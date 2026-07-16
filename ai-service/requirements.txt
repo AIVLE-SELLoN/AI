@@ -1,0 +1,28 @@
+# 아래 버전은 Python 3.12 + Windows 에서 실제로 설치·기동·테스트가 통과한 조합입니다.
+# 추측값이 아니라 검증된 값이니 임의로 올리지 마세요. 올릴 땐 pytest 통과 확인 후.
+#
+# 전이 의존성까지 완전히 똑같이 맞추려면 requirements.lock.txt 를 쓰세요.
+
+# --- 웹 프레임워크 ---
+fastapi==0.139.0
+uvicorn[standard]==0.51.0
+pydantic==2.13.4
+pydantic-settings==2.14.2
+
+# --- LLM ---
+openai==2.45.0
+
+# --- 벡터DB (RAG: 컬렉션1 상세페이지 / 컬렉션2 반려사유) ---
+chromadb==1.5.9
+
+# --- Agent3 전용: 루프·상태·HITL ---
+langgraph==1.2.9
+
+# --- Agent2 전용: 카이제곱·Fisher·비율검정 ---
+scipy==1.18.0
+statsmodels==0.14.6
+
+# --- 개발/테스트 ---
+pytest==9.1.1
+pytest-asyncio==1.4.0
+httpx==0.28.1
