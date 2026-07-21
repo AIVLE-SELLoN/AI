@@ -79,7 +79,7 @@ pytest
 ## 구조
 
 ```
-app/
+app/                   # 실제 서비스 코드 (운영 컨테이너에 포함되는 유일한 폴더)
 ├── main.py            # 앱 생성 + 라우터 등록만
 ├── config.py          # 환경변수
 ├── core/              # 공유 계층 — 수정 시 팀 합의 필수 (schemas.py = 계약서)
@@ -87,9 +87,32 @@ app/
 ├── detection/         # 서영 (Agent2) — 이상탐지 + 원인분류
 ├── recommendation/    # 지인 (Agent3) — 개선안 생성 (LangGraph)
 └── reporting/         # 용준 — 월간 리포트 + CS 답변 초안
-tests/                 # 공용 fixtures + 모듈별 테스트
+
+tests/                 # CI 가 PR 마다 자동 실행 (비용 0)
+└── fixtures/          # 개발용 소규모 계약 예시 — golden 아님, 정답 없음
+
+eval/                  # 정량 실험 ①~④ — 사람이 수동 실행, LLM 과금, CI 금지
+data/                  # 파이프라인 규모 mock (~26만행) — git 제외, 아래 참고
 scripts/               # seed_vectordb.py 등
 ```
+
+`tests/` 와 `eval/` 은 성격이 다릅니다 — 전자는 "코드가 안 깨졌나"(자동·무료),
+후자는 "성능이 얼마나 나오나"(수동·과금). 자세한 건 [`eval/README.md`](eval/README.md).
+
+## 데이터
+
+`data/` 는 **git 에 포함되지 않습니다.** 커밋 여부가 아직 확정되지 않아 일단 전부
+제외해뒀습니다. 클론 후 직접 만들어야 합니다:
+
+```
+data/
+├── input/      # input_*.csv   — Mock Producer 발행용 원본
+├── config/     # config_*.csv  — 생성기 설정 (사람이 직접 작성)
+└── golden/     # golden_*.csv  — 채점 정답지
+```
+
+> ⚠️ **`data/golden/` 은 `eval/` 만 읽습니다.** `app/` 코드가 import 하면 컨닝이고,
+> 정확도 측정이 무의미해집니다.
 
 ## 현재 상태 (0주차)
 

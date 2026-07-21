@@ -6,6 +6,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# app/ 만 넣는다. data/(~30MB) · eval/(수동 실행) · tests/ 는 운영 이미지에 불필요.
+# 특히 data/golden/ 은 채점 정답지라 컨테이너에 들어가면 안 된다.
 COPY app/ ./app/
 
 EXPOSE 8080
