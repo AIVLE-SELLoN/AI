@@ -1,0 +1,18 @@
+services:
+  mock-producer:
+    build: .
+    command: python scripts/mock_producer.py --data-dir /app/data/input
+    volumes:
+      - ./data/input:/app/data/input:ro
+      - ./data/config:/app/data/config:ro
+      # golden/ 은 마운트하지 않음 (경로 자체를 미존재 상태로 처리)
+    depends_on:
+      - kafka
+
+  eval-runner:
+    build: .
+    command: python eval/run_detection_eval.py
+    volumes:
+      - ./data/golden:/app/data/golden:ro
+      - ./data/input:/app/data/input:ro
+    profiles: ["eval"] # docker compose --profile eval up 시에만 구동
