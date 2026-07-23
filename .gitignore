@@ -22,7 +22,10 @@ chroma_data/
 
 # 파이프라인 규모 mock 데이터 (~26만행/시드) — 커밋 여부 미확정이라 일단 전부 제외.
 # 구조와 용도는 README '데이터' 절 참고. 확정되면 config/ 부터 풀 가능성이 높다.
-data/
+data/input/*.csv
+data/golden/*.csv
+data/config/*.csv
+!data/**/.gitkeep
 
 # 설계 문서 원본 — 팀 노션에서 관리하므로 저장소에 커밋하지 않는다.
 # (기술 정리 / 이상탐지 로직·시나리오 / 상품 마스터 데이터 등)
