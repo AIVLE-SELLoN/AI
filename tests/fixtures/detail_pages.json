@@ -1,1 +1,32 @@
-[]
+[
+  {
+    "product_group_id": "P001",
+    "channel": "COUPANG",
+    "aspect": "색상",
+    "detail_text": "아이보리 컬러"
+  },
+  {
+    "product_group_id": "P001",
+    "channel": "COUPANG",
+    "aspect": "사이즈",
+    "detail_text": "정보 없음"
+  },
+  {
+    "product_group_id": "P001",
+    "channel": "NAVER",
+    "aspect": "색상",
+    "detail_text": "아이보리, 실내조명에서 촬영"
+  },
+  {
+    "product_group_id": "P002",
+    "channel": "NAVER",
+    "aspect": "소재",
+    "detail_text": "폴리 95% 스판 5%, 신축성 좋음"
+  },
+  {
+    "product_group_id": "P002",
+    "channel": "ZIGZAG",
+    "aspect": "기타",
+    "detail_text": "세탁 시 찬물 손세탁 권장"
+  }
+]

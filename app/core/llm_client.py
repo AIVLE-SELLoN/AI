@@ -128,6 +128,80 @@ class LlmClient:
             f"JSON 파싱 실패 ({1 + MAX_RETRY}회 시도) [{trace_key}]: {last_raw[:200]}"
         )
 
+    async def choose_tool(
+        self,
+        prompt: str,
+        *,
+        tools: list[dict[str, Any]],
+        trace_key: str = "-",
+        temperature: float = 0.0,
+    ) -> dict[str, Any]:
+        """프롬프트 → 모델이 실제로 고른 tool 이름 + 인자.
+
+        판단(라우팅)을 모델에 맡길 때 쓴다. complete_json()으로 "네가 고른 도구를
+        JSON으로 적어봐" 흉내내지 말 것 — tool_choice="required"로 모델이 tools 중
+        하나를 진짜로 호출하게 강제해야, 우리 코드가 아니라 모델이 결정한 게 된다.
+
+        Args:
+            tools: OpenAI tools 스펙(`[{"type": "function", "function": {...}}, ...]`).
+
+        Returns:
+            `{"name": 호출된 함수 이름, "arguments": 파싱된 인자 dict}`.
+
+        Raises:
+            LlmCallError: 재시도를 모두 소진하고도 실패(호출 실패 또는 tool 미호출).
+            LlmParseError: 재시도를 모두 소진하고도 arguments JSON 파싱 실패.
+        """
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+            "tools": tools,
+            "tool_choice": "required",
+        }
+
+        last_error: Exception | None = None
+
+        for attempt in range(1 + MAX_RETRY):
+            try:
+                response = await self._client.chat.completions.create(**kwargs)
+            except (RateLimitError, APIError) as exc:
+                last_error = exc
+                if attempt < MAX_RETRY:
+                    backoff = 2**attempt
+                    logger.warning(
+                        "LLM tool 호출 실패, %s초 후 재시도 [%s] attempt=%d/%d error=%s",
+                        backoff, trace_key, attempt + 1, 1 + MAX_RETRY, exc,
+                    )
+                    await asyncio.sleep(backoff)
+                continue
+
+            self._log_usage(response, trace_key=trace_key)
+
+            tool_calls = response.choices[0].message.tool_calls
+            if not tool_calls:
+                last_error = LlmParseError(f"모델이 tool을 호출하지 않음 [{trace_key}]")
+                continue
+
+            call = tool_calls[0]
+            try:
+                arguments = json.loads(call.function.arguments)
+            except json.JSONDecodeError as exc:
+                last_error = exc
+                logger.warning(
+                    "tool 인자 JSON 파싱 실패 [%s] attempt=%d/%d error=%s",
+                    trace_key, attempt + 1, 1 + MAX_RETRY, exc,
+                )
+                continue
+
+            return {"name": call.function.name, "arguments": arguments}
+
+        if isinstance(last_error, LlmParseError):
+            raise last_error
+        raise LlmCallError(
+            f"tool 선택 실패 ({1 + MAX_RETRY}회 시도) [{trace_key}]: {last_error}"
+        ) from last_error
+
     def _log_usage(self, response: Any, *, trace_key: str) -> None:
         """토큰 사용량 로깅. 주간 비용 집계는 이 로그를 긁어서 낸다.
 
