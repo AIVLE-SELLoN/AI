@@ -67,7 +67,7 @@ def build_batch(all_combinations: list) -> tuple[list, list]:
     Returns:
         (batch, held)
           - batch: 판정 가능한 검정 결과 리스트 (각 dict 에 "key" 부착)
-          - held:  표본 부족으로 보류된 (product, channel) 리스트 (채널 단위)
+          - held:  표본 부족으로 보류된 (product, channel, source) 리스트
     """
     batch: list = []
     held: list = []
@@ -76,10 +76,10 @@ def build_batch(all_combinations: list) -> tuple[list, list]:
         cur_neg, cur_total, past_neg, past_total = counts
 
         # ── 관문① 최소표본 가드 ──────────────────────────
-        # 기준은 분모인 (상품,채널) 총문의. aspect 무관. 보류는 채널 단위라
-        # 그 채널의 모든 aspect 가 함께 빠진다.
+        # 기준은 분모인 (상품,채널,source) 총문의. aspect 무관, source별 분리
+        # (리뷰 분모 별도 — 로직 §40). 그 (채널,source)의 모든 aspect 가 함께 빠진다.
         if cur_total < MIN_SAMPLE_SIZE:
-            held.append((product, channel))
+            held.append((product, channel, source))
             continue
 
         result = run_one_test(cur_neg, cur_total, past_neg, past_total)
@@ -117,7 +117,7 @@ def run_detection(all_combinations: list, q: float = BH_FDR_Q) -> tuple[list, li
     """[2] 전체 진입점 — 집계 결과를 받아 발화 판정까지.
 
     build_batch(관문①) → decide_fires(관문②③) 를 엮은 것.
-    반환: (발화 판정이 담긴 batch, 보류된 (상품,채널) 리스트)
+    반환: (발화 판정이 담긴 batch, 보류된 (상품,채널,source) 리스트)
     """
     batch, held = build_batch(all_combinations)
     decide_fires(batch, q=q)

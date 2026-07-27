@@ -64,17 +64,50 @@ def classify_pattern(channel_status: dict) -> dict:
 
 
 def run_verdict(fired_batch: list, held: list) -> list:
-    """윈도우 전체를 (상품, aspect) 로 묶어 classify_pattern 을 돌린다.
+    """윈도우 전체를 (상품, aspect, source) 로 묶어 classify_pattern 을 돌린다.
+
+    [3]은 source별로 독립 수행한다(로직 §116: CS·리뷰는 [0]~[7]을 각각 독립 수행).
+    소스 종합(combine_sources, [8])은 이 뒤의 별도 단계이므로 여기서는 필요 없다.
 
     Args:
         fired_batch: [2] decide_fires 결과 (각 dict 에 "key"=(product,aspect,channel,source),
                      "fired" 포함)
-        held:        [2] build_batch 의 보류 (상품, 채널) 리스트
+        held:        [2] build_batch 의 보류 (상품, 채널, source) 리스트
 
     Returns:
-        (상품, aspect) 단위 판정 결과 리스트 — 각 dict 에 verdict 등 부착.
+        (상품, aspect, source) 단위 판정 결과 리스트.
+        각 dict = classify_pattern 반환값 + {"product", "aspect", "source"}.
 
-    ⚠️ 미구현: cs/review 합산(combine_sources, 로직 §[8]/탐지 스키마 §269)이 선행돼야
-       채널별 {testable, fired} 를 만들 수 있다. combine_sources 확장과 함께 구현.
+    채널 상태 도출:
+        - 배치에 있는 채널  → testable=True, fired=그 검정 결과
+        - 그 (상품, source) 의 held 채널 중 이 그룹 배치에 없는 것 → testable=False
+          (held 는 source·채널 단위라 그 source 의 aspect 전체에만 적용. 다른 source
+           그룹엔 끼지 않는다. 같은 채널이 이 그룹 배치에 있으면 testable 이므로 중복 X.)
     """
-    raise NotImplementedError("combine_sources 확장과 함께 구현 — 로직 §[8]")
+    held_channels: dict = {}
+    for product, channel, source in held:
+        held_channels.setdefault((product, source), set()).add(channel)
+
+    # (product, aspect, source) → {channel: fired}
+    groups: dict = {}
+    for test in fired_batch:
+        product, aspect, channel, source = test["key"]
+        groups.setdefault((product, aspect, source), {})[channel] = test["fired"]
+
+    results: list = []
+    for (product, aspect, source), channel_fired in groups.items():
+        channel_status = {
+            ch: {"testable": True, "fired": fired}
+            for ch, fired in channel_fired.items()
+        }
+        for ch in held_channels.get((product, source), ()):
+            if ch not in channel_status:
+                channel_status[ch] = {"testable": False, "fired": False}
+
+        result = classify_pattern(channel_status)
+        result["product"] = product
+        result["aspect"] = aspect
+        result["source"] = source
+        results.append(result)
+
+    return results
