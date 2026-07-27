@@ -12,7 +12,6 @@ from app.core.schemas import (
     validate_citations_grounded,
 )
 
-
 # ── DetectionAlert 픽스처 3개가 스키마를 통과하는지 확인 ──────────
 
 

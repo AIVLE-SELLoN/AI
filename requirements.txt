@@ -26,3 +26,6 @@ statsmodels==0.14.6
 pytest==9.1.1
 pytest-asyncio==1.4.0
 httpx==0.28.1
+
+# --- 린트/포맷 (의존성 없음, 단독 wheel) ---
+ruff==0.16.0
