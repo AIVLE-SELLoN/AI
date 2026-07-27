@@ -37,10 +37,19 @@ import csv
 import json
 import random
 import re
+import sys
 import time
+import asyncio
 from pathlib import Path
+from pathlib import Path as _Path
 
-import anthropic
+# scripts/ 는 저장소 루트의 형제 폴더 — app 패키지를 절대경로로 import하려면
+# 저장소 루트를 sys.path에 넣어야 함
+sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+
+from app.core.llm_client import get_llm_client
+from app.core.exceptions import LlmCallError, LlmParseError
+
 
 # ────────────────────────────────────────────────────────────────
 # 고정 상수 (색상/사이즈 풀, 채널 표기 관례) — 필요시 여기만 조정
@@ -129,7 +138,7 @@ def format_option(channel: str, color_kr: str, color_code: str, size: str,
     raise ValueError(f"알 수 없는 시나리오: {scenario}")
 
 
-MODEL = "claude-sonnet-4-6"
+
 
 
 class NameGenerator:
@@ -146,7 +155,13 @@ class NameGenerator:
         self.cache: dict[str, list[str]] = {}
         if self.cache_path.exists():
             self.cache = json.loads(self.cache_path.read_text(encoding="utf-8"))
-        self.client = anthropic.Anthropic() if use_llm else None  # ANTHROPIC_API_KEY 환경변수 사용
+        self.llm_client = None
+        if use_llm:
+            try:
+                self.llm_client = get_llm_client()
+            except Exception as e:
+                print(f"  ⚠️ LLM 클라이언트 생성 실패({e}) — 채널명은 동의어 사전으로 대체됩니다.")
+                self.use_llm = False
 
     def save(self):
         self.cache_path.write_text(json.dumps(self.cache, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -161,22 +176,20 @@ class NameGenerator:
 - 동의어 치환(예: 원피스↔드레스, 팬츠↔슬랙스, 니트↔스웨터, 자켓↔재킷, 스커트↔치마)이나 어순 변경을 활용해 자연스럽게 다르게 만드세요
 - 완전히 다른 상품처럼 보이면 안 됩니다 (과도한 변형 금지, 사람이 봐도 같은 상품임을 알 수 있어야 함)
 - {n}개는 서로 겹치지 않게 만드세요
-- 다른 설명 없이 JSON 배열로만 답하세요. 예: ["미디 원피스", "미디 드레스", "봄 미디 원피스"]"""
-        for attempt in range(1, 4):
+- 다른 설명 없이 JSON으로만 답하세요. 형식: {{"names": ["미디 원피스", "미디 드레스", "봄 미디 원피스"]}}"""
+
+        trace_key = f"concept_name={concept_name}"
+        for business_attempt in range(1, 3):  # 개수 부족 시 재시도(예외 재시도는 llm_client가 이미 담당)
             try:
-                resp = self.client.messages.create(
-                    model=MODEL, max_tokens=200, messages=[{"role": "user", "content": prompt}]
-                )
-                raw = resp.content[0].text
-                cleaned = re.sub(r"```json|```", "", raw).strip()
-                names = json.loads(cleaned)
-                if isinstance(names, list) and len(names) >= n:
-                    return names[:n]
-            except Exception as e:
-                if attempt == 3:
-                    print(f"    ⚠️ '{concept_name}' LLM 이름 생성 실패({e}) → 동의어 사전으로 폴백")
-                    return None
-                time.sleep(1.5 * attempt)
+                data = asyncio.run(self.llm_client.complete_json(prompt, trace_key=trace_key))
+            except (LlmCallError, LlmParseError) as e:
+                print(f"    ⚠️ [{trace_key}] LLM 이름 생성 실패({e}) → 동의어 사전으로 폴백")
+                return None
+            names = data.get("names") if isinstance(data, dict) else None
+            if isinstance(names, list) and len(names) >= n:
+                return names[:n]
+            print(f"    ⚠️ [{trace_key}] 개수 부족(기대{n}, 실제{len(names) if names else 0}) → 재시도")
+        print(f"    ⚠️ [{trace_key}] 개수 부족 재시도 소진 → 동의어 사전으로 폴백")
         return None
 
     def _synonym_fallback(self, concept_name: str, n: int, rng: random.Random) -> list[str]:
@@ -400,7 +413,7 @@ def main():
     products = load_products(args.config)
     name_gen = NameGenerator(cache_path=args.name_cache, use_llm=not args.no_llm_names)
     if not args.no_llm_names:
-        print(f"채널별 상품명: LLM 생성 모드 (모델 {MODEL}, 캐시: {args.name_cache})")
+        print(f"채널별 상품명: LLM 생성 모드 (캐시: {args.name_cache})")
     else:
         print("채널별 상품명: 동의어 사전 모드 (--no-llm-names)")
 

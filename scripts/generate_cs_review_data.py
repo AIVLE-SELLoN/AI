@@ -219,50 +219,73 @@ class TextGenerator:
         )
 
     def generate_cause_batch(self, case_id: str, aspect: str, cause_counts: dict[str, int]) -> list[dict]:
-        """케이스 1개 = API 호출 1회로 cause_counts 배분대로 텍스트 전체를 한 번에 받아온다.
-        (지인님 원칙: 건당 호출 금지, 배치 호출 필수 — 여기선 케이스당 20건을 한 호출로 처리)
+        """1라운드: cause_counts 전체를 한 번에 요청.
+        2라운드부터: 부족한 원인만 "그 부족분만큼만" 추가 요청(전체 재생성 안 함 — 비용 절감).
+        작은 개수 요청일수록 LLM이 정확하다는 게 실측으로 확인돼서(2·2·2는 항상 정확,
+        14처럼 큰 수만 자주 부족), 부족분 보충 쪽이 오히려 성공률도 높고 저렴하다.
         반환: [{"cause": "...", "text": "..."}, ...] (개수 = sum(cause_counts.values()))"""
         cache_key = f"{case_id}:{aspect}"
         if cache_key in self.cause_cache:
             return self.cause_cache[cache_key]
 
         total = sum(cause_counts.values())
+        trace_key = f"case_id={case_id};aspect={aspect}"
 
-        def _fallback():
-            items = []
-            for cause, n in cause_counts.items():
-                for _ in range(n):
-                    items.append({"cause": cause, "text": f"[PLACEHOLDER:cause:{aspect}:{cause}]"})
-            return items
+        def _placeholder(cause):
+            return {"cause": cause, "text": f"[PLACEHOLDER:cause:{aspect}:{cause}]"}
 
         if not self.use_llm or not self.cause_system_prompt:
-            items = _fallback()
+            items = [_placeholder(c) for c, n in cause_counts.items() for _ in range(n)]
             self.cause_cache[cache_key] = items
             return items
 
-        req_lines = "\n".join(f"- {c}: {n}건" for c, n in cause_counts.items())
-        user_msg = f"aspect: {aspect}\n요청 개수:\n{req_lines}\n총 {total}건, 위 개수를 정확히 지켜서 생성하세요."
-        trace_key = f"case_id={case_id};aspect={aspect}"
-        # 실제 app.core.llm_client.complete_json은 system 파라미터가 없음 — 하나의 prompt로 합침
-        combined_prompt = f"{self.cause_system_prompt}\n\n---\n\n{user_msg}"
+        collected: list[dict] = []
+        remaining = dict(cause_counts)
 
-        for business_attempt in range(1, 3):  # 개수 불일치 시 재시도(예외 재시도는 llm_client가 이미 담당)
+        for round_num in range(1, 4):  # 1라운드(전체) + 부족분 보충 최대 2라운드
+            req_lines = "\n".join(f"- {c}: {n}건" for c, n in remaining.items() if n > 0)
+            if round_num == 1:
+                user_msg = f"aspect: {aspect}\n요청 개수:\n{req_lines}\n총 {total}건, 위 개수를 정확히 지켜서 생성하세요."
+            else:
+                shortfall = sum(remaining.values())
+                user_msg = (
+                    f"aspect: {aspect}\n이전 요청에서 아래 원인이 부족했습니다. "
+                    f"정확히 이 개수만큼만 추가로 생성하세요(총 {shortfall}건):\n{req_lines}"
+                )
+            combined_prompt = f"{self.cause_system_prompt}\n\n---\n\n{user_msg}"
+
             try:
-                data = asyncio.run(self.llm_client.complete_json(combined_prompt, trace_key=trace_key))
+                data = asyncio.run(
+                    self.llm_client.complete_json(combined_prompt, trace_key=f"{trace_key};round={round_num}")
+                )
             except (LlmCallError, LlmParseError) as e:
-                print(f"    ⚠️ [{trace_key}] LLM 호출 실패: {e}")
-                break  # llm_client 자체 재시도(MAX_RETRY)까지 다 실패 — 더 시도해도 소용없음
-            items = data.get("texts", [])
-            got = Counter(i["cause"] for i in items)
-            if all(got.get(c, 0) == n for c, n in cause_counts.items()) and len(items) == total:
-                self.cause_cache[cache_key] = items
-                return items
-            print(f"    ⚠️ [{trace_key}] cause 개수 불일치(기대={cause_counts}, 실제={dict(got)}) → 재시도")
+                print(f"    ⚠️ [{trace_key}] round{round_num} LLM 호출 실패: {e}")
+                break  # llm_client 자체 재시도까지 다 실패 — 더 시도해도 소용없음
 
-        print(f"    ⚠️ [{trace_key}] cause 생성 최종 실패 → 플레이스홀더 폴백")
-        items = _fallback()
-        self.cause_cache[cache_key] = items
-        return items
+            items = data.get("texts", [])
+            got_this_round = Counter()
+            for item in items:
+                c = item.get("cause")
+                if remaining.get(c, 0) > got_this_round[c]:  # 필요한 만큼만 채택(초과분은 버림)
+                    collected.append(item)
+                    got_this_round[c] += 1
+
+            for c in list(remaining):
+                remaining[c] -= got_this_round.get(c, 0)
+            remaining = {c: n for c, n in remaining.items() if n > 0}
+
+            if not remaining:
+                self.cause_cache[cache_key] = collected
+                return collected
+            print(f"    ⚠️ [{trace_key}] round{round_num} 후에도 부족: {remaining} → 보충 요청")
+
+        # 최종까지 부족하면, 부족분만 플레이스홀더로 채움(전체가 아니라 일부만 — 손실 최소화)
+        for c, n in remaining.items():
+            for _ in range(n):
+                collected.append(_placeholder(c))
+        print(f"    ⚠️ [{trace_key}] 최종 부족분 {sum(remaining.values())}건 플레이스홀더로 채움")
+        self.cause_cache[cache_key] = collected
+        return collected
 
     def generate(self, aspect: str, sentiment: int, source: str, is_cause_sample: bool = False) -> str:
         sent_label = {-1: "부정", 0: "중립", 1: "긍정"}[sentiment]
@@ -426,7 +449,9 @@ def build_rows_for_window_group(rows: list[dict], rng: random.Random, pid_map: d
 
                 if item_aspect is None:
                     # 이 그룹의 모든 aspect 부정 몫을 다 채웠음 — 나머지는 배경(무관한 문의)
-                    item_aspect = rng.choice(ASPECTS)
+                    # ⚠️ 리뷰는 프롬프트2 스코프(색상·사이즈·소재)만 — 파손·오배송·기타 없음
+                    bg_aspect_pool = ["색상", "사이즈", "소재"] if source == "review" else ASPECTS
+                    item_aspect = rng.choice(bg_aspect_pool)
                     if item_aspect in group_aspects:
                         # ⚠️ 이 그룹에 속한 aspect는 이미 위에서 "정확 건수"로 부정 몫을 다 심었음
                         # (plant 원칙=결정론). 배경에서 또 -1이 나오면 안 됨.
@@ -535,17 +560,19 @@ def build_rows_for_product_background(gid: str, rng: random.Random, pid_map: dic
     NORMAL_VOLUME = {"cs": 6, "review": 2}
     HOT_VOLUME = {"cs": 28, "review": 10}
     hot_channels = hot_channels or set()
+    REVIEW_ASPECTS = ["색상", "사이즈", "소재"]  # 프롬프트2 스코프 — 파손·오배송·기타 없음
 
     for (channel, source), days in day_scope.items():
         if not days:
             continue
         cpid = get_channel_product_id(pid_map, gid, channel)
         volume = HOT_VOLUME if (channel, source) in hot_channels else NORMAL_VOLUME
-        per_aspect_daily = volume[source] / len(ASPECTS)
+        aspects_for_source = REVIEW_ASPECTS if source == "review" else ASPECTS
+        per_aspect_daily = volume[source] / len(aspects_for_source)
 
         for day_no in days:
             date = day_to_date(day_no, anchor_date)
-            for aspect in ASPECTS:
+            for aspect in aspects_for_source:
                 rate = BASELINE_RATE[aspect][channel]
                 n = int(per_aspect_daily)
                 if rng.random() < (per_aspect_daily - n):
