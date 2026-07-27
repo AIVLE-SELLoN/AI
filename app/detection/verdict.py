@@ -3,55 +3,68 @@
 순수 함수만. LLM·DB·FastAPI 를 import 하지 않는다 ([2] statistics.py 와 동일 원칙).
 
 [2]가 '각 채널 vs 자기 과거'였다면, [3]은 '한 (상품, aspect)를 채널끼리 비교'해서
-verdict 를 정한다. 채널간 baseline 차이는 [2]에서 이미 자기-과거 비교로 제거됐고,
-여기서는 '어느 채널이 울렸나'의 분포만 본다.
+verdict 를 정한다. 발화한 채널 수로 편중/전역을 가른다.
 
-verdict 4종 (탐지 결과 스키마 §5 / 로직 §[3]):
-    전역형       관측 채널이 전부 발화 · 보류 없음            → 상품 자체 문제
-    편중형       일부 채널만 발화 · 나머지 정상 · 보류 없음    → 채널 운영 문제
-    잠정 전역형   관측 채널은 전부 발화했으나 일부 채널 보류    → "확정 시 재판정"
-    구분불가     판정 가능 채널이 1개뿐(나머지 보류)          → 편중/전역 구분 불가
+verdict 5종 (로직 §[3] 판정표 / 탐지 결과 스키마 §5):
+    정상         발화 채널 0개                                → 알림 없음
+    구분불가     판정 가능 채널이 1개뿐(나머지 보류)           → [6] 생략, 확신도 '중간'
+    전역형       판정 가능 채널 전부 발화 · 보류 없음          → 상품 자체 점검
+    잠정 전역형   판정 가능 채널 전부 발화 · 보류 있음          → 위 + "확정 시 재판정"
+    편중형       일부만 발화 (1~2개)                          → [6] 원인 진단 진행
 
-보류(held)는 [2] build_batch 의 표본 가드에서 나온 (상품,채널) 목록을 그대로 쓴다.
-
-⚠️ 열린 항목 (월요일 구현 시 정리 — 탐지 스키마 §269):
-    combine_sources() 가 현재 (확신도, 라벨)만 반환. [3] verdict 를 정하려면
-    cs/review 를 CS 우선으로 합친 '채널별 발화 여부'가 선행돼야 하므로,
-    combine_sources 가 verdict·stats·source 채택까지 반환하도록 확장 필요.
-
-TODO(월): 아래 함수 본문 + 수제 숫자 유닛테스트(tests/test_detection.py).
-          판정 경계는 로직 §[3]·시나리오(SC-030~038 편중/전역/구분불가) 확정본 대조 후.
+⚠️ 판정 순서 주의(로직 §[3] 코드 그대로): fired==0 → testable==1 → 전부발화 → 편중.
+   testable==1 검사가 '전부 발화'보다 먼저다 — 1채널은 발화해도 비교 대상이 없어 구분불가.
 """
 
 
-def decide_verdict(per_channel: dict) -> dict:
-    """한 (상품, aspect)에 대해 채널 분포를 보고 verdict 를 정한다.
+def classify_pattern(channel_status: dict) -> dict:
+    """한 (상품, aspect)의 채널별 상태로 편중/전역 verdict 를 판정한다. (로직 §[3])
 
     Args:
-        per_channel: {channel: status}
-            status ∈ {"fired", "normal", "held"}
-              - fired:  [2]에서 발화(BH 유의 AND min_delta)
-              - normal: 판정됐으나 미발화
-              - held:   표본 가드로 보류(판정 불가)
+        channel_status: {channel: {"testable": bool, "fired": bool}}
+            - testable=False → 표본 부족으로 보류된 채널 ([2] build_batch held)
+            - fired 는 testable 채널에만 유효
+            판정 단위는 aspect별이다 ("쿠팡이 편중"이 아니라 "쿠팡의 색상이 편중").
 
     Returns:
-        {"verdict", "significant_channels", "excluded_channels"}
-          - verdict:              전역형 / 편중형 / 잠정 전역형 / 구분불가
-          - significant_channels: 발화한 채널 리스트
-          - excluded_channels:    보류(held) 채널 리스트 ("표본 부족" 병기용)
-
-    판정 규칙(요지, 확정본 대조 예정):
-        관측 채널 = held 아닌 채널.
-        - held 없음 & 관측 전부 fired            → 전역형
-        - held 없음 & 일부만 fired               → 편중형
-        - held 있음 & 관측 전부 fired            → 잠정 전역형
-        - 판정 가능(fired/normal) 채널이 1개뿐   → 구분불가
+        {"verdict", "channels", "held"} (구분불가는 "note" 추가)
+          - verdict:  정상 / 구분불가 / 전역형 / 잠정 전역형 / 편중형
+          - channels: 발화한 채널 리스트
+          - held:     보류(표본 부족) 채널 리스트 — 알림에 "표본 부족 병기"용
     """
-    raise NotImplementedError("월요일 구현 — 로직 §[3] 확정본 대조 후")
+    testable = [ch for ch, s in channel_status.items() if s["testable"]]
+    held = [ch for ch, s in channel_status.items() if not s["testable"]]
+    fired = [ch for ch in testable if channel_status[ch]["fired"]]
+
+    # ── 아무 채널도 안 울렸으면 정상 ──────────────────
+    if not fired:
+        return {"verdict": "정상", "channels": [], "held": held}
+
+    # ── 판정 가능한 채널이 1개뿐이면 구분 자체가 불가능 ──
+    #    비교 대상이 없는데 "편중"이라 단정하면 과잉 주장. ('전부 발화'보다 먼저 검사)
+    if len(testable) == 1:
+        return {
+            "verdict": "구분불가",
+            "channels": fired,
+            "held": held,
+            "note": "타 채널 표본 부족 — 편중/전역 구분 불가",
+        }
+
+    # ── 판정 가능한 채널이 전부 울렸으면 전역형 ──────────
+    #    보류 채널이 있으면 '잠정'을 붙인다 (그 채널은 멀쩡할 수도 있으므로).
+    if len(fired) == len(testable):
+        return {
+            "verdict": "잠정 전역형" if held else "전역형",
+            "channels": fired,
+            "held": held,
+        }
+
+    # ── 일부만 울렸으면 편중형 (1개든 2개든) ────────────
+    return {"verdict": "편중형", "channels": fired, "held": held}
 
 
 def run_verdict(fired_batch: list, held: list) -> list:
-    """윈도우 전체를 (상품, aspect) 로 묶어 decide_verdict 를 돌린다.
+    """윈도우 전체를 (상품, aspect) 로 묶어 classify_pattern 을 돌린다.
 
     Args:
         fired_batch: [2] decide_fires 결과 (각 dict 에 "key"=(product,aspect,channel,source),
@@ -61,7 +74,7 @@ def run_verdict(fired_batch: list, held: list) -> list:
     Returns:
         (상품, aspect) 단위 판정 결과 리스트 — 각 dict 에 verdict 등 부착.
 
-    NOTE: cs/review 합산(combine_sources) 후의 '채널별 발화 여부'를 만들어
-          decide_verdict 에 넘겨야 한다 (위 열린 항목 참조).
+    ⚠️ 미구현: cs/review 합산(combine_sources, 로직 §[8]/탐지 스키마 §269)이 선행돼야
+       채널별 {testable, fired} 를 만들 수 있다. combine_sources 확장과 함께 구현.
     """
-    raise NotImplementedError("월요일 구현 — combine_sources 확장과 함께")
+    raise NotImplementedError("combine_sources 확장과 함께 구현 — 로직 §[8]")

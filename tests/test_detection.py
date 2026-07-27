@@ -12,6 +12,7 @@ from app.detection.statistics import (
     run_detection,
     run_one_test,
 )
+from app.detection.verdict import classify_pattern
 
 # 부록 A 검산값: (케이스, cur_neg, cur_total, past_neg, past_total, delta, p)
 APPENDIX_A = [
@@ -102,3 +103,72 @@ def test_three_gate_integration():
     assert fired["P024"] is False    # 잡음
     assert "P036" not in fired       # 보류라 batch 에 없음
     assert ("P036", "COUPANG") in held
+
+
+# ── [3] 편중·전역 판정 (로직 §[3] classify_pattern) ─────────────────
+def _ch(testable: bool, fired: bool) -> dict:
+    return {"testable": testable, "fired": fired}
+
+
+def test_verdict_normal_when_no_fire():
+    """발화 0개 → 정상 (알림 없음)."""
+    cs = {"COUPANG": _ch(True, False), "NAVER": _ch(True, False)}
+    assert classify_pattern(cs)["verdict"] == "정상"
+
+
+def test_verdict_global_all_testable_fired():
+    """판정가능 전부 발화 · 보류 없음 → 전역형."""
+    cs = {
+        "COUPANG": _ch(True, True),
+        "NAVER": _ch(True, True),
+        "ZIGZAG": _ch(True, True),
+    }
+    r = classify_pattern(cs)
+    assert r["verdict"] == "전역형"
+    assert r["held"] == []
+
+
+def test_verdict_tentative_global_when_held_exists():
+    """판정가능 전부 발화 · 보류 채널 있음 → 잠정 전역형."""
+    cs = {
+        "COUPANG": _ch(True, True),
+        "NAVER": _ch(True, True),
+        "ZIGZAG": _ch(False, False),  # 표본 부족 보류
+    }
+    r = classify_pattern(cs)
+    assert r["verdict"] == "잠정 전역형"
+    assert r["held"] == ["ZIGZAG"]
+
+
+def test_verdict_biased_partial_fire():
+    """일부만 발화 → 편중형 (1개든 2개든)."""
+    cs = {
+        "COUPANG": _ch(True, True),
+        "NAVER": _ch(True, False),
+        "ZIGZAG": _ch(True, False),
+    }
+    r = classify_pattern(cs)
+    assert r["verdict"] == "편중형"
+    assert r["channels"] == ["COUPANG"]
+
+    cs["NAVER"] = _ch(True, True)  # 2개 발화도 편중형
+    assert classify_pattern(cs)["verdict"] == "편중형"
+
+
+def test_verdict_indeterminate_single_testable():
+    """판정가능 채널 1개 + 발화 → 구분불가 ('전부 발화'보다 먼저 걸림)."""
+    cs = {
+        "COUPANG": _ch(True, True),
+        "NAVER": _ch(False, False),
+        "ZIGZAG": _ch(False, False),
+    }
+    r = classify_pattern(cs)
+    assert r["verdict"] == "구분불가"
+    assert r["channels"] == ["COUPANG"]
+    assert set(r["held"]) == {"NAVER", "ZIGZAG"}
+
+
+def test_verdict_single_testable_no_fire_is_normal():
+    """판정순서 검증 — 1채널이라도 발화 0이면 구분불가 아니라 정상."""
+    cs = {"COUPANG": _ch(True, False), "NAVER": _ch(False, False)}
+    assert classify_pattern(cs)["verdict"] == "정상"
