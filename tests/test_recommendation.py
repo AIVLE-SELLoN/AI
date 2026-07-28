@@ -73,6 +73,9 @@ async def test_run_generates_recommendation_for_biased_alert(monkeypatch, biased
     assert result.hitl_status == HitlStatus.PENDING
     assert result.hitl_feedback is None
     assert result.proposal is not None
+    # raw_text 조회 경로가 없어 진짜 CS 인용을 못 만든다 — 빈 자리를 채우는 가짜
+    # Citation(quote="") 대신 정직하게 빈 리스트(2026-07-27 수정, 이전엔 가짜였음).
+    assert result.citations == []
 
     validate_citations_grounded(result, biased_alert)
 
@@ -82,16 +85,22 @@ class _FakeRecoveringClient:
 
     attempts 필드가 항상 1로 고정돼 있던 버그(2026-07-27 이전)를 재현/검증하기 위한
     fake — 재시도가 실제로 일어났고 그 회차가 Evaluator.attempts에 반영되는지 본다.
+    prompt/temperature를 회차별로 기록해서, 재시도가 "같은 프롬프트를 온도 0으로
+    반복"이 아니라 실패 피드백+온도 상승이 실제로 반영되는지도 같이 확인한다.
     """
 
     def __init__(self):
         self.complete_json_call_count = 0
+        self.prompts: list[str] = []
+        self.temperatures: list[float] = []
 
     async def choose_tool(self, prompt: str, *, tools, trace_key: str = "-", temperature: float = 0.0):
         return {"name": "use_copy_draft", "arguments": {"reason": "테스트"}}
 
     async def complete_json(self, prompt: str, *, trace_key: str = "-", temperature: float = 0.0) -> dict:
         self.complete_json_call_count += 1
+        self.prompts.append(prompt)
+        self.temperatures.append(temperature)
         if self.complete_json_call_count == 1:
             return {
                 "current_text": "근거와 무관한 할루시네이션 문구",
@@ -116,6 +125,12 @@ async def test_run_records_real_attempt_number_after_retry(monkeypatch, biased_a
     assert result.evaluator.passed is True
     assert result.evaluator.attempts == 2
     assert fake_client.complete_json_call_count == 2
+
+    # 2026-07-27 버그 수정 확인: 재시도가 1차와 똑같은 프롬프트·온도로 반복되지 않는다.
+    assert fake_client.temperatures[0] != fake_client.temperatures[1]
+    assert fake_client.prompts[0] != fake_client.prompts[1]
+    assert "이전 시도" in fake_client.prompts[1]
+    assert "근거와 무관한 할루시네이션 문구" in fake_client.prompts[1]
 
 
 @pytest.mark.asyncio

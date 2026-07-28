@@ -8,6 +8,7 @@ tool 이름 → ProposalType" 매핑과 프롬프트·tools 조립을 검증한�
 
 import pytest
 
+from app.core.exceptions import LlmParseError
 from app.core.schemas import ProposalType
 from app.recommendation import pipeline
 
@@ -64,3 +65,14 @@ async def test_offers_both_tools_and_includes_both_evidence_in_prompt(monkeypatc
     assert tool_names == {"use_copy_draft", "use_image_guide"}
     assert "아이보리 컬러" in fake_client.last_prompt
     assert "CS 20건 중 14건" in fake_client.last_prompt
+
+
+@pytest.mark.asyncio
+async def test_raises_llm_parse_error_for_unknown_tool_name(monkeypatch, biased_alert):
+    """LLM이 우리가 안 준 tool 이름을 반환하면 KeyError로 그냥 죽지 않고 명확한
+    예외를 던져야 한다(2026-07-27 발견·수정 — 방어 코드 없던 버그)."""
+    fake_client = _FakeToolChoosingClient("use_something_unexpected")
+    monkeypatch.setattr(pipeline, "get_llm_client", lambda: fake_client)
+
+    with pytest.raises(LlmParseError):
+        await pipeline.route_proposal_type(biased_alert, _context())

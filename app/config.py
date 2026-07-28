@@ -1,8 +1,17 @@
-"""환경변수 로딩. 코드에 API 키·호스트를 하드코딩하지 말고 전부 여기를 거칠 것."""
+"""환경변수 로딩. 코드에 API 키·호스트를 하드코딩하지 말고 전부 여기를 거칠 것.
+
+load_dotenv()가 필요한 이유: pydantic-settings의 env_file 로딩은 .env를 읽어서
+Settings 객체 안에만 넣어줄 뿐 os.environ엔 안 넣는다. langsmith 같은 서드파티
+SDK는 os.environ을 직접 읽으므로, 그런 라이브러리도 .env 값을 보게 하려면
+os.environ에 실제로 채워 넣는 load_dotenv()가 따로 필요하다.
+"""
 
 from functools import lru_cache
 
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+load_dotenv()
 
 
 class Settings(BaseSettings):

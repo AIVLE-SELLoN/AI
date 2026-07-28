@@ -18,6 +18,7 @@ import logging
 from functools import lru_cache
 from typing import Any
 
+from langsmith.wrappers import wrap_openai
 from openai import APIError, AsyncOpenAI, RateLimitError
 
 from app.config import get_settings
@@ -187,7 +188,9 @@ class LlmClient:
             try:
                 arguments = json.loads(call.function.arguments)
             except json.JSONDecodeError as exc:
-                last_error = exc
+                # LlmParseError로 감싸야 아래 exhaustion 분기가 LlmCallError가 아니라
+                # LlmParseError로 정확히 구분해서 던진다(complete_json()과 동일한 관례).
+                last_error = LlmParseError(f"tool 인자 JSON 파싱 실패 [{trace_key}]: {exc}")
                 logger.warning(
                     "tool 인자 JSON 파싱 실패 [%s] attempt=%d/%d error=%s",
                     trace_key, attempt + 1, 1 + MAX_RETRY, exc,
@@ -224,10 +227,14 @@ class LlmClient:
 
 @lru_cache
 def get_llm_client() -> LlmClient:
-    """앱 전역 공용 클라이언트. 커넥션 풀 재사용을 위해 매번 새로 만들지 않는다."""
+    """앱 전역 공용 클라이언트. 커넥션 풀 재사용을 위해 매번 새로 만들지 않는다.
+
+    wrap_openai()로 감싸서 실제 API 호출을 LangSmith에 남긴다. LANGSMITH_TRACING이
+    설정 안 돼 있으면 그냥 조용히 추적 없이 평소대로 동작한다(에러 안 남).
+    """
     settings = get_settings()
     client = AsyncOpenAI(
         api_key=settings.llm_api_key,
         timeout=settings.llm_timeout_seconds,
     )
-    return LlmClient(client, settings.llm_model)
+    return LlmClient(wrap_openai(client), settings.llm_model)

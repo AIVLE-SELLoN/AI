@@ -67,6 +67,9 @@ def test_records_approved_outcome(monkeypatch, biased_alert):
     call = fake_collection.upsert_calls[0]
     assert call["ids"] == ["REC-HITL-TEST"]
     assert "사진_색감_오차" in call["documents"][0]
+    # §4-2 스펙: "원인 라벨 + CS 요약 + 개선안 본문" — CS 요약이 실제로 들어가는지 확인
+    # (2026-07-27 이전엔 CS 요약 대신 aspect가 들어가던 버그).
+    assert "CS 20건 중 14건" in call["documents"][0]
     assert call["metadatas"][0]["outcome"] == "승인"
     assert call["metadatas"][0]["channel"] == "COUPANG"
     assert "rejection_reason_code" not in call["metadatas"][0]

@@ -11,6 +11,10 @@ pydantic-settings==2.14.2
 
 # --- LLM ---
 openai==2.45.0
+python-dotenv==1.2.2
+
+# --- LLM 추적 (LangSmith — wrap_openai + @traceable) ---
+langsmith==0.10.5
 
 # --- 벡터DB (RAG: 컬렉션1 상세페이지 / 컬렉션2 반려사유) ---
 chromadb==1.5.9
