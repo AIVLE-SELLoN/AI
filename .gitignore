@@ -15,6 +15,7 @@ venv/
 .ruff_cache/
 .coverage
 htmlcov/
+*_cache.json  
 
 # 벡터DB 로컬 영속화 디렉토리
 .chroma/
