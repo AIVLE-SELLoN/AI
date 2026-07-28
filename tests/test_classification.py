@@ -23,8 +23,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from app.classification.router import ClassifyRequestItem
-from app.classification.service import _classify_one, _parse_llm_response, explode_to_rows
+from app.classification.service import ClassifyRequestItem, _classify_one, _parse_llm_response, explode_to_rows
 from app.core.exceptions import LlmParseError
 from app.core.schemas import AspectSentiment, Aspect, Channel, ClassifiedItem, Sentiment, Source
 from app.main import app

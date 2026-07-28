@@ -8,13 +8,33 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime
 from string import Template
-from typing import Any
+
+from pydantic import BaseModel
 
 from app.core.exceptions import LlmParseError
 from app.core.llm_client import get_llm_client
 from app.core.prompts import load_prompt
 from app.core.schemas import AspectSentiment, Aspect, Channel, ClassifiedItem, Sentiment, Source
+
+# ── 입력 타입 (router.py에서 옮겨옴 — REST뿐 아니라 Kafka 워커도 재사용) ────────
+#
+# ⚠️ 이 타입은 원래 router.py에 있었으나, 용준님 Kafka 워커도 classify_aspect()를
+# 직접 호출하며 이 타입을 재사용하므로 "REST 전용"이 아니라 "분류 로직 자체의
+# 입력 타입"으로 보는 게 맞아 여기로 이동(2026-07-28).
+
+
+class ClassifyRequestItem(BaseModel):
+    """분류 대상 원문 1건. Kafka 메시지 필드와 1:1 대응."""
+
+    item_id: str
+    source: Source
+    channel: Channel
+    product_group_id: str
+    raw_text: str
+    created_at: datetime
+
 
 # ── 프롬프트 버전 (매직넘버 금지 컨벤션 — 여기서만 관리, 한 줄만 바꾸면 전체 반영) ──
 #
@@ -24,7 +44,7 @@ PROMPT_ASPECT_VERSION = "classify_aspect_v2"       # 프롬프트1(CS) — 파�
 PROMPT_SENTIMENT_VERSION = "classify_sentiment_v1"  # 프롬프트2(리뷰) — TODO(현진): ver2/ver3 평가 후 교체
 
 
-async def classify_aspect(items: list[Any]) -> list[ClassifiedItem]:
+async def classify_aspect(items: list[ClassifyRequestItem]) -> list[ClassifiedItem]:
     """원문 여러 건 → ClassifiedItem 리스트.
 
     items 원소는 item_id/source/channel/product_group_id/raw_text/created_at
@@ -39,7 +59,7 @@ async def classify_aspect(items: list[Any]) -> list[ClassifiedItem]:
     return await asyncio.gather(*tasks)
 
 
-async def _classify_one(item: Any) -> ClassifiedItem:
+async def _classify_one(item: ClassifyRequestItem) -> ClassifiedItem:
     """원문 1건 → ClassifiedItem. source에 따라 프롬프트1(CS)/프롬프트2(리뷰) 자동 분기."""
     item_id = item.item_id
     source: Source = item.source

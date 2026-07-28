@@ -11,27 +11,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
-from app.classification.service import classify_aspect
+from app.classification.service import ClassifyRequestItem, classify_aspect
 from app.core.exceptions import LlmCallError, LlmParseError
-from app.core.schemas import Channel, ClassifiedItem, Source
+from app.core.schemas import ClassifiedItem
 
 router = APIRouter(prefix="/api/v1", tags=["classification"])
-
-
-class ClassifyRequestItem(BaseModel):
-    """분류 대상 원문 1건. Kafka 메시지 필드와 1:1 대응 예정(워커 연동 시)."""
-
-    item_id: str
-    source: Source
-    channel: Channel
-    product_group_id: str
-    raw_text: str
-    created_at: datetime
 
 
 class ClassifyRequest(BaseModel):
