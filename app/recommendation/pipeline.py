@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from langsmith import traceable
+
 from app.core.constants import MAX_RETRY, SIMILAR_CASE_TOP_N
 from app.core.exceptions import EvidenceNotFoundError, LlmParseError
 from app.core.llm_client import get_llm_client
@@ -204,6 +206,7 @@ def _summarize_cs_evidence(alert: DetectionAlert) -> str:
     return f"CS {alert.root_cause.total}건 중 {alert.root_cause.count}건이 '{alert.root_cause.label}' 관련 언급"
 
 
+@traceable
 async def route_proposal_type(alert: DetectionAlert, context: dict) -> ProposalType:
     """개선안 도구 라우팅 — LLM이 tool 호출로 직접 판단(§4-3).
 
@@ -231,6 +234,7 @@ async def route_proposal_type(alert: DetectionAlert, context: dict) -> ProposalT
     return _TOOL_NAME_TO_PROPOSAL_TYPE[tool_name]
 
 
+@traceable
 async def generate_proposal(
     alert: DetectionAlert,
     proposal_type: ProposalType,
@@ -289,6 +293,7 @@ async def generate_proposal(
     )
 
 
+@traceable
 async def generate_fallback_proposal(alert: DetectionAlert, proposal_type: ProposalType) -> Proposal:
     """근거없음 경로 — grounding이 MAX_RETRY번 실패했을 때만 호출된다(§2 방법1).
 
@@ -502,6 +507,7 @@ def assemble(
     )
 
 
+@traceable
 async def run(alert: DetectionAlert) -> Recommendation | None:
     """오케스트레이터: 트리거 게이트 → 근거조회 → 라우팅(LLM) → (생성→검증) 최대 3회
     → (그래도 실패하면) 근거없음 경로 → 조립.

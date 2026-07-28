@@ -18,6 +18,7 @@ import logging
 from functools import lru_cache
 from typing import Any
 
+from langsmith.wrappers import wrap_openai
 from openai import APIError, AsyncOpenAI, RateLimitError
 
 from app.config import get_settings
@@ -226,10 +227,14 @@ class LlmClient:
 
 @lru_cache
 def get_llm_client() -> LlmClient:
-    """앱 전역 공용 클라이언트. 커넥션 풀 재사용을 위해 매번 새로 만들지 않는다."""
+    """앱 전역 공용 클라이언트. 커넥션 풀 재사용을 위해 매번 새로 만들지 않는다.
+
+    wrap_openai()로 감싸서 실제 API 호출을 LangSmith에 남긴다. LANGSMITH_TRACING이
+    설정 안 돼 있으면 그냥 조용히 추적 없이 평소대로 동작한다(에러 안 남).
+    """
     settings = get_settings()
     client = AsyncOpenAI(
         api_key=settings.llm_api_key,
         timeout=settings.llm_timeout_seconds,
     )
-    return LlmClient(client, settings.llm_model)
+    return LlmClient(wrap_openai(client), settings.llm_model)
