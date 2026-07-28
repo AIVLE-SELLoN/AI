@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import datetime
 from string import Template
 
@@ -17,6 +18,21 @@ from app.core.exceptions import LlmParseError
 from app.core.llm_client import get_llm_client
 from app.core.prompts import load_prompt
 from app.core.schemas import AspectSentiment, Aspect, Channel, ClassifiedItem, Sentiment, Source
+
+def _load_llm_prompt(module: str, name: str) -> str:
+    """load_prompt()로 파일 전체를 읽되, "## System Prompt" 이전(파일 헤더 — 담당자·변경이력
+    등 문서용 메타정보)은 잘라내고 그 이후만 반환한다.
+
+    프롬프트 파일 헤더에는 오류분석 과정에서 평가셋 문항 원문을 인용하는 경우가 있는데
+    (예: v4 변경이력에 파일럿 오답 문항 언급), 파일 전체를 그대로 LLM에 보내면 그 인용문까지
+    같이 전송돼 ①불필요한 토큰 낭비 ②향후 같은 문항 재평가 시 시험지 유출 위험이 생긴다.
+    "## System Prompt" 이후만 잘라 보내면 헤더는 순수 문서로만 남고 이 위험이 원천 차단된다.
+    "## System Prompt" 구분선이 없는 파일은(과거 버전 호환) 안전하게 전체를 그대로 반환한다.
+    """
+    raw = load_prompt(module, name)
+    m = re.search(r"## System Prompt\s*\n(.*)", raw, re.S)
+    return m.group(1).strip() if m else raw
+
 
 # ── 입력 타입 (router.py에서 옮겨옴 — REST뿐 아니라 Kafka 워커도 재사용) ────────
 #
@@ -40,7 +56,7 @@ class ClassifyRequestItem(BaseModel):
 #
 # 🔴 프롬프트2는 아직 확정본이 아님. ver2 마무리 + ver3 파일럿 평가가 남아있음
 #    (주간계획 목요일 예정). 평가 끝나면 이 상수만 바꾸면 됨 — 호출부는 안 건드림.
-PROMPT_ASPECT_VERSION = "classify_aspect_v3"       # 프롬프트1(CS) — 파일럿 42건 오류분석 반영판
+PROMPT_ASPECT_VERSION = "classify_aspect_v4"       # 프롬프트1(CS) — v3 재평가 오류분석 반영판("안 됐는데" 부정형 실패 신호 추가)
 PROMPT_SENTIMENT_VERSION = "classify_sentiment_v1"  # 프롬프트2(리뷰) — TODO(현진): ver2/ver3 평가 후 교체
 
 
@@ -67,12 +83,12 @@ async def _classify_one(item: ClassifyRequestItem) -> ClassifiedItem:
     client = get_llm_client()
 
     if source == Source.CS:
-        template = Template(load_prompt("classification", PROMPT_ASPECT_VERSION))
+        template = Template(_load_llm_prompt("classification", PROMPT_ASPECT_VERSION))
         # ⚠️ str.format() 대신 Template — JSON 예시의 중괄호와 충돌 방지(core/prompts.py 경고).
         # 원문은 json.dumps로 감싸서 따옴표·줄바꿈이 프롬프트 구조를 깨지 않게 함.
         prompt = template.substitute(cs_text=json.dumps(item.raw_text, ensure_ascii=False))
     else:
-        template = Template(load_prompt("classification", PROMPT_SENTIMENT_VERSION))
+        template = Template(_load_llm_prompt("classification", PROMPT_SENTIMENT_VERSION))
         prompt = template.substitute(review_text=json.dumps(item.raw_text, ensure_ascii=False))
 
     data = await client.complete_json(prompt, trace_key=trace_key)
