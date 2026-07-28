@@ -12,6 +12,7 @@ from app.detection.statistics import (
     run_detection,
     run_one_test,
 )
+from app.detection.verdict import classify_pattern, run_verdict
 
 # 부록 A 검산값: (케이스, cur_neg, cur_total, past_neg, past_total, delta, p)
 APPENDIX_A = [
@@ -50,7 +51,7 @@ def test_small_sample_is_held():
         ("P001", "색상", "NAVER", "cs", (26, 200, 40, 800)),  # 정상 판정 대상
     ]
     batch, held = build_batch(combos)
-    assert ("P001", "COUPANG") in held
+    assert ("P001", "COUPANG", "cs") in held
     assert len(batch) == 1
     assert batch[0]["key"] == ("P001", "색상", "NAVER", "cs")
 
@@ -63,8 +64,8 @@ def test_hold_is_channel_level():
         ("P036", "소재", "COUPANG", "cs", (0, 8, 1, 32)),
     ]
     batch, held = build_batch(combos)
-    assert batch == []                       # 세 aspect 전부 보류
-    assert held == [("P036", "COUPANG")] * 3  # 채널 단위로 잡힘
+    assert batch == []                              # 세 aspect 전부 보류
+    assert held == [("P036", "COUPANG", "cs")] * 3  # (채널,source) 단위로 잡힘
 
 
 # ── 관문② BH-FDR: step-up 절차 (설명의 k 예시 재현) ──────────────
@@ -101,4 +102,146 @@ def test_three_gate_integration():
     assert fired["P020"] is False    # 함정
     assert fired["P024"] is False    # 잡음
     assert "P036" not in fired       # 보류라 batch 에 없음
-    assert ("P036", "COUPANG") in held
+    assert ("P036", "COUPANG", "cs") in held
+
+
+# ── [3] 편중·전역 판정 (로직 §[3] classify_pattern) ─────────────────
+def _ch(testable: bool, fired: bool) -> dict:
+    return {"testable": testable, "fired": fired}
+
+
+def test_verdict_normal_when_no_fire():
+    """발화 0개 → 정상 (알림 없음)."""
+    cs = {"COUPANG": _ch(True, False), "NAVER": _ch(True, False)}
+    assert classify_pattern(cs)["verdict"] == "정상"
+
+
+def test_verdict_global_all_testable_fired():
+    """판정가능 전부 발화 · 보류 없음 → 전역형."""
+    cs = {
+        "COUPANG": _ch(True, True),
+        "NAVER": _ch(True, True),
+        "ZIGZAG": _ch(True, True),
+    }
+    r = classify_pattern(cs)
+    assert r["verdict"] == "전역형"
+    assert r["held"] == []
+
+
+def test_verdict_tentative_global_when_held_exists():
+    """판정가능 전부 발화 · 보류 채널 있음 → 잠정 전역형."""
+    cs = {
+        "COUPANG": _ch(True, True),
+        "NAVER": _ch(True, True),
+        "ZIGZAG": _ch(False, False),  # 표본 부족 보류
+    }
+    r = classify_pattern(cs)
+    assert r["verdict"] == "잠정 전역형"
+    assert r["held"] == ["ZIGZAG"]
+
+
+def test_verdict_biased_partial_fire():
+    """일부만 발화 → 편중형 (1개든 2개든)."""
+    cs = {
+        "COUPANG": _ch(True, True),
+        "NAVER": _ch(True, False),
+        "ZIGZAG": _ch(True, False),
+    }
+    r = classify_pattern(cs)
+    assert r["verdict"] == "편중형"
+    assert r["channels"] == ["COUPANG"]
+
+    cs["NAVER"] = _ch(True, True)  # 2개 발화도 편중형
+    assert classify_pattern(cs)["verdict"] == "편중형"
+
+
+def test_verdict_indeterminate_single_testable():
+    """판정가능 채널 1개 + 발화 → 구분불가 ('전부 발화'보다 먼저 걸림)."""
+    cs = {
+        "COUPANG": _ch(True, True),
+        "NAVER": _ch(False, False),
+        "ZIGZAG": _ch(False, False),
+    }
+    r = classify_pattern(cs)
+    assert r["verdict"] == "구분불가"
+    assert r["channels"] == ["COUPANG"]
+    assert set(r["held"]) == {"NAVER", "ZIGZAG"}
+
+
+def test_verdict_single_testable_no_fire_is_normal():
+    """판정순서 검증 — 1채널이라도 발화 0이면 구분불가 아니라 정상."""
+    cs = {"COUPANG": _ch(True, False), "NAVER": _ch(False, False)}
+    assert classify_pattern(cs)["verdict"] == "정상"
+
+
+# ── [3] run_verdict 배치 래퍼 (source별 독립) ──────────────────────
+def _fired(product, aspect, channel, source, fired):
+    return {"key": (product, aspect, channel, source), "fired": fired}
+
+
+def test_run_verdict_biased_single_group():
+    """한 채널만 발화 → 편중형, 그룹 1개."""
+    batch = [
+        _fired("P019", "색상", "COUPANG", "cs", True),
+        _fired("P019", "색상", "NAVER", "cs", False),
+        _fired("P019", "색상", "ZIGZAG", "cs", False),
+    ]
+    res = run_verdict(batch, held=[])
+    assert len(res) == 1
+    assert res[0]["verdict"] == "편중형"
+    assert res[0]["product"] == "P019"
+    assert res[0]["aspect"] == "색상"
+    assert res[0]["source"] == "cs"
+
+
+def test_run_verdict_held_makes_tentative_global():
+    """배치의 채널 전부 발화 + 그 상품 보류 채널 있음 → 잠정 전역형."""
+    batch = [
+        _fired("P020", "소재", "COUPANG", "cs", True),
+        _fired("P020", "소재", "NAVER", "cs", True),
+    ]
+    res = run_verdict(batch, held=[("P020", "ZIGZAG", "cs")])
+    assert res[0]["verdict"] == "잠정 전역형"
+    assert res[0]["held"] == ["ZIGZAG"]
+
+
+def test_run_verdict_is_per_source():
+    """같은 (상품,aspect)라도 source별로 독립 판정 — cs 전역형, review 편중형."""
+    batch = [
+        _fired("P019", "색상", "COUPANG", "cs", True),
+        _fired("P019", "색상", "NAVER", "cs", True),
+        _fired("P019", "색상", "COUPANG", "review", True),
+        _fired("P019", "색상", "NAVER", "review", False),
+    ]
+    res = run_verdict(batch, held=[])
+    by_source = {r["source"]: r["verdict"] for r in res}
+    assert by_source["cs"] == "전역형"       # cs 둘 다 발화
+    assert by_source["review"] == "편중형"   # review 일부만
+
+
+def test_run_verdict_held_channel_in_batch_not_double_counted():
+    """held 목록에 있어도 이 그룹 배치에 있으면 testable — held로 중복 처리 안 함."""
+    batch = [
+        _fired("P021", "색상", "COUPANG", "cs", True),
+        _fired("P021", "색상", "NAVER", "cs", True),  # NAVER는 cs 배치에 있음(=testable)
+    ]
+    # NAVER가 held 목록에 있으나(같은 cs) cs 배치엔 존재 → 배치 우선
+    res = run_verdict(batch, held=[("P021", "NAVER", "cs")])
+    assert res[0]["verdict"] == "전역형"   # 둘 다 testable·발화, 보류 없음
+    assert res[0]["held"] == []
+
+
+def test_run_verdict_held_is_source_specific():
+    """[검증-A] held는 source별 — cs에서 보류된 채널이 review 그룹엔 안 낀다.
+
+    ZIGZAG가 cs에서만 보류(review 데이터 없음)인데, source-무관 held였다면
+    review 그룹에 held로 잘못 끼어 전역형→잠정전역형으로 뒤집혔다. 이 버그 재현·방지.
+    """
+    batch = [
+        _fired("P022", "색상", "COUPANG", "review", True),
+        _fired("P022", "색상", "NAVER", "review", True),
+    ]
+    res = run_verdict(batch, held=[("P022", "ZIGZAG", "cs")])
+    assert res[0]["source"] == "review"
+    assert res[0]["verdict"] == "전역형"   # ZIGZAG(cs 보류)가 review 판정에 안 낌
+    assert res[0]["held"] == []
