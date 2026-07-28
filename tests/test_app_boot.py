@@ -39,7 +39,6 @@ def test_module_ping(path: str, module: str) -> None:
     [
         "/api/v1/classify",
         "/api/v1/detect",
-        "/api/v1/recommendations/generate",
         "/api/v1/reports",
         "/api/v1/replies",
     ],
@@ -48,6 +47,8 @@ def test_endpoints_are_registered_but_unimplemented(path: str) -> None:
     """실제 엔드포인트는 경로만 잡혀있고 아직 501.
 
     구현이 끝나면 이 테스트는 지우고 각 모듈 테스트로 옮기세요.
+    recommendations/generate·recommendations/hitl은 구현 완료 —
+    tests/test_recommendation_router.py로 옮겼다.
     """
     response = client.post(path, json={})
     assert response.status_code == 501
