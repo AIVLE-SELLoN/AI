@@ -151,4 +151,4 @@
 
 ## 분류 대상 CS 문의
 
-{cs_text}
+$cs_text
