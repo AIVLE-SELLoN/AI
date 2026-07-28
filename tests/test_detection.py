@@ -6,6 +6,12 @@
 
 import pytest
 
+from app.detection.aggregate import (
+    build_baseline,
+    build_combinations,
+    collect_texts,
+    count_window,
+)
 from app.detection.scope import is_in_scope, pick_main_aspect
 from app.detection.statistics import (
     build_batch,
@@ -278,3 +284,115 @@ def test_is_in_scope_true_for_recommendable():
 def test_is_in_scope_false_for_alert_only():
     for aspect in ("파손", "오배송", "기타"):
         assert is_in_scope(aspect) is False
+
+
+# ── [0] 집계 (로직 §[0] count_window / collect_texts) ─────────────
+def _row(product, channel, source, aspect, neg, day, rid="x", text="t"):
+    return {"product": product, "channel": channel, "source": source,
+            "aspect": aspect, "is_negative": neg, "day": day, "id": rid, "text": text}
+
+
+def test_count_window_denominator_is_aspect_agnostic():
+    """분모(총문의)는 aspect·감성 무관 전체, 분자는 부정+aspect 만. (문서 §129)"""
+    rows = [
+        _row("P1", "COUPANG", "cs", "색상", True, 30),   # 부정 색상
+        _row("P1", "COUPANG", "cs", "색상", True, 31),   # 부정 색상
+        _row("P1", "COUPANG", "cs", "사이즈", True, 32),  # 부정 사이즈
+        _row("P1", "COUPANG", "cs", "색상", False, 33),  # 색상 문의지만 긍정 → 분모만
+        _row("P1", "COUPANG", "cs", None, False, 34),    # aspect 없음 → 분모만
+    ]
+    totals, negs = count_window(rows, 29, 35)
+    assert totals[("P1", "COUPANG", "cs")] == 5          # 전부 분모
+    assert negs[("P1", "색상", "COUPANG", "cs")] == 2
+    assert negs[("P1", "사이즈", "COUPANG", "cs")] == 1
+
+
+def test_count_window_boundary_inclusive_and_excludes_outside():
+    rows = [
+        _row("P1", "COUPANG", "cs", "색상", True, 29),   # 시작 경계 포함
+        _row("P1", "COUPANG", "cs", "색상", True, 35),   # 끝 경계 포함
+        _row("P1", "COUPANG", "cs", "색상", True, 28),   # 구간 밖(과거) 제외
+        _row("P1", "COUPANG", "cs", "색상", True, 36),   # 구간 밖(미래) 제외
+    ]
+    totals, negs = count_window(rows, 29, 35)
+    assert totals[("P1", "COUPANG", "cs")] == 2
+    assert negs[("P1", "색상", "COUPANG", "cs")] == 2
+
+
+def test_count_window_source_separated():
+    """cs 와 review 는 분모를 합치지 않는다. (문서 §136)"""
+    rows = [
+        _row("P1", "COUPANG", "cs", "색상", True, 30),
+        _row("P1", "COUPANG", "review", "색상", True, 30),
+        _row("P1", "COUPANG", "review", "색상", False, 31),
+    ]
+    totals, _ = count_window(rows, 29, 35)
+    assert totals[("P1", "COUPANG", "cs")] == 1
+    assert totals[("P1", "COUPANG", "review")] == 2
+
+
+def test_collect_texts_gathers_negative_only_by_key():
+    rows = [
+        _row("P1", "COUPANG", "cs", "색상", True, 30, "INQ-1", "색이 달라요"),
+        _row("P1", "COUPANG", "cs", "색상", False, 31, "INQ-2", "색 만족"),   # 긍정 제외
+        _row("P1", "COUPANG", "cs", "색상", True, 40, "INQ-3", "구간 밖"),     # 구간 밖 제외
+    ]
+    texts = collect_texts(rows, 29, 35)
+    key = ("P1", "색상", "COUPANG", "cs")
+    assert texts[key] == [{"cs_id": "INQ-1", "raw_text": "색이 달라요"}]
+
+
+# ── [1] 과거 기준 (로직 §[1] build_baseline) ──────────────────────
+def test_build_baseline_uses_preceding_28_days():
+    """과거 윈도우 = [cur_start-28, cur_start-1]. cur_start=29 → 과거 [1,28]."""
+    rows = [
+        _row("P1", "COUPANG", "cs", "색상", True, 1),    # 과거 시작 경계
+        _row("P1", "COUPANG", "cs", "색상", True, 28),   # 과거 끝 경계
+        _row("P1", "COUPANG", "cs", "색상", True, 29),   # 현재 → 과거 아님
+        _row("P1", "COUPANG", "cs", "색상", True, 0),    # 28일 밖 → 제외
+    ]
+    totals, negs = build_baseline(rows, cur_start=29)
+    assert totals[("P1", "COUPANG", "cs")] == 2
+    assert negs[("P1", "색상", "COUPANG", "cs")] == 2
+
+
+def test_build_baseline_excludes_alert_days():
+    """알림 구간 날짜(상품,채널,day)는 과거 집계에서 제외 — 기준선 오염 방지(§150)."""
+    rows = [
+        _row("P1", "COUPANG", "cs", "색상", True, 10),
+        _row("P1", "COUPANG", "cs", "색상", True, 11),   # 이 날이 알림 구간
+        _row("P1", "COUPANG", "cs", "색상", True, 12),
+    ]
+    totals, negs = build_baseline(
+        rows, cur_start=29, alert_days={("P1", "COUPANG", 11)}
+    )
+    assert totals[("P1", "COUPANG", "cs")] == 2          # day11 통째로 빠짐
+    assert negs[("P1", "색상", "COUPANG", "cs")] == 2
+
+
+# ── [0]+[1] 조합 빌더 (build_combinations) ────────────────────────
+def test_build_combinations_emits_full_grid_with_zero_fill():
+    """관측된 (상품,채널,source)마다 aspects 전 슬롯 방출 — 부정 없는 aspect 는 0으로."""
+    rows = [
+        _row("P1", "COUPANG", "cs", "색상", True, 30),   # 현재 부정
+        _row("P1", "COUPANG", "cs", "색상", True, 5),    # 과거 부정
+        _row("P1", "COUPANG", "cs", "사이즈", False, 31),  # 분모만
+    ]
+    combos, _ = build_combinations(
+        rows, 29, 35, aspects=["색상", "사이즈", "소재"]
+    )
+    by_aspect = {c[1]: c[4] for c in combos if c[0] == "P1"}
+    assert set(by_aspect) == {"색상", "사이즈", "소재"}   # 전 aspect 슬롯 존재
+    assert by_aspect["색상"] == (1, 2, 1, 1)   # cur_neg,cur_total,past_neg,past_total
+    assert by_aspect["사이즈"] == (0, 2, 0, 1)  # 부정 0 이어도 슬롯은 나옴
+    assert by_aspect["소재"] == (0, 2, 0, 1)    # 관측조차 없어도 그리드엔 포함
+
+
+def test_build_combinations_texts_only_current_negatives():
+    rows = [
+        _row("P1", "COUPANG", "cs", "색상", True, 30, "INQ-1", "현재부정"),
+        _row("P1", "COUPANG", "cs", "색상", True, 5, "INQ-2", "과거부정"),
+    ]
+    _, texts = build_combinations(rows, 29, 35, aspects=["색상"])
+    key = ("P1", "색상", "COUPANG", "cs")
+    assert texts[key] == [{"cs_id": "INQ-1", "raw_text": "현재부정"}]
