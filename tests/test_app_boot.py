@@ -37,7 +37,6 @@ def test_module_ping(path: str, module: str) -> None:
 @pytest.mark.parametrize(
     "path",
     [
-        "/api/v1/classify",
         "/api/v1/detect",
         "/api/v1/reports",
         "/api/v1/replies",

@@ -107,15 +107,17 @@ def get_background_products(all_products: list[dict], case_products: set[str]) -
 #    없으면 플레이스홀더로 대체(매핑 파일 아직 42상품 기준으로 재생성 전이면 이 경로를 탐)
 # ────────────────────────────────────────────────────────────────
 
-def load_channel_product_id_map(mapping_dir: str | None) -> dict[tuple[str, str], str]:
-    """(golden_group_id, channel) -> channel_product_id"""
+def load_channel_product_id_map(mapping_dir: str | None, golden_mapping_dir: str | None = None) -> dict[tuple[str, str], str]:
+    """(golden_group_id, channel) -> channel_product_id
+    golden_mapping_dir 생략 시 mapping_dir과 동일(하위호환 — golden/input이 한 폴더에 같이 있던 예전 구조)."""
     if not mapping_dir:
         return {}
     mapping_dir = Path(mapping_dir)
-    golden_path = mapping_dir / "golden_mapping.csv"
+    golden_dir = Path(golden_mapping_dir) if golden_mapping_dir else mapping_dir
+    golden_path = golden_dir / "golden_mapping.csv"
     raw_path = mapping_dir / "input_channel_products.csv"
     if not (golden_path.exists() and raw_path.exists()):
-        print(f"  ⚠️ 매핑 파일을 {mapping_dir}에서 못 찾음 — 플레이스홀더 ID로 대체")
+        print(f"  ⚠️ 매핑 파일을 찾을 수 없음(golden: {golden_path}, input: {raw_path}) — 플레이스홀더 ID로 대체")
         return {}
 
     with open(golden_path, encoding="utf-8-sig") as f:
@@ -242,15 +244,17 @@ class TextGenerator:
         collected: list[dict] = []
         remaining = dict(cause_counts)
 
-        for round_num in range(1, 4):  # 1라운드(전체) + 부족분 보충 최대 2라운드
+        for round_num in range(1, 5):  # 1라운드(전체) + 부족분 보충 최대 3라운드
             req_lines = "\n".join(f"- {c}: {n}건" for c, n in remaining.items() if n > 0)
             if round_num == 1:
                 user_msg = f"aspect: {aspect}\n요청 개수:\n{req_lines}\n총 {total}건, 위 개수를 정확히 지켜서 생성하세요."
             else:
                 shortfall = sum(remaining.values())
+                already_written = "\n".join(f"- {i['text']}" for i in collected)
                 user_msg = (
                     f"aspect: {aspect}\n이전 요청에서 아래 원인이 부족했습니다. "
-                    f"정확히 이 개수만큼만 추가로 생성하세요(총 {shortfall}건):\n{req_lines}"
+                    f"정확히 이 개수만큼만 추가로 생성하세요(총 {shortfall}건):\n{req_lines}\n\n"
+                    f"⚠️ 아래는 이미 작성된 문장들입니다. 이것들과 겹치지 않는 새로운 문장을 쓰세요:\n{already_written}"
                 )
             combined_prompt = f"{self.cause_system_prompt}\n\n---\n\n{user_msg}"
 
@@ -264,11 +268,15 @@ class TextGenerator:
 
             items = data.get("texts", [])
             got_this_round = Counter()
+            seen_texts = {i["text"] for i in collected}  # 이미 확보된 문장(전체 라운드 누적) — 중복 강제 차단
             for item in items:
                 c = item.get("cause")
-                if remaining.get(c, 0) > got_this_round[c]:  # 필요한 만큼만 채택(초과분은 버림)
+                text = item.get("text", "")
+                if remaining.get(c, 0) > got_this_round[c] and text not in seen_texts:
                     collected.append(item)
                     got_this_round[c] += 1
+                    seen_texts.add(text)
+                # else: 중복 문장이거나 이미 채워진 원인 → 버리고, 그 개수는 여전히 "부족"으로 남김
 
             for c in list(remaining):
                 remaining[c] -= got_this_round.get(c, 0)
@@ -641,12 +649,16 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--anomaly-config", default="config_anomaly.csv")
     ap.add_argument("--products-config", default="config_products.csv")
-    ap.add_argument("--mapping-dir", default=None, help="golden_mapping.csv/input_channel_products.csv 위치")
+    ap.add_argument("--mapping-dir", default=None, help="input_channel_products.csv 위치")
+    ap.add_argument("--golden-mapping-dir", default=None,
+                     help="golden_mapping.csv 위치(생략 시 --mapping-dir와 동일 — 하위호환)")
     ap.add_argument("--templates", default="templates.yaml", help="분모용(denom) 텍스트 템플릿 사전")
     ap.add_argument("--cause-prompt", default="prompts/generate_cause_text_v1.md", help="원인분류 투입분 생성 프롬프트")
     ap.add_argument("--cause-cache", default="cause_text_cache.json", help="cause 텍스트 캐시(재실행 시 재호출 방지)")
     ap.add_argument("--no-llm-cause", action="store_true", help="LLM 없이 cause도 플레이스홀더로(오프라인 테스트용)")
-    ap.add_argument("--outdir", default="./output")
+    ap.add_argument("--outdir", default="./output", help="input_*.csv 출력 디렉토리")
+    ap.add_argument("--golden-outdir", default=None,
+                     help="golden_*.csv 출력 디렉토리(생략 시 --outdir와 동일 — 하위호환)")
     ap.add_argument("--anchor-date", required=True, help="Day 60에 해당하는 날짜, 예: 2026-08-28")
     ap.add_argument("--seed", type=int, default=11)
     args = ap.parse_args()
@@ -662,7 +674,7 @@ def main():
 
     anomaly_rows = load_anomaly_config(args.anomaly_config)
     products = load_products_config(args.products_config)
-    pid_map = load_channel_product_id_map(args.mapping_dir)
+    pid_map = load_channel_product_id_map(args.mapping_dir, args.golden_mapping_dir)
 
     anomaly_groups = group_anomaly_rows(anomaly_rows)
     multi_aspect_groups = [k for k, v in anomaly_groups.items() if len(v) > 1]
@@ -723,11 +735,13 @@ def main():
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
+    golden_outdir = Path(args.golden_outdir) if args.golden_outdir else outdir
+    golden_outdir.mkdir(parents=True, exist_ok=True)
     write_csv(cs_data, outdir / "input_cs_inquiries.csv")
-    write_csv(cs_labels, outdir / "golden_cs_labels.csv")
+    write_csv(cs_labels, golden_outdir / "golden_cs_labels.csv")
     write_csv(review_data, outdir / "input_reviews.csv")
-    write_csv(review_labels, outdir / "golden_review_labels.csv")
-    print(f"저장 완료 → {outdir}/")
+    write_csv(review_labels, golden_outdir / "golden_review_labels.csv")
+    print(f"저장 완료 → input: {outdir}/, golden: {golden_outdir}/")
 
     validate_against_config(anomaly_rows, cs_labels, review_labels)
 

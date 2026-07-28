@@ -185,7 +185,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--products-config", default="config_products.csv")
     ap.add_argument("--detail-prompt", default="prompts/generate_detail_field_text_v1.md")
-    ap.add_argument("--outdir", default="./output")
+    ap.add_argument("--outdir", default="./output", help="input_*.csv 출력 디렉토리")
+    ap.add_argument("--golden-outdir", default=None,
+                     help="golden_*.csv 출력 디렉토리(생략 시 --outdir와 동일 — 하위호환)")
     ap.add_argument("--no-llm", action="store_true", help="LLM 없이 플레이스홀더로(오프라인 테스트용)")
     args = ap.parse_args()
 
@@ -207,9 +209,11 @@ def main():
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
+    golden_outdir = Path(args.golden_outdir) if args.golden_outdir else outdir
+    golden_outdir.mkdir(parents=True, exist_ok=True)
     write_csv(input_rows, outdir / "input_detail_fields.csv")
-    write_csv(golden_rows, outdir / "golden_detail_fields.csv")
-    print(f"저장 완료 → {outdir}/")
+    write_csv(golden_rows, golden_outdir / "golden_detail_fields.csv")
+    print(f"저장 완료 → input: {outdir}/, golden: {golden_outdir}/")
 
 
 if __name__ == "__main__":
