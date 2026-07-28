@@ -2,6 +2,8 @@
 너의 임무는 새로운 원인을 만들거나 문장을 요약·생성하는 것이 아니라, 주어진 원인 후보 중
 가장 정확히 들어맞는 하나를 고르는 것이다.
 
+한 번에 같은 aspect 의 문의 여러 건(items)이 배치로 들어온다. 각 문의를 독립적으로 분류한다.
+
 [분류 규칙]
 1. 입력으로 주어지는 aspect의 원인 후보 중에서만 고른다. 다른 aspect의 후보는 쓰지 않는다.
 2. 한 문의에 여러 원인이 섞여 있으면, 고객의 "핵심 불만"에 해당하는 원인 하나만 고른다.
@@ -10,7 +12,8 @@
    (예: aspect=색상인데 내용이 배송 지연 불만이면 false)
 5. evidence는 반드시 원문에 실제로 존재하는 구절을 그대로 인용한다. 바꿔 쓰지 않는다.
 6. confidence는 단서가 명확할수록 높게(0.8~1.0), 애매하면 낮게(0.3~0.6) 준다.
-7. 출력은 지정된 JSON 하나만. 설명 문장 금지.
+7. 출력은 지정된 JSON 하나만 — results 배열. 입력 items 와 **같은 개수·같은 순서**로,
+   문의 1건당 결과 1개(cs_id로 대응). 설명 문장 금지.
 
 [원인 후보 정의와 판별 단서]  ← 아래 블록 중 입력 aspect에 해당하는 것만 참조
 
@@ -46,39 +49,36 @@
 - 기타 : 위 셋에 해당하지 않음.
   우선순위: 품질 결함(실·보풀·부실) → 실제_원단_문제 / 정보 부재 지목 → 소재_정보_누락 / 얇음·비침 등 질감 예상 밖 → 이미지_질감표현_부족.
 
+[입력 형식]  aspect 는 배치 전체 공통. items 의 각 문의를 그 aspect 기준으로 분류한다.
+{"aspect": "색상", "items": [{"cs_id": "...", "raw_text": "..."}, ...]}
+
 [출력 형식]
-{"cs_id": "...", "aspect": "...", "cause": "...", "confidence": 0.0, "evidence": "...", "aspect_match": true}
+{"results": [{"cs_id": "...", "cause": "...", "confidence": 0.0, "evidence": "...", "aspect_match": true}, ...]}
 
 [예시]
-입력: {"cs_id":"a1","aspect":"색상","raw_text":"사진이랑 실물 색이 너무 달라요. 화면에서 본 것보다 훨씬 어두워요"}
-출력: {"cs_id":"a1","aspect":"색상","cause":"사진_색감_오차","confidence":0.93,"evidence":"사진이랑 실물 색이 너무 달라요","aspect_match":true}
+입력: {"aspect":"색상","items":[
+  {"cs_id":"a1","raw_text":"사진이랑 실물 색이 너무 달라요. 화면에서 본 것보다 훨씬 어두워요"},
+  {"cs_id":"a2","raw_text":"조명 때문인지 매장하고 색이 다르게 보이네요"},
+  {"cs_id":"a3","raw_text":"원단 색이 원래 이런 건가요? 얼룩덜룩해요"},
+  {"cs_id":"d1","raw_text":"색은 예쁜데 배송이 너무 늦게 왔어요"}
+]}
+출력: {"results":[
+  {"cs_id":"a1","cause":"사진_색감_오차","confidence":0.93,"evidence":"사진이랑 실물 색이 너무 달라요","aspect_match":true},
+  {"cs_id":"a2","cause":"조명_보정_차이","confidence":0.88,"evidence":"조명 때문인지","aspect_match":true},
+  {"cs_id":"a3","cause":"실물_염색_편차","confidence":0.9,"evidence":"원단 색이 원래 이런 건가요","aspect_match":true},
+  {"cs_id":"d1","cause":"기타","confidence":0.3,"evidence":"","aspect_match":false}
+]}
 
-입력: {"cs_id":"a2","aspect":"색상","raw_text":"조명 때문인지 매장하고 색이 다르게 보이네요"}
-출력: {"cs_id":"a2","aspect":"색상","cause":"조명_보정_차이","confidence":0.88,"evidence":"조명 때문인지","aspect_match":true}
-
-입력: {"cs_id":"a3","aspect":"색상","raw_text":"원단 색이 원래 이런 건가요? 얼룩덜룩해요"}
-출력: {"cs_id":"a3","aspect":"색상","cause":"실물_염색_편차","confidence":0.9,"evidence":"원단 색이 원래 이런 건가요","aspect_match":true}
-
-입력: {"cs_id":"b1","aspect":"사이즈","raw_text":"실측해보니 표기보다 2cm나 작게 나와요"}
-출력: {"cs_id":"b1","aspect":"사이즈","cause":"실측_표기_편차","confidence":0.92,"evidence":"실측해보니 표기보다 2cm나 작게","aspect_match":true}
-
-입력: {"cs_id":"b2","aspect":"사이즈","raw_text":"다른 쇼핑몰에서 산 같은 사이즈보다 이게 훨씬 작아요"}
-출력: {"cs_id":"b2","aspect":"사이즈","cause":"채널_사이즈_표준차이","confidence":0.85,"evidence":"다른 쇼핑몰에서 산 같은 사이즈보다","aspect_match":true}
-
-입력: {"cs_id":"b3","aspect":"사이즈","raw_text":"그냥 좀 작은 것 같아요"}
-출력: {"cs_id":"b3","aspect":"사이즈","cause":"기타","confidence":0.4,"evidence":"그냥 좀 작은 것 같아요","aspect_match":true}
-
-입력: {"cs_id":"c1","aspect":"소재","raw_text":"소재가 안 적혀 있어서 뭔지 모르고 샀는데 예상과 달라요"}
-출력: {"cs_id":"c1","aspect":"소재","cause":"소재_정보_누락","confidence":0.9,"evidence":"소재가 안 적혀 있어서","aspect_match":true}
-
-입력: {"cs_id":"c2","aspect":"소재","raw_text":"생각보다 원단이 너무 얇고 비침이 심해요"}
-출력: {"cs_id":"c2","aspect":"소재","cause":"이미지_질감표현_부족","confidence":0.82,"evidence":"너무 얇고 비침이 심해요","aspect_match":true}
-
-입력: {"cs_id":"c3","aspect":"소재","raw_text":"입자마자 실이 계속 나오고 올이 풀려요"}
-출력: {"cs_id":"c3","aspect":"소재","cause":"실제_원단_문제","confidence":0.94,"evidence":"실이 계속 나오고 올이 풀려요","aspect_match":true}
-
-입력: {"cs_id":"d1","aspect":"색상","raw_text":"색은 예쁜데 배송이 너무 늦게 왔어요"}
-출력: {"cs_id":"d1","aspect":"색상","cause":"기타","confidence":0.3,"evidence":"","aspect_match":false}
+입력: {"aspect":"사이즈","items":[
+  {"cs_id":"b1","raw_text":"실측해보니 표기보다 2cm나 작게 나와요"},
+  {"cs_id":"b2","raw_text":"다른 쇼핑몰에서 산 같은 사이즈보다 이게 훨씬 작아요"},
+  {"cs_id":"b3","raw_text":"그냥 좀 작은 것 같아요"}
+]}
+출력: {"results":[
+  {"cs_id":"b1","cause":"실측_표기_편차","confidence":0.92,"evidence":"실측해보니 표기보다 2cm나 작게","aspect_match":true},
+  {"cs_id":"b2","cause":"채널_사이즈_표준차이","confidence":0.85,"evidence":"다른 쇼핑몰에서 산 같은 사이즈보다","aspect_match":true},
+  {"cs_id":"b3","cause":"기타","confidence":0.4,"evidence":"그냥 좀 작은 것 같아요","aspect_match":true}
+]}
 
 입력: $input_json
 출력:
