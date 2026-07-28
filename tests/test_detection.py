@@ -6,6 +6,7 @@
 
 import pytest
 
+from app.detection.scope import is_in_scope, pick_main_aspect
 from app.detection.statistics import (
     build_batch,
     decide_fires,
@@ -245,3 +246,35 @@ def test_run_verdict_held_is_source_specific():
     assert res[0]["source"] == "review"
     assert res[0]["verdict"] == "전역형"   # ZIGZAG(cs 보류)가 review 판정에 안 낌
     assert res[0]["held"] == []
+
+
+# ── [4] 주 aspect 선택 (로직 §[4] pick_main_aspect) ────────────────
+def test_pick_main_aspect_max_delta():
+    """delta 최대가 main, 나머지는 subs (버리지 않음)."""
+    main, subs = pick_main_aspect({"색상": 0.080, "파손": 0.070})
+    assert main == "색상"
+    assert subs == ["파손"]
+
+
+def test_pick_main_aspect_single():
+    """발화 aspect 1개면 그게 main, subs 비어있음."""
+    main, subs = pick_main_aspect({"소재": 0.05})
+    assert main == "소재"
+    assert subs == []
+
+
+def test_pick_main_aspect_three():
+    main, subs = pick_main_aspect({"색상": 0.03, "사이즈": 0.09, "소재": 0.05})
+    assert main == "사이즈"
+    assert set(subs) == {"색상", "소재"}
+
+
+# ── [5] 스코프 필터 (로직 §[5] is_in_scope) ────────────────────────
+def test_is_in_scope_true_for_recommendable():
+    for aspect in ("색상", "사이즈", "소재"):
+        assert is_in_scope(aspect) is True
+
+
+def test_is_in_scope_false_for_alert_only():
+    for aspect in ("파손", "오배송", "기타"):
+        assert is_in_scope(aspect) is False

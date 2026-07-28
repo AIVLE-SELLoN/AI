@@ -400,7 +400,10 @@ def write_csv(rows: list[dict], path: Path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default="config_products.csv", help="상품 시나리오 설정 CSV")
-    ap.add_argument("--outdir", default="./output", help="출력 디렉토리")
+    ap.add_argument("--outdir", default="./output", help="input_*.csv 출력 디렉토리")
+    ap.add_argument("--golden-outdir", default=None,
+                     help="golden_*.csv 출력 디렉토리(생략 시 --outdir와 동일 — 하위호환). "
+                          "README 원칙상 data/golden/처럼 input과 분리된 경로 지정 권장")
     ap.add_argument("--seed", type=int, default=11, help="재현성을 위한 랜덤 시드")
     ap.add_argument("--price-variance", type=float, default=0.15, help="채널별 가격 편차 범위(±)")
     ap.add_argument("--validate-only", action="store_true", help="생성 없이 검증만 수행")
@@ -437,9 +440,11 @@ def main():
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    write_csv(golden_rows, outdir / "golden_mapping.csv")
+    golden_outdir = Path(args.golden_outdir) if args.golden_outdir else outdir
+    golden_outdir.mkdir(parents=True, exist_ok=True)
+    write_csv(golden_rows, golden_outdir / "golden_mapping.csv")
     write_csv(raw_rows, outdir / "input_channel_products.csv")
-    print(f"\n생성 완료 → {outdir}/golden_mapping.csv, {outdir}/input_channel_products.csv")
+    print(f"\n생성 완료 → {golden_outdir}/golden_mapping.csv, {outdir}/input_channel_products.csv")
 
 
 if __name__ == "__main__":

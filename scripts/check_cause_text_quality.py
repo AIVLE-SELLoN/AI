@@ -23,7 +23,15 @@ import json
 import re
 from collections import Counter
 
-CS_MARKERS = ["?", "까요", "부탁", "가능", "해주세요", "해주실", "드립니다", "드려요", "인가요", "싶어요", "주세요"]
+CS_MARKERS = [
+    "?", "까요", "부탁", "가능", "해주세요", "해주실", "드립니다", "드려요",
+    "인가요", "싶어요", "주세요",
+    "필요해요", "필요합니다", "필요할",  # "~확인이 필요해요" 류 — 요청 표현
+    "궁금해요", "궁금합니다",             # "~어떤지 궁금해요" 류 — 질문 대체 표현
+    "싶습니다",                          # "싶어요"의 정중체
+    "요청합니다", "요청드립니다",
+    "것 같아요", "것 같습니다",           # CS에서 흔한 완곡한 불만/관찰 서술("잘못 표현된 것 같아요")
+]
 
 # aspect별 원인 그룹 (같은 aspect 안에서만 단어 중복도를 비교해야 의미 있음)
 ASPECT_CAUSES = {
@@ -49,7 +57,7 @@ def check_case(case_id_aspect: str, items: list[dict]) -> dict:
     # 1) CS 문의체 여부
     non_cs = [i for i in items if not is_cs_toned(i["text"])]
     if non_cs:
-        result["issues"].append(f"CS 문의체 아님 의심 {len(non_cs)}건: {[i['text'][:30] for i in non_cs[:3]]}")
+        result["issues"].append(f"CS 문의체 아님 의심 {len(non_cs)}건: {[i['text'] for i in non_cs]}")
 
     # 2) 완전 중복 문장
     texts = [i["text"] for i in items]
