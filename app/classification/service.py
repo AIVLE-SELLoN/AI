@@ -40,7 +40,7 @@ class ClassifyRequestItem(BaseModel):
 #
 # 🔴 프롬프트2는 아직 확정본이 아님. ver2 마무리 + ver3 파일럿 평가가 남아있음
 #    (주간계획 목요일 예정). 평가 끝나면 이 상수만 바꾸면 됨 — 호출부는 안 건드림.
-PROMPT_ASPECT_VERSION = "classify_aspect_v2"       # 프롬프트1(CS) — 파일럿 42건 오류분석 반영판
+PROMPT_ASPECT_VERSION = "classify_aspect_v3"       # 프롬프트1(CS) — 파일럿 42건 오류분석 반영판
 PROMPT_SENTIMENT_VERSION = "classify_sentiment_v1"  # 프롬프트2(리뷰) — TODO(현진): ver2/ver3 평가 후 교체
 
 
