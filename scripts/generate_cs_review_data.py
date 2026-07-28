@@ -646,7 +646,9 @@ def main():
     ap.add_argument("--cause-prompt", default="prompts/generate_cause_text_v1.md", help="원인분류 투입분 생성 프롬프트")
     ap.add_argument("--cause-cache", default="cause_text_cache.json", help="cause 텍스트 캐시(재실행 시 재호출 방지)")
     ap.add_argument("--no-llm-cause", action="store_true", help="LLM 없이 cause도 플레이스홀더로(오프라인 테스트용)")
-    ap.add_argument("--outdir", default="./output")
+    ap.add_argument("--outdir", default="./output", help="input_*.csv 출력 디렉토리")
+    ap.add_argument("--golden-outdir", default=None,
+                     help="golden_*.csv 출력 디렉토리(생략 시 --outdir와 동일 — 하위호환)")
     ap.add_argument("--anchor-date", required=True, help="Day 60에 해당하는 날짜, 예: 2026-08-28")
     ap.add_argument("--seed", type=int, default=11)
     args = ap.parse_args()
@@ -723,11 +725,13 @@ def main():
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
+    golden_outdir = Path(args.golden_outdir) if args.golden_outdir else outdir
+    golden_outdir.mkdir(parents=True, exist_ok=True)
     write_csv(cs_data, outdir / "input_cs_inquiries.csv")
-    write_csv(cs_labels, outdir / "golden_cs_labels.csv")
+    write_csv(cs_labels, golden_outdir / "golden_cs_labels.csv")
     write_csv(review_data, outdir / "input_reviews.csv")
-    write_csv(review_labels, outdir / "golden_review_labels.csv")
-    print(f"저장 완료 → {outdir}/")
+    write_csv(review_labels, golden_outdir / "golden_review_labels.csv")
+    print(f"저장 완료 → input: {outdir}/, golden: {golden_outdir}/")
 
     validate_against_config(anomaly_rows, cs_labels, review_labels)
 
