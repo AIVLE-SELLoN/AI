@@ -81,6 +81,25 @@ def test_fails_when_rationale_not_consistent_with_root_cause(biased_alert):
     assert "원인 라벨" in result.failure_reason
 
 
+def test_passes_with_naturally_paraphrased_rationale(biased_alert):
+    """실제 LLM은 라벨을 언더스코어째로 안 베끼고 자연스럽게 풀어쓴다 — 그래도 통과해야 한다.
+
+    2026-07-27 버그: 라벨 전체("사진_색감_오차")를 한 덩어리로 대조해서, 자연스럽게
+    풀어쓴 문장은 전부 실패 처리됐었다(API 호출 없이 정적으로 재현·수정 확인).
+    """
+    proposal = _proposal(
+        ProposalType.COPY_DRAFT,
+        "아이보리 컬러",
+        rationale="사진 색감이 실제 상품과 다르게 촬영되어 발생한 문제로 보입니다",
+    )
+    context = {"detail_text": "아이보리 컬러", "cs_summary": "무관", "similar_case": None}
+
+    result = evaluate(proposal, biased_alert, context)
+
+    assert result.passed is True
+    assert result.checks.consistency is True
+
+
 def test_fails_when_proposed_text_not_actionable(biased_alert):
     proposal = _proposal(ProposalType.COPY_DRAFT, "아이보리 컬러", proposed_text="색상이 좀 이상한 것 같습니다")
     context = {"detail_text": "아이보리 컬러", "cs_summary": "무관", "similar_case": None}

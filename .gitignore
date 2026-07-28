@@ -32,6 +32,9 @@ data/config/*.csv
 # 코드 실행에 필요한 값은 루트의 개발환경-컨벤션.md 로 옮겨 적어서 커밋한다.
 md파일 모음/
 
+# Claude Code 세션 메모 — 개인 작업 컨텍스트라 저장소에 커밋하지 않는다.
+CLAUDE.md
+
 # OS / IDE
 .DS_Store
 Thumbs.db

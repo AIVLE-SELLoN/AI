@@ -28,10 +28,9 @@ from pathlib import Path
 from typing import Any
 
 from app.core.constants import MAX_RETRY, SIMILAR_CASE_TOP_N
-from app.core.exceptions import EvidenceNotFoundError
+from app.core.exceptions import EvidenceNotFoundError, LlmParseError
 from app.core.llm_client import get_llm_client
 from app.core.schemas import (
-    Citation,
     DetectionAlert,
     DetectionConfidence,
     Evaluator,
@@ -118,7 +117,29 @@ _DETECTION_CONFIDENCE_CAP = {
 """탐지확신도→개선안확신도 상한 매핑(§5-1). should_generate 게이트 통과분은 실무적으로
 HIGH/MEDIUM만 들어오지만, LOW/NOT_APPLICABLE도 방어적으로 가장 낮은 상한을 매핑해둔다."""
 
+ETC_LABEL = "기타"
+"""원인 라벨이 "기타"면 확신도 상한을 중간으로 캡핑한다(팀 §4-3 도구선택표). 라우팅
+(어떤 tool을 쓸지)은 그대로 LLM이 판단하고, 확신도만 후처리로 깎는다 — score_confidence 참고."""
+
+SCOPE_LIMIT_LABELS = ("실물_염색_편차", "실제_원단_문제")
+"""텍스트도 사진도 해결 못하는 실제 상품/공급 단계 문제(팀 §4-3 도구선택표 스코프 한계
+예외). LLM 호출 없이 고정 문구로 대체하고 확신도는 낮음으로 못박는다 — 생성해봐야
+지어내는 것밖에 안 되는 케이스라 애초에 LLM을 안 부른다."""
+
+SCOPE_LIMIT_PROPOSED_TEXT = "상품 자체 또는 공급 단계 문제일 수 있습니다. 실물 상태와 공급처를 확인해보세요."
+
 MAX_ATTEMPTS = MAX_RETRY + 1
+
+assert MAX_ATTEMPTS <= 3, (
+    "core/schemas.py의 Evaluator.attempts는 Field(ge=1, le=3)로 상한이 3 고정이다. "
+    "MAX_RETRY를 올려서 MAX_ATTEMPTS가 3을 넘으면 assemble()에서 ValidationError가 "
+    "터진다 — schemas.py도 같이 안 고치면 MAX_RETRY를 올리지 말 것."
+)
+
+RETRY_TEMPERATURES = (0.0, 0.4, 0.7)
+"""재시도 회차별 temperature. 1차는 재현성 위해 0.0, 이후엔 올려서 같은 프롬프트라도
+다른 답이 나올 여지를 준다 — 실패 피드백과 같이 써야 재시도가 실질적으로 의미 있다.
+MAX_ATTEMPTS보다 짧으면 마지막 값을 반복 사용(run()의 인덱싱 참고)."""
 
 
 def should_generate(alert: DetectionAlert) -> bool:
@@ -202,11 +223,21 @@ async def route_proposal_type(alert: DetectionAlert, context: dict) -> ProposalT
     result = await get_llm_client().choose_tool(
         prompt, tools=ROUTING_TOOLS, trace_key=f"alert_id={alert.alert_id}"
     )
-    return _TOOL_NAME_TO_PROPOSAL_TYPE[result["name"]]
+    tool_name = result["name"]
+    if tool_name not in _TOOL_NAME_TO_PROPOSAL_TYPE:
+        raise LlmParseError(
+            f"모델이 알 수 없는 tool을 호출함: {tool_name!r} [alert_id={alert.alert_id}]"
+        )
+    return _TOOL_NAME_TO_PROPOSAL_TYPE[tool_name]
 
 
 async def generate_proposal(
-    alert: DetectionAlert, proposal_type: ProposalType, context: dict
+    alert: DetectionAlert,
+    proposal_type: ProposalType,
+    context: dict,
+    *,
+    previous_failure: str | None = None,
+    temperature: float = 0.0,
 ) -> Proposal:
     """개선안 생성 — OpenAI 호출(core/llm_client.py 경유), 슬롯 채우기 방식.
 
@@ -215,6 +246,11 @@ async def generate_proposal(
     evaluate()가 실제 근거(context)와 문자 그대로 대조해 사후 검증한다(§4-3). type
     (route_proposal_type 결과)·target_field·detailpage_grounded는 alert/context에서
     이미 알고 있어 LLM에 맡기지 않는다.
+
+    previous_failure/temperature는 run()의 재시도 전용 — temperature=0.0 고정에
+    같은 프롬프트를 그대로 재요청하면 거의 같은 답이 나와서 재시도가 사실상 무의미
+    했던 버그를 고친다(2026-07-27). 실패 이유를 프롬프트에 실제로 알려줘야 LLM이
+    진짜 다른 시도를 할 수 있다.
     """
     root_cause_label = alert.root_cause.label if alert.root_cause else "미상"
     anomaly = f"{alert.channel.value} · {alert.main_aspect.value} 이상 (원인: {root_cause_label})"
@@ -231,7 +267,17 @@ async def generate_proposal(
             anomaly=anomaly, cs_summary=evidence_text, rejection_reasons=rejection_reasons
         )
 
-    response = await get_llm_client().complete_json(prompt, trace_key=f"alert_id={alert.alert_id}")
+    if previous_failure:
+        prompt += (
+            "\n\n## 이전 시도 피드백\n"
+            f"직전 시도가 다음 이유로 검증에 실패했습니다: {previous_failure}\n"
+            "이번엔 이 문제를 피해서 다시 작성하세요 — 인용은 근거 원문에 실제로 있는 문구만 "
+            "그대로 사용하고, rationale에는 원인 분류 라벨을 명확히 언급하세요."
+        )
+
+    response = await get_llm_client().complete_json(
+        prompt, trace_key=f"alert_id={alert.alert_id}", temperature=temperature
+    )
 
     return Proposal(
         type=proposal_type,
@@ -267,17 +313,46 @@ async def generate_fallback_proposal(alert: DetectionAlert, proposal_type: Propo
     )
 
 
+def _build_scope_limit_proposal(alert: DetectionAlert) -> Proposal:
+    """스코프 한계 원인(SCOPE_LIMIT_LABELS) 전용 — LLM 호출 없이 고정 문구(§4-3).
+
+    텍스트·이미지 어느 쪽으로도 해결 안 되는 원인이라고 표에 이미 정해져 있어서,
+    LLM한테 뭘 만들라고 시켜봐야 근거 없이 지어내는 것밖에 안 된다. type은 copy_draft로
+    고정(§4-3 표기 그대로), current_text는 인용할 근거가 없으므로 NO_DETAIL_TEXT.
+    """
+    return Proposal(
+        type=ProposalType.COPY_DRAFT,
+        target_field=alert.main_aspect,
+        current_text=NO_DETAIL_TEXT,
+        proposed_text=SCOPE_LIMIT_PROPOSED_TEXT,
+        rationale=f"원인 분류: {alert.root_cause.label} — 텍스트·이미지로 해결 불가능한 상품/공급 단계 문제로 판단(§4-3)",
+        detailpage_grounded=False,
+    )
+
+
 def _is_consistent_with_root_cause(rationale: str, alert: DetectionAlert) -> bool:
     """rationale이 실제 진단된 원인 라벨을 근거로 삼고 있는지(자기일관성, §2 방법4).
 
     grounding은 통과해도(current_text는 진짜 인용) rationale이 엉뚱한 사유를 댈 수
-    있다 — 이 경우를 잡는다. has_evidence()의 정규화+부분일치 로직을 재사용해서
-    rationale 안에 root_cause.label이 실제로 언급됐는지 확인한다. root_cause가
-    없으면(원칙적으로 게이트에서 걸러지지만 방어적으로) 검사 대상이 없으니 통과 처리.
+    있다 — 이 경우를 잡는다. root_cause가 없으면(원칙적으로 게이트에서 걸러지지만
+    방어적으로) 검사 대상이 없으니 통과 처리.
+
+    라벨을 "_"로 쪼갠 조각 단위로 확인한다(예: "사진_색감_오차" → 사진/색감/오차) —
+    라벨 문자열을 통째로 has_evidence()에 넣으면 실패한다. LLM은 자연스러운 문장으로
+    풀어쓰지("사진 색감이 다르게 촬영되어") 라벨을 언더스코어째로 그대로 베끼지 않고,
+    그러면 정규화를 거쳐도 "_"가 살아있는 라벨 원문과 안 겹쳐서 항상 False가 나왔다
+    (2026-07-27 버그 발견·수정 — 실제 API 호출 전에 정적으로 재현 확인함). 조각 절반
+    이상이 rationale에 있으면 통과로 본다.
     """
     if alert.root_cause is None:
         return True
-    return has_evidence(alert.root_cause.label, rationale)
+
+    segments = [segment for segment in alert.root_cause.label.split("_") if segment]
+    if not segments:
+        return has_evidence(alert.root_cause.label, rationale)
+
+    matched = sum(1 for segment in segments if has_evidence(segment, rationale))
+    return matched >= (len(segments) + 1) // 2
 
 
 def _is_actionable(proposed_text: str) -> bool:
@@ -335,42 +410,66 @@ def evaluate(proposal: Proposal, alert: DetectionAlert, context: dict, attempt: 
 def score_confidence(
     proposal: Proposal, context: dict, alert: DetectionAlert
 ) -> tuple[RecommendationConfidence, str, bool]:
-    """개선안 확신도 산정(§4-4) + 탐지 확신도 캡핑(§5-1).
+    """개선안 확신도 산정(§4-4) + 캡핑 2단계(§4-3·§5-1).
 
     베이스 라벨은 (상세페이지 근거 유무 + 유사사례 유무) 가중합 — 초기엔 규칙 기반
     등가(§4-4, 승인·반려 데이터 쌓이면 재보정 예정): 둘 다 있으면 높음, 하나만
     있으면 중간, 둘 다 없으면 낮음.
 
-    그 다음 alert.detection_confidence로 캡핑한다(§5-1) — 탐지 확신도가 중간이면
-    개선안도 중간이 상한(높음 표시 금지). should_generate 게이트
-    (recommended_action=="개선안 생성") 통과분은 실무적으로 detection_confidence가
-    높음/중간만 들어온다.
+    그 위에 캡핑을 두 번 거친다 — 라우팅(어떤 tool을 쓸지)은 그대로 LLM이 판단하고,
+    이 두 규칙은 결과 확신도만 후처리로 깎는 안전장치다(§4-3 도구선택표):
+    1. 원인 라벨이 "기타"면 상한을 중간으로 캡핑.
+    2. SCOPE_LIMIT_LABELS(실물_염색_편차·실제_원단_문제)는 위 계산을 다 건너뛰고
+       무조건 낮음으로 확정 — 텍스트·이미지 어느 쪽으로도 해결 안 되는 케이스라
+       확신도를 매길 근거 자체가 없다.
+
+    마지막으로 alert.detection_confidence로 한 번 더 캡핑한다(§5-1) — 탐지
+    확신도가 중간이면 개선안도 중간이 상한(높음 표시 금지).
 
     Returns:
         (최종 확신도, 사람이 읽을 한 줄 사유, 캡핑으로 실제 강등됐는지)
     """
+    if alert.root_cause and alert.root_cause.label in SCOPE_LIMIT_LABELS:
+        return (
+            RecommendationConfidence.LOW,
+            (
+                f"원인 '{alert.root_cause.label}'은 텍스트·이미지로 해결 불가능한 상품/공급 "
+                "문제로 판단해 확신도 낮음 고정(§4-3)"
+            ),
+            True,
+        )
+
     has_detail_grounding = proposal.detailpage_grounded
     has_similar_case = context.get("similar_case") is not None
 
     if has_detail_grounding and has_similar_case:
-        base = RecommendationConfidence.HIGH
+        raw_base = RecommendationConfidence.HIGH
     elif has_detail_grounding or has_similar_case:
-        base = RecommendationConfidence.MEDIUM
+        raw_base = RecommendationConfidence.MEDIUM
     else:
-        base = RecommendationConfidence.LOW
-
-    cap = _DETECTION_CONFIDENCE_CAP[alert.detection_confidence]
-    final = base if _CONFIDENCE_RANK[base] <= _CONFIDENCE_RANK[cap] else cap
-    capped = final != base
+        raw_base = RecommendationConfidence.LOW
 
     reason = (
         f"상세페이지 근거 {'있음' if has_detail_grounding else '없음'} + "
-        f"유사 사례 {'있음' if has_similar_case else '없음'} → {base.value}"
+        f"유사 사례 {'있음' if has_similar_case else '없음'} → {raw_base.value}"
     )
-    if capped:
-        reason += f" (탐지 확신도 {alert.detection_confidence.value}로 {final.value} 캡핑)"
+    applied_caps: list[str] = []
 
-    return final, reason, capped
+    is_etc_label = alert.root_cause is not None and alert.root_cause.label == ETC_LABEL
+    etc_cap = RecommendationConfidence.MEDIUM if is_etc_label else RecommendationConfidence.HIGH
+    base = raw_base if _CONFIDENCE_RANK[raw_base] <= _CONFIDENCE_RANK[etc_cap] else etc_cap
+    if base != raw_base:
+        applied_caps.append(f"원인 '{ETC_LABEL}'로 {base.value} 상한 캡핑(§4-3)")
+
+    detection_cap = _DETECTION_CONFIDENCE_CAP[alert.detection_confidence]
+    final = base if _CONFIDENCE_RANK[base] <= _CONFIDENCE_RANK[detection_cap] else detection_cap
+    if final != base:
+        applied_caps.append(f"탐지 확신도 {alert.detection_confidence.value}로 {final.value} 캡핑")
+
+    if applied_caps:
+        reason += " (" + "; ".join(applied_caps) + ")"
+
+    return final, reason, final != raw_base
 
 
 def assemble(
@@ -387,10 +486,12 @@ def assemble(
         alert_id=alert.alert_id,
         created_at=datetime.now(timezone.utc),
         proposal=proposal,
-        citations=[
-            Citation(inquiry_id=inquiry_id, quote="")
-            for inquiry_id in alert.evidence.inquiry_ids[:1]
-        ],
+        # citations는 CS 원문 인용용이다(evidence.inquiry_ids 중 실제로 인용한 문의).
+        # raw_text 조회 경로가 아직 없어서 진짜 인용문을 채울 수 없다 — 예전엔
+        # inquiry_id만 있고 quote=""인 가짜 Citation을 넣어놨는데(2026-07-27 정리),
+        # 그게 오히려 "인용이 있다"고 오해하게 만들어서 빈 리스트로 정직하게 바꿨다.
+        # TODO: raw_text 경로 생기면 실제 인용으로 채울 것(§4-3).
+        citations=[],
         evaluator=evaluator,
         similar_case=context.get("similar_case"),
         recommendation_confidence=confidence,
@@ -409,19 +510,45 @@ async def run(alert: DetectionAlert) -> Recommendation | None:
     "도구를 바꿔서 다시 판단"이 아니다. MAX_ATTEMPTS를 다 써도 grounding이 안 되면
     generate_fallback_proposal()로 넘어간다(§2 방법1) — 억지로 근거 있는 척 넘기지
     않는다. LLM 호출 있는 함수는 async로 통일한다(협업 규칙 5).
+
+    SCOPE_LIMIT_LABELS(§4-3 스코프 한계)면 라우팅·생성 둘 다 건너뛰고 고정 문구로
+    바로 조립한다 — LLM한테 물어봐도 답이 안 바뀌는 케이스라 호출 자체를 안 한다.
     """
     if not should_generate(alert):
         return None
+
+    if alert.root_cause and alert.root_cause.label in SCOPE_LIMIT_LABELS:
+        proposal = _build_scope_limit_proposal(alert)
+        evaluator = Evaluator(
+            passed=True,
+            attempts=1,
+            checks=EvaluatorChecks(
+                grounding=False,  # 대조할 근거 자체가 없음 — fallback_guide와 동일하게 정직히 기록
+                consistency=_is_consistent_with_root_cause(proposal.rationale, alert),
+                actionability=_is_actionable(proposal.proposed_text),
+            ),
+            failure_reason="스코프 한계 원인이라 근거 검증 대상 자체가 없음(§4-3)",
+        )
+        return assemble(alert, proposal, evaluator, {"similar_case": None})
 
     context = retrieve_context(alert)
     proposal_type = await route_proposal_type(alert, context)
 
     attempt = 1
-    proposal = await generate_proposal(alert, proposal_type, context)
+    proposal = await generate_proposal(
+        alert, proposal_type, context, temperature=RETRY_TEMPERATURES[0]
+    )
     evaluator = evaluate(proposal, alert, context, attempt=attempt)
     while not evaluator.passed and attempt < MAX_ATTEMPTS:
         attempt += 1
-        proposal = await generate_proposal(alert, proposal_type, context)
+        temperature = RETRY_TEMPERATURES[min(attempt - 1, len(RETRY_TEMPERATURES) - 1)]
+        proposal = await generate_proposal(
+            alert,
+            proposal_type,
+            context,
+            previous_failure=evaluator.failure_reason,
+            temperature=temperature,
+        )
         evaluator = evaluate(proposal, alert, context, attempt=attempt)
 
     if not evaluator.passed:
@@ -429,7 +556,14 @@ async def run(alert: DetectionAlert) -> Recommendation | None:
         evaluator = Evaluator(
             passed=True,
             attempts=MAX_ATTEMPTS,
-            checks=EvaluatorChecks(grounding=False, consistency=True, actionability=True),
+            checks=EvaluatorChecks(
+                grounding=False,  # 근거 자체를 안 씀 — 정직한 기록
+                # consistency/actionability는 예전에 evaluate()가 스텁이던 시절 True로
+                # 하드코딩해뒀던 게 evaluate() 실판정 구현 이후에도 안 바뀌고 남아있던
+                # 버그였다(2026-07-27 발견·수정) — LLM 호출 없이 계산 가능해서 실제로 돌린다.
+                consistency=_is_consistent_with_root_cause(proposal.rationale, alert),
+                actionability=_is_actionable(proposal.proposed_text),
+            ),
             failure_reason=f"근거를 찾지 못해 일반 가이드로 대체(MAX_RETRY={MAX_RETRY} 소진)",
         )
 
@@ -462,7 +596,10 @@ def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -
 
     root_cause_label = alert.root_cause.label if alert.root_cause else "미상"
     proposed_text = recommendation.proposal.proposed_text if recommendation.proposal else ""
-    document = f"{root_cause_label} {alert.main_aspect.value} {proposed_text}"
+    # §4-2 스펙: "원인 라벨 + CS 요약 + 개선안 본문". 예전엔 CS 요약 대신 aspect를 넣는
+    # 실수가 있었다(2026-07-27 발견·수정) — _summarize_cs_evidence()로 실제 CS 요약을 쓴다.
+    cs_summary = _summarize_cs_evidence(alert)
+    document = f"{root_cause_label} {cs_summary} {proposed_text}"
 
     outcome = "반려" if recommendation.hitl_status == HitlStatus.REJECTED else "승인"
     decided_at = (

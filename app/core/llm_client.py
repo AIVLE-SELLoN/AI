@@ -187,7 +187,9 @@ class LlmClient:
             try:
                 arguments = json.loads(call.function.arguments)
             except json.JSONDecodeError as exc:
-                last_error = exc
+                # LlmParseError로 감싸야 아래 exhaustion 분기가 LlmCallError가 아니라
+                # LlmParseError로 정확히 구분해서 던진다(complete_json()과 동일한 관례).
+                last_error = LlmParseError(f"tool 인자 JSON 파싱 실패 [{trace_key}]: {exc}")
                 logger.warning(
                     "tool 인자 JSON 파싱 실패 [%s] attempt=%d/%d error=%s",
                     trace_key, attempt + 1, 1 + MAX_RETRY, exc,

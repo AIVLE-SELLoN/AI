@@ -20,9 +20,11 @@ class _FakeLlmClient:
     def __init__(self, response: dict):
         self._response = response
         self.last_prompt: str | None = None
+        self.last_temperature: float | None = None
 
     async def complete_json(self, prompt: str, *, trace_key: str = "-", temperature: float = 0.0) -> dict:
         self.last_prompt = prompt
+        self.last_temperature = temperature
         return self._response
 
 
@@ -85,3 +87,40 @@ async def test_image_guide_builds_proposal_using_image_guide_prompt(monkeypatch,
     assert proposal.detailpage_grounded is False, "image_guide는 상세페이지 근거가 아니므로 항상 False"
     assert "CS 20건 중 14건" in fake_client.last_prompt
     assert "촬영" in fake_client.last_prompt, "image_guide_v1.md 고유 문구 — copy_draft 프롬프트와 구분"
+
+
+@pytest.mark.asyncio
+async def test_retry_includes_previous_failure_and_raised_temperature(monkeypatch, biased_alert):
+    """2026-07-27 버그 수정 확인: 재시도가 온도 0으로 같은 프롬프트를 그대로 반복하면
+    같은 답이 나올 수밖에 없었다. 실패 사유를 프롬프트에 넣고 temperature도 올려야
+    재시도가 실질적인 의미를 가진다.
+    """
+    fake_client = _FakeLlmClient(
+        {"current_text": "아이보리 컬러", "proposed_text": "확인해보세요.", "rationale": "원인 분류: 표기_오타"}
+    )
+    monkeypatch.setattr(pipeline, "get_llm_client", lambda: fake_client)
+
+    await pipeline.generate_proposal(
+        biased_alert,
+        ProposalType.COPY_DRAFT,
+        _context(),
+        previous_failure="근거를 원문에서 찾을 수 없습니다: '완전히 다른 색상'",
+        temperature=0.4,
+    )
+
+    assert fake_client.last_temperature == 0.4
+    assert "완전히 다른 색상" in fake_client.last_prompt
+    assert "이전 시도" in fake_client.last_prompt
+
+
+@pytest.mark.asyncio
+async def test_first_attempt_has_no_feedback_and_default_temperature(monkeypatch, biased_alert):
+    fake_client = _FakeLlmClient(
+        {"current_text": "아이보리 컬러", "proposed_text": "확인해보세요.", "rationale": "원인 분류: 표기_오타"}
+    )
+    monkeypatch.setattr(pipeline, "get_llm_client", lambda: fake_client)
+
+    await pipeline.generate_proposal(biased_alert, ProposalType.COPY_DRAFT, _context())
+
+    assert fake_client.last_temperature == 0.0
+    assert "이전 시도" not in fake_client.last_prompt

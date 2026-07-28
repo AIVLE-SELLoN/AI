@@ -56,9 +56,11 @@ async def test_run_falls_back_to_general_guide_after_grounding_exhausted(monkeyp
     assert result.proposal.detailpage_grounded is False
     assert result.proposal.proposed_text == "상세페이지 내용과 실제 상품이 일치하는지 확인해보세요."
 
-    # passed=True(더 이상 재시도 안 함)이지만 checks.grounding=False로 정직하게 기록.
+    # passed=True(더 이상 재시도 안 함)이지만 checks는 실제로 계산해서 정직하게 기록한다.
+    # fallback 프롬프트는 원인 라벨을 일부러 인용하지 말라고 시키므로 consistency는
+    # 실제로 False가 나오는 게 맞다(2026-07-27 이전엔 True로 하드코딩돼있던 버그).
     assert result.evaluator.passed is True
-    assert result.evaluator.checks == EvaluatorChecks(grounding=False, consistency=True, actionability=True)
+    assert result.evaluator.checks == EvaluatorChecks(grounding=False, consistency=False, actionability=True)
     assert "일반 가이드" in result.evaluator.failure_reason
 
     # 근거도 없고 similar_case도 없어서 확신도는 낮음으로 자연히 떨어진다.
