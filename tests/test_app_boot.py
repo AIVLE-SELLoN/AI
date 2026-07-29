@@ -37,7 +37,6 @@ def test_module_ping(path: str, module: str) -> None:
 @pytest.mark.parametrize(
     "path",
     [
-        "/api/v1/detect",
         "/api/v1/reports",
         "/api/v1/replies",
     ],
@@ -48,6 +47,7 @@ def test_endpoints_are_registered_but_unimplemented(path: str) -> None:
     구현이 끝나면 이 테스트는 지우고 각 모듈 테스트로 옮기세요.
     recommendations/generate·recommendations/hitl은 구현 완료 —
     tests/test_recommendation_router.py로 옮겼다.
+    detect 도 구현 완료 — tests/test_pipeline.py 로 옮겼다.
     """
     response = client.post(path, json={})
     assert response.status_code == 501

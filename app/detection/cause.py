@@ -89,15 +89,22 @@ async def diagnose_cause(
     aspect_match=false(다른 aspect 로 오라우팅된 문의)는 이 aspect 원인 집계에서 제외한다.
 
     Returns:
-        {"label", "consistent", "count", "total", "freq"}
+        {"label", "consistent", "count", "total", "freq", "cs_ids"}
           - label:      주원인(일관 미달 시 None)
           - consistent: 원인 일관 여부
           - count:      주원인 건수 (label 없으면 0)
           - total:      집계에 쓴 문의 수(aspect_match 통과분)
           - freq:       원인별 빈도표 ("20건 중 14건…" 리포트용)
+          - cs_ids:     집계에 쓴 문의 ID (total 과 같은 집합)
+
+    cs_ids 를 따로 돌려주는 이유: 이게 그대로 alert.evidence.inquiry_ids 가 되고,
+    스키마 §3 이 그 필드를 "원인분류 투입 문의 전체(= root_cause.total 건)"로 정의한다.
+    aspect_match=false 로 걷어낸 문의를 인용 경계에 남기면 개수가 total 과 어긋나고,
+    **Agent3 가 '다른 aspect 불만'을 근거로 인용할 수 있게 된다.**
     """
     results = await classify_cause(aspect, items, client=client, trace_key=trace_key)
-    causes = [r["cause"] for r in results if r.get("aspect_match", True)]
+    kept = [r for r in results if r.get("aspect_match", True)]
+    causes = [r["cause"] for r in kept]
 
     label, consistent, freq = judge_cause(causes)
     return {
@@ -106,4 +113,5 @@ async def diagnose_cause(
         "count": freq.get(label, 0),  # label 이 None 이면 자연히 0
         "total": len(causes),
         "freq": freq,
+        "cs_ids": [r["cs_id"] for r in kept if r.get("cs_id")],
     }

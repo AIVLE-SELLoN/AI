@@ -7,9 +7,13 @@
     탐지는 전 aspect 수행하되, 원인분류([6])·개선안은 스코프로 제한한다.
 """
 
+from app.core.schemas import Aspect
+
 # 개선안 생성 가능 aspect (로직 §[5] 표). 파손·오배송·기타는 알림만 — 원인분류·개선안 없음.
 # 도메인 정의(튜닝 대상 아님)라 상수 파일이 아닌 여기에 둔다.
-SCOPE_ASPECTS = frozenset({"색상", "사이즈", "소재"})
+# 값은 **반드시 Aspect enum 경유** — 문자열을 다시 적으면 schemas.py 가 정본인데도
+# 값이 바뀔 때 여기만 옛 문자열로 남아 조용히 어긋난다.
+SCOPE_ASPECTS = frozenset({Aspect.COLOR, Aspect.SIZE, Aspect.MATERIAL})
 
 
 def pick_main_aspect(fired_aspects: dict) -> tuple:
