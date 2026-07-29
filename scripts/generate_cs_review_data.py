@@ -653,7 +653,7 @@ def main():
     ap.add_argument("--golden-mapping-dir", default=None,
                      help="golden_mapping.csv 위치(생략 시 --mapping-dir와 동일 — 하위호환)")
     ap.add_argument("--templates", default="templates.yaml", help="분모용(denom) 텍스트 템플릿 사전")
-    ap.add_argument("--cause-prompt", default="prompts/generate_cause_text_v1.md", help="원인분류 투입분 생성 프롬프트")
+    ap.add_argument("--cause-prompt", default="prompts/generate_cause_text_v3.md", help="원인분류 투입분 생성 프롬프트")
     ap.add_argument("--cause-cache", default="cause_text_cache.json", help="cause 텍스트 캐시(재실행 시 재호출 방지)")
     ap.add_argument("--no-llm-cause", action="store_true", help="LLM 없이 cause도 플레이스홀더로(오프라인 테스트용)")
     ap.add_argument("--outdir", default="./output", help="input_*.csv 출력 디렉토리")
