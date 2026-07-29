@@ -201,13 +201,11 @@ def _build_candidates(
     """
     # (상품, 채널) → {aspect: 판정결과}. 전역형은 채널을 "ALL" 한 칸으로 접는다.
     buckets: dict[tuple, dict] = defaultdict(dict)
-    held_by_product: dict[str, list] = defaultdict(list)
 
     for result in verdict_results:
         if result["source"] != source or result["verdict"] in _NO_ALERT_VERDICTS:
             continue
         product, aspect = result["product"], result["aspect"]
-        held_by_product[product] = result["held"]
 
         if result["verdict"] in PRODUCT_LEVEL_VERDICTS:
             buckets[(product, Channel.ALL.value)][aspect] = result
@@ -232,7 +230,11 @@ def _build_candidates(
             "channel": channel,
             "verdict": main_result["verdict"],
             "significant_channels": main_result["channels"],
-            "excluded_channels": held_by_product[product],
+            # 보류 채널도 **이 alert 의 main_aspect 판정에서 나온 것**만 붙인다.
+            # 상품 단위로 모아두면, 같은 상품의 다른 aspect 가 보류시킨 채널이
+            # 이 alert 에도 "표본 부족"으로 병기돼 셀러에게 거짓 정보가 나간다.
+            # (past_total==0 폴백은 aspect 슬롯별로 걸려서 실제로 aspect 마다 다를 수 있다.)
+            "excluded_channels": main_result["held"],
             "stats": _build_stats(tests, counts, product, main, stats_channel, source),
             "sub_aspects": [
                 SubAspectAction(

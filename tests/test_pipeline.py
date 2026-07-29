@@ -24,8 +24,9 @@ from app.detection.alert import (
     build_root_cause,
     resolve_channel,
 )
-from app.detection.service import detect_anomaly, normalize
+from app.detection.service import _build_candidates, detect_anomaly, normalize
 from app.detection.suppression import filter_suppressed
+from app.detection.verdict import run_verdict
 
 
 class _FakeClient:
@@ -217,6 +218,51 @@ def test_different_channel_is_not_suppressed():
     published, suppressed = filter_suppressed([current], [prior])
     assert len(published) == 1
     assert suppressed == []
+
+
+# ── [3]~[5] 후보 접기 — aspect별 보류 채널 귀속 (PR #14 리뷰) ────
+def _test_result(product, aspect, channel, source, fired, delta=0.08):
+    return {
+        "key": (product, aspect, channel, source),
+        "fired": fired,
+        "delta": delta,
+        "p_value": 0.0001,
+        "bh_significant": fired,
+        "meaningful": True,
+    }
+
+
+def test_excluded_channels_belong_to_own_aspect():
+    """보류 채널은 그 alert 의 main_aspect 판정에서 나온 것만 붙는다.
+
+    한 상품에 판정 대상 aspect 가 2개 이상이면, 예전 구현은 상품 단위로 held 를
+    덮어써서 **다른 aspect 가 보류시킨 채널이 엉뚱한 alert 에 병기**됐다.
+    (past_total==0 폴백이 aspect 슬롯별로 걸리므로 held 는 실제로 aspect 마다 다르다.)
+
+    색상: 3채널 전부 판정 가능, 쿠팡만 발화 → 보류 없음
+    사이즈: 네이버 발화, 지그재그 보류      → 보류 [지그재그]
+    """
+    batch = [
+        _test_result("P1", "색상", "COUPANG", "cs", True),
+        _test_result("P1", "색상", "NAVER", "cs", False),
+        _test_result("P1", "색상", "ZIGZAG", "cs", False),
+        _test_result("P1", "사이즈", "NAVER", "cs", True, delta=0.09),
+        _test_result("P1", "사이즈", "COUPANG", "cs", False),
+    ]
+    held = [("P1", "ZIGZAG", "cs")]  # 사이즈 슬롯만 보류 (색상은 배치에 있음)
+
+    verdicts = run_verdict(batch, held)
+    counts = {t["key"]: (26, 200, 40, 800) for t in batch}
+    tests = {t["key"]: t for t in batch}
+
+    candidates = _build_candidates(verdicts, "cs", tests, counts)
+
+    color = candidates[("P1", "COUPANG")]
+    size = candidates[("P1", "NAVER")]
+    assert color["aspect"] == "색상"
+    assert color["excluded_channels"] == []          # 다른 aspect 의 보류가 새면 안 된다
+    assert size["aspect"] == "사이즈"
+    assert size["excluded_channels"] == ["ZIGZAG"]   # 자기 판정의 보류는 유지
 
 
 # ── 입력 정규화 ──────────────────────────────────────────────────
