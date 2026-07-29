@@ -351,23 +351,41 @@ def test_build_baseline_uses_preceding_28_days():
         _row("P1", "COUPANG", "cs", "색상", True, 29),   # 현재 → 과거 아님
         _row("P1", "COUPANG", "cs", "색상", True, 0),    # 28일 밖 → 제외
     ]
-    totals, negs = build_baseline(rows, cur_start=29)
-    assert totals[("P1", "COUPANG", "cs")] == 2
+    totals, negs, _ = build_baseline(rows, cur_start=29, aspects=["색상"])
+    assert totals[("P1", "색상", "COUPANG", "cs")] == 2
     assert negs[("P1", "색상", "COUPANG", "cs")] == 2
 
 
 def test_build_baseline_excludes_alert_days():
-    """알림 구간 날짜(상품,채널,day)는 과거 집계에서 제외 — 기준선 오염 방지(§150)."""
+    """알림 구간 날짜(상품,aspect,채널,day)는 과거 집계에서 제외 — 기준선 오염 방지(§150)."""
     rows = [
         _row("P1", "COUPANG", "cs", "색상", True, 10),
         _row("P1", "COUPANG", "cs", "색상", True, 11),   # 이 날이 알림 구간
         _row("P1", "COUPANG", "cs", "색상", True, 12),
     ]
-    totals, negs = build_baseline(
-        rows, cur_start=29, alert_days={("P1", "COUPANG", 11)}
+    totals, negs, unfiltered = build_baseline(
+        rows, cur_start=29, aspects=["색상"], alert_days={("P1", "색상", "COUPANG", 11)}
     )
-    assert totals[("P1", "COUPANG", "cs")] == 2          # day11 통째로 빠짐
+    assert totals[("P1", "색상", "COUPANG", "cs")] == 2   # day11 통째로 빠짐 (분자·분모 모두)
     assert negs[("P1", "색상", "COUPANG", "cs")] == 2
+    assert unfiltered[("P1", "COUPANG", "cs")] == 3      # 제외 전 = 폴백 판정 재료
+
+
+def test_build_baseline_exclusion_is_per_aspect():
+    """색상 알림 구간을 빼도 같은 날의 사이즈 집계는 남는다 — 제외 단위가 aspect별(§150)."""
+    rows = [
+        _row("P1", "COUPANG", "cs", "색상", True, 10),
+        _row("P1", "COUPANG", "cs", "사이즈", True, 11),  # 색상 알림 구간이지만 사이즈 문의
+    ]
+    totals, negs, _ = build_baseline(
+        rows,
+        cur_start=29,
+        aspects=["색상", "사이즈"],
+        alert_days={("P1", "색상", "COUPANG", 11)},
+    )
+    assert totals[("P1", "색상", "COUPANG", "cs")] == 1    # day11 빠짐
+    assert totals[("P1", "사이즈", "COUPANG", "cs")] == 2  # 사이즈는 그대로
+    assert negs[("P1", "사이즈", "COUPANG", "cs")] == 1
 
 
 # ── [0]+[1] 조합 빌더 (build_combinations) ────────────────────────
@@ -386,6 +404,71 @@ def test_build_combinations_emits_full_grid_with_zero_fill():
     assert by_aspect["색상"] == (1, 2, 1, 1)   # cur_neg,cur_total,past_neg,past_total
     assert by_aspect["사이즈"] == (0, 2, 0, 1)  # 부정 0 이어도 슬롯은 나옴
     assert by_aspect["소재"] == (0, 2, 0, 1)    # 관측조차 없어도 그리드엔 포함
+
+
+def test_baseline_fallback_when_past_halved_by_exclusion():
+    """알림 구간 제외로 과거 표본이 절반 이하로 줄면 설정값 부정률로 대체 (§152).
+
+    과거 4건 중 3건이 알림 구간 → 1건만 남음(절반 이하) → 설정값 10% × 1건 = 0건.
+    """
+    rows = [
+        _row("P1", "COUPANG", "cs", "색상", True, 10),
+        _row("P1", "COUPANG", "cs", "색상", True, 11),
+        _row("P1", "COUPANG", "cs", "색상", True, 12),
+        _row("P1", "COUPANG", "cs", "색상", False, 13),
+        _row("P1", "COUPANG", "cs", "색상", True, 30),   # 현재 윈도우
+    ]
+    alert_days = {("P1", "색상", "COUPANG", d) for d in (10, 11, 12)}
+    combos, _ = build_combinations(
+        rows, 29, 35, aspects=["색상"], alert_days=alert_days,
+        past_rate_fallback={("COUPANG", "색상"): 0.10},
+    )
+    past_neg, past_total = combos[0][4][2], combos[0][4][3]
+    assert past_total == 1                  # 3일 제외 후 1건만 남음
+    assert past_neg == round(0.10 * 1)      # 실측(0건) 대신 설정값 적용
+
+
+def test_baseline_fallback_initial_period_assumes_window_ratio_n():
+    """과거 표본이 아예 없으면(초기 구간) 현재 볼륨을 윈도우 길이 비로 늘려 N 으로 쓴다.
+
+    현재 7일 20건 · 과거 28일 → N = 20 × 28/7 = 80, 설정값 5% → 부정 4건. (§153·§137)
+    """
+    rows = [
+        _row("P1", "COUPANG", "cs", "색상", i < 3, 29 + (i % 7), rid=f"r{i}") for i in range(20)
+    ]
+    combos, _ = build_combinations(
+        rows, 29, 35, aspects=["색상"], past_rate_fallback={("COUPANG", "색상"): 0.05}
+    )
+    _, cur_total, past_neg, past_total = combos[0][4]
+    assert cur_total == 20
+    assert past_total == 80              # 20 × (28/7)
+    assert past_neg == 4                 # round(0.05 × 80)
+
+
+def test_baseline_fallback_skipped_without_config_rate():
+    """설정값이 주입되지 않으면 폴백을 못 타고 past_total=0 → [2] 가 보류로 보낸다."""
+    rows = [_row("P1", "COUPANG", "cs", "색상", True, 30)]
+    combos, _ = build_combinations(rows, 29, 35, aspects=["색상"])
+    assert combos[0][4][3] == 0
+    batch, held = run_detection(combos)
+    assert batch == []
+    assert held == [("P1", "COUPANG", "cs")]
+
+
+def test_baseline_fallback_not_applied_when_sample_survives():
+    """절반 초과로 남았으면 실측치를 그대로 쓴다 — 폴백은 표본이 무너졌을 때만."""
+    rows = [
+        _row("P1", "COUPANG", "cs", "색상", True, 10),   # 알림 구간
+        _row("P1", "COUPANG", "cs", "색상", True, 11),
+        _row("P1", "COUPANG", "cs", "색상", True, 12),
+        _row("P1", "COUPANG", "cs", "색상", True, 30),
+    ]
+    combos, _ = build_combinations(
+        rows, 29, 35, aspects=["색상"],
+        alert_days={("P1", "색상", "COUPANG", 10)},
+        past_rate_fallback={("COUPANG", "색상"): 0.99},
+    )
+    assert combos[0][4][2] == 2             # 실측 2건 유지 (설정값 99% 무시)
 
 
 def test_build_combinations_texts_only_current_negatives():

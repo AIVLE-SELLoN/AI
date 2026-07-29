@@ -1,99 +1,458 @@
-"""담당: 서영 (Agent2) — 이상탐지 + 원인분류.
+"""담당: 서영 (Agent2) — 이상탐지 파이프라인 조립 [0]~[8].
 
 성격: 통계 + LLM 워크플로우 → scipy/statsmodels + 순수 Python (프레임워크 없음).
 
-역할 분리:
-  - statistics.py : 순수 통계 계산. LLM·DB 모름 → 단위테스트 쉬움.
-  - service.py    : 파이프라인 조립. 통계 결과 + LLM 원인분류를 엮는다.
+역할 분리 — 이 파일은 **조립만** 한다. 판정 규칙은 전부 단계별 모듈에 있다:
+    aggregate.py   [0][1] 집계·과거기준     statistics.py  [2] 검정 3관문
+    verdict.py     [3] 편중/전역 판정       scope.py       [4][5] 주 aspect·스코프
+    cause.py       [6] 원인분류 (LLM)       confidence.py  [7] 확신도·권장조치
+    combine.py     [8] CS·리뷰 종합         alert.py       발행 규칙
+    suppression.py 재알림 억제·갱신
+그래서 이 파일에는 임계값도 판정 분기도 없다 — 있으면 그건 모듈로 내려가야 하는 것이다.
 
-TODO(서영): 설계 문서 확정 + schemas.py 확정 후 구현.
-  파이프라인 단계·판정 규칙·집계 단위는 `이상탐지 로직` / `이상탐지 시나리오` 문서를
-  따르되, **개발 착수 시점의 최신본을 다시 확인할 것.** 문서가 개정 중이라 여기에
-  단계별 상세를 미리 적어두지 않는다 (적어두면 문서가 바뀔 때마다 같이 틀어진다).
-
-  - detect_anomaly(...) -> AnomalyResult
-  - 임계값은 전부 core/constants.py 경유 (매직넘버 금지)
-  - 원인 분류는 아래 프롬프트3 사용법 참고
-
-⚠️ 입력 의존성 — 백엔드와의 계약:
+⚠️ 입력 의존성 — 백엔드와의 계약 (미확정):
   상품 매핑은 백엔드(Spring Boot) 담당이고, detection 은 그 산출물인 상품 식별자를
   입력으로 받는다. 이 식별자는 **옵션(SKU) 이 아니라 '상품 그룹' 레벨**이어야 한다.
   문의·리뷰 원본에 옵션 정보가 없어서, 옵션 레벨 ID 를 받으면 집계가 성립하지 않는다.
-  → 필드명·레벨을 백엔드와 확정할 것 (아직 계약이 문서화되지 않았다).
+  → 여기서는 ClassifiedItem.product_group_id 를 그룹 레벨로 **가정**한다.
+
+⚠️ BH 배치 범위 (문서 확인 필요):
+  build_combinations 가 cs·review 조합을 한 리스트로 내므로 BH-FDR 이 두 소스에
+  걸쳐 한 번에 적용된다. 로직 §116 은 "[0]~[7]을 source별 독립 수행"이라 하는데,
+  BH family 를 source별로 쪼개야 하는지는 문서에 명시가 없다. 지금은 한 배치로 두었다
+  (m 이 커져 컷오프가 보수적 = 오탐에 안전한 쪽). 부록 A 캘리브레이션 m≈1,464 가
+  어느 쪽 기준인지 확인 필요.
 
 ──────────────────────────────────────────────────────────────────────────
-원인 분류 — 프롬프트3 (classify_cause_v1.md) 사용법
+원인 분류 — 프롬프트3 (classify_cause_v1.md) 미결 / 주의
 ──────────────────────────────────────────────────────────────────────────
-
-부정 문의 텍스트를 사전정의 원인 후보로 **분류**한다(추출 아님 — 그래야 정확도
-측정이 된다). 대상 aspect: 색상 / 사이즈 / 소재.
-핏 불만은 별도 aspect 가 아니라 사이즈 안에서 처리한다.
-
-■ 입출력 계약
-
-  입력 (문의 1건): {cs_id, aspect, raw_text}   ← aspect 는 상류에서 확정된 값
-  출력 (문의 1건): JSON 1개
-      {
-        "cs_id": "…",
-        "aspect": "색상",
-        "cause": "사진_색감_오차",     # 해당 aspect 의 후보 중 하나 또는 "기타"
-        "confidence": 0.0,             # 0~1
-        "evidence": "판단 근거가 된 원문 구절 그대로",   # 없으면 빈 문자열
-        "aspect_match": true           # false = 상류 aspect 오분류 신호
-      }
-
-■ 프롬프트 호출
-
-  프롬프트 파일에 JSON 이 많아 str.format() 을 쓰면 중괄호에서 깨진다.
-  string.Template 과 $input_json 플레이스홀더를 쓸 것:
-
-      import json
-      from string import Template
-      from app.core.prompts import load_prompt
-      from app.core.llm_client import get_llm_client
-
-      template = Template(load_prompt("detection", "classify_cause_v1"))
-      input_json = json.dumps(
-          {"cs_id": cs_id, "aspect": aspect, "raw_text": raw_text},
-          ensure_ascii=False,
-      )
-      prompt = template.substitute(input_json=input_json)
-      result = await get_llm_client().complete_json(prompt, trace_key=f"cs_id={cs_id}")
-
-  raw_text 에 따옴표·줄바꿈이 들어올 수 있으므로 반드시 json.dumps 로 직렬화할 것.
-  문자열 포매팅으로 끼워 넣으면 프롬프트의 JSON 이 깨진다.
-
-  호출 단위는 문의 1건씩, 대량 처리는 병렬로. 온도는 0~0.2 (분류 태스크).
-
-■ 후처리 (프롬프트 밖, 이 파일에서 구현)
-
-  1. **aspect_match=false 인 건은 집계에서 제외한다.**
-     해당 aspect 불만이 아니므로 원인 분포에 들어가면 분모가 오염된다.
-     confidence 와 무관하게 제외 (LLM 이 false 인데도 높은 confidence 를 줄 수 있다).
-  2. 남은 문의를 cause 별 빈도로 집계 → "N건 중 M건이 사진_색감_오차".
-  3. 일관 판정(최다 원인 비율·건수 기준) → 확신도 경로 분기.
-     기준값은 문서 확정 후 constants.py 에 추가할 것.
-  4. aspect_match=false 비율이 높으면(예: >20%) 상류 aspect 분류를 재점검.
-
-■ 미결 / 주의
-
-  - **confidence 캘리브레이션 [서영, 프롬프트1·2 테스트 때 함께 수행]:**
-    few-shot 예시의 confidence 가 "구체 후보=0.82~0.94 / 기타=0.3~0.4" 두 덩어리라
-    0.5~0.8 구간이 비어 있다. LLM 은 few-shot 을 강하게 모방하므로 confidence 가
-    사실상 `cause == 기타` 의 재표현이 될 수 있다 (= `if cause != "기타"` 한 줄로 될 일).
-
-    또한 상류 aspect 오분류 전파는 confidence 가 아니라 aspect_match 가 잡는다.
-    배송 불만이 색상으로 잘못 들어와도 "화면"이라는 단어에 낚여 confidence 0.8 을
-    줄 수 있기 때문이다. 층이 다르다.
-
-    → golden 라벨로 confidence 구간별 실제 정확도를 그린다.
-      판정 기준: ① 구간이 올라갈수록 정확도가 단조 증가하는가
-                ② 값이 0.5~0.8 구간에도 분포하는가 (양극단만이면 사실상 이진 플래그)
-      둘 중 하나라도 실패하면 confidence 를 버리고 aspect_match 만 쓴다.
-  - **핏 흡수:** 사이즈의 원인 후보 3종은 치수·표기 기준이라 순수 핏 불만("붕 뜬다")은
-    '기타'로 떨어진다. 기타 비율이 높게 나오면 후보 추가를 검토할 것.
+  - **confidence 캘리브레이션:** few-shot 예시의 confidence 가 "구체 후보=0.82~0.94 /
+    기타=0.3~0.4" 두 덩어리라 0.5~0.8 구간이 비어 있다. LLM 은 few-shot 을 강하게
+    모방하므로 confidence 가 사실상 `cause == 기타` 의 재표현이 될 수 있다.
+    판정 기준: ① 구간이 올라갈수록 정확도가 단조 증가하는가 ② 0.5~0.8 에도 분포하는가.
+    둘 중 하나라도 실패하면 confidence 를 버리고 aspect_match 만 쓴다.
+    → eval/run_cause_eval.py 가 이 두 기준을 리포트한다.
+  - **핏 흡수:** 사이즈 원인 후보 3종은 치수·표기 기준이라 순수 핏 불만("붕 뜬다")은
+    '기타'로 떨어진다. 기타 비율이 높으면 후보 추가를 검토할 것.
   - **경계 혼동 모니터링:** 사진_색감 vs 조명, 표기_오타 vs 실측_표기_편차는 태생적으로
     겹친다 → golden 라벨로 이 쌍의 혼동행렬을 별도 확인.
   - **evidence 용도 미정:** 채점에도 후처리에도 안 쓰인다. 디버깅·데모용이면 그대로 두고,
     아니면 빼서 토큰을 아낄 수 있다.
 """
+
+from __future__ import annotations
+
+import asyncio
+import itertools
+import logging
+from collections import defaultdict
+from datetime import date, datetime
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
+from app.core.schemas import (
+    Aspect,
+    Channel,
+    ClassifiedItem,
+    DetectionAlert,
+    DetectionStats,
+    Sentiment,
+    Source,
+    SubAspectAction,
+    Verdict,
+)
+from app.detection.aggregate import build_combinations
+from app.detection.alert import PRODUCT_LEVEL_VERDICTS, build_alert, build_root_cause
+from app.detection.cause import diagnose_cause
+from app.detection.combine import combine_sources, pick_primary_source, source_signal
+from app.detection.confidence import (
+    decide_confidence,
+    decide_recommended_action,
+    is_scope_in,
+)
+from app.detection.scope import pick_main_aspect
+from app.detection.statistics import run_detection
+from app.detection.suppression import filter_suppressed
+from app.detection.verdict import run_verdict
+
+logger = logging.getLogger(__name__)
+
+ALL_ASPECTS: list[str] = [a.value for a in Aspect]
+"""[0] 그리드에 방출할 aspect 택소노미. 탐지는 전 aspect, 원인분류만 스코프 제한."""
+
+# 알림을 내지 않는 판정 — [3] 이 '정상'이면 애초에 발행 대상이 아니다.
+_NO_ALERT_VERDICTS = frozenset({Verdict.NORMAL})
+
+
+# ── 요청/응답 모델 ───────────────────────────────────────────────
+# core/schemas.py 는 전원 회의 확정 사항이라 건드리지 않는다. 모듈 전용 I/O 모델은
+# service.py 에 두는 게 팀 선례 (classification 의 ClassifyRequestItem, 커밋 c785672).
+
+
+class DetectRequest(BaseModel):
+    """POST /detect 요청. items 는 분류(Agent1) 산출물 그대로."""
+
+    items: list[ClassifiedItem]
+    window_end: date | None = Field(
+        default=None,
+        description="현재 윈도우 마지막 날. 없으면 items 의 최신 날짜를 쓴다.",
+    )
+    prior_alerts: list[DetectionAlert] = Field(
+        default_factory=list,
+        description="과거 발행된 알림. 재알림 억제·기준선 오염 방지에 쓴다.",
+    )
+    resolved_alert_ids: list[str] = Field(
+        default_factory=list,
+        description="승인/반려 처리가 끝난 alert_id. 재알림 억제가 풀린다 (로직 §6).",
+    )
+
+
+class DetectResponse(BaseModel):
+    """발행할 알림 + 억제된 알림(운영 가시성용)."""
+
+    alerts: list[DetectionAlert]
+    suppressed: list[DetectionAlert] = Field(default_factory=list)
+
+
+# ── [0] 입력 정규화 ──────────────────────────────────────────────
+
+
+def normalize(items: list[ClassifiedItem]) -> list[dict]:
+    """ClassifiedItem → aggregate.py 가 먹는 정규화 행. **문의 1건 = 행 1개.**
+
+    한 문의가 색상·사이즈에 동시에 부정이면 neg_aspects 에 둘 다 담는다. 행으로 쪼개면
+    분모(총문의)가 부풀어 부정률이 반토막 나므로 절대 쪼개지 않는다
+    (aggregate._negative_aspects 주석 참고).
+
+    day 는 날짜의 ordinal 을 그대로 쓴다 — 기준일 오프셋을 따로 두면 배치마다 값이
+    달라져 alert_days 같은 (상품,채널,day) 키가 배치 간에 안 맞는다.
+    """
+    rows: list[dict] = []
+    for item in items:
+        neg_aspects = [
+            a.aspect.value for a in item.aspects if a.sentiment == Sentiment.NEGATIVE
+        ]
+        rows.append(
+            {
+                "product": item.product_group_id,
+                "channel": item.channel.value,
+                "source": item.source.value,
+                "neg_aspects": neg_aspects,
+                "day": item.created_at.date().toordinal(),
+                "id": item.item_id,
+                "text": item.raw_text,
+            }
+        )
+    return rows
+
+
+def _window_bounds(rows: list[dict], window_end: date | None) -> tuple[int, int, date, date]:
+    """현재 윈도우 [cur_start, cur_end] 를 day ordinal 과 date 양쪽으로 낸다."""
+    cur_end = window_end.toordinal() if window_end else max(r["day"] for r in rows)
+    cur_start = cur_end - CURRENT_WINDOW_DAYS + 1
+    return cur_start, cur_end, date.fromordinal(cur_start), date.fromordinal(cur_end)
+
+
+def _alert_days(prior_alerts: list[DetectionAlert] | None) -> set:
+    """기준선 오염 방지용 제외 날짜. (로직 §150)
+
+    문서 그대로 **(상품, aspect, 채널)** 단위다 — 색상 알림이 나갔던 날은 색상 과거
+    집계에서만 빠지고, 같은 날의 사이즈 집계는 그대로 남는다.
+
+    '알림 구간' = 그 알림이 판정에 쓴 현재 윈도우(window_start~window_end). 전역형은
+    channel=ALL 이라 특정 채널로 환원되지 않으므로 제외 대상에서 뺀다(ALL 을 채널 키로
+    쓰면 어느 채널도 매치되지 않아 어차피 무효).
+    """
+    excluded: set = set()
+    for alert in prior_alerts or []:
+        if alert.channel == Channel.ALL:
+            continue
+        for ordinal in range(alert.window_start.toordinal(), alert.window_end.toordinal() + 1):
+            excluded.add(
+                (alert.product_group_id, alert.main_aspect.value, alert.channel.value, ordinal)
+            )
+    return excluded
+
+
+# ── [3]~[5] 소스별 후보 만들기 ───────────────────────────────────
+
+
+def _build_candidates(
+    verdict_results: list[dict],
+    source: str,
+    tests: dict,
+    counts: dict,
+) -> dict[tuple, dict]:
+    """한 소스의 [3] 판정들을 발행 단위 (상품, main_aspect, 채널) 후보로 접는다.
+
+    [4] 를 여기서 적용한다 — 같은 채널에서 여러 aspect 가 동시 발화하면 delta 최대가
+    main 이고 나머지는 sub_aspects 로 병기된다 (로직 §[4], 스키마 §3.2 SC-029).
+
+    Returns:
+        {(product, channel): 후보 dict}  — (상품, 채널)당 정확히 1건.
+        channel 은 전역·잠정전역이면 "ALL" (alert.resolve_channel 이 최종 변환).
+
+    ⚠️ 키에 main_aspect 를 넣지 않는 이유: [8] 종합이 CS·리뷰를 짝지을 때 두 소스의
+       main_aspect 가 다르면(CS=색상, 리뷰=사이즈) 키가 어긋나 종합이 안 되고 알림이
+       2건 나간다. 문서가 이 경우를 안 다루므로 §3.1 "종합의 단일 진실은 CS" 기조를
+       따라 (상품, 채널)로 짝짓고 CS 값을 채택한다 — verdict 불일치 처리와 같은 규칙.
+    """
+    # (상품, 채널) → {aspect: 판정결과}. 전역형은 채널을 "ALL" 한 칸으로 접는다.
+    buckets: dict[tuple, dict] = defaultdict(dict)
+    held_by_product: dict[str, list] = defaultdict(list)
+
+    for result in verdict_results:
+        if result["source"] != source or result["verdict"] in _NO_ALERT_VERDICTS:
+            continue
+        product, aspect = result["product"], result["aspect"]
+        held_by_product[product] = result["held"]
+
+        if result["verdict"] in PRODUCT_LEVEL_VERDICTS:
+            buckets[(product, "ALL")][aspect] = result
+        else:
+            # 편중형·구분불가 → 발화 채널마다 alert 1건 (§5.2 alert 단위 원칙).
+            for channel in result["channels"]:
+                buckets[(product, channel)][aspect] = result
+
+    candidates: dict[tuple, dict] = {}
+    for (product, channel), by_aspect in buckets.items():
+        deltas = {
+            aspect: _representative_delta(tests, product, aspect, channel, source, result)
+            for aspect, result in by_aspect.items()
+        }
+        main, subs = pick_main_aspect(deltas)
+        main_result = by_aspect[main]
+        stats_channel = _stats_channel(tests, product, main, channel, source, main_result)
+
+        candidates[(product, channel)] = {
+            "product": product,
+            "aspect": main,
+            "channel": channel,
+            "verdict": main_result["verdict"],
+            "significant_channels": main_result["channels"],
+            "excluded_channels": held_by_product[product],
+            "stats": _build_stats(tests, counts, product, main, stats_channel, source),
+            "sub_aspects": [
+                SubAspectAction(
+                    aspect=aspect,
+                    delta=deltas[aspect],
+                    # sub 는 [6] 을 돌리지 않으므로 원인 상태는 미상(None).
+                    recommended_action=decide_recommended_action(
+                        by_aspect[aspect]["verdict"], aspect, None
+                    ),
+                )
+                for aspect in subs
+            ],
+            # 아래 3개는 [6]·[7] 에서 채운다.
+            "diagnosis": None,
+            "confidence": None,
+            "fired": True,
+        }
+    return candidates
+
+
+def _representative_delta(
+    tests: dict, product: str, aspect: str, channel: str, source: str, result: dict
+) -> float:
+    """[4] 비교용 delta. 전역형(ALL)은 발화 채널 중 최대값을 대표로 쓴다. (§5.1)"""
+    if channel != "ALL":
+        test = tests.get((product, aspect, channel, source))
+        return test["delta"] if test else 0.0
+    deltas = [
+        tests[(product, aspect, ch, source)]["delta"]
+        for ch in result["channels"]
+        if (product, aspect, ch, source) in tests
+    ]
+    return max(deltas) if deltas else 0.0
+
+
+def _stats_channel(
+    tests: dict, product: str, aspect: str, channel: str, source: str, result: dict
+) -> str:
+    """stats 를 어느 채널 값으로 채울지. 전역형은 delta 최대 채널 대표값. (§5.1)"""
+    if channel != "ALL":
+        return channel
+    return max(
+        result["channels"],
+        key=lambda ch: tests[(product, aspect, ch, source)]["delta"]
+        if (product, aspect, ch, source) in tests
+        else 0.0,
+    )
+
+
+def _build_stats(
+    tests: dict, counts: dict, product: str, aspect: str, channel: str, source: str
+) -> DetectionStats:
+    """stats 는 가공 전 원자료 — 대시보드가 "5%→13%"를 재계산 없이 렌더링한다. (§4-2)"""
+    key = (product, aspect, channel, source)
+    test = tests[key]
+    cur_neg, cur_total, past_neg, past_total = counts[key]
+    return DetectionStats(
+        source=Source(source),
+        cur_rate=cur_neg / cur_total,
+        past_rate=past_neg / past_total,
+        delta=test["delta"],
+        p_value=test["p_value"],
+        bh_significant=test["bh_significant"],
+        cur_total=cur_total,
+    )
+
+
+# ── [6] 원인 분류 ────────────────────────────────────────────────
+
+
+async def _diagnose(candidates: dict, texts: dict, client: Any) -> None:
+    """편중형 & 스코프 내 후보에만 [6] 을 돌린다. 결과를 후보에 제자리로 채운다.
+
+    소스별로 독립 수행한다 (로직 §116). 전역·구분불가·스코프 밖은 호출 자체를 안 해
+    비용이 0 이다.
+    """
+    targets = [
+        (key, candidate)
+        for key, candidate in candidates.items()
+        if candidate["verdict"] == Verdict.BIASED and is_scope_in(candidate["aspect"])
+    ]
+    if not targets:
+        return
+
+    async def one(key: tuple, candidate: dict) -> None:
+        product, channel = key
+        aspect = candidate["aspect"]
+        source = candidate["stats"].source.value
+        items = texts.get((product, aspect, channel, source), [])
+        candidate["diagnosis"] = await diagnose_cause(
+            aspect,
+            items,
+            client=client,
+            trace_key=f"product={product} aspect={aspect} channel={channel} source={source}",
+        )
+        candidate["inquiry_ids"] = [i["cs_id"] for i in items]
+
+    await asyncio.gather(*(one(key, candidate) for key, candidate in targets))
+
+
+# ── 진입점 ───────────────────────────────────────────────────────
+
+
+async def detect_anomaly(
+    items: list[ClassifiedItem],
+    *,
+    detected_at: datetime | None = None,
+    window_end: date | None = None,
+    prior_alerts: list[DetectionAlert] | None = None,
+    resolved_alert_ids: set | None = None,
+    past_rate_fallback: dict | None = None,
+    change_log: dict | None = None,
+    client: Any = None,
+) -> tuple[list[DetectionAlert], list[DetectionAlert]]:
+    """[0]~[8] 전체 파이프라인. ClassifiedItem 집합 → 발행할 DetectionAlert.
+
+    Args:
+        items: 분류(Agent1) 산출물.
+        detected_at: 탐지 시각. 없으면 현재 시각.
+        window_end: 현재 윈도우 마지막 날. 없으면 items 의 최신 날짜.
+        prior_alerts: 과거 알림. 재알림 억제(§6) + 기준선 오염 방지(§150)에 쓴다.
+        resolved_alert_ids: 승인/반려 처리가 끝난 alert_id — 억제가 풀린다 (§6).
+        past_rate_fallback: {(channel, aspect): 과거 부정률} 설정값 테이블 (§142·§152).
+            과거 표본이 알림 구간 제외로 절반 이하로 줄었을 때 baseline 으로 쓴다.
+            **값을 코드에 박지 않고 주입받는다** — aggregate._apply_baseline_fallback 참고.
+        change_log: {(product, aspect): change_id} — 상세페이지 수정 이력이 이상 시점과
+            일치하는 건. **확신도 보강용이지 판정 권한이 없다**(로직 §[7]). 없으면
+            timestamp_matched=False 로 두고 확신도가 '높음'까지 못 갈 뿐, 기각하지 않는다.
+        client: LlmClient (테스트 목킹용 주입).
+
+    Returns:
+        (발행할 알림, 억제된 알림)
+    """
+    rows = normalize(items)
+    if not rows:
+        return [], []
+
+    detected_at = detected_at or datetime.now()
+    cur_start, cur_end, window_start_date, window_end_date = _window_bounds(rows, window_end)
+
+    # [0][1] 집계 · 과거 기준
+    combinations, texts = build_combinations(
+        rows,
+        cur_start,
+        cur_end,
+        aspects=ALL_ASPECTS,
+        past_days=PAST_WINDOW_DAYS,
+        alert_days=_alert_days(prior_alerts),
+        past_rate_fallback=past_rate_fallback,
+    )
+
+    # [2] 검정 3관문 → [3] 편중/전역 판정
+    batch, held = run_detection(combinations)
+    verdict_results = run_verdict(batch, held)
+
+    tests = {test["key"]: test for test in batch}
+    counts = {(p, a, c, s): cnt for p, a, c, s, cnt in combinations}
+
+    # [3]~[5] 를 소스별로 접어 발행 후보를 만든다 (로직 §116: source 독립 수행).
+    by_source = {
+        source: _build_candidates(verdict_results, source.value, tests, counts)
+        for source in (Source.CS, Source.REVIEW)
+    }
+
+    # [6] 원인 분류 — 편중형 & 스코프 내만, 소스별 독립
+    await asyncio.gather(*(_diagnose(c, texts, client) for c in by_source.values()))
+
+    # [7] 소스별 확신도
+    for candidates in by_source.values():
+        for candidate in candidates.values():
+            diagnosis = candidate["diagnosis"]
+            change_key = (candidate["product"], candidate["aspect"])
+            candidate["confidence"] = decide_confidence(
+                candidate["verdict"],
+                diagnosis["consistent"] if diagnosis else None,
+                timestamp_matched=bool(change_log and change_key in change_log),
+            )
+
+    # [8] 종합 → 알림 1건씩 발행
+    alerts: list[DetectionAlert] = []
+    seq = itertools.count(1)
+    cs_candidates, review_candidates = by_source[Source.CS], by_source[Source.REVIEW]
+
+    for key in sorted(set(cs_candidates) | set(review_candidates)):
+        cs, review = cs_candidates.get(key), review_candidates.get(key)
+        confidence, interpretation = combine_sources(cs, review)
+        if confidence is None:
+            continue
+
+        primary_source = pick_primary_source(cs, review)
+        primary = cs if primary_source == Source.CS else review
+        diagnosis = primary["diagnosis"]
+
+        alerts.append(
+            build_alert(
+                {
+                    **primary,
+                    "confidence": confidence,
+                    "interpretation": interpretation,
+                    "cs_signal": source_signal(cs),
+                    "review_signal": source_signal(review),
+                    "root_cause": build_root_cause(diagnosis),
+                    "inquiry_ids": primary.get("inquiry_ids", []),
+                    "linked_change_id": (change_log or {}).get(
+                        (primary["product"], primary["aspect"])
+                    ),
+                },
+                detected_at=detected_at,
+                window_start=window_start_date,
+                window_end=window_end_date,
+                seq=seq,
+            )
+        )
+
+    published, suppressed = filter_suppressed(
+        alerts, prior_alerts, resolved_alert_ids=resolved_alert_ids
+    )
+    logger.info(
+        "detection 완료 window=%s~%s 검정=%d 발화=%d 발행=%d 억제=%d",
+        window_start_date, window_end_date, len(batch),
+        sum(1 for t in batch if t["fired"]), len(published), len(suppressed),
+    )
+    return published, suppressed

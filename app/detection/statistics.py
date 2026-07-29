@@ -82,6 +82,13 @@ def build_batch(all_combinations: list) -> tuple[list, list]:
             held.append((product, channel, source))
             continue
 
+        # 과거 표본 0 — 정상 경로라면 [1] 에서 설정값 baseline 으로 채워져 들어온다
+        # (로직 §153, aggregate._apply_baseline_fallback ①). 여기까지 0 으로 왔다면
+        # 그 aspect 의 설정값이 주입되지 않은 것이므로, 비교 기준이 없어 판정할 수 없다.
+        if past_total == 0:
+            held.append((product, channel, source))
+            continue
+
         result = run_one_test(cur_neg, cur_total, past_neg, past_total)
         result["key"] = (product, aspect, channel, source)
         batch.append(result)
@@ -107,8 +114,13 @@ def decide_fires(batch: list, q: float = BH_FDR_Q) -> list:
     rejected, _, _, _ = multipletests(p_values, alpha=q, method="fdr_bh")
 
     for test, is_significant in zip(batch, rejected):
+        # bh_significant 는 BH 보정 결과 **그 자체**로 남긴다 — 스키마 §3 이 이 필드를
+        # "BH-FDR 보정 후에도 유의했는지"로 정의하고 대시보드 '유의 ✓' 배지의 근거로
+        # 쓰기 때문이다. min_delta 를 섞으면 통계적 유의성과 실무적 크기가 한 칸에
+        # 뭉개진다. 발화(fired)는 그 둘의 AND.
+        test["bh_significant"] = bool(is_significant)
         # 이중 잠금: ② BH 보정 후 유의 AND ③ 상승폭이 실질적
-        test["fired"] = bool(is_significant) and test["meaningful"]
+        test["fired"] = test["bh_significant"] and test["meaningful"]
 
     return batch
 
