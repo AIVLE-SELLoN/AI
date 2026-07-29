@@ -33,9 +33,26 @@
    실행 전 확인 필요 — eval/README.md 원칙("LLM 비용 발생, 사람이 수동 실행")대로
    기본 실행에는 안 들어있고 --grounding 플래그를 명시해야만 돈다.
 
+3단계 — RAG 유무 베이스라인 비교 (--rag-baseline 플래그로만 실행, 비용 발생)
+   무엇을 재나: §5-3 "(A) 원인 라벨만으로 생성(RAG 미사용) vs (B) RAG 포함 생성"
+   비교. (B)는 2단계에서 이미 측정함(100%) — 여기서는 (A)만 새로 측정해서 나란히
+   비교한다.
+
+   어떻게: 같은 15건 alert에 route_proposal_type()은 그대로(실제 근거 보여주고)
+   호출해 라우팅만 재사용하고, COPY_DRAFT로 라우팅된 것만 대상으로 generate_proposal()
+   대신 근거를 아예 안 주는 별도 프롬프트(NO_RAG_PROMPT)로 1차만(재시도 없이) 생성.
+   재시도 루프를 안 태우는 이유: run()의 재시도+fallback을 그대로 쓰면 실패할 때마다
+   "근거없음 고정 문구"로 수렴해버려서, RAG 없이 LLM이 실제로 뭘 지어내는지가
+   안 보인다 — 안전장치를 걷어내고 날것의 실패율을 봐야 (A)/(B) 차이가 의미 있다.
+   current_text(LLM이 지어낸 것)를 LLM에게 안 보여준 진짜 원문과 대조 — 우연히
+   맞는 경우만 "성공"으로 센다.
+
+   비용: COPY_DRAFT 라우팅된 건수만큼(2단계 기준 약 4~6건) × 1회 생성.
+
 실행:
-    python eval/run_recommendation_eval.py              # 1단계만, $0
-    python eval/run_recommendation_eval.py --grounding  # 1+2단계, 실비용 발생
+    python eval/run_recommendation_eval.py                # 1단계만, $0
+    python eval/run_recommendation_eval.py --grounding    # 1+2단계, 실비용 발생
+    python eval/run_recommendation_eval.py --rag-baseline # 1+2+3단계, 실비용 발생
 
 전제: scripts/seed_vectordb.py로 Chroma에 실데이터(504행)가 이미 시딩돼 있어야 함.
 """
@@ -50,11 +67,13 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.core.llm_client import get_llm_client
 from app.core.schemas import (
     DetectionAlert,
     DetectionConfidence,
     DetectionStats,
     Evidence,
+    ProposalType,
     RecommendedAction,
     RootCause,
     SourceSignals,
@@ -66,6 +85,21 @@ from scripts.generate_detail_fields import FIFTEEN_COMBOS
 
 GOLDEN_PATH = Path(__file__).resolve().parents[1] / "data" / "golden" / "golden_detail_fields.csv"
 INPUT_PATH = Path(__file__).resolve().parents[1] / "data" / "input" / "input_detail_fields.csv"
+
+NO_RAG_PROMPT = """당신은 이커머스 상세페이지 개선안을 작성하는 어시스턴트입니다.
+아래 "이상징후 + 원인"만 보고 개선안을 작성하세요. 실제 상세페이지 원문은
+제공되지 않습니다 — current_text에는 이 상품 상세페이지에 있을 법한 문구를
+자연스럽게 작성하세요.
+
+이상징후 + 원인: {anomaly}
+
+JSON만 반환:
+{{"current_text": "...", "proposed_text": "...", "rationale": "..."}}
+"""
+"""§5-3 (A) 원인 라벨만으로 생성 조건 전용 — copy_draft_v1.md와 달리 "정보 없음이면
+정보 없음이라 쓰라"는 도피 지시가 없다. 그 지시가 있으면 NO_DETAIL_TEXT를 넣었을 때
+LLM이 정직하게 "정보 없음"이라 답해버려서, 원래 보려던 "근거 없이 지어내면 어떻게
+되는가"가 아니라 "정보없음 지시를 따르는가"를 재게 된다 — 다른 실험이 돼버림."""
 
 
 def load_expected_texts() -> dict[tuple[str, str, str], str]:
@@ -208,16 +242,65 @@ async def check_grounding_precision() -> None:
     print(f"\nGrounding precision: {hits}/{len(denom)} ({hits / len(denom):.0%})")
 
 
+async def check_rag_baseline_comparison() -> None:
+    """§5-3 베이스라인 비교 — (A) RAG 없음 vs (B) RAG 있음(2단계에서 이미 측정한 100%)."""
+    alerts = build_synthetic_alerts()
+    expected = load_expected_texts()
+    client = get_llm_client()
+
+    copy_draft_cases = []
+    for alert in alerts:
+        if alert.root_cause and alert.root_cause.label in pipeline.SCOPE_LIMIT_LABELS:
+            continue  # SCOPE_LIMIT은 애초에 LLM 호출 없음 — RAG 유무 비교 대상 아님
+        context = pipeline.retrieve_context(alert)
+        proposal_type = await pipeline.route_proposal_type(alert, context)
+        if proposal_type == ProposalType.COPY_DRAFT:
+            copy_draft_cases.append(alert)
+
+    print(f"\n(A) RAG 없음 — copy_draft 라우팅 대상: {len(copy_draft_cases)}건")
+
+    if not copy_draft_cases:
+        print("RAG 없음 Grounding precision: N/A (copy_draft 라우팅 케이스 없음)")
+        return
+
+    hits = 0
+    for alert in copy_draft_cases:
+        root_cause_label = alert.root_cause.label if alert.root_cause else "미상"
+        anomaly = f"{alert.channel.value} · {alert.main_aspect.value} 이상 (원인: {root_cause_label})"
+        prompt = NO_RAG_PROMPT.format(anomaly=anomaly)
+
+        response = await client.complete_json(
+            prompt, trace_key=f"rag-baseline:alert_id={alert.alert_id}", temperature=0.0
+        )
+        current_text = response["current_text"]
+
+        key = (alert.product_group_id, alert.channel.value, alert.main_aspect.value)
+        original_text = expected.get(key, "")
+        is_hit = current_text in original_text
+        hits += is_hit
+        marker = "OK" if is_hit else "MISS"
+        print(f"  [{marker}] {key} current_text={current_text!r}")
+
+    print(f"\nGrounding precision — (A) RAG 없음: {hits}/{len(copy_draft_cases)} ({hits / len(copy_draft_cases):.0%})")
+    print("Grounding precision — (B) RAG 있음(2단계 결과): 4/4 (100%)")
+
+
 def main() -> None:
     run_grounding = "--grounding" in sys.argv
+    run_rag_baseline = "--rag-baseline" in sys.argv
 
     check_collection1_hit_rate()
     check_collection2_status()
 
-    if run_grounding:
+    if run_grounding or run_rag_baseline:
         asyncio.run(check_grounding_precision())
     else:
         print("\n(Grounding precision은 --grounding 플래그로 별도 실행 — 실비용 발생)")
+
+    if run_rag_baseline:
+        asyncio.run(check_rag_baseline_comparison())
+    else:
+        print("(RAG 유무 베이스라인 비교는 --rag-baseline 플래그로 별도 실행 — 실비용 발생)")
 
 
 if __name__ == "__main__":
