@@ -33,6 +33,12 @@
    실행 전 확인 필요 — eval/README.md 원칙("LLM 비용 발생, 사람이 수동 실행")대로
    기본 실행에는 안 들어있고 --grounding 플래그를 명시해야만 돈다.
 
+   덤으로 같은 실행에서 추가 비용 없이 report_evaluator_quality()도 같이 보고한다:
+   consistency·actionability 통과율(단, 프롬프트가 이미 직접 지시하는 항목이라
+   순환적 — 100%여도 "독립적으로 어려운 판단을 통과했다"는 근거로는 약함)과
+   attempts(재시도) 분포(지시한 적 없는 결과값이라 더 의미 있음 — 오늘 고친
+   재시도 로직이 라이브에서 실제로 exercise되는지 보여줌).
+
 3단계 — RAG 유무 베이스라인 비교 (--rag-baseline 플래그로만 실행, 비용 발생)
    무엇을 재나: §5-3 "(A) 원인 라벨만으로 생성(RAG 미사용) vs (B) RAG 포함 생성"
    비교. (B)는 2단계에서 이미 측정함(100%) — 여기서는 (A)만 새로 측정해서 나란히
@@ -85,6 +91,7 @@ from app.core.schemas import (
     DetectionStats,
     Evidence,
     ProposalType,
+    Recommendation,
     RecommendedAction,
     RootCause,
     SourceSignals,
@@ -253,19 +260,42 @@ async def check_grounding_precision() -> None:
 
     if not denom:
         print("Grounding precision: N/A (detailpage_grounded=true 케이스 없음)")
-        return
+    else:
+        expected = load_expected_texts()
+        hits = 0
+        for alert, rec in denom:
+            key = (alert.product_group_id, alert.channel.value, alert.main_aspect.value)
+            original_text = expected.get(key, "")
+            is_hit = rec.proposal.current_text in original_text
+            hits += is_hit
+            marker = "OK" if is_hit else "MISS"
+            print(f"  [{marker}] {key} current_text={rec.proposal.current_text!r}")
 
-    expected = load_expected_texts()
-    hits = 0
-    for alert, rec in denom:
-        key = (alert.product_group_id, alert.channel.value, alert.main_aspect.value)
-        original_text = expected.get(key, "")
-        is_hit = rec.proposal.current_text in original_text
-        hits += is_hit
-        marker = "OK" if is_hit else "MISS"
-        print(f"  [{marker}] {key} current_text={rec.proposal.current_text!r}")
+        print(f"\nGrounding precision: {hits}/{len(denom)} ({hits / len(denom):.0%})")
 
-    print(f"\nGrounding precision: {hits}/{len(denom)} ({hits / len(denom):.0%})")
+    report_evaluator_quality(grounded_cases)
+
+
+def report_evaluator_quality(cases: list[tuple[DetectionAlert, Recommendation]]) -> None:
+    """Evaluator 3기준 중 grounding 이외 2개(consistency·actionability) + 재시도(attempts) 분포.
+
+    consistency·actionability는 프롬프트가 이미 "원인 라벨을 근거로", "실행 가능한
+    문장으로"라고 직접 지시하는 항목이라, LLM의 지시 순응도를 재는 것에 가깝다 —
+    라우팅 정확도와 같은 이유로 100%가 나와도 "독립적으로 어려운 판단을 통과했다"는
+    근거로 쓰기엔 약하다(순환적). attempts는 반대로 지시한 적 없는 결과값이라 더
+    의미 있다 — 1차 실패 후 재시도가 실제로 발생하는지, 오늘 고친 재시도 로직이
+    라이브에서 exercise되는지를 보여준다.
+    """
+    total = len(cases)
+    consistency_pass = sum(1 for _, r in cases if r.evaluator.checks.consistency)
+    actionability_pass = sum(1 for _, r in cases if r.evaluator.checks.actionability)
+    attempts_hist: dict[int, int] = {}
+    for _, r in cases:
+        attempts_hist[r.evaluator.attempts] = attempts_hist.get(r.evaluator.attempts, 0) + 1
+
+    print(f"\nConsistency 통과율: {consistency_pass}/{total} ({consistency_pass / total:.0%})")
+    print(f"Actionability 통과율: {actionability_pass}/{total} ({actionability_pass / total:.0%})")
+    print("재시도(attempts) 분포:", {k: attempts_hist[k] for k in sorted(attempts_hist)})
 
 
 async def check_rag_baseline_comparison() -> None:
