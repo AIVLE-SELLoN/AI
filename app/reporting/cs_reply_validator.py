@@ -21,12 +21,12 @@ def validate_cs_guideline(
     errors: list[str] = []
 
     # 1. CS ID Grounding Validation
-    allowed_cs_ids = {inquiry.cs_id for inquiry in input_data.linked_inquiries}
+    allowed_item_ids = {inquiry.item_id for inquiry in input_data.linked_inquiries}
     for guide in generated_output.inquiry_specific_guides:
-        if guide.cs_id not in allowed_cs_ids:
+        if guide.item_id not in allowed_item_ids:
             errors.append(
-                f"Grounding 오류: 인용된 cs_id '{guide.cs_id}'가 입력 CS 문의 목록에 존재하지 않습니다."
-            )
+                f"Grounding 오류: 인용된 item_id '{guide.item_id}'가 입력 CS 문의 목록에 존재하지 않습니다."
+        )
 
     # 2. Structural & Completeness Check
     std_guide = generated_output.standard_guideline
