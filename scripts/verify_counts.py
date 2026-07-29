@@ -107,24 +107,27 @@ def verify_case(case_id: str, anomaly_rows: list[dict], data_by_source: dict,
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--anomaly-config", default="config_anomaly.csv")
-    ap.add_argument("--generated-dir", default="./output")
-    ap.add_argument("--mapping-dir", required=True, help="golden_mapping.csv/input_channel_products.csv 위치")
+    ap.add_argument("--generated-dir", default="./output", help="input_*.csv 위치")
+    ap.add_argument("--golden-dir", default=None, help="golden_*.csv 위치(생략 시 --generated-dir와 동일 — 하위호환)")
+    ap.add_argument("--mapping-dir", required=True, help="input_channel_products.csv 위치")
+    ap.add_argument("--golden-mapping-dir", default=None, help="golden_mapping.csv 위치(생략 시 --mapping-dir와 동일)")
     ap.add_argument("--case-ids", default="SC-001", help="쉼표로 구분, 예: SC-001,SC-024")
     ap.add_argument("--anchor-date", required=True)
     args = ap.parse_args()
 
     anchor_date = datetime.strptime(args.anchor_date, "%Y-%m-%d")
     anomaly_rows = load_csv(args.anomaly_config)
-    pid_map = load_channel_product_id_map(args.mapping_dir)
+    pid_map = load_channel_product_id_map(args.mapping_dir, args.golden_mapping_dir)
 
     gen_dir = Path(args.generated_dir)
+    golden_dir = Path(args.golden_dir) if args.golden_dir else gen_dir
     data_by_source = {
         "cs": load_csv(gen_dir / "input_cs_inquiries.csv"),
         "review": load_csv(gen_dir / "input_reviews.csv"),
     }
     labels_by_source = {
-        "cs": load_csv(gen_dir / "golden_cs_labels.csv"),
-        "review": load_csv(gen_dir / "golden_review_labels.csv"),
+        "cs": load_csv(golden_dir / "golden_cs_labels.csv"),
+        "review": load_csv(golden_dir / "golden_review_labels.csv"),
     }
 
     results = []
