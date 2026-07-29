@@ -1,4 +1,4 @@
-# eval/ — 정량 실험
+# eval/ — Agent1·2·3 정량 실험 6종 가이드
 
 > ⚠️ **사람이 수동으로 실행한다. CI 에 넣지 말 것.**
 > LLM 비용이 발생하고 수 분~수십 분 걸린다. `tests/` 와 성격이 완전히 다르다.
@@ -28,10 +28,22 @@ python eval/run_detection_eval.py
 | `run_pipeline_eval.py` | ② 분류 오류가 탐지를 얼마나 깎는지 (①−②) | 시드 3벌 | ~$90 | 서영·현진 |
 | `run_classify_eval.py` | ③ 프롬프트1 aspect 분류 정확도 | 1,000건 × 반복 | ~$20 | 현진 |
 | `run_review_eval.py` | ④ 프롬프트2 리뷰 aspect별 긍부정 | AI Hub 71603 | ~$20 | 현진 |
-| (개선안 모듈) | ⑤ RAG 유무 베이스라인 비교 | — | 지인 산정 | 지인 |
+| `run_recommendation_eval.py` | ⑤ Retrieval hit rate·Grounding precision·RAG 유무 비교·라우팅 정확도 | golden 15건 + 실제 CS 201건 | 실측 $0~수달러 | 지인 |
 | `run_cause_eval.py` | ⑥ 프롬프트3 원인분류 정확도 ([6] 원인 진단) | 채점 케이스 × 20건 | ~$20 (추정) | 서영 |
 
 ⑤는 개선안 로직 §182 정의(스크립트는 개선안 모듈 소관). ⑥은 지인 승인으로 추가(2026-07-23).
+
+**⑤ 실측 결과 (2026-07-29, gpt-4o-mini)**:
+- Retrieval hit rate(컬렉션1): 15/15(100%, $0)
+- Grounding precision(RAG 있음): 4/4(100%)
+- RAG 유무 베이스라인: RAG 없음 0/4(0%) vs RAG 있음 4/4(100%)
+- 라우팅 정확도: golden 15건 기준 11/11(100%), 실제 CS 201건 기준 201/201(100%)
+- Evaluator 품질(consistency·actionability): 15/15(각 100%) — 단, 프롬프트가 직접
+  지시하는 항목이라 순환적, 판단력 증거로는 약함
+- **재시도 발생 분포: 1차 통과 11건 / 2차(재시도) 통과 4건 / 3차·fallback 0건** —
+  4건이 1차 실패 후 재시도로 성공. 재시도 temperature·피드백 로직이 라이브에서
+  실제로 작동한다는 증거
+- 상세 설계(왜 이렇게 재는지, 각 실험의 한계)는 `run_recommendation_eval.py` 소스 참고
 
 **평가 비용 소계 ~$150(①~④·⑥), ⑤ 별도, 전체 상한 $250로 관리** — 추정치, 재산정 필요.
 

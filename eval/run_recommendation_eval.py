@@ -1,76 +1,16 @@
-"""실험⑤ RAG 유무 베이스라인 비교 — Retrieval hit rate + Grounding precision.
+"""실험⑤ Agent3 정량 실험 — Retrieval hit rate / Grounding precision / RAG 유무 비교 / 라우팅 정확도.
 
-1단계 — Retrieval hit rate (컬렉션1 부분, 기본 실행 대상)
-   무엇을 재나: 컬렉션1(상세페이지) get() 조회 결과가 실제 적재 원문과 일치하는가.
-   docs/agent3_logic.md §5-3 정의 그대로면 "컬렉션1 get 일치 + 컬렉션2 query 상위3
-   포함"을 합친 게 Retrieval hit rate지만, 컬렉션2(rejection_reasons)는 HITL
-   반려 실적이 쌓여야 채워지는 구조라 지금은 항상 0건 — 이 스크립트는 $0으로
-   지금 잴 수 있는 컬렉션1 부분만 실측하고, 컬렉션2는 상태만 보고한다(N/A).
-
-   "일치"의 의미: get()은 텍스트를 그대로 반환할 뿐 있음/없음/애매를 판단하지
-   않는다(그 판단은 Grounding precision 쪽 몫). 여기서 재는 건 벡터DB 조회
-   경로(seeding·키 매칭·인코딩)에 배관 버그가 없는지 — golden 15건의 키로
-   조회했을 때 input_detail_fields.csv에 실제로 적재된 원문과 글자 그대로
-   일치하는가를 확인한다.
-
-   어떻게: golden_detail_fields.csv(15건, 정답 키)로 pipeline이 쓰는 것과 동일한
-   vectordb.get_documents() 호출 → input_detail_fields.csv(실제 적재 원문, 기대값)와
-   문자열 비교.
-
-   비용: $0 — LLM 호출 없음, 순수 vectordb 조회.
-
-2단계 — Grounding precision (--grounding 플래그로만 실행, 비용 발생)
-   무엇을 재나: proposal.current_text가 실제 원문에 그대로 포함된 케이스 수 /
-   proposal.detailpage_grounded=true 케이스 수 (docs/agent3_logic.md §5-3).
-
-   어떻게: scripts/generate_detail_fields.py의 FIFTEEN_COMBOS(golden 15건의
-   golden_group_id/channel/aspect/root_cause)로 synthetic DetectionAlert 15개를 만들어 pipeline.run()을 실제로 돌린다.
-
-   비용: gpt-4o-mini 기준 최대 15건 × 4회(라우팅1 + 생성 최대3) = 60회 호출.
-   실행 전 확인 필요 — eval/README.md 원칙("LLM 비용 발생, 사람이 수동 실행")대로
-   기본 실행에는 안 들어있고 --grounding 플래그를 명시해야만 돈다.
-
-   덤으로 같은 실행에서 추가 비용 없이 report_evaluator_quality()도 같이 보고한다:
-   consistency·actionability 통과율(단, 프롬프트가 이미 직접 지시하는 항목이라
-   순환적 — 100%여도 "독립적으로 어려운 판단을 통과했다"는 근거로는 약함)과
-   attempts(재시도) 분포(지시한 적 없는 결과값이라 더 의미 있음 — 오늘 고친
-   재시도 로직이 라이브에서 실제로 exercise되는지 보여줌).
-
-3단계 — RAG 유무 베이스라인 비교 (--rag-baseline 플래그로만 실행, 비용 발생)
-   무엇을 재나: §5-3 "(A) 원인 라벨만으로 생성(RAG 미사용) vs (B) RAG 포함 생성"
-   비교. (B)는 2단계에서 이미 측정함(100%) — 여기서는 (A)만 새로 측정해서 나란히
-   비교한다.
-
-   어떻게: 2단계(check_grounding_precision)가 이미 pipeline.run()으로 계산해둔
-   라우팅 결과(rec.proposal.type)를 재사용 — route_proposal_type()을 여기서 또
-   부르지 않는다(2026-07-28 재검토: 중복 호출로 비용 낭비하던 버그 수정). COPY_DRAFT로
-   라우팅된 것만 대상으로 generate_proposal() 대신 근거를 아예 안 주는 별도
-   프롬프트(NO_RAG_PROMPT)로 1차만(재시도 없이) 생성.
-   재시도 루프를 안 태우는 이유: run()의 재시도+fallback을 그대로 쓰면 실패할 때마다
-   "근거없음 고정 문구"로 수렴해버려서, RAG 없이 LLM이 실제로 뭘 지어내는지가
-   안 보인다 — 안전장치를 걷어내고 날것의 실패율을 봐야 (A)/(B) 차이가 의미 있다.
-   current_text(LLM이 지어낸 것)를 LLM에게 안 보여준 진짜 원문과 대조 — 우연히
-   맞는 경우만 "성공"으로 센다.
-
-   비용: COPY_DRAFT 라우팅된 건수만큼(2단계 기준 약 4~6건) × 1회 생성.
-
-4단계 — 라우팅 정확도 (--routing 플래그로만 실행, 비용 발생)
-   무엇을 재나: route_proposal_type()의 choose_tool() 판단이 §4-3 도구선택표(팀
-   정답)와 얼마나 일치하는가 — "에이전트의 자율 판단을 얼마나 신뢰할 수 있는가"를
-   정량화.
-
-   어떻게: EXPECTED_TOOL_BY_ROOT_CAUSE(§4-3 표를 코드로 옮긴 것)와 실제 LLM 판단을
-   11건(SCOPE_LIMIT 2건·원인 미지정 2건 제외) 대조.
-
-   비용: 11회 호출(라우팅만, 생성 없음) — 4단계 중 제일 쌈.
+각 실험이 무엇을 재는지·비용·실측 결과는 eval/README.md 표 참고. 설계 이유가
+비자명한 부분(왜 재시도를 안 태우는지 등)은 해당 함수 docstring에 있음.
 
 실행:
-    python eval/run_recommendation_eval.py                # 1단계만, $0
-    python eval/run_recommendation_eval.py --grounding    # 1+2단계, 실비용 발생
-    python eval/run_recommendation_eval.py --rag-baseline # 1+2+3단계, 실비용 발생
-    python eval/run_recommendation_eval.py --routing      # 1+2+4단계, 실비용 발생
+    python eval/run_recommendation_eval.py                # Retrieval hit rate만, $0
+    python eval/run_recommendation_eval.py --grounding    # + Grounding precision, 실비용
+    python eval/run_recommendation_eval.py --rag-baseline # + RAG 유무 비교, 실비용
+    python eval/run_recommendation_eval.py --routing      # + 라우팅 정확도(golden 15건), 실비용
+    python eval/run_recommendation_eval.py --routing-real # + 라우팅 정확도(실제 CS 201건), 실비용
 
-전제: scripts/seed_vectordb.py로 Chroma에 실데이터(504행)가 이미 시딩돼 있어야 함.
+전제: scripts/seed_vectordb.py로 Chroma에 실데이터가 이미 시딩돼 있어야 함.
 """
 
 from __future__ import annotations
@@ -338,18 +278,18 @@ async def check_rag_baseline_comparison(cases: list[tuple[DetectionAlert, Recomm
     print("Grounding precision — (B) RAG 있음(2단계 결과): 4/4 (100%)")
 
 
-async def check_routing_accuracy() -> None:
+async def check_routing_accuracy(alerts: list[DetectionAlert], *, label: str) -> None:
     """§4-3 도구선택표 대조 — LLM의 choose_tool() 판단이 팀 정답표와 얼마나 일치하는가.
 
-    SCOPE_LIMIT(2건)·원인 미지정(2건)은 정답 자체가 없어 제외 — 11건 기준.
+    SCOPE_LIMIT·원인 미지정 등 EXPECTED_TOOL_BY_ROOT_CAUSE에 없는 원인은 정답 자체가
+    없어 제외. golden 15건 기반(synthetic)과 실제 CS 데이터 기반 둘 다 이 함수를
+    공유한다 — label로 어느 쪽 결과인지만 구분.
     """
-    alerts = build_synthetic_alerts()
-
     targets = [
         a for a in alerts
         if a.root_cause and a.root_cause.label in EXPECTED_TOOL_BY_ROOT_CAUSE
     ]
-    print(f"\n라우팅 정확도 대상: {len(targets)}건 (SCOPE_LIMIT·원인 미지정 제외)")
+    print(f"\n라우팅 정확도 대상({label}): {len(targets)}건")
 
     hits = 0
     for alert in targets:
@@ -365,13 +305,78 @@ async def check_routing_accuracy() -> None:
             f"기대={expected.value} 실제={actual.value}"
         )
 
-    print(f"\n라우팅 정확도: {hits}/{len(targets)} ({hits / len(targets):.0%})")
+    print(f"\n라우팅 정확도({label}): {hits}/{len(targets)} ({hits / len(targets):.0%})")
+
+
+CS_LABELS_PATH = Path(__file__).resolve().parents[1] / "data" / "golden" / "golden_cs_labels.csv"
+CS_INQUIRIES_PATH = Path(__file__).resolve().parents[1] / "data" / "input" / "input_cs_inquiries.csv"
+CHANNEL_PRODUCTS_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "input" / "mapping_42" / "input_channel_products.csv"
+)
+GOLDEN_MAPPING_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "golden" / "mapping_42" / "golden_mapping.csv"
+)
+
+
+def build_alerts_from_real_cs_data() -> list[DetectionAlert]:
+    """실제 CS 문의(golden_cs_labels.csv, true_cause 있는 건)를 DetectionAlert로 변환.
+
+    조인 경로: inquiry_id(golden_cs_labels) → channel_product_id(input_cs_inquiries)
+    → variant_row_id(input_channel_products) → golden_group_id(golden_mapping).
+    """
+    def load(path: Path) -> list[dict]:
+        with path.open(encoding="utf-8-sig", newline="") as f:
+            return list(csv.DictReader(f))
+
+    cs_labels = load(CS_LABELS_PATH)
+    inq_to_cpid = {r["inquiry_id"]: (r["channel"], r["channel_product_id"]) for r in load(CS_INQUIRIES_PATH)}
+    cpid_to_vrid = {
+        (r["channel"], r["channel_product_id"]): r["variant_row_id"] for r in load(CHANNEL_PRODUCTS_PATH)
+    }
+    vrid_to_ggid = {r["variant_row_id"]: r["golden_group_id"] for r in load(GOLDEN_MAPPING_PATH)}
+
+    alerts = []
+    for r in cs_labels:
+        cause = r["true_cause"].strip()
+        if cause not in EXPECTED_TOOL_BY_ROOT_CAUSE:
+            continue
+        ch_cpid = inq_to_cpid.get(r["inquiry_id"])
+        vrid = cpid_to_vrid.get(ch_cpid) if ch_cpid else None
+        ggid = vrid_to_ggid.get(vrid) if vrid else None
+        if not ggid:
+            continue
+
+        alerts.append(
+            DetectionAlert(
+                alert_id=f"ALT-REAL-{r['inquiry_id']}",
+                detected_at="2026-07-28T00:00:00",
+                product_group_id=ggid,
+                channel=ch_cpid[0],
+                window_start="2026-07-21",
+                window_end="2026-07-28",
+                verdict=Verdict.BIASED,
+                significant_channels=[ch_cpid[0]],
+                main_aspect=r["true_aspect"],
+                stats=DetectionStats(
+                    source="cs", cur_rate=0.13, past_rate=0.05, delta=0.08,
+                    p_value=0.00013, bh_significant=True, cur_total=200,
+                ),
+                source_signals=SourceSignals(cs=True, review=False, interpretation="실제 CS 데이터 기반 eval"),
+                root_cause=RootCause(label=cause, count=14, total=20, consistent=True),
+                detection_confidence=DetectionConfidence.HIGH,
+                scope_in=True,
+                recommended_action=RecommendedAction.GENERATE_RECOMMENDATION,
+                evidence=Evidence(inquiry_ids=[r["inquiry_id"]]),
+            )
+        )
+    return alerts
 
 
 def main() -> None:
     run_grounding = "--grounding" in sys.argv
     run_rag_baseline = "--rag-baseline" in sys.argv
     run_routing = "--routing" in sys.argv
+    run_routing_real = "--routing-real" in sys.argv
 
     check_collection1_hit_rate()
     check_collection2_status()
@@ -388,9 +393,14 @@ def main() -> None:
         print("(RAG 유무 베이스라인 비교는 --rag-baseline 플래그로 별도 실행 — 실비용 발생)")
 
     if run_routing:
-        asyncio.run(check_routing_accuracy())
+        asyncio.run(check_routing_accuracy(build_synthetic_alerts(), label="golden 15건"))
     else:
         print("(라우팅 정확도는 --routing 플래그로 별도 실행 — 실비용 발생)")
+
+    if run_routing_real:
+        asyncio.run(check_routing_accuracy(build_alerts_from_real_cs_data(), label="실제 CS 데이터"))
+    else:
+        print("(실제 CS 데이터 기반 라우팅 정확도는 --routing-real 플래그로 별도 실행 — 실비용 발생)")
 
 
 if __name__ == "__main__":
