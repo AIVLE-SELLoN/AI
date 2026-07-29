@@ -40,8 +40,12 @@ from app.core.vectordb import get_detail_pages, get_documents, get_rejection_rea
 from app.recommendation import pipeline
 from scripts.generate_detail_fields import FIFTEEN_COMBOS
 
-GOLDEN_PATH = Path(__file__).resolve().parents[1] / "data" / "golden" / "golden_detail_fields.csv"
-INPUT_PATH = Path(__file__).resolve().parents[1] / "data" / "input" / "input_detail_fields.csv"
+GOLDEN_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "golden" / "golden_detail_fields.csv"
+)
+INPUT_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "input" / "input_detail_fields.csv"
+)
 
 NO_RAG_PROMPT = """당신은 이커머스 상세페이지 개선안을 작성하는 어시스턴트입니다.
 아래 "이상징후 + 원인"만 보고 개선안을 작성하세요. 실제 상세페이지 원문은
@@ -77,7 +81,10 @@ def load_expected_texts() -> dict[tuple[str, str, str], str]:
     """input_detail_fields.csv → {(product_group_id, channel, aspect): detail_text}."""
     with INPUT_PATH.open(encoding="utf-8-sig", newline="") as f:
         rows = list(csv.DictReader(f))
-    return {(r["product_group_id"], r["channel"], r["aspect"]): r["detail_text"] for r in rows}
+    return {
+        (r["product_group_id"], r["channel"], r["aspect"]): r["detail_text"]
+        for r in rows
+    }
 
 
 def check_collection1_hit_rate() -> None:
@@ -136,7 +143,9 @@ def check_collection2_status() -> None:
             "(0건 — HITL 반려 실적이 쌓여야 측정 가능, 정상 상태)"
         )
     else:
-        print(f"\n컬렉션2(rejection_reasons): {count}건 존재 — 상위3 포함율 실측은 별도 구현 필요")
+        print(
+            f"\n컬렉션2(rejection_reasons): {count}건 존재 — 상위3 포함율 실측은 별도 구현 필요"
+        )
 
 
 def build_synthetic_alerts() -> list[DetectionAlert]:
@@ -166,10 +175,17 @@ def build_synthetic_alerts() -> list[DetectionAlert]:
                 significant_channels=[combo["channel"]],
                 main_aspect=combo["aspect"],
                 stats=DetectionStats(
-                    source="cs", cur_rate=0.13, past_rate=0.05, delta=0.08,
-                    p_value=0.00013, bh_significant=True, cur_total=200,
+                    source="cs",
+                    cur_rate=0.13,
+                    past_rate=0.05,
+                    delta=0.08,
+                    p_value=0.00013,
+                    bh_significant=True,
+                    cur_total=200,
                 ),
-                source_signals=SourceSignals(cs=True, review=False, interpretation="eval용 synthetic alert"),
+                source_signals=SourceSignals(
+                    cs=True, review=False, interpretation="eval용 synthetic alert"
+                ),
                 root_cause=root_cause,
                 detection_confidence=DetectionConfidence.HIGH,
                 scope_in=True,
@@ -190,11 +206,11 @@ async def check_grounding_precision() -> list[tuple[DetectionAlert, Recommendati
             continue
         grounded_cases.append((alert, recommendation))
 
-    denom = [
-        (a, r) for a, r in grounded_cases if r.proposal.detailpage_grounded
-    ]
+    denom = [(a, r) for a, r in grounded_cases if r.proposal.detailpage_grounded]
 
-    print(f"\nGrounding precision 대상(detailpage_grounded=true): {len(denom)}/{len(grounded_cases)}건")
+    print(
+        f"\nGrounding precision 대상(detailpage_grounded=true): {len(denom)}/{len(grounded_cases)}건"
+    )
 
     if not denom:
         print("Grounding precision: N/A (detailpage_grounded=true 케이스 없음)")
@@ -215,7 +231,9 @@ async def check_grounding_precision() -> list[tuple[DetectionAlert, Recommendati
     return grounded_cases
 
 
-def report_evaluator_quality(cases: list[tuple[DetectionAlert, Recommendation]]) -> None:
+def report_evaluator_quality(
+    cases: list[tuple[DetectionAlert, Recommendation]],
+) -> None:
     """Evaluator 3기준 중 grounding 이외 2개(consistency·actionability) + 재시도(attempts) 분포.
 
     consistency·actionability는 프롬프트가 이미 지시하는 항목이라 순환적 — 100%여도
@@ -226,14 +244,24 @@ def report_evaluator_quality(cases: list[tuple[DetectionAlert, Recommendation]])
     actionability_pass = sum(1 for _, r in cases if r.evaluator.checks.actionability)
     attempts_hist: dict[int, int] = {}
     for _, r in cases:
-        attempts_hist[r.evaluator.attempts] = attempts_hist.get(r.evaluator.attempts, 0) + 1
+        attempts_hist[r.evaluator.attempts] = (
+            attempts_hist.get(r.evaluator.attempts, 0) + 1
+        )
 
-    print(f"\nConsistency 통과율: {consistency_pass}/{total} ({consistency_pass / total:.0%})")
-    print(f"Actionability 통과율: {actionability_pass}/{total} ({actionability_pass / total:.0%})")
-    print("재시도(attempts) 분포:", {k: attempts_hist[k] for k in sorted(attempts_hist)})
+    print(
+        f"\nConsistency 통과율: {consistency_pass}/{total} ({consistency_pass / total:.0%})"
+    )
+    print(
+        f"Actionability 통과율: {actionability_pass}/{total} ({actionability_pass / total:.0%})"
+    )
+    print(
+        "재시도(attempts) 분포:", {k: attempts_hist[k] for k in sorted(attempts_hist)}
+    )
 
 
-async def check_rag_baseline_comparison(cases: list[tuple[DetectionAlert, Recommendation]]) -> None:
+async def check_rag_baseline_comparison(
+    cases: list[tuple[DetectionAlert, Recommendation]],
+) -> None:
     """§5-3 베이스라인 비교 — (A) RAG 없음 vs (B) RAG 있음(2단계에서 이미 측정한 100%).
 
     cases는 check_grounding_precision()이 계산한 결과를 재사용 — route_proposal_type()
@@ -246,7 +274,9 @@ async def check_rag_baseline_comparison(cases: list[tuple[DetectionAlert, Recomm
     copy_draft_cases = [
         alert
         for alert, rec in cases
-        if not (alert.root_cause and alert.root_cause.label in pipeline.SCOPE_LIMIT_LABELS)
+        if not (
+            alert.root_cause and alert.root_cause.label in pipeline.SCOPE_LIMIT_LABELS
+        )
         and rec.proposal.type == ProposalType.COPY_DRAFT
     ]
 
@@ -274,7 +304,9 @@ async def check_rag_baseline_comparison(cases: list[tuple[DetectionAlert, Recomm
         marker = "OK" if is_hit else "MISS"
         print(f"  [{marker}] {key} current_text={current_text!r}")
 
-    print(f"\nGrounding precision — (A) RAG 없음: {hits}/{len(copy_draft_cases)} ({hits / len(copy_draft_cases):.0%})")
+    print(
+        f"\nGrounding precision — (A) RAG 없음: {hits}/{len(copy_draft_cases)} ({hits / len(copy_draft_cases):.0%})"
+    )
     print("Grounding precision — (B) RAG 있음(2단계 결과): 4/4 (100%)")
 
 
@@ -286,7 +318,8 @@ async def check_routing_accuracy(alerts: list[DetectionAlert], *, label: str) ->
     공유한다 — label로 어느 쪽 결과인지만 구분.
     """
     targets = [
-        a for a in alerts
+        a
+        for a in alerts
         if a.root_cause and a.root_cause.label in EXPECTED_TOOL_BY_ROOT_CAUSE
     ]
     print(f"\n라우팅 정확도 대상({label}): {len(targets)}건")
@@ -305,16 +338,30 @@ async def check_routing_accuracy(alerts: list[DetectionAlert], *, label: str) ->
             f"기대={expected.value} 실제={actual.value}"
         )
 
-    print(f"\n라우팅 정확도({label}): {hits}/{len(targets)} ({hits / len(targets):.0%})")
+    print(
+        f"\n라우팅 정확도({label}): {hits}/{len(targets)} ({hits / len(targets):.0%})"
+    )
 
 
-CS_LABELS_PATH = Path(__file__).resolve().parents[1] / "data" / "golden" / "golden_cs_labels.csv"
-CS_INQUIRIES_PATH = Path(__file__).resolve().parents[1] / "data" / "input" / "input_cs_inquiries.csv"
+CS_LABELS_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "golden" / "golden_cs_labels.csv"
+)
+CS_INQUIRIES_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "input" / "input_cs_inquiries.csv"
+)
 CHANNEL_PRODUCTS_PATH = (
-    Path(__file__).resolve().parents[1] / "data" / "input" / "mapping_42" / "input_channel_products.csv"
+    Path(__file__).resolve().parents[1]
+    / "data"
+    / "input"
+    / "mapping_42"
+    / "input_channel_products.csv"
 )
 GOLDEN_MAPPING_PATH = (
-    Path(__file__).resolve().parents[1] / "data" / "golden" / "mapping_42" / "golden_mapping.csv"
+    Path(__file__).resolve().parents[1]
+    / "data"
+    / "golden"
+    / "mapping_42"
+    / "golden_mapping.csv"
 )
 
 
@@ -324,16 +371,23 @@ def build_alerts_from_real_cs_data() -> list[DetectionAlert]:
     조인 경로: inquiry_id(golden_cs_labels) → channel_product_id(input_cs_inquiries)
     → variant_row_id(input_channel_products) → golden_group_id(golden_mapping).
     """
+
     def load(path: Path) -> list[dict]:
         with path.open(encoding="utf-8-sig", newline="") as f:
             return list(csv.DictReader(f))
 
     cs_labels = load(CS_LABELS_PATH)
-    inq_to_cpid = {r["inquiry_id"]: (r["channel"], r["channel_product_id"]) for r in load(CS_INQUIRIES_PATH)}
-    cpid_to_vrid = {
-        (r["channel"], r["channel_product_id"]): r["variant_row_id"] for r in load(CHANNEL_PRODUCTS_PATH)
+    inq_to_cpid = {
+        r["inquiry_id"]: (r["channel"], r["channel_product_id"])
+        for r in load(CS_INQUIRIES_PATH)
     }
-    vrid_to_ggid = {r["variant_row_id"]: r["golden_group_id"] for r in load(GOLDEN_MAPPING_PATH)}
+    cpid_to_vrid = {
+        (r["channel"], r["channel_product_id"]): r["variant_row_id"]
+        for r in load(CHANNEL_PRODUCTS_PATH)
+    }
+    vrid_to_ggid = {
+        r["variant_row_id"]: r["golden_group_id"] for r in load(GOLDEN_MAPPING_PATH)
+    }
 
     alerts = []
     for r in cs_labels:
@@ -358,10 +412,17 @@ def build_alerts_from_real_cs_data() -> list[DetectionAlert]:
                 significant_channels=[ch_cpid[0]],
                 main_aspect=r["true_aspect"],
                 stats=DetectionStats(
-                    source="cs", cur_rate=0.13, past_rate=0.05, delta=0.08,
-                    p_value=0.00013, bh_significant=True, cur_total=200,
+                    source="cs",
+                    cur_rate=0.13,
+                    past_rate=0.05,
+                    delta=0.08,
+                    p_value=0.00013,
+                    bh_significant=True,
+                    cur_total=200,
                 ),
-                source_signals=SourceSignals(cs=True, review=False, interpretation="실제 CS 데이터 기반 eval"),
+                source_signals=SourceSignals(
+                    cs=True, review=False, interpretation="실제 CS 데이터 기반 eval"
+                ),
                 root_cause=RootCause(label=cause, count=14, total=20, consistent=True),
                 detection_confidence=DetectionConfidence.HIGH,
                 scope_in=True,
@@ -390,17 +451,27 @@ def main() -> None:
     if run_rag_baseline:
         asyncio.run(check_rag_baseline_comparison(grounded_cases))
     else:
-        print("(RAG 유무 베이스라인 비교는 --rag-baseline 플래그로 별도 실행 — 실비용 발생)")
+        print(
+            "(RAG 유무 베이스라인 비교는 --rag-baseline 플래그로 별도 실행 — 실비용 발생)"
+        )
 
     if run_routing:
-        asyncio.run(check_routing_accuracy(build_synthetic_alerts(), label="golden 15건"))
+        asyncio.run(
+            check_routing_accuracy(build_synthetic_alerts(), label="golden 15건")
+        )
     else:
         print("(라우팅 정확도는 --routing 플래그로 별도 실행 — 실비용 발생)")
 
     if run_routing_real:
-        asyncio.run(check_routing_accuracy(build_alerts_from_real_cs_data(), label="실제 CS 데이터"))
+        asyncio.run(
+            check_routing_accuracy(
+                build_alerts_from_real_cs_data(), label="실제 CS 데이터"
+            )
+        )
     else:
-        print("(실제 CS 데이터 기반 라우팅 정확도는 --routing-real 플래그로 별도 실행 — 실비용 발생)")
+        print(
+            "(실제 CS 데이터 기반 라우팅 정확도는 --routing-real 플래그로 별도 실행 — 실비용 발생)"
+        )
 
 
 if __name__ == "__main__":
