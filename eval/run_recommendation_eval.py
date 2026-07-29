@@ -24,10 +24,7 @@
    proposal.detailpage_grounded=true 케이스 수 (docs/agent3_logic.md §5-3).
 
    어떻게: scripts/generate_detail_fields.py의 FIFTEEN_COMBOS(golden 15건의
-   golden_group_id/channel/aspect/root_cause — 이미 팀이 확정한 값)로 synthetic
-   DetectionAlert 15개를 만들어 pipeline.run()을 실제로 돌린다. 서영님의 [4][5][6]
-   PR 병합을 기다릴 필요 없이 이 15건만으로 완결된다(root_cause가 이미 하드코딩돼
-   있어서).
+   golden_group_id/channel/aspect/root_cause)로 synthetic DetectionAlert 15개를 만들어 pipeline.run()을 실제로 돌린다.
 
    비용: gpt-4o-mini 기준 최대 15건 × 4회(라우팅1 + 생성 최대3) = 60회 호출.
    실행 전 확인 필요 — eval/README.md 원칙("LLM 비용 발생, 사람이 수동 실행")대로
@@ -44,9 +41,11 @@
    비교. (B)는 2단계에서 이미 측정함(100%) — 여기서는 (A)만 새로 측정해서 나란히
    비교한다.
 
-   어떻게: 같은 15건 alert에 route_proposal_type()은 그대로(실제 근거 보여주고)
-   호출해 라우팅만 재사용하고, COPY_DRAFT로 라우팅된 것만 대상으로 generate_proposal()
-   대신 근거를 아예 안 주는 별도 프롬프트(NO_RAG_PROMPT)로 1차만(재시도 없이) 생성.
+   어떻게: 2단계(check_grounding_precision)가 이미 pipeline.run()으로 계산해둔
+   라우팅 결과(rec.proposal.type)를 재사용 — route_proposal_type()을 여기서 또
+   부르지 않는다(2026-07-28 재검토: 중복 호출로 비용 낭비하던 버그 수정). COPY_DRAFT로
+   라우팅된 것만 대상으로 generate_proposal() 대신 근거를 아예 안 주는 별도
+   프롬프트(NO_RAG_PROMPT)로 1차만(재시도 없이) 생성.
    재시도 루프를 안 태우는 이유: run()의 재시도+fallback을 그대로 쓰면 실패할 때마다
    "근거없음 고정 문구"로 수렴해버려서, RAG 없이 LLM이 실제로 뭘 지어내는지가
    안 보인다 — 안전장치를 걷어내고 날것의 실패율을 봐야 (A)/(B) 차이가 의미 있다.
@@ -115,9 +114,8 @@ JSON만 반환:
 {{"current_text": "...", "proposed_text": "...", "rationale": "..."}}
 """
 """§5-3 (A) 원인 라벨만으로 생성 조건 전용 — copy_draft_v1.md와 달리 "정보 없음이면
-정보 없음이라 쓰라"는 도피 지시가 없다. 그 지시가 있으면 NO_DETAIL_TEXT를 넣었을 때
-LLM이 정직하게 "정보 없음"이라 답해버려서, 원래 보려던 "근거 없이 지어내면 어떻게
-되는가"가 아니라 "정보없음 지시를 따르는가"를 재게 된다 — 다른 실험이 돼버림."""
+정보 없음이라 쓰라"는 지시가 없음. 있으면 NO_DETAIL_TEXT 입력 시 LLM이 정직하게
+"정보 없음"이라 답해서 다른 실험이 됨."""
 
 
 EXPECTED_TOOL_BY_ROOT_CAUSE = {
@@ -242,7 +240,7 @@ def build_synthetic_alerts() -> list[DetectionAlert]:
     return alerts
 
 
-async def check_grounding_precision() -> None:
+async def check_grounding_precision() -> list[tuple[DetectionAlert, Recommendation]]:
     alerts = build_synthetic_alerts()
 
     grounded_cases = []
@@ -274,17 +272,14 @@ async def check_grounding_precision() -> None:
         print(f"\nGrounding precision: {hits}/{len(denom)} ({hits / len(denom):.0%})")
 
     report_evaluator_quality(grounded_cases)
+    return grounded_cases
 
 
 def report_evaluator_quality(cases: list[tuple[DetectionAlert, Recommendation]]) -> None:
     """Evaluator 3기준 중 grounding 이외 2개(consistency·actionability) + 재시도(attempts) 분포.
 
-    consistency·actionability는 프롬프트가 이미 "원인 라벨을 근거로", "실행 가능한
-    문장으로"라고 직접 지시하는 항목이라, LLM의 지시 순응도를 재는 것에 가깝다 —
-    라우팅 정확도와 같은 이유로 100%가 나와도 "독립적으로 어려운 판단을 통과했다"는
-    근거로 쓰기엔 약하다(순환적). attempts는 반대로 지시한 적 없는 결과값이라 더
-    의미 있다 — 1차 실패 후 재시도가 실제로 발생하는지, 오늘 고친 재시도 로직이
-    라이브에서 exercise되는지를 보여준다.
+    consistency·actionability는 프롬프트가 이미 지시하는 항목이라 순환적 — 100%여도
+    판단력 증거로는 약함. attempts(재시도 여부)는 지시 안 한 결과값이라 더 신뢰 가능.
     """
     total = len(cases)
     consistency_pass = sum(1 for _, r in cases if r.evaluator.checks.consistency)
@@ -298,20 +293,22 @@ def report_evaluator_quality(cases: list[tuple[DetectionAlert, Recommendation]])
     print("재시도(attempts) 분포:", {k: attempts_hist[k] for k in sorted(attempts_hist)})
 
 
-async def check_rag_baseline_comparison() -> None:
-    """§5-3 베이스라인 비교 — (A) RAG 없음 vs (B) RAG 있음(2단계에서 이미 측정한 100%)."""
-    alerts = build_synthetic_alerts()
+async def check_rag_baseline_comparison(cases: list[tuple[DetectionAlert, Recommendation]]) -> None:
+    """§5-3 베이스라인 비교 — (A) RAG 없음 vs (B) RAG 있음(2단계에서 이미 측정한 100%).
+
+    cases는 check_grounding_precision()이 계산한 결과를 재사용 — route_proposal_type()
+    중복 호출 방지. SCOPE_LIMIT은 proposal.type이 copy_draft로 고정돼 있어도 실제
+    라우팅 판단이 아니므로 별도 제외.
+    """
     expected = load_expected_texts()
     client = get_llm_client()
 
-    copy_draft_cases = []
-    for alert in alerts:
-        if alert.root_cause and alert.root_cause.label in pipeline.SCOPE_LIMIT_LABELS:
-            continue  # SCOPE_LIMIT은 애초에 LLM 호출 없음 — RAG 유무 비교 대상 아님
-        context = pipeline.retrieve_context(alert)
-        proposal_type = await pipeline.route_proposal_type(alert, context)
-        if proposal_type == ProposalType.COPY_DRAFT:
-            copy_draft_cases.append(alert)
+    copy_draft_cases = [
+        alert
+        for alert, rec in cases
+        if not (alert.root_cause and alert.root_cause.label in pipeline.SCOPE_LIMIT_LABELS)
+        and rec.proposal.type == ProposalType.COPY_DRAFT
+    ]
 
     print(f"\n(A) RAG 없음 — copy_draft 라우팅 대상: {len(copy_draft_cases)}건")
 
@@ -379,13 +376,14 @@ def main() -> None:
     check_collection1_hit_rate()
     check_collection2_status()
 
+    grounded_cases: list[tuple[DetectionAlert, Recommendation]] = []
     if run_grounding or run_rag_baseline:
-        asyncio.run(check_grounding_precision())
+        grounded_cases = asyncio.run(check_grounding_precision())
     else:
         print("\n(Grounding precision은 --grounding 플래그로 별도 실행 — 실비용 발생)")
 
     if run_rag_baseline:
-        asyncio.run(check_rag_baseline_comparison())
+        asyncio.run(check_rag_baseline_comparison(grounded_cases))
     else:
         print("(RAG 유무 베이스라인 비교는 --rag-baseline 플래그로 별도 실행 — 실비용 발생)")
 
