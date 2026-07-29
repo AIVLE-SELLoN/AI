@@ -49,10 +49,21 @@
 
    비용: COPY_DRAFT 라우팅된 건수만큼(2단계 기준 약 4~6건) × 1회 생성.
 
+4단계 — 라우팅 정확도 (--routing 플래그로만 실행, 비용 발생)
+   무엇을 재나: route_proposal_type()의 choose_tool() 판단이 §4-3 도구선택표(팀
+   정답)와 얼마나 일치하는가 — "에이전트의 자율 판단을 얼마나 신뢰할 수 있는가"를
+   정량화.
+
+   어떻게: EXPECTED_TOOL_BY_ROOT_CAUSE(§4-3 표를 코드로 옮긴 것)와 실제 LLM 판단을
+   11건(SCOPE_LIMIT 2건·원인 미지정 2건 제외) 대조.
+
+   비용: 11회 호출(라우팅만, 생성 없음) — 4단계 중 제일 쌈.
+
 실행:
     python eval/run_recommendation_eval.py                # 1단계만, $0
     python eval/run_recommendation_eval.py --grounding    # 1+2단계, 실비용 발생
     python eval/run_recommendation_eval.py --rag-baseline # 1+2+3단계, 실비용 발생
+    python eval/run_recommendation_eval.py --routing      # 1+2+4단계, 실비용 발생
 
 전제: scripts/seed_vectordb.py로 Chroma에 실데이터(504행)가 이미 시딩돼 있어야 함.
 """
@@ -100,6 +111,21 @@ JSON만 반환:
 정보 없음이라 쓰라"는 도피 지시가 없다. 그 지시가 있으면 NO_DETAIL_TEXT를 넣었을 때
 LLM이 정직하게 "정보 없음"이라 답해버려서, 원래 보려던 "근거 없이 지어내면 어떻게
 되는가"가 아니라 "정보없음 지시를 따르는가"를 재게 된다 — 다른 실험이 돼버림."""
+
+
+EXPECTED_TOOL_BY_ROOT_CAUSE = {
+    "표기_오타": ProposalType.COPY_DRAFT,
+    "실측_표기_편차": ProposalType.COPY_DRAFT,
+    "채널_사이즈_표준차이": ProposalType.COPY_DRAFT,
+    "소재_정보_누락": ProposalType.COPY_DRAFT,
+    "사진_색감_오차": ProposalType.IMAGE_GUIDE,
+    "조명_보정_차이": ProposalType.IMAGE_GUIDE,
+    "이미지_질감표현_부족": ProposalType.IMAGE_GUIDE,
+}
+"""§4-3 도구선택표(팀 Notion, 결정론적 매핑) — copy_draft형/image_guide형 원인 분류는
+scripts/prompts/generate_detail_field_text_v1.md의 설계 원칙("원인 유형이 있음/없음의
+방향을 결정한다")에서 가져옴. SCOPE_LIMIT_LABELS(실물_염색_편차·실제_원단_문제)와
+원인 미지정("") 케이스는 정답이 없어 이 표에서 제외 — 라우팅 정확도 실험에서도 제외."""
 
 
 def load_expected_texts() -> dict[tuple[str, str, str], str]:
@@ -285,9 +311,40 @@ async def check_rag_baseline_comparison() -> None:
     print("Grounding precision — (B) RAG 있음(2단계 결과): 4/4 (100%)")
 
 
+async def check_routing_accuracy() -> None:
+    """§4-3 도구선택표 대조 — LLM의 choose_tool() 판단이 팀 정답표와 얼마나 일치하는가.
+
+    SCOPE_LIMIT(2건)·원인 미지정(2건)은 정답 자체가 없어 제외 — 11건 기준.
+    """
+    alerts = build_synthetic_alerts()
+
+    targets = [
+        a for a in alerts
+        if a.root_cause and a.root_cause.label in EXPECTED_TOOL_BY_ROOT_CAUSE
+    ]
+    print(f"\n라우팅 정확도 대상: {len(targets)}건 (SCOPE_LIMIT·원인 미지정 제외)")
+
+    hits = 0
+    for alert in targets:
+        context = pipeline.retrieve_context(alert)
+        actual = await pipeline.route_proposal_type(alert, context)
+        expected = EXPECTED_TOOL_BY_ROOT_CAUSE[alert.root_cause.label]
+        is_hit = actual == expected
+        hits += is_hit
+        marker = "OK" if is_hit else "MISS"
+        print(
+            f"  [{marker}] {alert.product_group_id} {alert.channel.value} "
+            f"{alert.main_aspect.value} 원인={alert.root_cause.label} "
+            f"기대={expected.value} 실제={actual.value}"
+        )
+
+    print(f"\n라우팅 정확도: {hits}/{len(targets)} ({hits / len(targets):.0%})")
+
+
 def main() -> None:
     run_grounding = "--grounding" in sys.argv
     run_rag_baseline = "--rag-baseline" in sys.argv
+    run_routing = "--routing" in sys.argv
 
     check_collection1_hit_rate()
     check_collection2_status()
@@ -301,6 +358,11 @@ def main() -> None:
         asyncio.run(check_rag_baseline_comparison())
     else:
         print("(RAG 유무 베이스라인 비교는 --rag-baseline 플래그로 별도 실행 — 실비용 발생)")
+
+    if run_routing:
+        asyncio.run(check_routing_accuracy())
+    else:
+        print("(라우팅 정확도는 --routing 플래그로 별도 실행 — 실비용 발생)")
 
 
 if __name__ == "__main__":
