@@ -96,7 +96,7 @@ def build_alert(
               "interpretation": [8] 해석 라벨,
               "cs_signal" / "review_signal": bool|None (null=보류),
               "root_cause":     RootCause | None,
-              "inquiry_ids":    [6] 투입 문의 ID 전체,
+              "inquiry_ids":    [6] 원인 집계에 쓴 문의 ID (= root_cause.total 건),
               "sub_aspects":    [SubAspectAction],
               "linked_change_id": str | None,
             }

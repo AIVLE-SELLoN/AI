@@ -20,6 +20,8 @@
 
 from collections import Counter, defaultdict
 
+from app.core.constants import PAST_WINDOW_DAYS
+
 
 def _negative_aspects(row: dict) -> tuple:
     """이 문의가 '부정'으로 잡힌 aspect 들. 두 행 형태를 모두 받는다.
@@ -80,7 +82,7 @@ def build_baseline(
     cur_start: int,
     *,
     aspects: list,
-    past_days: int = 28,
+    past_days: int = PAST_WINDOW_DAYS,
     alert_days: set | None = None,
 ) -> tuple[Counter, Counter, Counter]:
     """[1] 과거 기준 — 현재 윈도우 직전 past_days 일의 총문의·부정 카운트. (문서 §[1])
@@ -139,7 +141,7 @@ def build_combinations(
     cur_end: int,
     *,
     aspects: list,
-    past_days: int = 28,
+    past_days: int = PAST_WINDOW_DAYS,
     alert_days: set | None = None,
     past_rate_fallback: dict | None = None,
 ) -> tuple[list, dict]:

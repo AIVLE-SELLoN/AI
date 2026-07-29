@@ -12,9 +12,14 @@ verdict 5종 (로직 §[3] 판정표 / 탐지 결과 스키마 §5):
     잠정 전역형   판정 가능 채널 전부 발화 · 보류 있음          → 위 + "확정 시 재판정"
     편중형       일부만 발화 (1~2개)                          → [6] 원인 진단 진행
 
+verdict 값은 **반드시 Verdict enum 경유**로 낸다. 문자열을 여기 다시 적으면 정본인
+schemas.py 가 바뀔 때 이 파일만 옛 값으로 남아 조용히 어긋난다.
+
 ⚠️ 판정 순서 주의(로직 §[3] 코드 그대로): fired==0 → testable==1 → 전부발화 → 편중.
    testable==1 검사가 '전부 발화'보다 먼저다 — 1채널은 발화해도 비교 대상이 없어 구분불가.
 """
+
+from app.core.schemas import Verdict
 
 
 def classify_pattern(channel_status: dict) -> dict:
@@ -38,13 +43,13 @@ def classify_pattern(channel_status: dict) -> dict:
 
     # ── 아무 채널도 안 울렸으면 정상 ──────────────────
     if not fired:
-        return {"verdict": "정상", "channels": [], "held": held}
+        return {"verdict": Verdict.NORMAL, "channels": [], "held": held}
 
     # ── 판정 가능한 채널이 1개뿐이면 구분 자체가 불가능 ──
     #    비교 대상이 없는데 "편중"이라 단정하면 과잉 주장. ('전부 발화'보다 먼저 검사)
     if len(testable) == 1:
         return {
-            "verdict": "구분불가",
+            "verdict": Verdict.INDETERMINATE,
             "channels": fired,
             "held": held,
             "note": "타 채널 표본 부족 — 편중/전역 구분 불가",
@@ -54,13 +59,13 @@ def classify_pattern(channel_status: dict) -> dict:
     #    보류 채널이 있으면 '잠정'을 붙인다 (그 채널은 멀쩡할 수도 있으므로).
     if len(fired) == len(testable):
         return {
-            "verdict": "잠정 전역형" if held else "전역형",
+            "verdict": Verdict.TENTATIVE_GLOBAL if held else Verdict.GLOBAL,
             "channels": fired,
             "held": held,
         }
 
     # ── 일부만 울렸으면 편중형 (1개든 2개든) ────────────
-    return {"verdict": "편중형", "channels": fired, "held": held}
+    return {"verdict": Verdict.BIASED, "channels": fired, "held": held}
 
 
 def run_verdict(fired_batch: list, held: list) -> list:

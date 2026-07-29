@@ -118,4 +118,8 @@ async def test_diagnose_cause_excludes_aspect_mismatch():
     r = await diagnose_cause("색상", items, client=client)
 
     assert r["total"] == 2          # false 1건 제외
+    # 인용 경계도 같은 집합이어야 한다 (스키마 §3: inquiry_ids = root_cause.total 건).
+    # 걷어낸 문의가 남으면 Agent3 가 다른 aspect 불만을 근거로 인용할 수 있다.
+    assert r["cs_ids"] == ["1", "2"]
+    assert len(r["cs_ids"]) == r["total"]
     assert "기타" not in r["freq"]

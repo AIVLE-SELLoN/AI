@@ -210,7 +210,7 @@ def _build_candidates(
         held_by_product[product] = result["held"]
 
         if result["verdict"] in PRODUCT_LEVEL_VERDICTS:
-            buckets[(product, "ALL")][aspect] = result
+            buckets[(product, Channel.ALL.value)][aspect] = result
         else:
             # 편중형·구분불가 → 발화 채널마다 alert 1건 (§5.2 alert 단위 원칙).
             for channel in result["channels"]:
@@ -257,7 +257,7 @@ def _representative_delta(
     tests: dict, product: str, aspect: str, channel: str, source: str, result: dict
 ) -> float:
     """[4] 비교용 delta. 전역형(ALL)은 발화 채널 중 최대값을 대표로 쓴다. (§5.1)"""
-    if channel != "ALL":
+    if channel != Channel.ALL.value:
         test = tests.get((product, aspect, channel, source))
         return test["delta"] if test else 0.0
     deltas = [
@@ -272,7 +272,7 @@ def _stats_channel(
     tests: dict, product: str, aspect: str, channel: str, source: str, result: dict
 ) -> str:
     """stats 를 어느 채널 값으로 채울지. 전역형은 delta 최대 채널 대표값. (§5.1)"""
-    if channel != "ALL":
+    if channel != Channel.ALL.value:
         return channel
     return max(
         result["channels"],
@@ -328,7 +328,11 @@ async def _diagnose(candidates: dict, texts: dict, client: Any) -> None:
             client=client,
             trace_key=f"product={product} aspect={aspect} channel={channel} source={source}",
         )
-        candidate["inquiry_ids"] = [i["cs_id"] for i in items]
+        # 인용 경계 = 원인 집계에 실제로 쓴 문의 (aspect_match 통과분).
+        # 스키마 §3 이 inquiry_ids 를 "투입 문의 전체(= root_cause.total 건)"로 정의하므로
+        # 걷어낸 문의를 남기면 개수가 total 과 어긋나고, Agent3 가 다른 aspect 불만을
+        # 근거로 인용할 수 있게 된다.
+        candidate["inquiry_ids"] = candidate["diagnosis"]["cs_ids"]
 
     await asyncio.gather(*(one(key, candidate) for key, candidate in targets))
 
