@@ -33,6 +33,29 @@ python eval/run_detection_eval.py
 
 ⑤는 개선안 로직 §182 정의(스크립트는 개선안 모듈 소관). ⑥은 지인 승인으로 추가(2026-07-23).
 
+**① 실측 결과 (2026-07-30, LLM 호출 0회)**:
+- 탐지율 100%(25/25) · 오탐률 0%(0/8) · verdict 정확도 100%(33/33)
+- is_biased 100%(25/25) · main_aspect 100%(25/25)
+- 편중 채널 정확도 100%(66/66) — 비유의 채널의 '안 울림'까지 포함
+- 확신도 100%(6/6) — SC-030 높음 / SC-031 중간 / SC-033 낮음 + 전역형 해당없음
+- 검정 배치 m=1,464 (보류 8슬롯) — `scripts/validate_anomaly.py` 검산값과 일치
+- ⚠️ **해석 주의:** 골든이 `config_anomaly.intended_answer`(설계 의도)에서 나왔고 그
+  의도는 validate_anomaly 가 scipy 로 달성 가능함을 이미 검산했다. 따라서 이 100%는
+  "실서비스 탐지 성능"이 아니라 **"구현이 문서대로 됐는가"**(참조 구현과의 일치)다.
+  대규모 회귀 검증으로는 유효하나 성능 지표로 인용하면 과장이 된다.
+
+**⑥ 실측 결과 (2026-07-30, gpt-4o-mini, seed=42, n=200)**:
+- 라벨 정확도 **89.0%** (사이즈 93.0% n=43 / 색상 88.6% n=114 / 소재 86.1% n=43)
+- aspect_match=false 0.0% · 원인 특정 판정 일치 92.9%(13/14 그룹)
+- confidence 구간별 58.6% → 79.0% → 96.0% → 96.0% (단조 증가)
+- 직전 측정(2026-07-28) 73.5% 대비 +15.5%p. 골든 원인 라벨이 자기 텍스트와 어긋나
+  있어(표기_오타인데 원문에 실측 수치) 프롬프트3 가 맞아도 오답 처리되던 것을,
+  `generate_cause_text_v3.md` 로 CS 텍스트를 재생성해 해소했다. 사이즈는 58.1% → 93.0%.
+- ⚠️ **해석 주의:** 생성기 v3 와 분류기 v1 이 같은 원인 taxonomy 를 공유하는 합성
+  데이터다. **실서비스 정확도의 상한**으로 읽어야 한다.
+- ⚠️ 표본 200/280(±4.3%p). aspect 별은 n=43 이라 ±8~10%p 로 흔들린다 —
+  `--limit 0` 전수 측정 + seed 반복이 남은 개선.
+
 **⑤ 실측 결과 (2026-07-29, gpt-4o-mini)**:
 - Retrieval hit rate(컬렉션1): 15/15(100%, $0)
 - Grounding precision(RAG 있음): 4/4(100%)
@@ -62,4 +85,26 @@ python eval/run_detection_eval.py
 - **`data/golden/` 은 `eval/` 만 읽는다.** `app/` 코드가 import 하면 컨닝이다.
 - 실험 결과는 재현 가능해야 한다 — 시드·프롬프트 버전·모델명을 결과와 함께 기록할 것.
 
-⚠️ 아래 스크립트들은 아직 **뼈대만** 있다. 데이터·스키마 확정 후 구현한다.
+## 구현 현황
+
+| 스크립트 | 상태 |
+| --- | --- |
+| `run_detection_eval.py` ① | ✅ 구현 완료 |
+| `run_cause_eval.py` ⑥ | ✅ 구현 완료 |
+| `run_recommendation_eval.py` ⑤ | ✅ 구현 완료 |
+| `run_pipeline_eval.py` ② | ⛔ 뼈대만 — ①이 기준선(①−②)이라 ① 다음 |
+| `run_classify_eval.py` ③ | ⛔ 뼈대만 |
+| `run_review_eval.py` ④ | ⛔ 뼈대만 |
+
+### ①의 정답지 만들기
+
+`data/golden/golden_anomaly.csv` 는 손으로 쓰지 않고 생성한다:
+
+```bash
+python scripts/build_golden_anomaly.py           # config_anomaly.csv → golden_anomaly.csv
+python scripts/build_golden_anomaly.py --dry-run # 파일 안 쓰고 요약만
+```
+
+⚠️ **이 생성기는 `app/detection` 을 쓰지 않는다.** 우리 로직으로 정답을 만들면
+자기 코드로 자기를 채점하는 순환이 된다. 정답의 출처는 오직 `config_anomaly.csv` 의
+`intended_answer`(설계 의도)다. 사람이 정해야 하는 칸은 비운 채 실행 시 리포트한다.
