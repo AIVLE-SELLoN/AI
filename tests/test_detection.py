@@ -71,8 +71,25 @@ def test_hold_is_channel_level():
         ("P036", "소재", "COUPANG", "cs", (0, 8, 1, 32)),
     ]
     batch, held = build_batch(combos)
-    assert batch == []                              # 세 aspect 전부 보류
-    assert held == [("P036", "COUPANG", "cs")] * 3  # (채널,source) 단위로 잡힘
+    assert batch == []                          # 세 aspect 전부 보류
+    assert held == [("P036", "COUPANG", "cs")]  # aspect 수만큼 중복되지 않는다
+
+
+def test_hold_propagates_across_sources():
+    """CS 가 표본 부족이면 그 (상품,채널)은 리뷰까지 함께 보류된다.
+
+    로직 §5·§215, config 보고 §304: "한 채널이 보류되면 그 (상품,채널)의
+    모든 aspect·source 12검정이 통째로 family 에서 빠진다."
+    source 별로 따로 보류하면 family 크기(m)가 달라져 BH 컷오프가 어긋난다.
+    """
+    combos = [
+        ("P036", "색상", "COUPANG", "cs", (3, 8, 2, 32)),        # CS 총문의 8 < 10
+        ("P036", "색상", "COUPANG", "review", (5, 40, 4, 160)),  # 리뷰는 표본 충분
+        ("P036", "색상", "NAVER", "cs", (26, 200, 40, 800)),     # 다른 채널은 무관
+    ]
+    batch, held = build_batch(combos)
+    assert set(held) == {("P036", "COUPANG", "cs"), ("P036", "COUPANG", "review")}
+    assert [t["key"] for t in batch] == [("P036", "색상", "NAVER", "cs")]
 
 
 # ── 관문② BH-FDR: step-up 절차 (설명의 k 예시 재현) ──────────────

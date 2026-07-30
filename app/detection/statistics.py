@@ -67,28 +67,47 @@ def build_batch(all_combinations: list) -> tuple[list, list]:
     Returns:
         (batch, held)
           - batch: 판정 가능한 검정 결과 리스트 (각 dict 에 "key" 부착)
-          - held:  표본 부족으로 보류된 (product, channel, source) 리스트
+          - held:  판정하지 않은 (product, channel, source) 리스트. 중복 없음.
+
+    보류 사유가 둘이고 **적용 범위가 다르다** — 묶지 말 것:
+      ① 최소표본 미달 → (상품, 채널) 전체. 그 채널의 6 aspect × 2 source 12검정이
+         통째로 빠진다 (로직 §5·§215, config 보고 §304). CS 가 부족하면 리뷰도 함께.
+         분모가 작으면 비율이 널뛴다는 규칙이라, 기준 단위도 분모와 같은 (상품, 채널)이다.
+      ② 과거 표본 0 → 그 (상품, 채널, source) 만. past_total 은 source 마다 따로
+         집계되므로(리뷰 분모 별도 — 로직 §7), 한쪽이 비었다고 다른 쪽까지 뺄 이유가 없다.
+
+    ①을 source 별로 좁히면 family 크기(m)가 달라져 BH 컷오프가 어긋난다.
     """
-    batch: list = []
-    held: list = []
+    held_pairs: set = set()  # ① (product, channel)
+    held_slots: set = set()  # ② (product, channel, source)
+    sources_of: dict = {}  # (product, channel) → 입력에 실제로 있던 source 들
 
-    for product, aspect, channel, source, counts in all_combinations:
-        cur_neg, cur_total, past_neg, past_total = counts
+    for product, _aspect, channel, source, counts in all_combinations:
+        _cur_neg, cur_total, _past_neg, past_total = counts
+        sources_of.setdefault((product, channel), set()).add(source)
 
-        # ── 관문① 최소표본 가드 ──────────────────────────
-        # 기준은 분모인 (상품,채널,source) 총문의. aspect 무관, source별 분리
-        # (리뷰 분모 별도 — 로직 §40). 그 (채널,source)의 모든 aspect 가 함께 빠진다.
         if cur_total < MIN_SAMPLE_SIZE:
-            held.append((product, channel, source))
-            continue
+            held_pairs.add((product, channel))
+        elif past_total == 0:
+            # 정상 경로라면 [1] 에서 설정값 baseline 으로 채워져 들어온다
+            # (로직 §153, aggregate._apply_baseline_fallback ①). 여기까지 0 으로 왔다면
+            # 그 설정값이 주입되지 않은 것이므로, 비교 기준이 없어 판정할 수 없다.
+            held_slots.add((product, channel, source))
 
-        # 과거 표본 0 — 정상 경로라면 [1] 에서 설정값 baseline 으로 채워져 들어온다
-        # (로직 §153, aggregate._apply_baseline_fallback ①). 여기까지 0 으로 왔다면
-        # 그 aspect 의 설정값이 주입되지 않은 것이므로, 비교 기준이 없어 판정할 수 없다.
-        if past_total == 0:
-            held.append((product, channel, source))
-            continue
+    # [3] 은 source 별로 독립 수행하므로(로직 §116) 호출부가 쓰기 좋게 슬롯 단위로 펼친다.
+    held: list = sorted(
+        held_slots.union(
+            (product, channel, source)
+            for (product, channel) in held_pairs
+            for source in sources_of[(product, channel)]
+        )
+    )
 
+    batch: list = []
+    for product, aspect, channel, source, counts in all_combinations:
+        if (product, channel) in held_pairs or (product, channel, source) in held_slots:
+            continue
+        cur_neg, cur_total, past_neg, past_total = counts
         result = run_one_test(cur_neg, cur_total, past_neg, past_total)
         result["key"] = (product, aspect, channel, source)
         batch.append(result)
