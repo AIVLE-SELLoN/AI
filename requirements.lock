@@ -108,6 +108,21 @@ xxhash==3.8.1
 yarl==1.24.2
 zstandard==0.25.0
 
-jinja2==3.1.5
+jinja2==3.1.6
 weasyprint==63.1
-kafka-python-ng>=2.2.3
+kafka-python-ng==2.2.3
+
+# jinja2 / weasyprint 가 끌고 오는 전이 의존성
+brotli==1.2.0
+cffi==2.1.0
+cssselect2==0.9.0
+fonttools==4.63.0
+MarkupSafe==3.0.3
+pillow==12.3.0
+pycparser==3.0
+pydyf==0.12.1
+pyphen==0.17.2
+tinycss2==1.5.1
+tinyhtml5==2.1.0
+webencodings==0.5.1
+zopfli==0.4.3
