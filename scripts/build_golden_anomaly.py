@@ -41,6 +41,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+CHANNELS = ("COUPANG", "NAVER", "ZIGZAG")
+
 COLUMNS = [
     "case_id",
     "golden_group_id",
@@ -60,7 +62,8 @@ COLUMNS = [
     "linked_change_id",
 ]
 
-# config 의 note 가 확신도를 명시한 케이스 (시나리오 §4 채점 범위 = SC-030/031 한정)
+# config 의 note 가 확신도를 명시한 케이스 (현재 SC-030 높음 / SC-031 중간 / SC-033 낮음).
+# note 를 읽어 채우므로, config 에 확신도 문구가 늘면 자동으로 따라간다.
 _CONFIDENCE_FROM_NOTE = {
     "확신도 높음": "높음",
     "확신도 중간": "중간",
@@ -101,9 +104,20 @@ def significance(intended: str) -> str:
 
 
 def decide_verdict(flags: list[str]) -> str:
-    """한 (case, source) 의 채널별 유의 플래그 → verdict."""
+    """한 (case, source) 의 채널별 유의 플래그 → verdict.
+
+    ⚠️ '전부 발화 = 전역형' 판정은 채널 3개가 다 있을 때만 성립한다. config 에
+    2채널만 적힌 케이스가 생기면 둘 다 Y 인 것이 전역형으로 잘못 찍힌다 —
+    실제로는 나머지 한 채널이 안 울렸는지 알 수 없으므로 전역이라 단정할 수 없다.
+    그런 케이스가 나오면 여기서 멈추고 config 를 먼저 확인할 것.
+    """
     if any(f == "" for f in flags):
         return ""  # 보류/관찰 케이스 — scoring_included=N 으로만 제외 표기
+    if len(flags) != len(CHANNELS):
+        raise ValueError(
+            f"채널이 {len(flags)}개뿐이라 전역/편중을 가릴 수 없다 "
+            f"(기대 {len(CHANNELS)}개: {CHANNELS}). config_anomaly 를 확인할 것."
+        )
     fired = flags.count("Y")
     if fired == 0:
         return "정상"

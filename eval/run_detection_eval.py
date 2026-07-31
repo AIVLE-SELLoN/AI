@@ -56,6 +56,7 @@ from validate_anomaly import (
 from app.core.constants import CONSISTENT_COUNT, CONSISTENT_RATIO
 from app.core.schemas import Verdict
 from app.detection.confidence import decide_confidence
+from app.detection.service import _build_candidates
 from app.detection.statistics import run_detection
 from app.detection.verdict import run_verdict
 
@@ -173,35 +174,30 @@ def change_log(config_rows: list[dict]) -> set[tuple[str, str]]:
 
 
 def predict(config_rows: list[dict], products: list[str]) -> dict:
+    """[2]→[3]→[4] 를 운영 코드 그대로 태운다.
+
+    main_aspect 선택은 service._build_candidates 에 맡긴다. 여기서 따로 구현하면
+    운영과 다른 답이 나올 수 있다 — 운영은 (상품, 채널) 버킷으로 묶고
+    _representative_delta 로 비교하는데, (상품, source) 단위로 고르면 색상이 NAVER,
+    사이즈가 COUPANG 에서 발화할 때 서로 갈린다.
+    """
     combos = build_combinations(config_rows, products)
     batch, held = run_detection(combos)
     verdicts = run_verdict(batch, held)
 
-    by_key = {t["key"]: t for t in batch}
-    verdict_of = {(v["product"], v["aspect"], v["source"]): v for v in verdicts}
+    tests = {t["key"]: t for t in batch}
+    counts = {(p, a, c, s): cnt for p, a, c, s, cnt in combos}
 
-    # main_aspect: 그 (상품, source) 에서 발화한 aspect 중 delta 최대 (service.py 와 동일)
-    best: dict[tuple[str, str], tuple[str, float]] = {}
-    for (product, aspect, source), v in verdict_of.items():
-        if v["verdict"].value == NORMAL:
-            continue
-        deltas = [
-            by_key[(product, aspect, ch, source)]["delta"]
-            for ch in CHANNELS
-            if (product, aspect, ch, source) in by_key
-            and by_key[(product, aspect, ch, source)]["fired"]
-        ]
-        if not deltas:
-            continue
-        top = max(deltas)
-        key = (product, source)
-        if key not in best or top > best[key][1]:
-            best[key] = (aspect, top)
+    candidates: dict[tuple[str, str], dict] = {}
+    for source in SOURCES:
+        for key, candidate in _build_candidates(
+            verdicts, source, tests, counts
+        ).items():
+            candidates[(*key, source)] = candidate
 
     return {
-        "batch": by_key,
-        "verdict_of": verdict_of,
-        "main_of": {k: v[0] for k, v in best.items()},
+        "tests": tests,
+        "candidates": candidates,
         "consistent": cause_consistency(config_rows),
         "changes": change_log(config_rows),
         "n_batch": len(batch),
@@ -209,21 +205,40 @@ def predict(config_rows: list[dict], products: list[str]) -> dict:
     }
 
 
+_NO_ALERT = {
+    "verdict": NORMAL,
+    "is_anomaly": False,
+    "is_biased": False,
+    "main_aspect": "",
+    "channel_significant": False,
+    "detection_confidence": "",
+}
+
+
 def predicted_row(pred: dict, product: str, source: str, channel: str) -> dict:
-    """골든 1행에 대응하는 예측값."""
-    main = pred["main_of"].get((product, source))
-    if main is None:
-        return {
-            "verdict": NORMAL,
-            "is_anomaly": False,
-            "is_biased": False,
-            "main_aspect": "",
-            "channel_significant": False,
-            "detection_confidence": "",
-        }
-    v = pred["verdict_of"][(product, main, source)]
-    verdict = v["verdict"].value
-    test = pred["batch"].get((product, main, channel, source))
+    """골든 1행에 대응하는 예측값.
+
+    후보 조회는 **케이스 수준**이다. 골든의 verdict·main_aspect 는 케이스 전체에
+    같은 값이 들어가고(3채널 행 모두 '편중형'), 채널별 차이는 channel_significant
+    한 칸으로만 표현되기 때문이다(mock 정의서 §7). 발화 채널에만 후보가 생기므로
+    골든 행의 채널로 조회하면 비유의 채널 행이 전부 '정상'으로 잡혀 미탐이 된다.
+
+    channel_significant 만 인자로 받은 채널의 검정 결과를 본다.
+    """
+    candidate = next(
+        (
+            c
+            for (p, _ch, s), c in pred["candidates"].items()
+            if p == product and s == source
+        ),
+        None,
+    )
+    if candidate is None:
+        return dict(_NO_ALERT)
+
+    verdict = candidate["verdict"].value
+    main = candidate["aspect"]
+    test = pred["tests"].get((product, main, channel, source))
     return {
         "verdict": verdict,
         "is_anomaly": verdict != NORMAL,
@@ -231,7 +246,7 @@ def predicted_row(pred: dict, product: str, source: str, channel: str) -> dict:
         "main_aspect": main,
         "channel_significant": bool(test and test["fired"]),
         "detection_confidence": decide_confidence(
-            v["verdict"],
+            candidate["verdict"],
             is_cause_consistent=pred["consistent"].get((product, source)),
             timestamp_matched=(product, main) in pred["changes"],
         ).value,

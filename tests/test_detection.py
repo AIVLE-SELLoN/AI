@@ -23,13 +23,13 @@ from app.detection.verdict import classify_pattern, run_verdict
 
 # 부록 A 검산값: (케이스, cur_neg, cur_total, past_neg, past_total, delta, p)
 APPENDIX_A = [
-    ("SC-001", 26, 200, 40, 800, 0.0800, 0.0001),   # 참양성 — 확실 발화
-    ("SC-013", 13, 200, 8, 800, 0.0550, 0.0000),    # 참양성(오배송)
-    ("SC-019", 5, 60, 10, 240, 0.0417, 0.159),      # 저사건 함정 — Fisher가 거름
-    ("SC-020", 4, 55, 6, 220, 0.0455, 0.117),       # 저사건 함정
-    ("SC-021", 3, 50, 3, 200, 0.0450, 0.096),       # 저사건 함정
-    ("SC-023", 12, 200, 40, 800, 0.0100, 0.338),    # 잡음 — min_delta가 거름
-    ("SC-026", 23, 200, 40, 800, 0.0650, 0.001224), # G 경계 — 확정 컷오프
+    ("SC-001", 26, 200, 40, 800, 0.0800, 0.0001),  # 참양성 — 확실 발화
+    ("SC-013", 13, 200, 8, 800, 0.0550, 0.0000),  # 참양성(오배송)
+    ("SC-019", 5, 60, 10, 240, 0.0417, 0.159),  # 저사건 함정 — Fisher가 거름
+    ("SC-020", 4, 55, 6, 220, 0.0455, 0.117),  # 저사건 함정
+    ("SC-021", 3, 50, 3, 200, 0.0450, 0.096),  # 저사건 함정
+    ("SC-023", 12, 200, 40, 800, 0.0100, 0.338),  # 잡음 — min_delta가 거름
+    ("SC-026", 23, 200, 40, 800, 0.0650, 0.001224),  # G 경계 — 확정 컷오프
 ]
 
 
@@ -54,7 +54,7 @@ def test_min_delta_gate():
 # ── 관문① 최소표본: 총문의 <10 이면 보류(채널 단위), batch 미진입 ──
 def test_small_sample_is_held():
     combos = [
-        ("P001", "색상", "COUPANG", "cs", (3, 8, 2, 32)),    # 총문의 8 < 10 → 보류
+        ("P001", "색상", "COUPANG", "cs", (3, 8, 2, 32)),  # 총문의 8 < 10 → 보류
         ("P001", "색상", "NAVER", "cs", (26, 200, 40, 800)),  # 정상 판정 대상
     ]
     batch, held = build_batch(combos)
@@ -71,8 +71,25 @@ def test_hold_is_channel_level():
         ("P036", "소재", "COUPANG", "cs", (0, 8, 1, 32)),
     ]
     batch, held = build_batch(combos)
-    assert batch == []                          # 세 aspect 전부 보류
+    assert batch == []  # 세 aspect 전부 보류
     assert held == [("P036", "COUPANG", "cs")]  # aspect 수만큼 중복되지 않는다
+
+
+def test_past_total_zero_holds_only_that_aspect():
+    """과거표본 0 은 그 aspect 슬롯만 보류한다 — 같은 채널의 다른 aspect 는 살아야 한다.
+
+    past_total 은 aspect 마다 따로 센다(aggregate §97·§181). 색상의 기준선이
+    비었다고 같은 채널의 사이즈·소재까지 판정을 접으면, 그 이상이 held 표기도
+    없이 조용히 사라진다. 최소표본 보류(채널 단위)와 범위를 섞지 말 것.
+    """
+    combos = [
+        ("P100", "색상", "NAVER", "cs", (10, 50, 0, 0)),  # 과거표본 0 → 이 슬롯만 보류
+        ("P100", "사이즈", "NAVER", "cs", (20, 50, 5, 200)),  # 살아야 한다
+        ("P100", "소재", "NAVER", "cs", (18, 50, 4, 200)),  # 살아야 한다
+    ]
+    batch, held = build_batch(combos)
+    assert [t["key"][1] for t in batch] == ["사이즈", "소재"]
+    assert held == [("P100", "NAVER", "cs")]  # 보류 사실은 계속 보고된다
 
 
 def test_hold_propagates_across_sources():
@@ -83,9 +100,9 @@ def test_hold_propagates_across_sources():
     source 별로 따로 보류하면 family 크기(m)가 달라져 BH 컷오프가 어긋난다.
     """
     combos = [
-        ("P036", "색상", "COUPANG", "cs", (3, 8, 2, 32)),        # CS 총문의 8 < 10
+        ("P036", "색상", "COUPANG", "cs", (3, 8, 2, 32)),  # CS 총문의 8 < 10
         ("P036", "색상", "COUPANG", "review", (5, 40, 4, 160)),  # 리뷰는 표본 충분
-        ("P036", "색상", "NAVER", "cs", (26, 200, 40, 800)),     # 다른 채널은 무관
+        ("P036", "색상", "NAVER", "cs", (26, 200, 40, 800)),  # 다른 채널은 무관
     ]
     batch, held = build_batch(combos)
     assert set(held) == {("P036", "COUPANG", "cs"), ("P036", "COUPANG", "review")}
@@ -115,17 +132,17 @@ def test_bh_empty_batch():
 def test_three_gate_integration():
     combos = [
         ("P019", "색상", "COUPANG", "cs", (26, 200, 40, 800)),  # 참양성 → 발화
-        ("P020", "색상", "COUPANG", "cs", (5, 60, 10, 240)),    # 함정 → Fisher/BH 컷
+        ("P020", "색상", "COUPANG", "cs", (5, 60, 10, 240)),  # 함정 → Fisher/BH 컷
         ("P024", "색상", "COUPANG", "cs", (12, 200, 40, 800)),  # 잡음 → min_delta 컷
-        ("P036", "색상", "COUPANG", "cs", (3, 8, 2, 32)),       # 소표본 → 보류
+        ("P036", "색상", "COUPANG", "cs", (3, 8, 2, 32)),  # 소표본 → 보류
     ]
     batch, held = run_detection(combos)
 
     fired = {t["key"][0]: t["fired"] for t in batch}
-    assert fired["P019"] is True     # 참양성만 발화
-    assert fired["P020"] is False    # 함정
-    assert fired["P024"] is False    # 잡음
-    assert "P036" not in fired       # 보류라 batch 에 없음
+    assert fired["P019"] is True  # 참양성만 발화
+    assert fired["P020"] is False  # 함정
+    assert fired["P024"] is False  # 잡음
+    assert "P036" not in fired  # 보류라 batch 에 없음
     assert ("P036", "COUPANG", "cs") in held
 
 
@@ -239,19 +256,21 @@ def test_run_verdict_is_per_source():
     ]
     res = run_verdict(batch, held=[])
     by_source = {r["source"]: r["verdict"] for r in res}
-    assert by_source["cs"] == "전역형"       # cs 둘 다 발화
-    assert by_source["review"] == "편중형"   # review 일부만
+    assert by_source["cs"] == "전역형"  # cs 둘 다 발화
+    assert by_source["review"] == "편중형"  # review 일부만
 
 
 def test_run_verdict_held_channel_in_batch_not_double_counted():
     """held 목록에 있어도 이 그룹 배치에 있으면 testable — held로 중복 처리 안 함."""
     batch = [
         _fired("P021", "색상", "COUPANG", "cs", True),
-        _fired("P021", "색상", "NAVER", "cs", True),  # NAVER는 cs 배치에 있음(=testable)
+        _fired(
+            "P021", "색상", "NAVER", "cs", True
+        ),  # NAVER는 cs 배치에 있음(=testable)
     ]
     # NAVER가 held 목록에 있으나(같은 cs) cs 배치엔 존재 → 배치 우선
     res = run_verdict(batch, held=[("P021", "NAVER", "cs")])
-    assert res[0]["verdict"] == "전역형"   # 둘 다 testable·발화, 보류 없음
+    assert res[0]["verdict"] == "전역형"  # 둘 다 testable·발화, 보류 없음
     assert res[0]["held"] == []
 
 
@@ -267,7 +286,7 @@ def test_run_verdict_held_is_source_specific():
     ]
     res = run_verdict(batch, held=[("P022", "ZIGZAG", "cs")])
     assert res[0]["source"] == "review"
-    assert res[0]["verdict"] == "전역형"   # ZIGZAG(cs 보류)가 review 판정에 안 낌
+    assert res[0]["verdict"] == "전역형"  # ZIGZAG(cs 보류)가 review 판정에 안 낌
     assert res[0]["held"] == []
 
 
@@ -305,31 +324,39 @@ def test_is_in_scope_false_for_alert_only():
 
 # ── [0] 집계 (로직 §[0] count_window / collect_texts) ─────────────
 def _row(product, channel, source, aspect, neg, day, rid="x", text="t"):
-    return {"product": product, "channel": channel, "source": source,
-            "aspect": aspect, "is_negative": neg, "day": day, "id": rid, "text": text}
+    return {
+        "product": product,
+        "channel": channel,
+        "source": source,
+        "aspect": aspect,
+        "is_negative": neg,
+        "day": day,
+        "id": rid,
+        "text": text,
+    }
 
 
 def test_count_window_denominator_is_aspect_agnostic():
     """분모(총문의)는 aspect·감성 무관 전체, 분자는 부정+aspect 만. (문서 §129)"""
     rows = [
-        _row("P1", "COUPANG", "cs", "색상", True, 30),   # 부정 색상
-        _row("P1", "COUPANG", "cs", "색상", True, 31),   # 부정 색상
+        _row("P1", "COUPANG", "cs", "색상", True, 30),  # 부정 색상
+        _row("P1", "COUPANG", "cs", "색상", True, 31),  # 부정 색상
         _row("P1", "COUPANG", "cs", "사이즈", True, 32),  # 부정 사이즈
         _row("P1", "COUPANG", "cs", "색상", False, 33),  # 색상 문의지만 긍정 → 분모만
-        _row("P1", "COUPANG", "cs", None, False, 34),    # aspect 없음 → 분모만
+        _row("P1", "COUPANG", "cs", None, False, 34),  # aspect 없음 → 분모만
     ]
     totals, negs = count_window(rows, 29, 35)
-    assert totals[("P1", "COUPANG", "cs")] == 5          # 전부 분모
+    assert totals[("P1", "COUPANG", "cs")] == 5  # 전부 분모
     assert negs[("P1", "색상", "COUPANG", "cs")] == 2
     assert negs[("P1", "사이즈", "COUPANG", "cs")] == 1
 
 
 def test_count_window_boundary_inclusive_and_excludes_outside():
     rows = [
-        _row("P1", "COUPANG", "cs", "색상", True, 29),   # 시작 경계 포함
-        _row("P1", "COUPANG", "cs", "색상", True, 35),   # 끝 경계 포함
-        _row("P1", "COUPANG", "cs", "색상", True, 28),   # 구간 밖(과거) 제외
-        _row("P1", "COUPANG", "cs", "색상", True, 36),   # 구간 밖(미래) 제외
+        _row("P1", "COUPANG", "cs", "색상", True, 29),  # 시작 경계 포함
+        _row("P1", "COUPANG", "cs", "색상", True, 35),  # 끝 경계 포함
+        _row("P1", "COUPANG", "cs", "색상", True, 28),  # 구간 밖(과거) 제외
+        _row("P1", "COUPANG", "cs", "색상", True, 36),  # 구간 밖(미래) 제외
     ]
     totals, negs = count_window(rows, 29, 35)
     assert totals[("P1", "COUPANG", "cs")] == 2
@@ -351,8 +378,10 @@ def test_count_window_source_separated():
 def test_collect_texts_gathers_negative_only_by_key():
     rows = [
         _row("P1", "COUPANG", "cs", "색상", True, 30, "INQ-1", "색이 달라요"),
-        _row("P1", "COUPANG", "cs", "색상", False, 31, "INQ-2", "색 만족"),   # 긍정 제외
-        _row("P1", "COUPANG", "cs", "색상", True, 40, "INQ-3", "구간 밖"),     # 구간 밖 제외
+        _row("P1", "COUPANG", "cs", "색상", False, 31, "INQ-2", "색 만족"),  # 긍정 제외
+        _row(
+            "P1", "COUPANG", "cs", "색상", True, 40, "INQ-3", "구간 밖"
+        ),  # 구간 밖 제외
     ]
     texts = collect_texts(rows, 29, 35)
     key = ("P1", "색상", "COUPANG", "cs")
@@ -363,10 +392,10 @@ def test_collect_texts_gathers_negative_only_by_key():
 def test_build_baseline_uses_preceding_28_days():
     """과거 윈도우 = [cur_start-28, cur_start-1]. cur_start=29 → 과거 [1,28]."""
     rows = [
-        _row("P1", "COUPANG", "cs", "색상", True, 1),    # 과거 시작 경계
-        _row("P1", "COUPANG", "cs", "색상", True, 28),   # 과거 끝 경계
-        _row("P1", "COUPANG", "cs", "색상", True, 29),   # 현재 → 과거 아님
-        _row("P1", "COUPANG", "cs", "색상", True, 0),    # 28일 밖 → 제외
+        _row("P1", "COUPANG", "cs", "색상", True, 1),  # 과거 시작 경계
+        _row("P1", "COUPANG", "cs", "색상", True, 28),  # 과거 끝 경계
+        _row("P1", "COUPANG", "cs", "색상", True, 29),  # 현재 → 과거 아님
+        _row("P1", "COUPANG", "cs", "색상", True, 0),  # 28일 밖 → 제외
     ]
     totals, negs, _ = build_baseline(rows, cur_start=29, aspects=["색상"])
     assert totals[("P1", "색상", "COUPANG", "cs")] == 2
@@ -377,22 +406,26 @@ def test_build_baseline_excludes_alert_days():
     """알림 구간 날짜(상품,aspect,채널,day)는 과거 집계에서 제외 — 기준선 오염 방지(§150)."""
     rows = [
         _row("P1", "COUPANG", "cs", "색상", True, 10),
-        _row("P1", "COUPANG", "cs", "색상", True, 11),   # 이 날이 알림 구간
+        _row("P1", "COUPANG", "cs", "색상", True, 11),  # 이 날이 알림 구간
         _row("P1", "COUPANG", "cs", "색상", True, 12),
     ]
     totals, negs, unfiltered = build_baseline(
         rows, cur_start=29, aspects=["색상"], alert_days={("P1", "색상", "COUPANG", 11)}
     )
-    assert totals[("P1", "색상", "COUPANG", "cs")] == 2   # day11 통째로 빠짐 (분자·분모 모두)
+    assert (
+        totals[("P1", "색상", "COUPANG", "cs")] == 2
+    )  # day11 통째로 빠짐 (분자·분모 모두)
     assert negs[("P1", "색상", "COUPANG", "cs")] == 2
-    assert unfiltered[("P1", "COUPANG", "cs")] == 3      # 제외 전 = 폴백 판정 재료
+    assert unfiltered[("P1", "COUPANG", "cs")] == 3  # 제외 전 = 폴백 판정 재료
 
 
 def test_build_baseline_exclusion_is_per_aspect():
     """색상 알림 구간을 빼도 같은 날의 사이즈 집계는 남는다 — 제외 단위가 aspect별(§150)."""
     rows = [
         _row("P1", "COUPANG", "cs", "색상", True, 10),
-        _row("P1", "COUPANG", "cs", "사이즈", True, 11),  # 색상 알림 구간이지만 사이즈 문의
+        _row(
+            "P1", "COUPANG", "cs", "사이즈", True, 11
+        ),  # 색상 알림 구간이지만 사이즈 문의
     ]
     totals, negs, _ = build_baseline(
         rows,
@@ -400,7 +433,7 @@ def test_build_baseline_exclusion_is_per_aspect():
         aspects=["색상", "사이즈"],
         alert_days={("P1", "색상", "COUPANG", 11)},
     )
-    assert totals[("P1", "색상", "COUPANG", "cs")] == 1    # day11 빠짐
+    assert totals[("P1", "색상", "COUPANG", "cs")] == 1  # day11 빠짐
     assert totals[("P1", "사이즈", "COUPANG", "cs")] == 2  # 사이즈는 그대로
     assert negs[("P1", "사이즈", "COUPANG", "cs")] == 1
 
@@ -409,18 +442,16 @@ def test_build_baseline_exclusion_is_per_aspect():
 def test_build_combinations_emits_full_grid_with_zero_fill():
     """관측된 (상품,채널,source)마다 aspects 전 슬롯 방출 — 부정 없는 aspect 는 0으로."""
     rows = [
-        _row("P1", "COUPANG", "cs", "색상", True, 30),   # 현재 부정
-        _row("P1", "COUPANG", "cs", "색상", True, 5),    # 과거 부정
+        _row("P1", "COUPANG", "cs", "색상", True, 30),  # 현재 부정
+        _row("P1", "COUPANG", "cs", "색상", True, 5),  # 과거 부정
         _row("P1", "COUPANG", "cs", "사이즈", False, 31),  # 분모만
     ]
-    combos, _ = build_combinations(
-        rows, 29, 35, aspects=["색상", "사이즈", "소재"]
-    )
+    combos, _ = build_combinations(rows, 29, 35, aspects=["색상", "사이즈", "소재"])
     by_aspect = {c[1]: c[4] for c in combos if c[0] == "P1"}
-    assert set(by_aspect) == {"색상", "사이즈", "소재"}   # 전 aspect 슬롯 존재
-    assert by_aspect["색상"] == (1, 2, 1, 1)   # cur_neg,cur_total,past_neg,past_total
+    assert set(by_aspect) == {"색상", "사이즈", "소재"}  # 전 aspect 슬롯 존재
+    assert by_aspect["색상"] == (1, 2, 1, 1)  # cur_neg,cur_total,past_neg,past_total
     assert by_aspect["사이즈"] == (0, 2, 0, 1)  # 부정 0 이어도 슬롯은 나옴
-    assert by_aspect["소재"] == (0, 2, 0, 1)    # 관측조차 없어도 그리드엔 포함
+    assert by_aspect["소재"] == (0, 2, 0, 1)  # 관측조차 없어도 그리드엔 포함
 
 
 def test_baseline_fallback_when_past_halved_by_exclusion():
@@ -433,16 +464,20 @@ def test_baseline_fallback_when_past_halved_by_exclusion():
         _row("P1", "COUPANG", "cs", "색상", True, 11),
         _row("P1", "COUPANG", "cs", "색상", True, 12),
         _row("P1", "COUPANG", "cs", "색상", False, 13),
-        _row("P1", "COUPANG", "cs", "색상", True, 30),   # 현재 윈도우
+        _row("P1", "COUPANG", "cs", "색상", True, 30),  # 현재 윈도우
     ]
     alert_days = {("P1", "색상", "COUPANG", d) for d in (10, 11, 12)}
     combos, _ = build_combinations(
-        rows, 29, 35, aspects=["색상"], alert_days=alert_days,
+        rows,
+        29,
+        35,
+        aspects=["색상"],
+        alert_days=alert_days,
         past_rate_fallback={("COUPANG", "색상"): 0.10},
     )
     past_neg, past_total = combos[0][4][2], combos[0][4][3]
-    assert past_total == 1                  # 3일 제외 후 1건만 남음
-    assert past_neg == round(0.10 * 1)      # 실측(0건) 대신 설정값 적용
+    assert past_total == 1  # 3일 제외 후 1건만 남음
+    assert past_neg == round(0.10 * 1)  # 실측(0건) 대신 설정값 적용
 
 
 def test_baseline_fallback_initial_period_assumes_window_ratio_n():
@@ -451,15 +486,16 @@ def test_baseline_fallback_initial_period_assumes_window_ratio_n():
     현재 7일 20건 · 과거 28일 → N = 20 × 28/7 = 80, 설정값 5% → 부정 4건. (§153·§137)
     """
     rows = [
-        _row("P1", "COUPANG", "cs", "색상", i < 3, 29 + (i % 7), rid=f"r{i}") for i in range(20)
+        _row("P1", "COUPANG", "cs", "색상", i < 3, 29 + (i % 7), rid=f"r{i}")
+        for i in range(20)
     ]
     combos, _ = build_combinations(
         rows, 29, 35, aspects=["색상"], past_rate_fallback={("COUPANG", "색상"): 0.05}
     )
     _, cur_total, past_neg, past_total = combos[0][4]
     assert cur_total == 20
-    assert past_total == 80              # 20 × (28/7)
-    assert past_neg == 4                 # round(0.05 × 80)
+    assert past_total == 80  # 20 × (28/7)
+    assert past_neg == 4  # round(0.05 × 80)
 
 
 def test_baseline_fallback_skipped_without_config_rate():
@@ -475,17 +511,20 @@ def test_baseline_fallback_skipped_without_config_rate():
 def test_baseline_fallback_not_applied_when_sample_survives():
     """절반 초과로 남았으면 실측치를 그대로 쓴다 — 폴백은 표본이 무너졌을 때만."""
     rows = [
-        _row("P1", "COUPANG", "cs", "색상", True, 10),   # 알림 구간
+        _row("P1", "COUPANG", "cs", "색상", True, 10),  # 알림 구간
         _row("P1", "COUPANG", "cs", "색상", True, 11),
         _row("P1", "COUPANG", "cs", "색상", True, 12),
         _row("P1", "COUPANG", "cs", "색상", True, 30),
     ]
     combos, _ = build_combinations(
-        rows, 29, 35, aspects=["색상"],
+        rows,
+        29,
+        35,
+        aspects=["색상"],
         alert_days={("P1", "색상", "COUPANG", 10)},
         past_rate_fallback={("COUPANG", "색상"): 0.99},
     )
-    assert combos[0][4][2] == 2             # 실측 2건 유지 (설정값 99% 무시)
+    assert combos[0][4][2] == 2  # 실측 2건 유지 (설정값 99% 무시)
 
 
 def test_build_combinations_texts_only_current_negatives():
