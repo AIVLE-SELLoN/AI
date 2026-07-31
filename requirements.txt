@@ -26,6 +26,22 @@ langgraph==1.2.9
 scipy==1.18.0
 statsmodels==0.14.6
 
+# --- 리포팅 전용: 월간 보고서·CS 가이드라인 PDF ---
+# ⚠️ weasyprint 는 파이썬 패키지만으론 안 된다. GTK 네이티브 런타임이 따로 필요하다.
+#    Windows: GTK3-Runtime Win64 설치 시 "환경변수 추가" 옵션 필수
+#             https://github.com/tschoonj/GTK-for-Windows-Runtime-Environment-Installer/releases
+#    macOS:   brew install cairo pango gdk-pixbuf libffi   (또는 brew install weasyprint)
+#             Apple Silicon 에서 못 찾으면 DYLD_FALLBACK_LIBRARY_PATH 에 /opt/homebrew/lib 추가
+#    GTK 가 없어도 PDF 생성 외 코드는 돌아간다 — app/reporting/pdf_compiler.py 가
+#    weasyprint 를 함수 안에서 import 하기 때문(테스트가 수집 단계에서 안 멈춘다).
+jinja2==3.1.6
+weasyprint==63.1
+
+# --- docker kafka 컨테이너 환경 ---
+# ⚠️ kafka-python 과 **같은 `kafka` 모듈**을 설치한다. 둘 다 깔면 충돌하므로,
+#    기존에 kafka-python 이 있으면 먼저 `pip uninstall kafka-python` 할 것.
+kafka-python-ng==2.2.3
+
 # --- 개발/테스트 ---
 pytest==9.1.1
 pytest-asyncio==1.4.0
