@@ -353,15 +353,10 @@ CHANNEL_PRODUCTS_PATH = (
     Path(__file__).resolve().parents[1]
     / "data"
     / "input"
-    / "mapping_42"
     / "input_channel_products.csv"
 )
 GOLDEN_MAPPING_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "data"
-    / "golden"
-    / "mapping_42"
-    / "golden_mapping.csv"
+    Path(__file__).resolve().parents[1] / "data" / "golden" / "golden_mapping.csv"
 )
 
 
