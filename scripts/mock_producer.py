@@ -49,9 +49,14 @@ DEFAULT_RAW_DB = "./data/raw.db"
 DB_FLUSH_ROWS = 200
 DB_FLUSH_SECONDS = 1.0
 
+# 이 시간 이상 자야 할 때만 잠들기 전에 강제 flush 한다.
+# 이벤트마다 무조건 flush 하면 위의 배칭이 사실상 무력화된다 — 촘촘한 구간(sleep 수 ms)에서는
+# 배칭에 맡기고, 오래 쉬는 구간에서만 워커가 최신 행을 보도록 내보낸다.
+FLUSH_BEFORE_SLEEP_SECONDS = 0.5
+
 STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
     "orders": {
-        "file_candidates": ["input_orders.csv"],
+        "file_name": "input_orders.csv",
         "time_column": "order_date",
         "topic": "raw.orders",
         "event_type": "ORDER",
@@ -61,7 +66,7 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
         "text_column": None,
     },
     "inquiries": {
-        "file_candidates": ["input_cs_inquiries.csv"],
+        "file_name": "input_cs_inquiries.csv",
         "time_column": "inquired_at",
         "topic": "raw.inquiries",
         "event_type": "INQUIRY",
@@ -71,7 +76,7 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
         "text_column": "content",
     },
     "reviews": {
-        "file_candidates": ["input_reviews.csv"],
+        "file_name": "input_reviews.csv",
         "time_column": "created_at",
         "topic": "raw.reviews",
         "event_type": "REVIEW",
@@ -84,7 +89,7 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
         # ⚠️ 현재 data/input 에는 `input_detail_fields.csv`(상세페이지 스냅샷, 505행)만 있고
         #    시각 컬럼이 없다 — 시계열 이벤트가 아니라 정적 참조 테이블이라 재생 대상이 아니다.
         #    변경 이벤트 대본(input_detail_changes.csv)이 생성되면 그때부터 자동으로 잡힌다.
-        "file_candidates": ["input_detail_changes.csv"],
+        "file_name": "input_detail_changes.csv",
         "time_column": "changed_at",
         "topic": "raw.detail_changes",
         "event_type": "DETAIL_CHANGE",
@@ -156,13 +161,19 @@ def open_raw_db(db_path_str: str) -> sqlite3.Connection:
 
 
 class RawEventSink:
-    """raw_event 적재 버퍼. 일정 건수/시간마다 모아서 commit 한다."""
+    """raw_event 적재 버퍼. 일정 건수/시간마다 모아서 commit 한다.
+
+    ⚠️ 적재 실패는 **여기서 흡수하고 집계만** 한다. 밖으로 던지지 않는 이유:
+       한 행이 잘못됐다고 나머지 재생(특히 Kafka 발행)까지 멈추면 안 되기 때문이다.
+       실패 건수는 self.failed 에 쌓여 종료 요약에 함께 찍힌다.
+    """
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
         self.buffer: list[tuple] = []
         self.last_flush = time.monotonic()
         self.written = 0
+        self.failed = 0
 
     def add(self, event: dict[str, Any]) -> None:
         payload = event["payload"]
@@ -184,14 +195,36 @@ class RawEventSink:
             self.flush()
 
     def flush(self) -> None:
+        """버퍼를 비운다. 실패해도 버퍼는 반드시 비워지고, 불량 행만 떨어져 나간다."""
         if not self.buffer:
             self.last_flush = time.monotonic()
             return
-        self.conn.executemany(RAW_EVENT_INSERT, self.buffer)
-        self.conn.commit()
-        self.written += len(self.buffer)
-        self.buffer.clear()
-        self.last_flush = time.monotonic()
+
+        # 버퍼를 먼저 떼어낸다 — 실패해도 같은 행이 버퍼에 남아 다음 flush 를 계속 터뜨리는
+        # 것을 원천 차단한다(그 상태가 되면 재생 전체가 조용히 멈춘다).
+        rows, self.buffer = self.buffer, []
+        try:
+            self.conn.executemany(RAW_EVENT_INSERT, rows)
+            self.conn.commit()
+            self.written += len(rows)
+        except sqlite3.Error as err:
+            self.conn.rollback()
+            logger.warning(f"[RAW DB] 배치 적재 실패({len(rows)}행) — 행 단위로 재시도합니다: {err}")
+            self._flush_row_by_row(rows)
+        finally:
+            self.last_flush = time.monotonic()
+
+    def _flush_row_by_row(self, rows: list[tuple]) -> None:
+        """불량 행을 골라내려고 한 줄씩 넣는다. 실패한 행의 event_id 만 정확히 로그로 남는다."""
+        for row in rows:
+            try:
+                self.conn.execute(RAW_EVENT_INSERT, row)
+                self.conn.commit()
+                self.written += 1
+            except sqlite3.Error as err:
+                self.conn.rollback()
+                self.failed += 1
+                logger.error(f"[RAW DB] 행 적재 실패 (event_id={row[0]}): {err}")
 
     def close(self) -> None:
         self.flush()
@@ -225,14 +258,6 @@ def validate_data_directory(data_dir_str: str) -> Path:
     return resolved_path
 
 
-def resolve_source_file(data_dir: Path, candidates: list[str]) -> Path | None:
-    for name in candidates:
-        path = data_dir / name
-        if path.exists():
-            return path
-    return None
-
-
 def _to_jsonable(value: Any) -> Any:
     """CSV 셀 값을 JSON 직렬화 가능한 형태로 정리."""
     if pd.isna(value):
@@ -245,17 +270,27 @@ def _to_jsonable(value: Any) -> Any:
 
 
 def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[dict[str, Any]]:
+    """대본 CSV 들을 읽어 이벤트 리스트로 합친다.
+
+    ⚠️ 대상 파일을 **하나도** 못 찾으면 경고가 아니라 에러로 죽는다.
+       data/ 는 gitignore 라 팀원마다 파일이 다른데, 경고 한 줄만 남기고 "0건 발행"으로
+       조용히 끝나면 파일명이 틀린 건지 정상인지 구분할 수가 없다.
+    """
     merged_events: list[dict[str, Any]] = []
     topics_filter = [t.strip() for t in topics_filter_str.split(",")] if topics_filter_str else []
+    missing_files: list[Path] = []
+    loaded_files = 0
 
     for key, config in STREAMING_FILE_CONFIGS.items():
         if topics_filter and "all" not in topics_filter and key not in topics_filter:
             continue
 
-        file_path = resolve_source_file(data_dir, config["file_candidates"])
-        if file_path is None:
-            logger.warning(f"대본 파일 미존재 스킵: {data_dir / config['file_candidates'][0]}")
+        file_path = data_dir / config["file_name"]
+        if not file_path.exists():
+            missing_files.append(file_path)
+            logger.warning(f"대본 파일 미존재 스킵: {file_path}")
             continue
+        loaded_files += 1
 
         # utf-8-sig: 대본 CSV 선두에 BOM 이 붙어 있어 첫 컬럼명이 '﻿inquiry_id' 로
         # 읽히는 문제가 있다. BOM 을 떼지 않으면 id 컬럼 조회가 전부 빗나간다.
@@ -312,6 +347,15 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
 
         logger.info(f"[LOAD] {file_path.name}: {len(df)}행 적재 대상 로드")
 
+    if loaded_files == 0:
+        expected = "\n  - ".join(str(p) for p in missing_files) or "(필터에 걸려 대상 없음)"
+        sys.stderr.write(
+            "[FATAL] 재생할 대본 파일을 하나도 찾지 못했습니다. 경로·파일명을 확인하세요.\n"
+            f"  - {expected}\n"
+            "  data/ 는 git 에 없으므로 scripts/generate_mock_data.py 로 먼저 생성해야 합니다.\n"
+        )
+        sys.exit(1)
+
     return merged_events
 
 
@@ -343,15 +387,15 @@ def publish(event: dict[str, Any], producer: Any | None, sink: RawEventSink | No
     payload["published_at"] = datetime.now(timezone.utc).astimezone().isoformat()
 
     # 원본 적재를 먼저 한다 — 워커가 참조하는 정본은 이제 raw DB 쪽이다.
+    # 적재 실패는 sink 안에서 흡수·집계되고 여기까지 올라오지 않는다.
+    # DB 한 건이 실패했다고 Kafka 발행까지 건너뛰면 두 경로가 함께 죽는다.
     if sink is not None:
-        try:
-            sink.add(event)
-        except Exception as err:
-            logger.error(f"[RAW DB] 적재 실패 (event_id: {event['event_id']}): {err}")
-            return False
+        sink.add(event)
 
     if dry_run:
-        logger.debug(
+        # --dry-run 의 정의가 "콘솔로 재생 타임라인을 검증한다"이므로 INFO 로 찍는다
+        # (debug 로 두면 기본 로그 레벨이 INFO 라 아무것도 안 보인다).
+        logger.info(
             f"[DRY-RUN] Virtual Time: {event['time'].isoformat()} | Topic: {event['topic']} | "
             f"EventType: {payload['event_type']} | PublishedAt: {payload['published_at']}"
         )
@@ -370,7 +414,9 @@ def publish(event: dict[str, Any], producer: Any | None, sink: RawEventSink | No
         return False
 
 
-def print_summary(summary_counts: dict[str, int], db_written: int | None) -> None:
+def print_summary(
+    summary_counts: dict[str, int], db_written: int | None, db_failed: int = 0
+) -> None:
     print("\n========== [발행 결과 요약 SUMMARY] ==========")
     total = 0
     for topic, count in summary_counts.items():
@@ -379,6 +425,9 @@ def print_summary(summary_counts: dict[str, int], db_written: int | None) -> Non
     print(f" 총 발행 이벤트 수: {total} 건")
     if db_written is not None:
         print(f" raw DB 적재 행 수: {db_written} 행")
+        if db_failed:
+            # 조용히 넘어가면 워커가 처리할 원본이 비는 것을 눈치채지 못한다
+            print(f" ⚠️ raw DB 적재 실패: {db_failed} 행 (ERROR 로그의 event_id 확인)")
     print("==============================================")
 
 
@@ -407,15 +456,19 @@ def main() -> None:
     summary_counts: dict[str, int] = {config["topic"]: 0 for config in STREAMING_FILE_CONFIGS.values()}
     prev_time: datetime | None = None
 
+    db_written: int | None = None
+    db_failed = 0
     try:
         for e in events:
             if prev_time and not args.dry_run:
                 delta_seconds = (e["time"] - prev_time).total_seconds()
                 if delta_seconds > 0 and args.speed > 0:
-                    # 대기 중에도 워커가 최신 행을 볼 수 있게, 잠들기 전에 버퍼를 비운다
-                    if sink is not None:
+                    sleep_seconds = delta_seconds / args.speed
+                    # 오래 쉬는 구간에서만 버퍼를 비운다 — 워커가 최신 행을 준실시간으로 보되,
+                    # 촘촘한 구간에서는 DB_FLUSH_ROWS 배칭이 살아있게 한다.
+                    if sink is not None and sleep_seconds >= FLUSH_BEFORE_SLEEP_SECONDS:
                         sink.flush()
-                    time.sleep(delta_seconds / args.speed)
+                    time.sleep(sleep_seconds)
 
             if publish(e, producer, sink, args.dry_run):
                 summary_counts[e["topic"]] += 1
@@ -424,12 +477,12 @@ def main() -> None:
         if producer:
             producer.flush()
             producer.close()
-        db_written = None
         if sink is not None:
             sink.close()
             db_written = sink.written
+            db_failed = sink.failed
 
-    print_summary(summary_counts, db_written)
+    print_summary(summary_counts, db_written, db_failed)
 
 
 if __name__ == "__main__":
