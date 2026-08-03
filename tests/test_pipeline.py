@@ -40,7 +40,12 @@ class _FakeClient:
         self.calls += 1
         return {
             "results": [
-                {"cs_id": f"C{i}", "cause": self._cause, "confidence": 0.9, "aspect_match": True}
+                {
+                    "cs_id": f"C{i}",
+                    "cause": self._cause,
+                    "confidence": 0.9,
+                    "aspect_match": True,
+                }
                 for i in range(12)
             ]
         }
@@ -54,7 +59,9 @@ def test_root_cause_none_when_step6_skipped():
 
 def test_root_cause_unspecified_when_scattered():
     """[6] 수행했으나 분산 → label='미특정', consistent=False."""
-    root = build_root_cause({"label": None, "consistent": False, "count": 0, "total": 20})
+    root = build_root_cause(
+        {"label": None, "consistent": False, "count": 0, "total": 20}
+    )
     assert root.label == UNSPECIFIED_CAUSE
     assert root.consistent is False
     assert root.total == 20
@@ -88,8 +95,13 @@ def _judgement(**overrides):
         "significant_channels": ["COUPANG"],
         "excluded_channels": [],
         "stats": DetectionStats(
-            source=Source.CS, cur_rate=0.13, past_rate=0.05, delta=0.08,
-            p_value=0.0001, bh_significant=True, cur_total=200,
+            source=Source.CS,
+            cur_rate=0.13,
+            past_rate=0.05,
+            delta=0.08,
+            p_value=0.0001,
+            bh_significant=True,
+            cur_total=200,
         ),
         "confidence": DetectionConfidence.MEDIUM,
         "interpretation": "CS 선행 신호 — 리뷰는 시차로 미반영 가능",
@@ -150,18 +162,32 @@ def test_build_alert_out_of_scope_aspect_keeps_scope_in_false():
 
 
 # ── 재알림 억제 (로직 §6) ─────────────────────────────────────────
-def _alert(product="P001", aspect="색상", channel="COUPANG", cur_rate=0.13, day=7, alert_id="A1"):
+def _alert(
+    product="P001",
+    aspect="색상",
+    channel="COUPANG",
+    cur_rate=0.13,
+    day=7,
+    alert_id="A1",
+    run_at=None,
+):
+    """day = 데이터 시각(window_end). run_at 을 주면 실행 시각만 따로 움직인다."""
     return build_alert(
         _judgement(
             product=product,
             aspect=aspect,
             channel=channel,
             stats=DetectionStats(
-                source=Source.CS, cur_rate=cur_rate, past_rate=0.05, delta=0.08,
-                p_value=0.0001, bh_significant=True, cur_total=200,
+                source=Source.CS,
+                cur_rate=cur_rate,
+                past_rate=0.05,
+                delta=0.08,
+                p_value=0.0001,
+                bh_significant=True,
+                cur_total=200,
             ),
         ),
-        detected_at=datetime(2026, 7, day),
+        detected_at=run_at or datetime(2026, 7, day),
         window_start=date(2026, 7, 1),
         window_end=date(2026, 7, day),
         seq=itertools.count(int(alert_id[1:])),
@@ -177,7 +203,7 @@ def test_no_prior_alerts_passes_everything():
 
 def test_same_combo_within_7_days_is_suppressed():
     prior = _alert(day=5, cur_rate=0.13)
-    current = _alert(day=7, cur_rate=0.14)          # +1%p 뿐 → 갱신 조건 미달
+    current = _alert(day=7, cur_rate=0.14)  # +1%p 뿐 → 갱신 조건 미달
     published, suppressed = filter_suppressed([current], [prior])
     assert published == []
     assert suppressed == [current]
@@ -194,9 +220,38 @@ def test_extra_5pp_rise_allows_update_alert():
 
 def test_after_block_window_is_new_alert():
     prior = _alert(day=1, cur_rate=0.13)
-    current = _alert(day=9, cur_rate=0.13)          # 8일 경과 → 억제 해제
+    current = _alert(day=9, cur_rate=0.13)  # 8일 경과 → 억제 해제
     published, _ = filter_suppressed([current], [prior])
     assert published[0].updates_alert_id is None
+
+
+def test_suppression_counts_data_time_not_wall_clock():
+    """경과일은 window_end(데이터 시각)로 센다 — detected_at(실행 시각) 아님.
+
+    데모는 60일치를 몇 분에 압축 재생한다. 실행 시각으로 세면 detected_at 차이가
+    항상 0일이라 억제가 영영 안 풀리고 조합당 알림이 1건만 뜨고 끝난다
+    (시스템 워크플로우 §6). 아래는 그 상황 그대로 — 데이터는 8일 벌어졌는데
+    실행 시각은 10초 차이다.
+    """
+    run1 = datetime(2026, 8, 3, 14, 0, 0)
+    prior = _alert(day=1, cur_rate=0.13, run_at=run1)
+    current = _alert(day=9, cur_rate=0.13, run_at=run1.replace(second=10))
+
+    published, suppressed = filter_suppressed([current], [prior])
+
+    assert suppressed == []  # 데이터 기준 8일 경과 → 억제 해제
+    assert published[0].updates_alert_id is None  # 갱신이 아니라 신규
+
+
+def test_suppression_still_blocks_when_data_time_is_close():
+    """반대 방향 — 실행 시각이 멀어도 데이터가 가까우면 계속 억제한다."""
+    prior = _alert(day=5, cur_rate=0.13, run_at=datetime(2026, 8, 1))
+    current = _alert(day=7, cur_rate=0.14, run_at=datetime(2026, 8, 20))
+
+    published, suppressed = filter_suppressed([current], [prior])
+
+    assert published == []  # 데이터 기준 2일 → 아직 억제 기간
+    assert suppressed == [current]
 
 
 def test_resolved_alert_releases_suppression():
@@ -207,7 +262,7 @@ def test_resolved_alert_releases_suppression():
         [current], [prior], resolved_alert_ids={prior.alert_id}
     )
     assert len(published) == 1
-    assert published[0].updates_alert_id is None    # 갱신이 아니라 신규
+    assert published[0].updates_alert_id is None  # 갱신이 아니라 신규
     assert suppressed == []
 
 
@@ -260,9 +315,9 @@ def test_excluded_channels_belong_to_own_aspect():
     color = candidates[("P1", "COUPANG")]
     size = candidates[("P1", "NAVER")]
     assert color["aspect"] == "색상"
-    assert color["excluded_channels"] == []          # 다른 aspect 의 보류가 새면 안 된다
+    assert color["excluded_channels"] == []  # 다른 aspect 의 보류가 새면 안 된다
     assert size["aspect"] == "사이즈"
-    assert size["excluded_channels"] == ["ZIGZAG"]   # 자기 판정의 보류는 유지
+    assert size["excluded_channels"] == ["ZIGZAG"]  # 자기 판정의 보류는 유지
 
 
 # ── 입력 정규화 ──────────────────────────────────────────────────
@@ -281,10 +336,15 @@ def _item(item_id, channel, aspects, day, source="cs", product="P001"):
 def test_normalize_keeps_one_row_per_inquiry():
     """한 문의가 2 aspect 부정이어도 행은 1개 — 쪼개면 분모가 부풀어 부정률이 반토막."""
     items = [
-        _item("C1", "COUPANG", [
-            {"aspect": "색상", "sentiment": -1},
-            {"aspect": "사이즈", "sentiment": -1},
-        ], day=3)
+        _item(
+            "C1",
+            "COUPANG",
+            [
+                {"aspect": "색상", "sentiment": -1},
+                {"aspect": "사이즈", "sentiment": -1},
+            ],
+            day=3,
+        )
     ]
     rows = normalize(items)
     assert len(rows) == 1
@@ -329,8 +389,14 @@ def _scenario_items():
         # 현재 윈도우 (7/1 ~ 7/7)
         negatives = 12 if channel == "COUPANG" else 2
         for i in range(40):
-            items.append(_item(f"C{next(counter)}", channel, neg if i < negatives else pos,
-                               day=1 + (i % 7)))
+            items.append(
+                _item(
+                    f"C{next(counter)}",
+                    channel,
+                    neg if i < negatives else pos,
+                    day=1 + (i % 7),
+                )
+            )
     return items
 
 
@@ -349,7 +415,7 @@ async def test_pipeline_emits_biased_alert_for_single_channel():
 
     alert = alerts[0]
     assert alert.verdict == Verdict.BIASED
-    assert alert.channel == Channel.COUPANG          # 쿠팡만 발화 → 편중형
+    assert alert.channel == Channel.COUPANG  # 쿠팡만 발화 → 편중형
     assert alert.main_aspect == "색상"
     assert alert.stats.source == Source.CS
     assert alert.stats.cur_total == 40
@@ -360,7 +426,7 @@ async def test_pipeline_emits_biased_alert_for_single_channel():
     assert alert.recommended_action == RecommendedAction.GENERATE_RECOMMENDATION
     assert alert.detection_confidence == DetectionConfidence.MEDIUM  # 시점 미확인
     assert alert.source_signals.cs is True
-    assert alert.source_signals.review is None      # 리뷰 데이터 없음 = 보류
+    assert alert.source_signals.review is None  # 리뷰 데이터 없음 = 보류
     assert alert.window_start == date(2026, 7, 1)
     assert alert.window_end == date(2026, 7, 7)
 
