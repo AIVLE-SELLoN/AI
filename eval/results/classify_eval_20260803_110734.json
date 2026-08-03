@@ -1,0 +1,141 @@
+{
+  "meta": {
+    "experiment": "③ 프롬프트1 aspect 분류 정확도",
+    "run_at": "2026-08-03T11:07:34",
+    "golden": "golden_cs_labels.csv",
+    "prompt_version": "classify_aspect_v5",
+    "model": "gpt-4o-mini",
+    "seed": 42,
+    "limit": 300,
+    "chunk_size": 20,
+    "mode": "batch"
+  },
+  "scores": {
+    "n_sampled": 300,
+    "n_scored": 299,
+    "n_unanswered": 1,
+    "aspect_f1": 0.9933,
+    "aspect_precision": 0.9933,
+    "aspect_recall": 0.9933,
+    "sentiment_accuracy": 0.9832,
+    "exact_match_rate": 0.9766,
+    "per_aspect": {
+      "기타": {
+        "precision": 1.0,
+        "recall": 0.9787,
+        "n_true": 47
+      },
+      "사이즈": {
+        "precision": 1.0,
+        "recall": 0.9804,
+        "n_true": 51
+      },
+      "색상": {
+        "precision": 0.9818,
+        "recall": 1.0,
+        "n_true": 54
+      },
+      "소재": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 50
+      },
+      "오배송": {
+        "precision": 0.9796,
+        "recall": 1.0,
+        "n_true": 48
+      },
+      "파손": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 49
+      }
+    },
+    "mismatches": [
+      {
+        "inquiry_id": "INQ-016304",
+        "raw_text": "문의 답변 빨리 주셔서 감사해요.",
+        "true_aspect": "기타",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-014322",
+        "raw_text": "문의 답변 빨리 주셔서 감사해요.",
+        "true_aspect": "기타",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-010702",
+        "raw_text": "문의 답변 빨리 주셔서 감사해요.",
+        "true_aspect": "기타",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-044189",
+        "raw_text": "이 제품 재입고는 언제쯤 될까요?",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-023752",
+        "raw_text": "문의 답변 빨리 주셔서 감사해요.",
+        "true_aspect": "기타",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-043816",
+        "raw_text": "고객센터 연결이 계속 안 되는데 어떻게 문의드려야 하나요?",
+        "true_aspect": "기타",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-019154",
+        "raw_text": "표기 그대로 정사이즈로 왔습니다.",
+        "true_aspect": "사이즈",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 1
+          }
+        ]
+      }
+    ]
+  }
+}
