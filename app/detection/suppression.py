@@ -11,12 +11,6 @@ LangGraph checkpointer)가 미정이기 때문이다. 저장소가 정해지면 
     - 단, 부정률이 직전 알림 대비 RENOTIFY_DELTA_JUMP(+5%p) 이상 더 오르면 갱신 허용.
       갱신은 새 alert_id + updates_alert_id 에 원본 ID.
 
-⏱️ **경과일은 window_end(데이터 시각)로 센다. detected_at(실행 시각)이 아니다.**
-   시스템 워크플로우 §6 권장이고, [1] 기준선 오염 방지(alert_days)가 이미 날짜 기준이라
-   같은 시계를 쓴다. 실행 시각으로 세면 데모가 깨진다 — 압축 재생은 60일치를 몇 분에
-   흘리므로 detected_at 차이가 항상 0일이라 억제가 영영 안 풀리고, 조합당 알림이
-   1건만 뜨고 끝난다.
-
 ⚠️ 단일 배치 mock 에서는 선행 알림이 없어 이 경로를 타지 않는다(로직 §710).
    aggregate.build_baseline 의 alert_days 와 짝이다 — 알림 구간을 과거 윈도우에서
    빼야 지속되는 이상이 '새로운 평소'로 굳어 알림이 스스로 꺼지는 일이 없다.
@@ -65,13 +59,12 @@ def filter_suppressed(
     resolved = resolved_alert_ids or set()
 
     # 같은 키의 직전 알림 중 가장 최근 것만 보면 된다.
-    # '최근'의 기준도 window_end — 아래 경과일 계산과 같은 시계를 써야 한다.
     latest: dict[tuple, DetectionAlert] = {}
     for prior in prior_alerts:
         if prior.alert_id in resolved:
             continue
         key = _key(prior)
-        if key not in latest or prior.window_end > latest[key].window_end:
+        if key not in latest or prior.detected_at > latest[key].detected_at:
             latest[key] = prior
 
     published: list[DetectionAlert] = []
@@ -83,8 +76,7 @@ def filter_suppressed(
             published.append(alert)
             continue
 
-        # 데이터 시각 기준 — 모듈 docstring ⏱️ 참고. 실행 시각으로 세면 데모가 깨진다.
-        elapsed_days = (alert.window_end - prior.window_end).days
+        elapsed_days = (alert.detected_at - prior.detected_at).days
         if elapsed_days >= block_days:
             # 억제 기간이 지났다 → 신규 알림으로 그대로 발행.
             published.append(alert)
@@ -94,9 +86,7 @@ def filter_suppressed(
         # _RATE_EPSILON: 부정률은 neg/total 부동소수점이라 경계가 안 맞는다.
         # 예) 36/200 - 26/200 = 0.049999999999999996 < 0.05 → 갱신이 조용히 죽는다.
         if alert.stats.cur_rate - prior.stats.cur_rate >= delta_jump - _RATE_EPSILON:
-            published.append(
-                alert.model_copy(update={"updates_alert_id": prior.alert_id})
-            )
+            published.append(alert.model_copy(update={"updates_alert_id": prior.alert_id}))
         else:
             suppressed.append(alert)
 

@@ -214,3 +214,37 @@ def test_classify_endpoint_success_with_mocked_llm(raw_cs_reviews):
     body = response.json()
     assert len(body["results"]) == 1
     assert body["results"][0]["item_id"] == raw_cs_reviews[0]["item_id"]
+
+# ── 프롬프트 플레이스홀더 렌더링 ─────────────────────────────────
+# 배경: classify_sentiment_v4가 $review_text 대신 {review_text}로 작성돼,
+# string.Template.substitute()가 조용히 무시하는 바람에 리뷰 원문이 LLM에
+# 전달되지 않는 버그가 있었다(PR 리뷰에서 발견). substitute()는 안 쓰인
+# 키워드 인자를 예외 없이 무시하므로 런타임에도 안 터진다 — 그래서 테스트로 막는다.
+
+
+@pytest.mark.parametrize(
+    "prompt_path",
+    sorted((Path(__file__).parent.parent / "app" / "classification" / "prompts").glob("*.md")),
+    ids=lambda p: p.stem,
+)
+def test_prompt_placeholder_substitutes(prompt_path: Path):
+    """모든 분류 프롬프트가 $placeholder 형식이라 실제로 원문이 렌더링되는지 검증.
+
+    파일을 glob으로 수집하므로 새 버전(v6...)을 추가해도 자동으로 커버된다.
+    """
+    from string import Template
+
+    from app.classification.service import load_llm_prompt
+
+    key = "cs_text" if "aspect" in prompt_path.stem else "review_text"
+    rendered = Template(load_llm_prompt("classification", prompt_path.stem)).substitute(
+        **{key: "__SENTINEL__"}
+    )
+
+    assert "__SENTINEL__" in rendered, (
+        f"{prompt_path.name}: 원문이 렌더링되지 않음. "
+        f"플레이스홀더가 ${key} 형식인지 확인할 것."
+    )
+    assert f"{{{key}}}" not in rendered, (
+        f"{prompt_path.name}: 치환 안 된 중괄호 플레이스홀더가 남아있음."
+    )

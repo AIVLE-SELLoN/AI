@@ -1,0 +1,111 @@
+{
+  "meta": {
+    "experiment": "③ 프롬프트1 aspect 분류 정확도",
+    "run_at": "2026-08-03T09:44:25",
+    "golden": "golden_cs_labels.csv",
+    "prompt_version": "classify_aspect_v5",
+    "model": "gpt-4o-mini",
+    "seed": 42,
+    "limit": 300,
+    "chunk_size": 20,
+    "mode": "per_item"
+  },
+  "scores": {
+    "n_sampled": 300,
+    "n_scored": 300,
+    "n_unanswered": 0,
+    "aspect_f1": 0.9899,
+    "aspect_precision": 1.0,
+    "aspect_recall": 0.98,
+    "sentiment_accuracy": 0.9966,
+    "exact_match_rate": 0.9767,
+    "per_aspect": {
+      "기타": {
+        "precision": 1.0,
+        "recall": 0.875,
+        "n_true": 48
+      },
+      "사이즈": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 51
+      },
+      "색상": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 54
+      },
+      "소재": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 50
+      },
+      "오배송": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 48
+      },
+      "파손": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 49
+      }
+    },
+    "mismatches": [
+      {
+        "inquiry_id": "INQ-014322",
+        "raw_text": "문의 답변 빨리 주셔서 감사해요.",
+        "true_aspect": "기타",
+        "true_sentiment": 1,
+        "predicted": []
+      },
+      {
+        "inquiry_id": "INQ-010702",
+        "raw_text": "문의 답변 빨리 주셔서 감사해요.",
+        "true_aspect": "기타",
+        "true_sentiment": 1,
+        "predicted": []
+      },
+      {
+        "inquiry_id": "INQ-003360",
+        "raw_text": "문의 답변 빨리 주셔서 감사해요.",
+        "true_aspect": "기타",
+        "true_sentiment": 1,
+        "predicted": []
+      },
+      {
+        "inquiry_id": "INQ-020303",
+        "raw_text": "문의 답변 빨리 주셔서 감사해요.",
+        "true_aspect": "기타",
+        "true_sentiment": 1,
+        "predicted": []
+      },
+      {
+        "inquiry_id": "INQ-043816",
+        "raw_text": "고객센터 연결이 계속 안 되는데 어떻게 문의드려야 하나요?",
+        "true_aspect": "기타",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-016304",
+        "raw_text": "문의 답변 빨리 주셔서 감사해요.",
+        "true_aspect": "기타",
+        "true_sentiment": 1,
+        "predicted": []
+      },
+      {
+        "inquiry_id": "INQ-021996",
+        "raw_text": "문의 답변 빨리 주셔서 감사해요.",
+        "true_aspect": "기타",
+        "true_sentiment": 1,
+        "predicted": []
+      }
+    ]
+  }
+}
