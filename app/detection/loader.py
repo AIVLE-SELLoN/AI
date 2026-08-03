@@ -1,0 +1,152 @@
+"""담당: 서영 (Agent2) — 탐지 입력 로더. 원본 문서 ⟕ 분류 결과 조인.
+
+왜 이 모듈이 따로 있나
+----------------------
+`classified_item` 은 "문서 목록"이 아니라 **"aspect 언급 목록"** 이다. aspect 가
+0개인 문서는 행이 아예 안 생겨서, **거기서 분모(총 문서 수)를 세면 안 된다.**
+
+    RVW-4 "배송 빨랐고 포장도 깔끔합니다"  →  aspects=[]  →  classified_item 0행
+
+리뷰는 허용 aspect 가 색상·사이즈·소재 3개뿐이고(`REVIEW_ALLOWED_ASPECTS`),
+프롬프트2가 "언급된 속성이 하나도 없으면 []" 를 지시한다. 그래서 빈 배열이 정상
+출력이다. CS 는 `기타` 가 있어 문의 1건당 최소 1행이 보장되므로 해당 없다.
+
+분모를 `classified_item` 에서 세면 이런 일이 생긴다(리뷰 4건 중 1건이 빈 배열):
+
+    진짜 색상 부정률 = 1/4 = 25%
+    관측 색상 부정률 = 1/3 = 33%        ← 분자는 맞고 분모만 깎인다
+
+Fisher 검정은 비율이 아니라 (부정건수, 총건수) 원시 카운트를 받으므로 p값 자체가
+틀어진다. 부풀림 배율은 윈도우마다 달라서(이상이 터진 주엔 언급이 늘어 덜 깎임)
+오탐·미탐 어느 방향인지 예측도 안 된다.
+
+해결
+----
+**분모는 원본 문서에서 세고, 분자만 분류 결과에서 가져온다.** SQL 의 LEFT JOIN 과
+같은 의미이며, 실서비스에서는 아래 형태가 된다:
+
+    FROM reviews d LEFT JOIN classified_item c ON c.item_id = d.review_id
+
+⚠️ `sentiment = -1` 조건을 WHERE 로 올리면 LEFT JOIN 이 INNER JOIN 으로 퇴화해서
+   이 버그가 그대로 돌아온다. 반드시 SELECT 쪽(CASE WHEN)에 둘 것.
+
+전제조건 — 분류 커버리지
+------------------------
+분자는 분류에 성공한 문서에서만 나온다. 커버리지가 100% 가 아니면 부정률이
+과소추정된다(미탐 방향). `check_coverage()` 로 **일자별** 검증한다 — 윈도우 총합만
+비교하면 특정 날짜만 통째로 빠진 걸 못 잡는다(aggregate §99 "분자와 분모를 같은
+날짜 집합에서 세야 비율이 성립한다").
+"""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from collections.abc import Iterable
+from datetime import datetime
+
+from app.core.schemas import ClassifiedItem, Sentiment
+
+
+def _neg_aspects(item: ClassifiedItem) -> list[str]:
+    return [a.aspect.value for a in item.aspects if a.sentiment == Sentiment.NEGATIVE]
+
+
+def build_rows(
+    documents: Iterable[dict],
+    classified: Iterable[ClassifiedItem],
+) -> list[dict]:
+    """원본 문서 ⟕ 분류 결과 → aggregate 가 먹는 정규화 행. **문서 1건 = 행 1개.**
+
+    Args:
+        documents: 분모의 출처. 원본 테이블/CSV 에서 그대로 온 문서들.
+            필요한 키 — id · product · channel · source · created_at(datetime) · text(선택)
+            **분류 여부와 무관하게 전부 넣을 것.** 이게 이 모듈의 존재 이유다.
+        classified: 분자의 출처. `item_id` 로 documents 와 짝지어진다.
+            documents 에 없는 item_id 는 무시한다(원본이 분모의 유일한 기준).
+
+    Returns:
+        [{"product", "channel", "source", "neg_aspects", "day", "id", "text"}, ...]
+        service.normalize() 와 같은 모양이라 aggregate 는 둘을 구분하지 않는다.
+
+    day 는 날짜의 ordinal 을 그대로 쓴다 — 기준일 오프셋을 두면 배치마다 값이 달라져
+    alert_days 같은 (상품, 채널, day) 키가 배치 간에 안 맞는다.
+    """
+    neg_by_id: dict[str, list[str]] = {
+        item.item_id: _neg_aspects(item) for item in classified
+    }
+
+    rows: list[dict] = []
+    for doc in documents:
+        created = doc["created_at"]
+        if isinstance(created, str):
+            created = datetime.fromisoformat(created)
+        rows.append(
+            {
+                "product": doc["product"],
+                "channel": doc["channel"],
+                "source": doc["source"],
+                # 분류 결과가 없으면 빈 리스트 — 분모 +1, 분자 +0 (LEFT JOIN 과 동일)
+                "neg_aspects": neg_by_id.get(doc["id"], []),
+                "day": created.date().toordinal(),
+                "id": doc["id"],
+                "text": doc.get("text", ""),
+            }
+        )
+    return rows
+
+
+def check_coverage(
+    documents: Iterable[dict],
+    classified: Iterable[ClassifiedItem],
+) -> list[dict]:
+    """분류가 빠진 (상품, 채널, source, 날짜) 를 찾는다. 빈 리스트면 커버리지 100%.
+
+    **일자별로 센다.** 윈도우 총합만 맞춰보면 "3일치가 통째로 빠지고 다른 날이 더
+    들어온" 상황을 못 잡는데, 그러면 그날 분자가 0 이 되면서 비율이 조용히 깎인다.
+
+    ⚠️ 여기서 '분류됨'은 **aspect 가 1개 이상 나온 문서**만 센다. 빈 배열은 분류
+       자체는 성공했지만 이 함수로는 구분이 안 된다 — 그래서 미달이 잡히면
+       "LLM 실패로 드롭"인지 "정상적인 빈 배열"인지는 호출부가 판단해야 한다.
+       리뷰는 빈 배열이 흔하므로 이 검사는 **CS 에 쓰는 것이 안전**하다.
+
+    Returns:
+        [{"product", "channel", "source", "day", "documents", "classified"}, ...]
+        classified < documents 인 슬롯만. 각 건수 포함.
+    """
+    doc_count: dict[tuple, int] = defaultdict(int)
+    doc_key_of: dict[str, tuple] = {}
+    for doc in documents:
+        created = doc["created_at"]
+        if isinstance(created, str):
+            created = datetime.fromisoformat(created)
+        key = (
+            doc["product"],
+            doc["channel"],
+            doc["source"],
+            created.date().toordinal(),
+        )
+        doc_count[key] += 1
+        doc_key_of[doc["id"]] = key
+
+    seen: dict[tuple, set] = defaultdict(set)
+    for item in classified:
+        key = doc_key_of.get(item.item_id)
+        if key is not None and item.aspects:
+            seen[key].add(item.item_id)
+
+    gaps: list[dict] = []
+    for key, total in sorted(doc_count.items()):
+        got = len(seen.get(key, ()))
+        if got < total:
+            product, channel, source, day = key
+            gaps.append(
+                {
+                    "product": product,
+                    "channel": channel,
+                    "source": source,
+                    "day": day,
+                    "documents": total,
+                    "classified": got,
+                }
+            )
+    return gaps
