@@ -140,6 +140,26 @@ def collect_documents(config_rows: list[dict]) -> tuple[list[dict], dict[str, tu
     return documents, windows
 
 
+def take_whole_products(documents: list[dict], limit: int) -> list[dict]:
+    """대략 limit 건까지 자르되 **상품 경계에서 끊는다.**
+
+    문서를 그냥 documents[:limit] 로 자르면 한 상품이 중간에 잘려 그 슬롯의
+    **분모가 실제보다 작아진다.** measure() 가 총문의를 실제 행에서 세기 때문이다.
+    분모가 깎이면 부정률이 부풀려져 판정이 왜곡되고, 그 상품은 ①과 비교 자체가
+    성립하지 않는다. 파일럿이라도 슬롯은 통째로 넣어야 한다.
+    """
+    by_product: dict[str, list[dict]] = {}
+    for doc in documents:
+        by_product.setdefault(doc["product"], []).append(doc)
+
+    taken: list[dict] = []
+    for docs in by_product.values():
+        if taken and len(taken) + len(docs) > limit:
+            break
+        taken.extend(docs)
+    return taken
+
+
 # ── 분류 ─────────────────────────────────────────────────────────
 
 
@@ -163,10 +183,17 @@ def _to_items(
     ]
 
 
-async def classify_cached(documents: list[dict], run: int) -> list[ClassifiedItem]:
-    """Agent1 분류. 회차별 캐시를 먼저 보고 없는 것만 태운다."""
+async def classify_cached(
+    documents: list[dict], run: int, tag: str = "full"
+) -> list[ClassifiedItem]:
+    """Agent1 분류. 회차별 캐시를 먼저 보고 없는 것만 태운다.
+
+    tag 로 캐시를 갈라두는 이유: 파일럿(--limit)과 본실행이 같은 캐시를 쓰면,
+    나중에 호출 방식이 바뀌었을 때(건당 → 배치) 한 회차 안에 두 방식의 결과가
+    섞인다. 지금 파일럿을 돌려도 본실행 숫자가 오염되지 않게 분리한다.
+    """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_path = CACHE_DIR / f"pipeline_run{run}.json"
+    cache_path = CACHE_DIR / f"pipeline_{tag}_run{run}.json"
     cache: dict = (
         json.loads(cache_path.read_text(encoding="utf-8"))
         if cache_path.exists()
@@ -318,9 +345,8 @@ def report(runs: list[dict], oracle: dict) -> None:
         spread = f" ±{(max(values) - min(values)) / 2:.1%}" if len(values) > 1 else ""
         print(f"{label:24s} {a:>10.1%} {b:>8.1%}{spread:<5s} {a - b:>+9.1%}")
 
-    print(
-        f"\n회차별 탐지율: {' / '.join(f'{_rate(r[chr(0x72) + chr(0x65) + chr(0x63) + chr(0x61) + chr(0x6C) + chr(0x6C)]):.1%}' for r in runs)}"
-    )
+    per_run = " / ".join(f"{_rate(r['recall']):.1%}" for r in runs)
+    print(f"\n회차별 탐지율: {per_run}")
 
     only_in_pipeline = sorted({m for r in runs for m in r["misses"]})
     if only_in_pipeline:
@@ -337,7 +363,7 @@ async def main_async(args) -> None:
 
     documents, windows = collect_documents(config_rows)
     if args.limit > 0:
-        documents = documents[: args.limit]
+        documents = take_whole_products(documents, args.limit)
 
     print(f"케이스 상품 {len(windows)}개 · 현재 윈도우 CS 문의 {len(documents):,}건")
     print("과거 윈도우·배경 슬롯은 ①과 동일(oracle) — 차이는 현재 윈도우 분류뿐")
@@ -354,9 +380,10 @@ async def main_async(args) -> None:
     )
     oracle_score = score(golden, oracle_pred)
 
+    tag = "full" if args.limit <= 0 else f"limit{args.limit}"
     runs = []
     for run in range(1, args.runs + 1):
-        classified = await classify_cached(documents, run)
+        classified = await classify_cached(documents, run, tag)
 
         gaps = check_coverage(documents, classified)
         if gaps:
