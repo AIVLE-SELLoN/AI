@@ -148,7 +148,9 @@ def normalize(items: list[ClassifiedItem]) -> list[dict]:
     return rows
 
 
-def _window_bounds(rows: list[dict], window_end: date | None) -> tuple[int, int, date, date]:
+def _window_bounds(
+    rows: list[dict], window_end: date | None
+) -> tuple[int, int, date, date]:
     """현재 윈도우 [cur_start, cur_end] 를 day ordinal 과 date 양쪽으로 낸다."""
     cur_end = window_end.toordinal() if window_end else max(r["day"] for r in rows)
     cur_start = cur_end - CURRENT_WINDOW_DAYS + 1
@@ -169,9 +171,16 @@ def _alert_days(prior_alerts: list[DetectionAlert] | None) -> set:
     for alert in prior_alerts or []:
         if alert.channel == Channel.ALL:
             continue
-        for ordinal in range(alert.window_start.toordinal(), alert.window_end.toordinal() + 1):
+        for ordinal in range(
+            alert.window_start.toordinal(), alert.window_end.toordinal() + 1
+        ):
             excluded.add(
-                (alert.product_group_id, alert.main_aspect.value, alert.channel.value, ordinal)
+                (
+                    alert.product_group_id,
+                    alert.main_aspect.value,
+                    alert.channel.value,
+                    ordinal,
+                )
             )
     return excluded
 
@@ -217,12 +226,16 @@ def _build_candidates(
     candidates: dict[tuple, dict] = {}
     for (product, channel), by_aspect in buckets.items():
         deltas = {
-            aspect: _representative_delta(tests, product, aspect, channel, source, result)
+            aspect: _representative_delta(
+                tests, product, aspect, channel, source, result
+            )
             for aspect, result in by_aspect.items()
         }
         main, subs = pick_main_aspect(deltas)
         main_result = by_aspect[main]
-        stats_channel = _stats_channel(tests, product, main, channel, source, main_result)
+        stats_channel = _stats_channel(
+            tests, product, main, channel, source, main_result
+        )
 
         candidates[(product, channel)] = {
             "product": product,
@@ -278,9 +291,11 @@ def _stats_channel(
         return channel
     return max(
         result["channels"],
-        key=lambda ch: tests[(product, aspect, ch, source)]["delta"]
-        if (product, aspect, ch, source) in tests
-        else 0.0,
+        key=lambda ch: (
+            tests[(product, aspect, ch, source)]["delta"]
+            if (product, aspect, ch, source) in tests
+            else 0.0
+        ),
     )
 
 
@@ -351,6 +366,7 @@ async def detect_anomaly(
     resolved_alert_ids: set | None = None,
     past_rate_fallback: dict | None = None,
     change_log: dict | None = None,
+    unreliable_denominators: set | None = None,
     client: Any = None,
 ) -> tuple[list[DetectionAlert], list[DetectionAlert]]:
     """[0]~[8] 전체 파이프라인. ClassifiedItem 집합 → 발행할 DetectionAlert.
@@ -367,6 +383,11 @@ async def detect_anomaly(
         change_log: {(product, aspect): change_id} — 상세페이지 수정 이력이 이상 시점과
             일치하는 건. **확신도 보강용이지 판정 권한이 없다**(로직 §[7]). 없으면
             timestamp_matched=False 로 두고 확신도가 '높음'까지 못 갈 뿐, 기각하지 않는다.
+        unreliable_denominators: 분류 커버리지 미달로 **분모를 믿을 수 없는**
+            (product, channel, source) 집합. 로더가 `loader.unreliable_slots()` 로
+            넘긴다. 검정 전에 family 에서 빠진다 — 분모가 깎인 슬롯은 p값이 실제보다
+            작게 나오고, BH 는 step-up 이라 그 하나가 기각 개수를 늘려 **다른 상품의
+            임계까지 완화**시키기 때문이다.
         client: LlmClient (테스트 목킹용 주입).
 
     Returns:
@@ -377,7 +398,9 @@ async def detect_anomaly(
         return [], []
 
     detected_at = detected_at or datetime.now()
-    cur_start, cur_end, window_start_date, window_end_date = _window_bounds(rows, window_end)
+    cur_start, cur_end, window_start_date, window_end_date = _window_bounds(
+        rows, window_end
+    )
 
     # [0][1] 집계 · 과거 기준
     combinations, texts = build_combinations(
@@ -391,7 +414,9 @@ async def detect_anomaly(
     )
 
     # [2] 검정 3관문 → [3] 편중/전역 판정
-    batch, held = run_detection(combinations)
+    batch, held = run_detection(
+        combinations, unreliable_denominators=unreliable_denominators
+    )
     verdict_results = run_verdict(batch, held)
 
     tests = {test["key"]: test for test in batch}
@@ -458,7 +483,11 @@ async def detect_anomaly(
     )
     logger.info(
         "detection 완료 window=%s~%s 검정=%d 발화=%d 발행=%d 억제=%d",
-        window_start_date, window_end_date, len(batch),
-        sum(1 for t in batch if t["fired"]), len(published), len(suppressed),
+        window_start_date,
+        window_end_date,
+        len(batch),
+        sum(1 for t in batch if t["fired"]),
+        len(published),
+        len(suppressed),
     )
     return published, suppressed

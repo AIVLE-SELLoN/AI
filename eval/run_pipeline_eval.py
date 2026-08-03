@@ -71,7 +71,7 @@ from app.classification.service import ClassifyRequestItem, classify_aspect
 from app.core.constants import CURRENT_WINDOW_DAYS
 from app.core.schemas import AspectSentiment, ClassifiedItem
 from app.detection.aggregate import count_window
-from app.detection.loader import build_rows, check_coverage
+from app.detection.loader import build_rows, check_coverage, unreliable_slots
 from app.detection.service import _build_candidates
 from app.detection.statistics import run_detection
 from app.detection.verdict import run_verdict
@@ -85,6 +85,11 @@ CACHE_DIR = ROOT / "data" / "eval_cache"
 DAY1 = date(2026, 6, 30)  # Day 1 = 문의 데이터 첫날
 SOURCE_CS = "cs"
 SOURCES = ("cs", "review")
+
+# classify_aspect() 는 넘긴 항목 수만큼 동시 호출을 띄운다(내부 asyncio.gather).
+# 청크로 끊어 속도 제한을 피하고, 실패 범위를 청크 하나로 가둔다.
+CHUNK_SIZE = 20
+CONCURRENCY = 4
 
 
 # ── 대상 문의 수집 ───────────────────────────────────────────────
@@ -205,26 +210,42 @@ async def classify_cached(
         f"  회차 {run}: 캐시 {len(documents) - len(todo):,}건 / 신규 호출 {len(todo):,}건"
     )
 
-    if todo:
-        results = await classify_aspect(
-            [
-                ClassifyRequestItem(
-                    item_id=d["id"],
-                    source=d["source"],
-                    channel=d["channel"],
-                    product_group_id=d["product"],
-                    raw_text=d["text"],
-                    created_at=d["created_at"],
-                )
-                for d in todo
-            ]
-        )
+    # ⚠️ 전량을 classify_aspect() 에 한 번에 넘기지 말 것.
+    #    내부가 asyncio.gather() 라 넘긴 만큼 동시 호출이 뜬다(1,420건이면 1,420개).
+    #    속도 제한에 걸리고, gather 가 통째로 raise 하면 그때까지의 결과가 다 날아간다.
+    #    청크로 끊고 **청크마다 캐시를 저장**해 중단돼도 이어서 돌 수 있게 한다.
+    semaphore = asyncio.Semaphore(CONCURRENCY)
+    chunks = [todo[i : i + CHUNK_SIZE] for i in range(0, len(todo), CHUNK_SIZE)]
+    done = 0
+
+    for index, chunk in enumerate(chunks, start=1):
+        items = [
+            ClassifyRequestItem(
+                item_id=d["id"],
+                source=d["source"],
+                channel=d["channel"],
+                product_group_id=d["product"],
+                raw_text=d["text"],
+                created_at=d["created_at"],
+            )
+            for d in chunk
+        ]
+        async with semaphore:
+            try:
+                results = await classify_aspect(items)
+            except Exception as exc:  # noqa: BLE001 — 청크 하나 실패로 전체를 버리지 않는다
+                print(f"    [{index}/{len(chunks)}] ⚠️ 실패 {len(chunk)}건 — {exc}")
+                continue
+
         for item in results:
             cache[item.item_id] = [
                 {"aspect": a.aspect.value, "sentiment": int(a.sentiment)}
                 for a in item.aspects
             ]
         cache_path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+        done += len(results)
+        if index % 10 == 0 or index == len(chunks):
+            print(f"    [{index}/{len(chunks)}] 누적 {done:,}/{len(todo):,}건")
 
     return _to_items(documents, cache)
 
@@ -273,9 +294,17 @@ def measure(rows: list[dict], config_rows: list[dict]) -> dict:
 
 
 def predict_with_counts(
-    config_rows: list[dict], products: list[str], measured: dict
+    config_rows: list[dict],
+    products: list[str],
+    measured: dict,
+    unreliable: set | None = None,
 ) -> dict:
-    """①의 배치 구성을 그대로 쓰되, 케이스 슬롯의 현재 윈도우 카운트만 교체한다."""
+    """①의 배치 구성을 그대로 쓰되, 케이스 슬롯의 현재 윈도우 카운트만 교체한다.
+
+    unreliable: 분류 커버리지 미달로 분모를 믿을 수 없는 (상품, 채널, source).
+        **검정 전에** family 에서 빠진다 — 부풀려진 p값 하나가 BH step-up 에서
+        기각 개수를 늘려 다른 검정의 임계까지 완화시키기 때문이다.
+    """
     combos = []
     for product, aspect, channel, source, counts in build_combinations(
         config_rows, products
@@ -294,7 +323,7 @@ def predict_with_counts(
             )
         )
 
-    batch, held = run_detection(combos)
+    batch, held = run_detection(combos, unreliable_denominators=unreliable)
     verdicts = run_verdict(batch, held)
     tests = {t["key"]: t for t in batch}
     counts_map = {(p, a, c, s): cnt for p, a, c, s, cnt in combos}
@@ -386,13 +415,17 @@ async def main_async(args) -> None:
         classified = await classify_cached(documents, run, tag)
 
         gaps = check_coverage(documents, classified)
-        if gaps:
+        unreliable = unreliable_slots(gaps)
+        if unreliable:
             print(
-                f"  ⚠️ 분류 커버리지 미달 {len(gaps)}슬롯 — 부정률이 과소추정될 수 있음"
+                f"  ⚠️ 분류 커버리지 미달 — {len(unreliable)}슬롯을 검정 전에 제외"
+                f" (누락 {sum(g['documents'] - g['classified'] for g in gaps)}건)"
             )
 
         rows = build_rows(documents, classified)
-        pred = predict_with_counts(config_rows, products, measure(rows, config_rows))
+        pred = predict_with_counts(
+            config_rows, products, measure(rows, config_rows), unreliable
+        )
         runs.append(score(golden, pred))
 
     report(runs, oracle_score)

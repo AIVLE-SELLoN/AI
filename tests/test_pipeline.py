@@ -401,6 +401,34 @@ def _scenario_items():
 
 
 @pytest.mark.asyncio
+async def test_unreliable_denominator_suppresses_that_slot_end_to_end():
+    """분류 커버리지 미달 슬롯은 알림이 안 나간다 — detect_anomaly 까지 배선 확인.
+
+    build_batch 에 인자만 만들어두고 호출부에서 안 넘기면 아무 일도 안 일어난다.
+    실제로 그 실수를 했었기 때문에, 파이프라인 끝에서 결과가 달라지는지로 검증한다.
+    """
+    items = _scenario_items()
+    fired_slot = ("P001", Channel.COUPANG.value, Source.CS.value)
+
+    baseline, _ = await detect_anomaly(
+        items,
+        detected_at=datetime(2026, 7, 7, 9, 0),
+        window_end=date(2026, 7, 7),
+        client=_FakeClient(),
+    )
+    assert len(baseline) == 1  # 원래는 발화한다
+
+    alerts, _ = await detect_anomaly(
+        items,
+        detected_at=datetime(2026, 7, 7, 9, 0),
+        window_end=date(2026, 7, 7),
+        unreliable_denominators={fired_slot},
+        client=_FakeClient(),
+    )
+    assert alerts == []  # 분모를 믿을 수 없으므로 검정 자체를 안 한다
+
+
+@pytest.mark.asyncio
 async def test_pipeline_emits_biased_alert_for_single_channel():
     client = _FakeClient()
     alerts, suppressed = await detect_anomaly(

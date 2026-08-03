@@ -150,3 +150,17 @@ def check_coverage(
                 }
             )
     return gaps
+
+
+def unreliable_slots(gaps: list[dict]) -> set[tuple[str, str, str]]:
+    """check_coverage 결과 → build_batch 가 먹는 (product, channel, source) 집합.
+
+    하루라도 분류가 빠지면 그 슬롯의 **윈도우 분모 전체**를 믿을 수 없다. 윈도우
+    집계는 날짜를 합치기 때문이다.
+
+    이 슬롯들은 **검정 전에** family 에서 빠져야 한다. 분모가 깎이면 부정률이
+    부풀려져 p값이 실제보다 작게 나오는데, BH 는 step-up 이라 가짜로 작은 p값
+    하나가 기각 개수를 늘려 **나머지 검정의 임계까지 완화**시킨다. 한 상품의 데이터
+    결함이 다른 상품을 오탐시키는 셈이다.
+    """
+    return {(g["product"], g["channel"], g["source"]) for g in gaps}
