@@ -47,10 +47,13 @@ Fisher 검정은 비율이 아니라 (부정건수, 총건수) 원시 카운트�
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Container, Iterable
 from datetime import datetime
 
-from app.core.schemas import ClassifiedItem, Sentiment
+from app.core.schemas import ClassifiedItem, Sentiment, Source
+
+COVERAGE_CHECKED_SOURCES: frozenset[str] = frozenset({Source.CS.value})
+"""check_coverage 가 커버리지를 검증할 수 있는 source. 근거는 그 함수 ⚠️ 참고."""
 
 
 def _neg_aspects(item: ClassifiedItem) -> list[str]:
@@ -104,16 +107,30 @@ def build_rows(
 def check_coverage(
     documents: Iterable[dict],
     classified: Iterable[ClassifiedItem],
+    *,
+    sources: Container[str] = COVERAGE_CHECKED_SOURCES,
 ) -> list[dict]:
     """분류가 빠진 (상품, 채널, source, 날짜) 를 찾는다. 빈 리스트면 커버리지 100%.
 
     **일자별로 센다.** 윈도우 총합만 맞춰보면 "3일치가 통째로 빠지고 다른 날이 더
     들어온" 상황을 못 잡는데, 그러면 그날 분자가 0 이 되면서 비율이 조용히 깎인다.
 
-    ⚠️ 여기서 '분류됨'은 **aspect 가 1개 이상 나온 문서**만 센다. 빈 배열은 분류
-       자체는 성공했지만 이 함수로는 구분이 안 된다 — 그래서 미달이 잡히면
-       "LLM 실패로 드롭"인지 "정상적인 빈 배열"인지는 호출부가 판단해야 한다.
-       리뷰는 빈 배열이 흔하므로 이 검사는 **CS 에 쓰는 것이 안전**하다.
+    여기서 '분류됨'은 **aspect 가 1개 이상 나온 문서**를 뜻한다. 그래서 **CS 에만
+    적용한다**(`sources` 기본값).
+
+    ⚠️ 리뷰에 쓰면 안 되는 이유 — 빈 배열이 리뷰의 **정상 출력**이기 때문이다.
+       허용 aspect 가 3개뿐이라 무관 리뷰는 []를 내고(모듈 docstring 의 RVW-4),
+       그러면 분류가 100% 성공해도 이 함수가 gap 으로 잡아 `unreliable_slots()` 이
+       그 슬롯을 BH family 에서 통째로 뺀다. 긍정 리뷰가 하나라도 섞이면 그 슬롯의
+       리뷰 탐지가 죽는다.
+       더 근본적으로, `explode_to_rows()` 가 aspect 마다 1행을 만들므로 빈 배열은
+       `classified_item` 에 **0행**이다. DB 관점에서 "무관 리뷰"와 "분류 안 됨"이
+       같은 모양이라, 리뷰 커버리지는 이 방법으로는 원리적으로 검증할 수 없다.
+       CS 는 `classification.service._cs_empty_fallback` 이 aspect >= 1 을 보장하므로
+       이 검사가 성립한다.
+
+    Args:
+        sources: 검사할 source 집합. 기본은 CS 만. 확장하려면 위 ⚠️ 를 먼저 읽을 것.
 
     Returns:
         [{"product", "channel", "source", "day", "documents", "classified"}, ...]
@@ -122,6 +139,8 @@ def check_coverage(
     doc_count: dict[tuple, int] = defaultdict(int)
     doc_key_of: dict[str, tuple] = {}
     for doc in documents:
+        if doc["source"] not in sources:
+            continue
         created = doc["created_at"]
         if isinstance(created, str):
             created = datetime.fromisoformat(created)

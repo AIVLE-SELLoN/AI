@@ -8,7 +8,7 @@ from datetime import datetime
 
 from app.core.schemas import AspectSentiment, ClassifiedItem
 from app.detection.aggregate import count_window
-from app.detection.loader import build_rows, check_coverage
+from app.detection.loader import build_rows, check_coverage, unreliable_slots
 
 
 def _doc(doc_id, day=1, source="review", channel="COUPANG", product="P001"):
@@ -89,10 +89,14 @@ def test_coverage_gap_is_reported_per_day():
     총합은 3건 중 2건이라 '어딘가 빠졌다'까지만 알 수 있지만,
     일자별로 보면 **1일이 미달**이라고 짚을 수 있다.
     """
-    docs = [_doc("A", day=1), _doc("B", day=1), _doc("C", day=2)]
+    docs = [
+        _doc("A", day=1, source="cs"),
+        _doc("B", day=1, source="cs"),
+        _doc("C", day=2, source="cs"),
+    ]
     classified = [
-        _classified("A", [("색상", -1)]),
-        _classified("C", [("색상", -1)]),
+        _classified("A", [("색상", -1)], source="cs"),
+        _classified("C", [("색상", -1)], source="cs"),
     ]
 
     gaps = check_coverage(docs, classified)
@@ -104,9 +108,53 @@ def test_coverage_gap_is_reported_per_day():
 
 
 def test_full_coverage_reports_no_gap():
-    docs = [_doc("A", day=1), _doc("B", day=1)]
+    docs = [_doc("A", day=1, source="cs"), _doc("B", day=1, source="cs")]
     classified = [
-        _classified("A", [("색상", -1)]),
-        _classified("B", [("사이즈", 1)]),
+        _classified("A", [("색상", -1)], source="cs"),
+        _classified("B", [("사이즈", 1)], source="cs"),
     ]
     assert check_coverage(docs, classified) == []
+
+
+def test_coverage_skips_review_because_empty_aspects_are_normal():
+    """리뷰는 검사 대상이 아니다 — 빈 배열이 **정상 출력**이라서. (지인 리뷰 2026-08-04)
+
+    허용 aspect 가 색상·사이즈·소재 3개뿐이라 무관 리뷰는 [] 를 낸다(모듈 docstring
+    의 RVW-4 "배송 빨랐고 포장도 깔끔합니다"). 이걸 미분류로 세면 **분류가 100%
+    성공해도** 그 슬롯이 gap 으로 잡히고, unreliable_slots() 이 BH family 에서
+    통째로 빼버린다 — 긍정 리뷰가 하나만 섞여도 그 슬롯의 리뷰 탐지가 죽는다.
+
+    더 근본적으로 explode_to_rows() 가 aspect 마다 1행을 만들므로 빈 배열은
+    classified_item 에 0행이다. DB 에서 "무관 리뷰"와 "분류 안 됨"이 같은 모양이라
+    리뷰 커버리지는 이 방법으로 원리적으로 검증할 수 없다.
+    """
+    docs = [_doc(f"RVW-{i}", day=1) for i in range(1, 5)]  # _doc 기본이 review
+    classified = [
+        _classified("RVW-1", [("색상", -1)]),
+        _classified("RVW-2", [("사이즈", 1)]),
+        _classified("RVW-3", [("소재", 0)]),
+        _classified("RVW-4", []),  # 무관 리뷰 — 정상 출력
+    ]
+    assert check_coverage(docs, classified) == []
+    assert unreliable_slots(check_coverage(docs, classified)) == set()
+
+
+def test_coverage_checks_cs_because_fallback_guarantees_one_aspect():
+    """CS 는 검사가 성립한다 — _cs_empty_fallback 이 aspect >= 1 을 보장하므로,
+    aspect 0개는 '정상 빈 배열'이 아니라 **분류 자체가 빠진 것**이다."""
+    docs = [_doc("A", day=1, source="cs"), _doc("B", day=1, source="cs")]
+    classified = [_classified("A", [("기타", 0)], source="cs")]  # B 는 분류 누락
+
+    gaps = check_coverage(docs, classified)
+    assert len(gaps) == 1
+    assert gaps[0]["source"] == "cs"
+    assert (gaps[0]["documents"], gaps[0]["classified"]) == (2, 1)
+
+
+def test_coverage_mixed_sources_only_flags_cs():
+    """CS·리뷰가 섞여 들어와도 리뷰 쪽은 gap 을 만들지 않는다."""
+    docs = [_doc("C1", day=1, source="cs"), _doc("R1", day=1)]
+    classified = [_classified("R1", [])]  # CS 는 누락, 리뷰는 정상 빈 배열
+
+    gaps = check_coverage(docs, classified)
+    assert [g["source"] for g in gaps] == ["cs"]

@@ -60,6 +60,7 @@ import json
 import logging
 import statistics
 import sys
+from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -423,9 +424,20 @@ def measure(rows: list[dict], config_rows: list[dict]) -> dict:
     """정규화 행 → {(product, aspect, channel, source): (cur_neg, cur_total)}.
 
     케이스가 정의된 슬롯만 낸다 — 배경을 건드리면 (①−②)가 분류 오차만 뜻하지 않게 된다.
+
+    ⚠️ 분모는 (상품, 채널, source) 에서 가져온다 — aspect 무관(aggregate §129). 케이스
+       슬롯만 실측으로 교체하므로, config 의 cur_total 과 실제 문서 수가 다르면 같은
+       (상품, 채널) 안에서 aspect 마다 분모가 갈린다. 지금은 전 슬롯이 일치하지만
+       (지인 리뷰 2026-08-04 확인: 117/117), 목 데이터를 재생성하면 조용히 깨지는
+       종류라 아래에서 대조한다.
     """
     slots = {
         (r["golden_group_id"], r["aspect"], r["channel"], r["source"])
+        for r in config_rows
+        if r["source"] == SOURCE_CS
+    }
+    expected_total = {
+        (r["golden_group_id"], r["channel"], r["source"]): int(r["cur_total"])
         for r in config_rows
         if r["source"] == SOURCE_CS
     }
@@ -435,11 +447,21 @@ def measure(rows: list[dict], config_rows: list[dict]) -> dict:
     totals, negs = count_window(rows, days[0], days[-1])
 
     out: dict[tuple, tuple[int, int]] = {}
-    for slot in slots:
+    mismatched: list[str] = []
+    for slot in sorted(slots):
         product, _aspect, channel, source = slot
         total = totals.get((product, channel, source), 0)
-        if total:
-            out[slot] = (negs.get(slot, 0), total)
+        if not total:
+            continue
+        want = expected_total.get((product, channel, source))
+        if want is not None and want != total:
+            mismatched.append(f"{product}/{channel} config {want} vs 실측 {total}")
+        out[slot] = (negs.get(slot, 0), total)
+
+    if mismatched:
+        # 실패시키지 않는다 — --limit 파일럿은 원래 분모가 작다. 다만 전량 실행에서
+        # 뜨면 config 와 목 데이터가 어긋났다는 뜻이라 결과 해석 전에 확인해야 한다.
+        print(f"  ⚠️ 분모 불일치 {len(mismatched)}건 — {'; '.join(mismatched[:3])}")
     return out
 
 
@@ -491,6 +513,140 @@ def predict_with_counts(
         "n_batch": len(batch),
         "n_held": len(held),
     }
+
+
+# ── 진단 (LLM 0회 — 캐시만 읽는다) ───────────────────────────────
+
+
+def _golden_negatives() -> dict[str, tuple[str, str]]:
+    """{inquiry_id: (true_aspect, true_sentiment)} — 부정으로 라벨된 CS 문의만."""
+    return {
+        r["inquiry_id"]: (r["true_aspect"], r["true_sentiment"])
+        for r in read(GOLDEN_CS_LABELS)
+        if r.get("true_aspect") and r.get("true_sentiment") == "-1"
+    }
+
+
+def classify_errors(documents: list[dict], cache: dict) -> tuple[Counter, Counter]:
+    """골든 부정 문의가 실제 분류에서 어떻게 됐는지 분해한다.
+
+    ②의 하락폭이 '어떤 종류의 분류 오차'에서 오는지 가르는 게 목적이다. aspect 를
+    틀린 것과 aspect 는 맞고 감성만 뒤집힌 것은 고칠 곳이 다르다 — 전자는 aspect
+    정의, 후자는 감성 판단 규칙이다.
+
+    Returns:
+        (분해 카운터, 감성만 뒤집힌 문장 빈도)
+    """
+    gold = _golden_negatives()
+    breakdown: Counter = Counter()
+    flipped: Counter = Counter()
+
+    for doc in documents:
+        label = gold.get(doc["id"])
+        if label is None:
+            continue
+        aspect, _ = label
+        predicted = cache.get(doc["id"], [])
+        same_aspect = [p for p in predicted if p["aspect"] == aspect]
+
+        if same_aspect and same_aspect[0]["sentiment"] == -1:
+            breakdown["정답 (부정 유지)"] += 1
+        elif same_aspect:
+            breakdown["같은 aspect · 감성만 뒤집힘"] += 1
+            flipped[(aspect, doc["text"])] += 1
+        elif predicted:
+            breakdown["다른 aspect 로"] += 1
+        else:
+            breakdown["분류 결과 없음"] += 1
+    return breakdown, flipped
+
+
+def restore_sentiment(documents: list[dict], cache: dict) -> tuple[dict, int]:
+    """감성만 골든으로 되돌린 캐시 사본을 만든다. **민감도 분석 전용.**
+
+    ⚠️ 성능 주장이 아니다. 골든을 예측에 주입하므로 이 숫자는 '달성 가능한 성능'이
+       아니라 **"손실이 이 오차 하나에 얼마나 귀속되는가"** 를 재는 상한이다.
+       aspect 오류(다른 aspect 로 간 건)는 손대지 않는다 — 감성 축만 분리해서 본다.
+
+    후속 작업(프롬프트1 감성 개선)의 **대조군**이라 코드로 재현 가능해야 한다.
+    """
+    gold = _golden_negatives()
+    restored = {k: [dict(a) for a in v] for k, v in cache.items()}
+    n = 0
+    for doc in documents:
+        label = gold.get(doc["id"])
+        if label is None:
+            continue
+        aspect, _ = label
+        for entry in restored.get(doc["id"], []):
+            if entry["aspect"] == aspect and entry["sentiment"] == 0:
+                entry["sentiment"] = -1
+                n += 1
+    return restored, n
+
+
+def _load_caches(tag: str, mode: str, fingerprint: str, runs: int) -> list[tuple]:
+    """해당 지문의 회차 캐시를 모은다. 없는 회차는 건너뛴다."""
+    out = []
+    for run in range(1, runs + 1):
+        path = CACHE_DIR / f"pipeline_{tag}_{mode}_{fingerprint}_run{run}.json"
+        if path.exists():
+            out.append((run, json.loads(path.read_text(encoding="utf-8"))))
+    return out
+
+
+def diagnose(documents, config_rows, products, golden, tag, mode, runs) -> None:
+    """캐시된 분류 결과로 ②의 하락 원인을 분해한다. LLM 호출 0회."""
+    fingerprint = prompt_fingerprint()
+    caches = _load_caches(tag, mode, fingerprint, runs)
+
+    if not caches:
+        # 지금 프롬프트로 돌린 캐시가 없다. 과거 실행을 진단하는 건 정당한 용도지만
+        # (개선 전 대조군을 다시 뽑는 등), **어느 프롬프트 결과인지 반드시 밝힌다** —
+        # 조용히 옛 캐시를 쓰면 캐시 키에 지문을 넣은 의미가 없어진다.
+        stale = sorted(CACHE_DIR.glob(f"pipeline_{tag}_{mode}_*_run1.json"))
+        if not stale:
+            raise SystemExit(
+                f"캐시 없음 — {CACHE_DIR} 에 pipeline_{tag}_{mode}_*_run*.json 가"
+                " 있어야 한다. 먼저 실험을 돌릴 것."
+            )
+        fingerprint = stale[-1].stem.split(f"pipeline_{tag}_{mode}_")[1].rsplit("_run", 1)[0]
+        caches = _load_caches(tag, mode, fingerprint, runs)
+        print(
+            f"\n⚠️ 현재 프롬프트({prompt_fingerprint()})로 돌린 캐시가 없어"
+            f" **과거 실행({fingerprint})** 을 진단한다. 지금 코드의 성능이 아니다."
+        )
+
+    print(f"\n{'=' * 72}")
+    print(f"실험② 오차 분해 — {mode} · {fingerprint} · 캐시 {len(caches)}회차")
+    print(f"{'=' * 72}")
+
+    total_breakdown: Counter = Counter()
+    total_flipped: Counter = Counter()
+    for _run, cache in caches:
+        breakdown, flipped = classify_errors(documents, cache)
+        total_breakdown.update(breakdown)
+        total_flipped.update(flipped)
+
+    grand = sum(total_breakdown.values())
+    print(f"\n■ 골든 부정 CS 문의가 실제 분류에서 어떻게 됐나 ({len(caches)}회차 합산)")
+    for label, n in total_breakdown.most_common():
+        print(f"    {n:7,d} ({n / grand:5.1%})  {label}")
+
+    print("\n■ 감성이 부정→중립으로 뒤집힌 문장 (상위 10)")
+    for (aspect, text), n in total_flipped.most_common(10):
+        print(f"    {n:5,d}회 [{aspect}] {text[:58]}")
+
+    print("\n■ 민감도 — 감성만 골든으로 되돌리면 (성능 주장 아님, 상한)")
+    print(f"    {'회차':6s} {'현재':>8s} {'감성 복원':>10s}  (복원 건수)")
+    for run, cache in caches:
+        restored, n = restore_sentiment(documents, cache)
+        rates = []
+        for source in (cache, restored):
+            rows = build_rows(documents, _to_items(documents, source))
+            pred = predict_with_counts(config_rows, products, measure(rows, config_rows))
+            rates.append(_rate(score(golden, pred)["recall"]))
+        print(f"    {run:<6d} {rates[0]:>8.1%} {rates[1]:>10.1%}  ({n:,}건)")
 
 
 # ── 리포트 ───────────────────────────────────────────────────────
@@ -565,6 +721,12 @@ async def main_async(args) -> None:
         print("\n[dry-run] LLM 호출 안 함.")
         return
 
+    tag = "full" if args.limit <= 0 else f"limit{args.limit}"
+
+    if args.diagnose:
+        diagnose(documents, config_rows, products, golden, tag, args.mode, args.runs)
+        return
+
     # ① 기준선 — 같은 코드에 oracle 입력을 태운다. 채점 버그면 여기서 먼저 드러난다.
     oracle_rows = build_rows(documents, oracle_classified(documents))
     oracle_pred = predict_with_counts(
@@ -572,7 +734,6 @@ async def main_async(args) -> None:
     )
     oracle_score = score(golden, oracle_pred)
 
-    tag = "full" if args.limit <= 0 else f"limit{args.limit}"
     runs = []
     for run in range(1, args.runs + 1):
         classified = await classify_cached(documents, run, tag, args.mode)
@@ -597,8 +758,21 @@ async def main_async(args) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--runs", type=int, default=3, help="LLM 실행 횟수 (평균용)")
-    ap.add_argument("--limit", type=int, default=0, help="문의 수 제한 (0=전량)")
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="문의 수 **근사** 상한 (0=전량). 상품 경계에서 끊으므로 정확한 상한이"
+        " 아니다 — 첫 상품은 이 값을 넘어도 통째로 들어간다(상품 평균 ~315건)."
+        " 실제 건수는 --dry-run 으로 먼저 확인할 것.",
+    )
     ap.add_argument("--dry-run", action="store_true", help="LLM 호출 없이 대상만 확인")
+    ap.add_argument(
+        "--diagnose",
+        action="store_true",
+        help="캐시된 분류 결과로 하락 원인을 분해 (LLM 0회). 오차 분해 + 감성 뒤집힌"
+        " 문장 빈도 + 감성만 복원했을 때의 민감도. 프롬프트 개선의 대조군 산출용.",
+    )
     ap.add_argument(
         "--mode",
         choices=[MODE_BATCH, MODE_PER_ITEM],
