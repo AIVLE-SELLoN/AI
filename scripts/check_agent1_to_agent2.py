@@ -134,14 +134,29 @@ async def main(args):
     ]
     print(f"\nAgent1 분류 중... ({len(requests)}건)")
     classified = await classify_aspect(requests)
-    print(f"  ✅ {len(classified)}건 수신 — ClassifiedItem 계약 통과")
+
+    # classify_aspect() 는 실패를 raise 하지 않고 결과 자리에 예외 객체를 담아 준다.
+    # 실패 건은 워커에서도 dead-letter 로 빠져 classified_item 에 안 남으므로 여기서도
+    # 똑같이 제외한다 — oracle 라벨로 대체하면 분류 실패가 일치도에 묻힌다.
+    by_id = {c.item_id: c for c in classified if not isinstance(c, Exception)}
+    failed = [
+        (req.item_id, c) for req, c in zip(requests, classified) if isinstance(c, Exception)
+    ]
+    scored = [r for r in target if r["inquiry_id"] in by_id]
+
+    print(f"  ✅ {len(by_id)}건 수신 — ClassifiedItem 계약 통과")
+    if failed:
+        print(f"  ⚠️  분류 실패 {len(failed)}건 — 이후 집계·Agent2 입력에서 제외")
+        for item_id, exc in failed:
+            print(f"       {item_id}: {type(exc).__name__}: {exc}")
+    if not scored:
+        raise SystemExit("분류 성공 건이 0 — 중단")
 
     # ── 전파 측정: oracle 대비 카운트 차이 ────────────────────
-    by_id = {c.item_id: c for c in classified}
     agree = disagree = 0
     oracle_neg: Counter = Counter()
     agent1_neg: Counter = Counter()
-    for r in target:
+    for r in scored:
         gold = oracle_aspects(r)
         got = by_id[r["inquiry_id"]].aspects
         g = {(a.aspect.value, int(a.sentiment)) for a in gold}
@@ -155,8 +170,8 @@ async def main(args):
             if int(a.sentiment) == -1:
                 agent1_neg[a.aspect.value] += 1
 
-    print(f"\n── 분류 일치도 (표본 {len(target)}건) ──")
-    print(f"  완전 일치 {agree} / 불일치 {disagree}  ({agree / len(target):.1%})")
+    print(f"\n── 분류 일치도 (표본 {len(scored)}건) ──")
+    print(f"  완전 일치 {agree} / 불일치 {disagree}  ({agree / len(scored):.1%})")
     print("\n── 부정 카운트 (oracle vs Agent1) ──")
     for aspect in sorted(set(oracle_neg) | set(agent1_neg)):
         o, p = oracle_neg[aspect], agent1_neg[aspect]
@@ -164,7 +179,7 @@ async def main(args):
         print(f"  {aspect:6s} oracle {o:3d}  →  Agent1 {p:3d}   {mark}")
 
     # ── Agent2 ───────────────────────────────────────────────
-    items = [by_id[r["inquiry_id"]] for r in target]
+    items = [by_id[r["inquiry_id"]] for r in scored]
     items += [to_classified(r, oracle_aspects(r)) for r in in_window[len(target) :]]
     items += [to_classified(r, oracle_aspects(r)) for r in past]
 
