@@ -173,7 +173,7 @@ def _parse_llm_response(data: dict, source: Source, *, trace_key: str) -> list[A
     "CS는 반드시 6개 중 하나 이상"이라고 명시하는데도 LLM이 가끔 빈 배열을 내는 경우가
     관측됨(예: "궁금한 점 빠르게 답변해주셔서 감사합니다!" 류 — 제품과 무관한 순수 CS
     응대 감사, 300건 중 6건 관측).
-    detection/aggregate.py의 분모 집계(§136)는 normalize()가 ClassifiedItem 1건당
+    detection/aggregate.py의 분모 집계(§129)는 normalize()가 ClassifiedItem 1건당
     행 1개를 만든 뒤 aspect 내용과 무관하게 무조건 +=1 하는 구조라(aggregate.py:58),
     ClassifiedItem이 일단 만들어지기만 하면 aspects가 비어있든 기타/중립으로
     채워지든 분모·분자 계산은 완전히 동일하다(둘 다 분모+1, 분자+0 — 탐지 산식

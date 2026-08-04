@@ -142,7 +142,7 @@ def test_parse_llm_response_cs_empty_aspects_falls_back_to_etc_neutral():
     배경: 프롬프트1은 "CS는 반드시 6개 중 하나 이상"이라 명시하지만 LLM이 가끔
     위반한다(관측: 제품과 무관한 순수 CS 응대 감사 표현, 300건 중 6건).
     detection/aggregate.py의 분모는 ClassifiedItem 1건=행 1개로 aspect 내용과
-    무관하게 세므로(§136), 빈 배열을 그대로 두든 기타/중립으로 채우든 탐지
+    무관하게 세므로(§129), 빈 배열을 그대로 두든 기타/중립으로 채우든 탐지
     산식엔 no-op이다(둘 다 분모+1, 분자+0). 진짜 위험은 LlmParseError로 던져
     ClassifiedItem 자체를 안 만드는 쪽 — 그러면 그 문의가 분모에서 통째로 빠져
     부정률이 실제보다 높게 계산된다(오탐 방향). 그래서 raise 대신 채워서
