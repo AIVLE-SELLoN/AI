@@ -413,13 +413,22 @@ def evaluate(proposal: Proposal, alert: DetectionAlert, context: dict, attempt: 
 
 
 def score_confidence(
-    proposal: Proposal, context: dict, alert: DetectionAlert
+    proposal: Proposal, context: dict, alert: DetectionAlert, evaluator: Evaluator
 ) -> tuple[RecommendationConfidence, str, bool]:
     """개선안 확신도 산정(§4-4) + 캡핑 2단계(§4-3·§5-1).
 
-    베이스 라벨은 (상세페이지 근거 유무 + 유사사례 유무) 가중합 — 초기엔 규칙 기반
-    등가(§4-4, 승인·반려 데이터 쌓이면 재보정 예정): 둘 다 있으면 높음, 하나만
-    있으면 중간, 둘 다 없으면 낮음.
+    베이스 라벨은 **근거(필수) + 보강 2축**으로 정한다:
+      - 근거 없음                       → 낮음
+      - 근거 있음 + 보강 0개            → 중간
+      - 근거 있음 + 보강 1개 이상       → 높음
+    보강 축은 원인 일관성(root_cause.consistent)과 유사사례 유무다.
+
+    근거를 필수로 둔 이유: 근거 없이 원인만 일관돼도 본문은 검증되지 않은 문장이라
+    확신도를 올릴 근거가 못 된다. 근거없음 경로가 여기로 떨어져 낮음을 유지한다.
+
+    원인 일관성을 축으로 넣은 이유: 원인이 흩어져 있으면(consistent=False) 개선안이
+    다수가 아닌 원인을 고칠 위험이 있다. 유사사례 축은 컬렉션2(HITL 실적)가 쌓이기
+    전까지 항상 False라, 이 축이 없으면 "높음"이 구조적으로 나올 수 없었다.
 
     그 위에 캡핑을 두 번 거친다 — 라우팅(어떤 tool을 쓸지)은 그대로 LLM이 판단하고,
     이 두 규칙은 결과 확신도만 후처리로 깎는 안전장치다(§4-3 도구선택표):
@@ -444,18 +453,28 @@ def score_confidence(
             True,
         )
 
-    has_detail_grounding = proposal.detailpage_grounded
+    # 근거 축은 evaluator 결과를 쓴다 — proposal.detailpage_grounded 는 copy_draft 전용이라
+    # (generate_proposal 참고) image_guide 는 항상 False 여서 확신도가 구조적으로 낮음에
+    # 고정됐다. evaluate()가 이미 타입별로 옳은 근거를 대조하므로(copy_draft→상세페이지,
+    # image_guide→CS) 그 판정을 그대로 재사용하면 타입 분기를 다시 만들 필요가 없다.
+    has_grounding = evaluator.checks.grounding
+
+    # 보강 축 — 근거가 있을 때만 확신도를 끌어올린다.
+    has_consistent_cause = alert.root_cause is not None and alert.root_cause.consistent
     has_similar_case = context.get("similar_case") is not None
 
-    if has_detail_grounding and has_similar_case:
-        raw_base = RecommendationConfidence.HIGH
-    elif has_detail_grounding or has_similar_case:
-        raw_base = RecommendationConfidence.MEDIUM
-    else:
+    # 근거는 필수 조건이다. 근거 없이 원인만 일관돼도 개선안 본문은 허공에 뜬 것이라
+    # 확신할 수 없다 — 근거없음 경로(generate_fallback_proposal)가 여기로 떨어진다.
+    if not has_grounding:
         raw_base = RecommendationConfidence.LOW
+    elif has_consistent_cause or has_similar_case:
+        raw_base = RecommendationConfidence.HIGH
+    else:
+        raw_base = RecommendationConfidence.MEDIUM
 
     reason = (
-        f"상세페이지 근거 {'있음' if has_detail_grounding else '없음'} + "
+        f"근거 검증 {'통과' if has_grounding else '실패'} + "
+        f"원인 일관 {'있음' if has_consistent_cause else '없음'} + "
         f"유사 사례 {'있음' if has_similar_case else '없음'} → {raw_base.value}"
     )
     applied_caps: list[str] = []
@@ -469,7 +488,7 @@ def score_confidence(
     detection_cap = _DETECTION_CONFIDENCE_CAP[alert.detection_confidence]
     final = base if _CONFIDENCE_RANK[base] <= _CONFIDENCE_RANK[detection_cap] else detection_cap
     if final != base:
-        applied_caps.append(f"탐지 확신도 {alert.detection_confidence.value}로 {final.value} 캡핑")
+        applied_caps.append(f"탐지 확신도 {alert.detection_confidence.value}으로 {final.value} 캡핑")
 
     if applied_caps:
         reason += " (" + "; ".join(applied_caps) + ")"
@@ -484,7 +503,7 @@ def assemble(
     context: dict,
 ) -> Recommendation:
     """단계 결과 조립 → Recommendation. hitl은 항상 대기 상태로 시작."""
-    confidence, confidence_reason, capped = score_confidence(proposal, context, alert)
+    confidence, confidence_reason, capped = score_confidence(proposal, context, alert, evaluator)
 
     return Recommendation(
         # TODO(2026-08-03): 같은 alert_id가 재처리되면(백엔드 재시도·배치 재실행)
