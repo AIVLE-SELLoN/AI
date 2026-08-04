@@ -140,11 +140,13 @@ def test_parse_llm_response_cs_empty_aspects_falls_back_to_etc_neutral():
     """CS가 빈 배열을 내면 raise 대신 기타/중립으로 채운다(서영님↔현진 계약 7번, 2026-08-04).
 
     배경: 프롬프트1은 "CS는 반드시 6개 중 하나 이상"이라 명시하지만 LLM이 가끔
-    위반한다(관측: 제품과 무관한 순수 CS 응대 감사 표현, 300건 중 6건). 이상탐지는
-    분모를 원본 문서에서 세고 분자만 분류 결과에서 세므로(LEFT JOIN), 빈 배열이
-    그대로 넘어가면 그 문의는 분모엔 남되 어느 aspect의 분자에도 안 잡혀 부정률이
-    실제보다 낮게 계산된다(미탐 방향). LlmParseError로 던지면 dead-letter로 빠져
-    커버리지 구멍이 이동만 할 뿐이라, 안전하게 기타/중립으로 채운다.
+    위반한다(관측: 제품과 무관한 순수 CS 응대 감사 표현, 300건 중 6건).
+    detection/aggregate.py의 분모는 ClassifiedItem 1건=행 1개로 aspect 내용과
+    무관하게 세므로(§136), 빈 배열을 그대로 두든 기타/중립으로 채우든 탐지
+    산식엔 no-op이다(둘 다 분모+1, 분자+0). 진짜 위험은 LlmParseError로 던져
+    ClassifiedItem 자체를 안 만드는 쪽 — 그러면 그 문의가 분모에서 통째로 빠져
+    부정률이 실제보다 높게 계산된다(오탐 방향). 그래서 raise 대신 채워서
+    ClassifiedItem을 확실히 만들어낸다.
     """
     result = _parse_llm_response({"aspects": []}, Source.CS, trace_key="test")
     assert len(result) == 1
@@ -265,12 +267,19 @@ def test_classify_endpoint_partial_failure_returns_200_with_errors(raw_cs_review
     raise 대신 결과 리스트에 예외 객체로 담아 반환하게 됨(서영님↔현진 계약,
     2026-08-04). 이 테스트가 없으면, 누군가 라우터를 "실패 시 그냥 502"로
     되돌려도 아무도 못 잡는다.
+    ⚠️ side_effect는 리스트가 아니라 trace_key(item_id 포함)로 분기하는 함수다
+    (PR 리뷰 nit, 2026-08-04) — asyncio.gather()는 태스크 실행 순서를 보장하지
+    않으므로, "몇 번째 호출인지"에 의존하는 리스트형 side_effect는 우연히
+    지금은 맞아도 원칙적으로 깨지기 쉽다. item_id로 분기하면 순서와 무관하게
+    항상 올바른 결과를 낸다.
     """
+    def fake_complete_json(prompt, trace_key="-", temperature=0.0):
+        if "FAIL-ITEM" in trace_key:
+            return {"aspects": [{"aspect": "존재안함", "sentiment": -1}]}  # 파싱 실패 유도
+        return {"aspects": [{"aspect": "색상", "sentiment": -1}]}  # 성공
+
     fake_client = AsyncMock()
-    fake_client.complete_json.side_effect = [
-        {"aspects": [{"aspect": "색상", "sentiment": -1}]},  # 1건은 성공
-        {"aspects": [{"aspect": "존재안함", "sentiment": -1}]},  # 1건은 파싱 실패 유도
-    ]
+    fake_client.complete_json.side_effect = fake_complete_json
 
     second_item = dict(raw_cs_reviews[0])
     second_item["item_id"] = "FAIL-ITEM"

@@ -11,11 +11,15 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.classification.service import ClassifyRequestItem, classify_aspect
 from app.core.schemas import ClassifiedItem
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["classification"])
 
@@ -25,7 +29,14 @@ class ClassifyRequest(BaseModel):
 
 
 class ClassifyErrorItem(BaseModel):
-    """부분 실패 1건. item_id로 요청의 어느 항목이 실패했는지 매칭."""
+    """부분 실패 1건. item_id로 요청의 어느 항목이 실패했는지 매칭.
+
+    error는 예외 타입명(LlmCallError/LlmParseError)만 담는 짧은 코드다(PR 리뷰
+    nit, 2026-08-04) — LlmParseError 메시지엔 LLM 원본 응답 전체가 그대로
+    포함될 수 있어(_parse_llm_response의 "원본: {raw_aspects}"), 이걸 API
+    응답에 그대로 실으면 내부 프롬프트·데이터가 외부로 노출된다. 상세는
+    logger.warning으로 서버 로그에만 남긴다.
+    """
 
     item_id: str
     error: str
@@ -61,7 +72,8 @@ async def classify(request: ClassifyRequest) -> ClassifyResponse:
     errors: list[ClassifyErrorItem] = []
     for item, r in zip(request.items, raw_results):
         if isinstance(r, Exception):
-            errors.append(ClassifyErrorItem(item_id=item.item_id, error=str(r)))
+            logger.warning(f"classify_partial_failure item_id={item.item_id}: {r}")
+            errors.append(ClassifyErrorItem(item_id=item.item_id, error=type(r).__name__))
         else:
             results.append(r)
 

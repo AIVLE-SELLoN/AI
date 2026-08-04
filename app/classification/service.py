@@ -84,6 +84,13 @@ async def classify_aspect(
     3. 실패 종류는 LlmCallError(호출 실패) 또는 LlmParseError(파싱 실패·검증 실패)만
        사용한다 — 그 외 예외(예: ClassifiedItem 생성 시 pydantic ValidationError)는
        _classify_one()이 LlmParseError로 감싸서 재던진다.
+       ⚠️ 예외: get_llm_client()는 이 규칙 밖(PR 리뷰 지적, 2026-08-04) — API 키
+       누락 같은 프로세스 전역 설정 오류를 item별 LlmParseError로 위장하면 시스템
+       장애가 "N건 요청 중 N건 개별 실패"처럼 부분 실패로 보인다. 그래서 이 함수
+       호출은 의도적으로 감싸지 않고 원래 예외 타입 그대로 전파한다(같은 배치의
+       나머지 item들도 보통 동일한 원인으로 같이 실패하므로, 여러 슬롯에 같은
+       비-LlmParseError 타입이 반복되면 호출부가 "아, 이건 개별 실패가 아니라
+       시스템 문제구나"라고 알아챌 신호가 된다).
     4. 전부 실패해도 이 함수 자체는 raise하지 않는다(gather의 return_exceptions=True).
     5. items == [] → [] (LLM 호출 0).
 
@@ -115,8 +122,14 @@ async def _classify_one(item: ClassifyRequestItem) -> ClassifiedItem:
     source: Source = item.source
     trace_key = f"item_id={item_id}"  # 컨벤션 4장: 로그에 추적 키 항상 포함
 
+    # ⚠️ get_llm_client()는 try 밖(PR 리뷰 지적, 2026-08-04) — API 키 누락 같은
+    # "프로세스 전역 설정 오류"를 item별 LlmParseError로 감싸면, 시스템 장애가
+    # "300건 요청 중 300건 개별 실패"처럼 부분 실패로 위장된다(200 OK + errors
+    # 300건). Template.substitute·load_llm_prompt만 진짜 item 처리 단계이므로
+    # 그 둘만 감싼다.
+    client = get_llm_client()
+
     try:
-        client = get_llm_client()
         if source == Source.CS:
             template = Template(load_llm_prompt("classification", PROMPT_ASPECT_VERSION))
             # ⚠️ str.format() 대신 Template — JSON 예시의 중괄호와 충돌 방지(core/prompts.py 경고).
@@ -156,16 +169,24 @@ def _parse_llm_response(data: dict, source: Source, *, trace_key: str) -> list[A
     aspect·sentiment 값이 enum 범위 밖이면(LLM 환각) LlmParseError로 통일해서 던짐 —
     호출부가 LlmCallError/LlmParseError 두 가지만 잡으면 되게.
 
-    ⚠️ CS 안전망(서영님↔현진 합의, 2026-08-04): 프롬프트1은 "CS는 반드시 6개 중
-    하나 이상"이라고 명시하는데도 LLM이 가끔 빈 배열을 내는 경우가 관측됨(예:
-    "궁금한 점 빠르게 답변해주셔서 감사합니다!" 류 — 제품과 무관한 순수 CS 응대
-    감사, 300건 중 6건 관측). 이상탐지는 분모를 원본 문서에서 세고(LEFT JOIN)
-    분자만 분류 결과에서 세므로, 빈 배열이 그대로 넘어가면 그 문의는 분모엔
-    남되 어느 aspect의 분자에도 안 들어가 부정률이 실제보다 낮게 계산된다
-    (미탐 방향으로 새는 문제). LlmParseError로 던지면 dead-letter로 빠져 커버리지
-    구멍이 "이동"만 할 뿐 해결되지 않으므로, 기타/중립으로 채워 분모에 남기되
-    어느 aspect의 분자도 늘리지 않는 가장 보수적인 값으로 대체한다. 얼마나 자주
-    발생하는지는 logger.warning으로 남겨 프롬프트 회귀 신호로도 쓴다.
+    ⚠️ CS 안전망(서영님↔현진 합의, 2026-08-04, 이유 서술 재검토 2026-08-04): 프롬프트1은
+    "CS는 반드시 6개 중 하나 이상"이라고 명시하는데도 LLM이 가끔 빈 배열을 내는 경우가
+    관측됨(예: "궁금한 점 빠르게 답변해주셔서 감사합니다!" 류 — 제품과 무관한 순수 CS
+    응대 감사, 300건 중 6건 관측).
+    detection/aggregate.py의 분모 집계(§136)는 normalize()가 ClassifiedItem 1건당
+    행 1개를 만든 뒤 aspect 내용과 무관하게 무조건 +=1 하는 구조라(aggregate.py:58),
+    ClassifiedItem이 일단 만들어지기만 하면 aspects가 비어있든 기타/중립으로
+    채워지든 분모·분자 계산은 완전히 동일하다(둘 다 분모+1, 분자+0 — 탐지 산식
+    입장에선 no-op). 즉 "빈 배열을 그대로 둔다"는 선택지 자체는 미탐을 유발하지
+    않는다.
+    진짜 위험은 반대 경우다 — 여기서 LlmParseError로 던지면 ClassifiedItem 자체가
+    안 만들어져 normalize()가 그 문의의 행을 아예 못 만든다. 그러면 그 문의가
+    분모에서 통째로 빠져(원본 문서 기준 총 문의 수보다 적게 잡힘), 부정률이 실제보다
+    높게 계산된다(오탐 방향). dead-letter로 보내도 "커버리지 구멍이 이동"할 뿐 이
+    오탐 위험은 그대로 남는다. 그래서 raise 대신 기타/중립으로 채워 ClassifiedItem을
+    확실히 만들어내는 쪽을 택한다 — 어느 aspect의 분자도 안 늘리는 가장 보수적인
+    값이면서, 동시에 분모에서 빠지는 오탐 경로를 막는다. 얼마나 자주 발생하는지는
+    logger.warning으로 남겨 프롬프트 회귀 신호로도 쓴다.
     REVIEW는 원래도 무관 리뷰에 대해 빈 배열이 정상 응답이라 이 로직에서 제외.
     """
     raw_aspects = data.get("aspects")
