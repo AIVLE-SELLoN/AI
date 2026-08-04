@@ -16,6 +16,7 @@ fixture: tests/fixtures/raw_cs_reviews.json (협업 규칙 4, 정답 없는 계�
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -128,6 +129,39 @@ def test_parse_llm_response_invalid_sentiment_value_raises():
     data = {"aspects": [{"aspect": "색상", "sentiment": 5}]}  # -1/0/1 밖의 값
     with pytest.raises(LlmParseError):
         _parse_llm_response(data, Source.CS, trace_key="test")
+
+
+def test_parse_llm_response_cs_empty_falls_back_to_etc_neutral():
+    """CS 빈 배열 → 기타/중립 1건. (2026-08-04 현진·서영 합의)
+
+    프롬프트1은 "CS는 반드시 하나 이상"을 지시하지만 LLM이 어기는 경우가 있다.
+    그대로 두면 이상탐지에서 이 문의가 분모에만 남아 부정률이 과소추정되고,
+    detection.loader.check_coverage 가 그 슬롯을 통째로 검정에서 빼버린다.
+    """
+    result = _parse_llm_response({"aspects": []}, Source.CS, trace_key="test")
+    assert len(result) == 1
+    assert result[0].aspect == Aspect.ETC
+    assert result[0].sentiment == Sentiment.NEUTRAL
+    # 폴백이 어느 aspect의 분자도 늘리면 안 된다 — 중립이라 부정 집계에 안 잡힌다.
+    assert result[0].sentiment != Sentiment.NEGATIVE
+    assert result[0].mixed_signal is None  # CS는 mixed_signal=null 규칙 유지
+
+
+def test_parse_llm_response_review_empty_stays_empty():
+    """리뷰는 빈 배열이 **정상 출력**이다 — 폴백을 CS 전용으로 둔 이유.
+
+    프롬프트2는 대상 속성(색상·사이즈·소재)이 없으면 []를 내도록 지시한다.
+    여기에 '기타'를 채우면 없던 aspect가 생겨 리뷰 분모·분자가 함께 오염된다.
+    """
+    assert _parse_llm_response({"aspects": []}, Source.REVIEW, trace_key="test") == []
+
+
+def test_parse_llm_response_cs_empty_is_logged(caplog):
+    """조용히 채우지 않는다 — 빈도가 프롬프트 개선의 측정 대상이자 회귀 신호다."""
+    with caplog.at_level(logging.WARNING, logger="app.classification.service"):
+        _parse_llm_response({"aspects": []}, Source.CS, trace_key="item_id=INQ-1")
+    assert "cs_empty_aspects" in caplog.text
+    assert "INQ-1" in caplog.text  # 추적 키 포함 (컨벤션 4장)
 
 
 # ── 4. _classify_one — LLM을 가짜로 대체해서 프롬프트1/2 분기 검증 ────────────

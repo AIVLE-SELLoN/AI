@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from datetime import datetime
 from string import Template
@@ -18,6 +19,8 @@ from app.core.exceptions import LlmParseError
 from app.core.llm_client import get_llm_client
 from app.core.prompts import load_prompt
 from app.core.schemas import AspectSentiment, Aspect, Channel, ClassifiedItem, Sentiment, Source
+
+logger = logging.getLogger(__name__)
 
 def load_llm_prompt(module: str, name: str) -> str:
     """load_prompt()로 파일 전체를 읽되, "## System Prompt" 이전(파일 헤더 — 담당자·변경이력
@@ -119,6 +122,9 @@ def _parse_llm_response(data: dict, source: Source, *, trace_key: str) -> list[A
     if raw_aspects is None:
         raise LlmParseError(f"LLM 응답에 'aspects' 키 없음 [{trace_key}]: {data}")
 
+    if source == Source.CS and not raw_aspects:
+        return _cs_empty_fallback(trace_key)
+
     try:
         result = []
         for a in raw_aspects:
@@ -132,6 +138,33 @@ def _parse_llm_response(data: dict, source: Source, *, trace_key: str) -> list[A
         return result
     except (KeyError, ValueError) as exc:
         raise LlmParseError(f"aspects 파싱 실패 [{trace_key}]: {exc} (원본: {raw_aspects})") from exc
+
+
+def _cs_empty_fallback(trace_key: str) -> list[AspectSentiment]:
+    """CS 응답이 빈 배열일 때 '기타/중립' 1건으로 채운다. (2026-08-04 현진·서영 합의)
+
+    프롬프트1은 "CS는 반드시 6개 중 하나 이상"을 지시하지만 LLM이 지키지 않는 경우가
+    있다(실측 284건 중 6건, 2.1%). 리뷰는 빈 배열이 정상 출력이라 **CS 전용**이다.
+
+    왜 그냥 두면 안 되나 — 이상탐지가 분모를 원본 문서에서 세기 때문이다(LEFT JOIN).
+    빈 배열로 온 문의는 분모에는 남고 분자 어디에도 안 들어가 부정률이 과소추정된다
+    (미탐 방향). 또 detection.loader.check_coverage 가 "aspect 1개 이상"을 분류 성공의
+    기준으로 삼아서, 이 문의들이 그 (상품,채널,source) 슬롯을 통째로 검정에서 빼버린다.
+
+    왜 LlmParseError 로 던지지 않나 — 예외로 만들면 워커가 dead-letter 로 보내 그 문의가
+    분류 결과에서 아예 빠진다. 커버리지 구멍이 그대로 남아 문제가 바뀌지 않는다.
+    '기타/중립'은 분모에 남기되 어느 aspect의 분자도 늘리지 않으므로 가장 보수적이다.
+
+    ⚠️ 조용히 채우지 않는다. 이게 얼마나 자주 도는지가 프롬프트 개선의 측정 대상이고,
+       빈도가 오르면 프롬프트 회귀 신호다.
+    """
+    logger.warning(
+        "cs_empty_aspects [%s] LLM이 빈 배열 반환 → %s/%d 로 대체",
+        trace_key,
+        Aspect.ETC.value,
+        Sentiment.NEUTRAL.value,
+    )
+    return [AspectSentiment(aspect=Aspect.ETC, sentiment=Sentiment.NEUTRAL, mixed_signal=None)]
 
 
 # ── explode 저장 규약 (분류 워커 명세 §2, 2026-07-23 유지인 확정) ────────────────
