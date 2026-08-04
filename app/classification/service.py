@@ -8,16 +8,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from datetime import datetime
 from string import Template
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.core.exceptions import LlmParseError
 from app.core.llm_client import get_llm_client
 from app.core.prompts import load_prompt
 from app.core.schemas import AspectSentiment, Aspect, Channel, ClassifiedItem, Sentiment, Source
+
+logger = logging.getLogger(__name__)
 
 def load_llm_prompt(module: str, name: str) -> str:
     """load_prompt()로 파일 전체를 읽되, "## System Prompt" 이전(파일 헤더 — 담당자·변경이력
@@ -62,23 +65,45 @@ PROMPT_ASPECT_VERSION = "classify_aspect_v5"        # 프롬프트1(CS) — aspe
 PROMPT_SENTIMENT_VERSION = "classify_sentiment_v4"  # 프롬프트2(리뷰) — v3 누적 수정 통합, 실험④ F1 84.4%(71603 기준)
 
 
-async def classify_aspect(items: list[ClassifyRequestItem]) -> list[ClassifiedItem]:
-    """원문 여러 건 → ClassifiedItem 리스트.
+async def classify_aspect(
+    items: list[ClassifyRequestItem],
+) -> list[ClassifiedItem | Exception]:
+    """원문 여러 건 → ClassifiedItem 또는 Exception 리스트(요청과 순서·길이 동일).
 
-    items 원소는 item_id/source/channel/product_group_id/raw_text/created_at
-    속성을 가진 객체(ClassifyRequestItem 등) 또는 그와 동등한 dict.
+    ⚠️ 계약(서영님↔현진 합의, 2026-08-04 — 서영님 안전망 커밋 미push 상태라
+       이번 구현에 같이 포함시킴):
+    1. len(반환) == len(items), 순서 동일 → zip(items, 반환)이 성립한다.
+    2. 성공은 ClassifiedItem, 실패는 예외 객체를 그 자리에 담아 반환한다(raise 안 함).
+    3. 실패 종류는 LlmCallError(호출 실패) 또는 LlmParseError(파싱 실패·검증 실패)만
+       사용한다 — 그 외 예외(예: ClassifiedItem 생성 시 pydantic ValidationError)는
+       _classify_one()이 LlmParseError로 감싸서 재던진다.
+    4. 전부 실패해도 이 함수 자체는 raise하지 않는다(gather의 return_exceptions=True).
+    5. items == [] → [] (LLM 호출 0).
+
+    호출부(워커·router.py·eval 스크립트)는 zip(items, results)로 순회하며
+    isinstance(r, Exception)으로 개별 실패를 판별할 것.
 
     ⚠️ "배치"의 의미: 프롬프트 자체는 1건씩 처리하도록 이미 검증됐음(파일럿 42건
-    평가 통과) — 프롬프트를 여러 건 한 번에 받는 구조로 바꾸는 건 검증을 다시
-    해야 해서 위험. 대신 asyncio.gather()로 여러 건을 동시에(병렬) 호출해 배치
-    처리 효과를 냄. 분류 워커 명세 §1 "LLM 배치 분류 추론" 단계에 대응.
+    평가 통과, 실험③에서 진짜 배치도 정확도 손실 없이 검증됨) — 다만 이 함수는
+    아직 "진짜 배치"(N건을 한 프롬프트에 담아 LLM 호출 1회)는 미구현 상태이고,
+    지금은 asyncio.gather()로 여러 건을 동시에(병렬) 호출해 배치 처리 효과만 냄.
+    분류 워커 명세 §1 "LLM 배치 분류 추론" 단계에 대응.
     """
+    if not items:
+        return []
     tasks = [_classify_one(item) for item in items]
-    return await asyncio.gather(*tasks)
+    return await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def _classify_one(item: ClassifyRequestItem) -> ClassifiedItem:
-    """원문 1건 → ClassifiedItem. source에 따라 프롬프트1(CS)/프롬프트2(리뷰) 자동 분기."""
+    """원문 1건 → ClassifiedItem. source에 따라 프롬프트1(CS)/프롬프트2(리뷰) 자동 분기.
+
+    이 함수가 던지는 예외는 LlmCallError 또는 LlmParseError로 통일한다(계약 3번).
+    ClassifiedItem 생성 시 pydantic이 던지는 ValidationError(예: source=='review'인데
+    aspect에 파손처럼 REVIEW_ALLOWED_ASPECTS 밖 값이 섞인 경우)를 여기서 잡아
+    LlmParseError로 감싸지 않으면, classify_aspect()의 계약 3번이 깨지고 호출부의
+    "LlmCallError/LlmParseError 두 가지만 잡으면 된다"는 전제도 함께 깨진다.
+    """
     item_id = item.item_id
     source: Source = item.source
     trace_key = f"item_id={item_id}"  # 컨벤션 4장: 로그에 추적 키 항상 포함
@@ -96,15 +121,18 @@ async def _classify_one(item: ClassifyRequestItem) -> ClassifiedItem:
     data = await client.complete_json(prompt, trace_key=trace_key)
     aspects = _parse_llm_response(data, source, trace_key=trace_key)
 
-    return ClassifiedItem(
-        item_id=item_id,
-        source=source,
-        channel=item.channel,
-        product_group_id=item.product_group_id,
-        raw_text=item.raw_text,
-        aspects=aspects,
-        created_at=item.created_at,
-    )
+    try:
+        return ClassifiedItem(
+            item_id=item_id,
+            source=source,
+            channel=item.channel,
+            product_group_id=item.product_group_id,
+            raw_text=item.raw_text,
+            aspects=aspects,
+            created_at=item.created_at,
+        )
+    except ValidationError as exc:
+        raise LlmParseError(f"ClassifiedItem 검증 실패 [{trace_key}]: {exc}") from exc
 
 
 def _parse_llm_response(data: dict, source: Source, *, trace_key: str) -> list[AspectSentiment]:
@@ -114,10 +142,26 @@ def _parse_llm_response(data: dict, source: Source, *, trace_key: str) -> list[A
     프롬프트2(리뷰)는 mixed_signal을 냄 → 그대로 반영.
     aspect·sentiment 값이 enum 범위 밖이면(LLM 환각) LlmParseError로 통일해서 던짐 —
     호출부가 LlmCallError/LlmParseError 두 가지만 잡으면 되게.
+
+    ⚠️ CS 안전망(서영님↔현진 합의, 2026-08-04): 프롬프트1은 "CS는 반드시 6개 중
+    하나 이상"이라고 명시하는데도 LLM이 가끔 빈 배열을 내는 경우가 관측됨(예:
+    "궁금한 점 빠르게 답변해주셔서 감사합니다!" 류 — 제품과 무관한 순수 CS 응대
+    감사, 300건 중 6건 관측). 이상탐지는 분모를 원본 문서에서 세고(LEFT JOIN)
+    분자만 분류 결과에서 세므로, 빈 배열이 그대로 넘어가면 그 문의는 분모엔
+    남되 어느 aspect의 분자에도 안 들어가 부정률이 실제보다 낮게 계산된다
+    (미탐 방향으로 새는 문제). LlmParseError로 던지면 dead-letter로 빠져 커버리지
+    구멍이 "이동"만 할 뿐 해결되지 않으므로, 기타/중립으로 채워 분모에 남기되
+    어느 aspect의 분자도 늘리지 않는 가장 보수적인 값으로 대체한다. 얼마나 자주
+    발생하는지는 logger.warning으로 남겨 프롬프트 회귀 신호로도 쓴다.
+    REVIEW는 원래도 무관 리뷰에 대해 빈 배열이 정상 응답이라 이 로직에서 제외.
     """
     raw_aspects = data.get("aspects")
     if raw_aspects is None:
         raise LlmParseError(f"LLM 응답에 'aspects' 키 없음 [{trace_key}]: {data}")
+
+    if not raw_aspects and source == Source.CS:
+        logger.warning(f"cs_empty_aspects [{trace_key}]")
+        return [AspectSentiment(aspect=Aspect.ETC, sentiment=Sentiment.NEUTRAL, mixed_signal=None)]
 
     try:
         result = []

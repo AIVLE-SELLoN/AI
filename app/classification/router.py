@@ -11,11 +11,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.classification.service import ClassifyRequestItem, classify_aspect
-from app.core.exceptions import LlmCallError, LlmParseError
 from app.core.schemas import ClassifiedItem
 
 router = APIRouter(prefix="/api/v1", tags=["classification"])
@@ -25,8 +24,16 @@ class ClassifyRequest(BaseModel):
     items: list[ClassifyRequestItem]
 
 
+class ClassifyErrorItem(BaseModel):
+    """부분 실패 1건. item_id로 요청의 어느 항목이 실패했는지 매칭."""
+
+    item_id: str
+    error: str
+
+
 class ClassifyResponse(BaseModel):
     results: list[ClassifiedItem]
+    errors: list[ClassifyErrorItem] = []
 
 
 @router.get("/classify/ping")
@@ -41,13 +48,21 @@ async def classify(request: ClassifyRequest) -> ClassifyResponse:
 
     service.classify_aspect()가 내부적으로 asyncio.gather()를 써서 여러 건을
     동시에 처리(분류 워커 명세 §1 "LLM 배치 분류 추론" 대응).
-    하나라도 실패하면 전체 502 처리 — 부분 성공 허용 여부는 아직 미정.
-    """
-    try:
-        results = await classify_aspect(request.items)
-    except (LlmCallError, LlmParseError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"분류 실패: {exc}"
-        ) from exc
 
-    return ClassifyResponse(results=results)
+    ⚠️ 부분 성공 허용(서영님↔현진 합의, 2026-08-04): classify_aspect()가 이제
+    실패 시 raise하지 않고 그 자리에 예외 객체를 담아 반환한다(계약 — service.py
+    참고). 1건(예: 환각으로 인한 파싱 실패)이 요청 전체를 502로 만드는 게 과하다고
+    판단해, 성공/실패를 나눠 200으로 응답하고 실패는 item_id와 함께 errors에
+    담는다. 클라이언트가 errors만 보고 그 항목만 재시도할 수 있게.
+    """
+    raw_results = await classify_aspect(request.items)
+
+    results: list[ClassifiedItem] = []
+    errors: list[ClassifyErrorItem] = []
+    for item, r in zip(request.items, raw_results):
+        if isinstance(r, Exception):
+            errors.append(ClassifyErrorItem(item_id=item.item_id, error=str(r)))
+        else:
+            results.append(r)
+
+    return ClassifyResponse(results=results, errors=errors)
