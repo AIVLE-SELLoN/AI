@@ -317,19 +317,28 @@ async def _run_per_item(todo: list[dict], cache: dict, save) -> tuple[int, int]:
         async with semaphore:
             try:
                 results = await classify_aspect(items)
-            except Exception as exc:  # noqa: BLE001 — 청크 하나 실패로 전체를 버리지 않는다
-                print(f"    [{index}/{len(chunks)}] ⚠️ 실패 {len(chunk)}건 — {exc}")
+            except Exception as exc:  # noqa: BLE001 — 계약 밖 예외(예: 설정 오류)
+                # classify_aspect 는 item 실패를 raise 하지 않는다(계약 4번). 여기까지
+                # 올라온 건 get_llm_client 실패 같은 **프로세스 전역 문제**이므로,
+                # 청크 하나가 아니라 전체가 같은 이유로 죽을 가능성이 높다.
+                print(f"    [{index}/{len(chunks)}] ⚠️ 청크 전체 실패 {len(chunk)}건 — {exc}")
                 failed += len(chunk)
                 continue
 
-        for item in results:
+        # 계약 1·2번: 길이·순서가 입력과 같고, 실패는 그 자리에 예외 객체로 온다.
+        for source_item, result in zip(items, results, strict=True):
+            if isinstance(result, Exception):
+                # 캐시에 넣지 않는다 — 다음 회차가 이것만 다시 부르고, 그때까지는
+                # 커버리지 검사가 잡아서 그 슬롯을 검정에서 뺀다(조용한 왜곡 방지).
+                failed += 1
+                continue
             # 건당 경로는 _parse_llm_response 를 타므로 CS 폴백이 이미 적용돼 온다.
-            cache[item.item_id] = [
+            cache[source_item.item_id] = [
                 {"aspect": a.aspect.value, "sentiment": int(a.sentiment)}
-                for a in item.aspects
+                for a in result.aspects
             ]
+            done += 1
         save()
-        done += len(results)
         if index % 10 == 0 or index == len(chunks):
             print(f"    [{index}/{len(chunks)}] 누적 {done:,}/{len(todo):,}건")
     return done, failed

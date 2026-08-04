@@ -24,9 +24,21 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from app.classification.service import ClassifyRequestItem, _classify_one, _parse_llm_response, explode_to_rows
+from app.classification.service import (
+    ClassifyRequestItem,
+    _classify_one,
+    _parse_llm_response,
+    explode_to_rows,
+)
 from app.core.exceptions import LlmParseError
-from app.core.schemas import AspectSentiment, Aspect, Channel, ClassifiedItem, Sentiment, Source
+from app.core.schemas import (
+    Aspect,
+    AspectSentiment,
+    Channel,
+    ClassifiedItem,
+    Sentiment,
+    Source,
+)
 from app.main import app
 
 client = TestClient(app)
@@ -125,35 +137,45 @@ def test_parse_llm_response_invalid_aspect_value_raises():
         _parse_llm_response(data, Source.CS, trace_key="test")
 
 
+def test_parse_llm_response_cs_empty_aspects_falls_back_to_etc_neutral():
+    """CS가 빈 배열을 내면 raise 대신 기타/중립으로 채운다(서영님↔현진 계약 7번, 2026-08-04).
+
+    배경: 프롬프트1은 "CS는 반드시 6개 중 하나 이상"이라 명시하지만 LLM이 가끔
+    위반한다(관측: 제품과 무관한 순수 CS 응대 감사 표현, 300건 중 6건).
+    detection/aggregate.py의 분모는 ClassifiedItem 1건=행 1개로 aspect 내용과
+    무관하게 세므로(§129), 빈 배열을 그대로 두든 기타/중립으로 채우든 탐지
+    산식엔 no-op이다(둘 다 분모+1, 분자+0). 진짜 위험은 LlmParseError로 던져
+    ClassifiedItem 자체를 안 만드는 쪽 — 그러면 그 문의가 분모에서 통째로 빠져
+    부정률이 실제보다 높게 계산된다(오탐 방향). 그래서 raise 대신 채워서
+    ClassifiedItem을 확실히 만들어낸다.
+    """
+    result = _parse_llm_response({"aspects": []}, Source.CS, trace_key="test")
+    assert len(result) == 1
+    assert result[0].aspect == Aspect.ETC
+    assert result[0].sentiment == Sentiment.NEUTRAL
+    assert result[0].mixed_signal is None
+
+
+def test_parse_llm_response_review_empty_aspects_stays_empty():
+    """REVIEW는 무관 리뷰에 대해 빈 배열이 정상 응답이므로 안전망 대상에서 제외."""
+    result = _parse_llm_response({"aspects": []}, Source.REVIEW, trace_key="test")
+    assert result == []
+
+
 def test_parse_llm_response_invalid_sentiment_value_raises():
     data = {"aspects": [{"aspect": "색상", "sentiment": 5}]}  # -1/0/1 밖의 값
     with pytest.raises(LlmParseError):
         _parse_llm_response(data, Source.CS, trace_key="test")
 
 
-def test_parse_llm_response_cs_empty_falls_back_to_etc_neutral():
-    """CS 빈 배열 → 기타/중립 1건. (2026-08-04 현진·서영 합의)
+def test_parse_llm_response_cs_empty_fallback_is_not_negative():
+    """폴백이 어느 aspect의 분자도 늘리면 안 된다 — 중립이라 부정 집계에 안 잡힌다.
 
-    프롬프트1은 "CS는 반드시 하나 이상"을 지시하지만 LLM이 어기는 경우가 있다.
-    그대로 두면 이상탐지에서 이 문의가 분모에만 남아 부정률이 과소추정되고,
-    detection.loader.check_coverage 가 그 슬롯을 통째로 검정에서 빼버린다.
+    위 ..._falls_back_to_etc_neutral 이 값 자체를 보고, 여기서는 그 값이 탐지 산식에
+    안전한지(부정이 아닌지)를 따로 못박는다. 폴백을 -1 로 바꾸면 없던 이상이 생긴다.
     """
     result = _parse_llm_response({"aspects": []}, Source.CS, trace_key="test")
-    assert len(result) == 1
-    assert result[0].aspect == Aspect.ETC
-    assert result[0].sentiment == Sentiment.NEUTRAL
-    # 폴백이 어느 aspect의 분자도 늘리면 안 된다 — 중립이라 부정 집계에 안 잡힌다.
     assert result[0].sentiment != Sentiment.NEGATIVE
-    assert result[0].mixed_signal is None  # CS는 mixed_signal=null 규칙 유지
-
-
-def test_parse_llm_response_review_empty_stays_empty():
-    """리뷰는 빈 배열이 **정상 출력**이다 — 폴백을 CS 전용으로 둔 이유.
-
-    프롬프트2는 대상 속성(색상·사이즈·소재)이 없으면 []를 내도록 지시한다.
-    여기에 '기타'를 채우면 없던 aspect가 생겨 리뷰 분모·분자가 함께 오염된다.
-    """
-    assert _parse_llm_response({"aspects": []}, Source.REVIEW, trace_key="test") == []
 
 
 def test_parse_llm_response_cs_empty_is_logged(caplog):
@@ -210,7 +232,14 @@ async def test_classify_one_review_uses_prompt2_and_keeps_mixed_signal():
 
 @pytest.mark.asyncio
 async def test_classify_one_review_with_damage_aspect_fails_schema_validation():
-    """LLM이 리뷰인데 파손을 뱉는 극단적 오류 상황 — ClassifiedItem 생성 자체가 막혀야 함."""
+    """LLM이 리뷰인데 파손을 뱉는 극단적 오류 상황 — ClassifiedItem 생성 자체가 막혀야 함.
+
+    ⚠️ 예전엔 pytest.raises(Exception)으로 느슨하게 잡아서, 내부에서 실제로
+    새는 게 pydantic ValidationError인지 LlmParseError인지 구분을 못 했다(지인님
+    ruff 리뷰의 B017 지적과 같은 종류의 문제). classify_aspect()의 계약(2026-08-04,
+    "실패는 LlmCallError 또는 LlmParseError만")을 지키려면 ValidationError가
+    그대로 새면 안 되므로, 구체적 타입까지 확인하도록 강화한다.
+    """
     fake_client = AsyncMock()
     fake_client.complete_json.return_value = {"aspects": [{"aspect": "파손", "sentiment": -1}]}
 
@@ -220,9 +249,9 @@ async def test_classify_one_review_with_damage_aspect_fails_schema_validation():
         created_at=datetime(2026, 5, 1, 10, 0, 0),
     )
 
-    with patch("app.classification.service.get_llm_client", return_value=fake_client):
-        with pytest.raises(Exception):  # Pydantic ValidationError
-            await _classify_one(item)
+    with patch("app.classification.service.get_llm_client", return_value=fake_client), \
+         pytest.raises(LlmParseError):  # ValidationError가 그대로 새면 안 됨(계약 3번)
+        await _classify_one(item)
 
 
 # ── 5. 라우터 — LLM을 가짜로 대체해서 엔드포인트 계약만 검증 ──────────────────
@@ -248,6 +277,42 @@ def test_classify_endpoint_success_with_mocked_llm(raw_cs_reviews):
     body = response.json()
     assert len(body["results"]) == 1
     assert body["results"][0]["item_id"] == raw_cs_reviews[0]["item_id"]
+
+
+def test_classify_endpoint_partial_failure_returns_200_with_errors(raw_cs_reviews):
+    """2건 중 1건 실패해도 전체 502가 아니라 200 + errors로 부분 성공 응답한다.
+
+    배경: classify_aspect()가 return_exceptions=True로 바뀌면서 개별 실패를
+    raise 대신 결과 리스트에 예외 객체로 담아 반환하게 됨(서영님↔현진 계약,
+    2026-08-04). 이 테스트가 없으면, 누군가 라우터를 "실패 시 그냥 502"로
+    되돌려도 아무도 못 잡는다.
+    ⚠️ side_effect는 리스트가 아니라 trace_key(item_id 포함)로 분기하는 함수다
+    (PR 리뷰 nit, 2026-08-04) — asyncio.gather()는 태스크 실행 순서를 보장하지
+    않으므로, "몇 번째 호출인지"에 의존하는 리스트형 side_effect는 우연히
+    지금은 맞아도 원칙적으로 깨지기 쉽다. item_id로 분기하면 순서와 무관하게
+    항상 올바른 결과를 낸다.
+    """
+    def fake_complete_json(prompt, trace_key="-", temperature=0.0):
+        if "FAIL-ITEM" in trace_key:
+            return {"aspects": [{"aspect": "존재안함", "sentiment": -1}]}  # 파싱 실패 유도
+        return {"aspects": [{"aspect": "색상", "sentiment": -1}]}  # 성공
+
+    fake_client = AsyncMock()
+    fake_client.complete_json.side_effect = fake_complete_json
+
+    second_item = dict(raw_cs_reviews[0])
+    second_item["item_id"] = "FAIL-ITEM"
+    payload = {"items": [raw_cs_reviews[0], second_item]}
+
+    with patch("app.classification.service.get_llm_client", return_value=fake_client):
+        response = client.post("/api/v1/classify", json=payload)
+
+    assert response.status_code == 200, "1건 실패로 전체가 502/500이 되면 안 됨"
+    body = response.json()
+    assert len(body["results"]) == 1
+    assert body["results"][0]["item_id"] == raw_cs_reviews[0]["item_id"]
+    assert len(body["errors"]) == 1
+    assert body["errors"][0]["item_id"] == "FAIL-ITEM"
 
 # ── 프롬프트 플레이스홀더 렌더링 ─────────────────────────────────
 # 배경: classify_sentiment_v4가 $review_text 대신 {review_text}로 작성돼,
