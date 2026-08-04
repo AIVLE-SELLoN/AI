@@ -23,9 +23,21 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from app.classification.service import ClassifyRequestItem, _classify_one, _parse_llm_response, explode_to_rows
+from app.classification.service import (
+    ClassifyRequestItem,
+    _classify_one,
+    _parse_llm_response,
+    explode_to_rows,
+)
 from app.core.exceptions import LlmParseError
-from app.core.schemas import AspectSentiment, Aspect, Channel, ClassifiedItem, Sentiment, Source
+from app.core.schemas import (
+    Aspect,
+    AspectSentiment,
+    Channel,
+    ClassifiedItem,
+    Sentiment,
+    Source,
+)
 from app.main import app
 
 client = TestClient(app)
@@ -216,9 +228,9 @@ async def test_classify_one_review_with_damage_aspect_fails_schema_validation():
         created_at=datetime(2026, 5, 1, 10, 0, 0),
     )
 
-    with patch("app.classification.service.get_llm_client", return_value=fake_client):
-        with pytest.raises(LlmParseError):  # ValidationError가 그대로 새면 안 됨(계약 3번)
-            await _classify_one(item)
+    with patch("app.classification.service.get_llm_client", return_value=fake_client), \
+         pytest.raises(LlmParseError):  # ValidationError가 그대로 새면 안 됨(계약 3번)
+        await _classify_one(item)
 
 
 # ── 5. 라우터 — LLM을 가짜로 대체해서 엔드포인트 계약만 검증 ──────────────────

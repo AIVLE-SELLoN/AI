@@ -18,7 +18,14 @@ from pydantic import BaseModel, ValidationError
 from app.core.exceptions import LlmParseError
 from app.core.llm_client import get_llm_client
 from app.core.prompts import load_prompt
-from app.core.schemas import AspectSentiment, Aspect, Channel, ClassifiedItem, Sentiment, Source
+from app.core.schemas import (
+    Aspect,
+    AspectSentiment,
+    Channel,
+    ClassifiedItem,
+    Sentiment,
+    Source,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +40,7 @@ def load_llm_prompt(module: str, name: str) -> str:
     "## System Prompt" 구분선이 없는 파일은(과거 버전 호환) 안전하게 전체를 그대로 반환한다.
     """
     raw = load_prompt(module, name)
-    m = re.search(r"## System Prompt\s*\n(.*)", raw, re.S)
+    m = re.search(r"## System Prompt\s*\n(.*)", raw, re.DOTALL)
     return m.group(1).strip() if m else raw
 
 
@@ -107,16 +114,22 @@ async def _classify_one(item: ClassifyRequestItem) -> ClassifiedItem:
     item_id = item.item_id
     source: Source = item.source
     trace_key = f"item_id={item_id}"  # 컨벤션 4장: 로그에 추적 키 항상 포함
-    client = get_llm_client()
 
-    if source == Source.CS:
-        template = Template(load_llm_prompt("classification", PROMPT_ASPECT_VERSION))
-        # ⚠️ str.format() 대신 Template — JSON 예시의 중괄호와 충돌 방지(core/prompts.py 경고).
-        # 원문은 json.dumps로 감싸서 따옴표·줄바꿈이 프롬프트 구조를 깨지 않게 함.
-        prompt = template.substitute(cs_text=json.dumps(item.raw_text, ensure_ascii=False))
-    else:
-        template = Template(load_llm_prompt("classification", PROMPT_SENTIMENT_VERSION))
-        prompt = template.substitute(review_text=json.dumps(item.raw_text, ensure_ascii=False))
+    try:
+        client = get_llm_client()
+        if source == Source.CS:
+            template = Template(load_llm_prompt("classification", PROMPT_ASPECT_VERSION))
+            # ⚠️ str.format() 대신 Template — JSON 예시의 중괄호와 충돌 방지(core/prompts.py 경고).
+            # 원문은 json.dumps로 감싸서 따옴표·줄바꿈이 프롬프트 구조를 깨지 않게 함.
+            prompt = template.substitute(cs_text=json.dumps(item.raw_text, ensure_ascii=False))
+        else:
+            template = Template(load_llm_prompt("classification", PROMPT_SENTIMENT_VERSION))
+            prompt = template.substitute(review_text=json.dumps(item.raw_text, ensure_ascii=False))
+    except Exception as exc:
+        # 프롬프트 파일 누락(FileNotFoundError)·플레이스홀더 불일치(KeyError) 등
+        # LLM 호출 전 셋업 단계의 예상 밖 오류도 계약 3번대로 LlmParseError로 통일.
+        # 이게 없으면 호출부의 "LlmCallError/LlmParseError만 잡으면 된다"는 전제가 깨진다.
+        raise LlmParseError(f"프롬프트 준비 실패 [{trace_key}]: {exc}") from exc
 
     data = await client.complete_json(prompt, trace_key=trace_key)
     aspects = _parse_llm_response(data, source, trace_key=trace_key)
