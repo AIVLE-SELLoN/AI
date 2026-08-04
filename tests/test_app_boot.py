@@ -41,13 +41,13 @@ def test_module_ping(path: str, module: str) -> None:
         "/api/v1/replies",
     ],
 )
-def test_endpoints_are_registered_but_unimplemented(path: str) -> None:
-    """실제 엔드포인트는 경로만 잡혀있고 아직 501.
+def test_report_endpoints_validate_input(path: str) -> None:
+    """리포팅 엔드포인트는 구현 완료 — 빈 body 는 501 이 아니라 422(스키마 검증 실패)다.
 
-    구현이 끝나면 이 테스트는 지우고 각 모듈 테스트로 옮기세요.
-    recommendations/generate·recommendations/hitl은 구현 완료 —
-    tests/test_recommendation_router.py로 옮겼다.
-    detect 도 구현 완료 — tests/test_pipeline.py 로 옮겼다.
+    원래 이 자리는 "아직 501" 을 확인하던 테스트였다. 4개 모듈이 순서대로 구현되며
+    recommendations→tests/test_recommendation_router.py, detect→tests/test_pipeline.py,
+    reports·replies→tests/test_report.py 로 각각 옮겨갔고, 여기에는 "라우터가 앱에
+    등록돼 있고 입력 검증이 걸린다"는 부팅 확인만 남긴다.
     """
     response = client.post(path, json={})
-    assert response.status_code == 501
+    assert response.status_code == 422
