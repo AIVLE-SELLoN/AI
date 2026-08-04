@@ -150,14 +150,27 @@ async def run_chunks(
             try:
                 results = await classification_service.classify_aspect(items)
             except AiServiceError as exc:
-                print(f"   [{index + 1}/{len(chunks)}] ⚠️ 청크 실패({len(chunk)}건 무응답): {exc}")
+                # classify_aspect()가 return_exceptions=True로 바뀌면서(2026-08-04
+                # 계약) 개별 실패는 더 이상 여기로 안 옴 — 이 except는 gather 시작
+                # 전 셋업 단계 등 정말 예외적인 전체 실패만 잡는 안전망으로 남긴다.
+                print(f"   [{index + 1}/{len(chunks)}] ⚠️ 청크 전체 실패({len(chunk)}건 무응답): {exc}")
                 failed_ids.extend(r["inquiry_id"] for r in chunk)
                 return
+
+        n_item_failed = 0
         for item, result in zip(items, results):
+            if isinstance(result, Exception):
+                # 이제 청크 전체가 아니라 실패한 이 건만 무응답 처리(계약 반영 —
+                # 이전엔 1건 실패로 청크 20건 전체가 날아갔음).
+                n_item_failed += 1
+                failed_ids.append(item.item_id)
+                continue
             predictions[item.item_id] = [
                 {"aspect": a.aspect.value, "sentiment": a.sentiment.value} for a in result.aspects
             ]
-        print(f"   [{index + 1}/{len(chunks)}] {len(chunk)}건 → {len(results)}건 응답")
+        if n_item_failed:
+            print(f"   [{index + 1}/{len(chunks)}] ⚠️ {n_item_failed}건 개별 실패(그 건만 무응답)")
+        print(f"   [{index + 1}/{len(chunks)}] {len(chunk)}건 → {len(chunk) - n_item_failed}건 응답")
 
     await asyncio.gather(*(one(i, c) for i, c in enumerate(chunks)))
     return predictions, failed_ids
