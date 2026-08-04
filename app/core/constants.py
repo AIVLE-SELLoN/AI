@@ -92,6 +92,132 @@ quote와 source_text 정규화 문자열 사이 최장 연속 일치 구간 길�
 SIMILAR_CASE_TOP_N = 3
 """컬렉션2(과거·반려 사례) 유사도 조회 상위 건수. 개선안 로직 §4-2."""
 
+# --- 문서 생성 (reporting / 용준) — 문서 생성 스키마(확정) §1·§3·§4 ---
+
+MONTHLY_ASPECT_COUNT = 3
+"""월간 리포트가 다루는 aspect 개수(색상·사이즈·소재) 고정 길이. 스키마 §1-1.
+
+aspect_distributions·sentiment_drifts·aspect_summaries 세 배열의 길이가 전부 이 값이며,
+서로 aspect 집합이 같아야 한다. CS 탐지용 6종(Aspect enum 전체)과 달리 3종으로 제한된다.
+"""
+
+DRIFT_RISK_THRESHOLD = 0.03
+"""sentiment_drifts[].status 가 RISK 가 되는 ΔP_neg 하한. 스키마 §1-1.
+
+경고 박스 스타일을 가르는 값이라 바꾸면 리포트 톤이 통째로 달라진다.
+detection 의 MIN_DELTA 와 수치는 같지만 다른 계약(월간 리포트)의 값이라 별도로 둔다 —
+한쪽을 조정할 때 다른 쪽이 딸려가면 안 된다.
+"""
+
+RATIO_SUM_TOLERANCE = 0.005
+"""비율 합 검증 허용 오차. 스키마 §1-1 "세 비율 합 = 1.00 (±0.005)".
+
+positive+neutral+negative 합, CS 통계의 delta = cur_rate − past_rate 검증에 함께 쓴다.
+부동소수 반올림 흡수용이라 이보다 키우면 집계 버그를 놓친다.
+"""
+
+MAX_PDF_SIZE_BYTES = 10_485_760
+"""생성 PDF 용량 상한(10MB). 스키마 §3-1.
+
+초과하면 S3 업로드·메일 발송 트랜잭션 이전에 FAILED_SIZE_EXCEEDED 로 차단한다(§4-3).
+"""
+
+# --- S3 보존 정책 (2026-08-03 확정) — S3 Lifecycle 규칙과 **반드시 같은 값**이어야 한다 ---
+#
+# 코드가 계산하는 `object_expires_at` 은 이 상수에서 나온다. 버킷의 Lifecycle 설정을
+# 바꾸면서 여기를 안 고치면, 실제로는 삭제된 파일을 "아직 받을 수 있다"고 안내하게 된다.
+
+GUIDELINE_RETENTION_HOURS = 24
+"""CS 가이드라인 PDF 자동 삭제까지의 시간. 출력 데이터가 DB 에 있어 언제든 재컴파일된다."""
+
+MONTHLY_RETENTION_DAYS = 180
+"""월간 리포트 PDF 자동 삭제까지의 일수(6개월).
+
+⚠️ 월간은 원본 데이터를 보관하지 않는다(PDF 가 유일 산출물). 즉 **만료 = 영구 소실**이라
+   재생성이 불가능하다.
+   6개월 경과 리포트는 조회하지 않기로 확정했으므로(2026-08-03) 아카이빙은 두지 않는다.
+   이 값을 **줄이면** 아직 볼 수 있어야 할 리포트가 사라지므로 변경 전 합의 필수.
+"""
+
+SEVERITY_STAGE_LABEL: dict[str, str] = {
+    "SAFE": "안정 단계",
+    "CAUTION": "주의 단계",
+    "CRISIS": "위험 단계",
+}
+"""severity → cause_title 에 반드시 포함돼야 하는 단계 라벨. 스키마 §1-2.
+
+다른 단계의 라벨이 섞이면 반려한다. 키는 Severity enum 의 value 와 1:1.
+"""
+
+HOLD_INSUFFICIENT_DATA_NOTICE = (
+    "해당 상품의 월간 CS 표본 수는 부족으로 인하여 보고서 생성이 보류되었습니다. "
+    "데이터가 누적되면 분석이 재개됩니다."
+)
+"""HOLD_INSUFFICIENT_DATA 콜백의 고정 안내 문구. 스키마 §4-3.
+
+LLM 이 생성하는 문장이 아니라 문서에 못박힌 고정 문자열이다 — 임의로 바꾸지 말 것.
+"""
+
+MIN_VOC_COUNT_FOR_REPORT = 10
+"""월간 보고서 생성 최소 표본. total_voc_count 가 이 미만이면 LLM 추론을 아예 돌리지 않고
+HOLD_INSUFFICIENT_DATA 로 보류한다(스키마 §1-1·§4-3). detection 의 MIN_SAMPLE_SIZE 와
+수치는 같지만 다른 계약이라 별도로 둔다.
+"""
+
+# --- 채널 분열 판정 (reporting / 용준) — 문서 생성 스키마 §4-2 ---
+
+JSD_DELTA_MIN = 0.10
+"""δ_min (bits). excess = jsd_score − jsd_baseline 를 이 값과 비교해 단계를 가른다.
+
+excess < δ_min 또는 미유의 → SAFE / δ_min ≤ excess < 2δ_min 이고 유의 → CAUTION /
+excess ≥ 2δ_min 이고 유의 → CRISIS. 게이지 문구 단계를 정하는 값이라 변경 시 합의 필요.
+"""
+
+JSD_GATE_MIN_TOTAL = 30
+"""[게이트] 두 채널 부정 문서 합 N 의 하한. min(n_A, n_B) ≥ 1 과 AND 로 묶인다.
+
+미충족이면 판정 6개 값을 전부 null 로 두고 hold_reason 을 세팅한다(반쪽 상태 금지).
+"""
+
+PERMUTATION_B = 10_000
+"""순열검정 반복 횟수 B. p값 해상도가 1/B 라 이보다 줄이면 BH-FDR 이 무뎌진다."""
+
+# --- 출력 검증 (reporting / 용준) — 문서 생성 스키마 §4-4 ---
+
+FORBIDDEN_METRIC_EXPRESSIONS = (
+    "p-value",
+    "p값",
+    "p 값",
+    "FDR",
+    "유의확률",
+)
+"""출력 텍스트 금지 표현. 통계 용어가 셀러용 문서에 노출되면 안 된다(§4-4).
+
+`p = 0.0x` 형태는 정규식으로 따로 잡는다(FORBIDDEN_P_VALUE_PATTERN).
+"""
+
+FORBIDDEN_P_VALUE_PATTERN = r"p\s*[=<>≤≥]\s*0?\.\d+"
+"""`p = 0.03`, `p<0.05` 같은 p값 노출 패턴. FORBIDDEN_METRIC_EXPRESSIONS 와 함께 검사한다."""
+
+FACTCHECK_NUMBER_TOLERANCE = 0.5
+"""수치 팩트체크 허용 오차. 출력 문장의 `13%` / `8%p` / `450건` 이 입력 수치와
+이 값 이내로 맞아야 통과한다(반올림 표기 흡수용). 단위: 표기된 수치 그대로(%, %p, 건).
+"""
+
+FACTCHECK_SCORE_TOLERANCE = 0.005
+"""단위 없는 소수(JSD 점수 등)의 팩트체크 허용 오차.
+
+`0.54` 를 %/건과 같은 ±0.5 로 재면 전혀 다른 점수(0.18)까지 통과해버려서 따로 둔다.
+소수 둘째 자리 반올림만 흡수하는 폭이다.
+"""
+
+ROOT_CAUSE_UNSPECIFIED_TEXT = "원인 미특정"
+"""root_cause 가 null 일 때 root_cause_summary 에 반드시 포함돼야 하는 대체 문구(§2-2).
+
+⚠️ 원본 문서의 해당 칸 문자열이 캡처에서 판독되지 않아 임시로 정한 값이다 — 확정 문구
+확인되면 교체할 것.
+"""
+
 # --- 벡터DB 컬렉션 이름 ---
 
 COLLECTION_DETAIL_PAGES = "detail_pages"
