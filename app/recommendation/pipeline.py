@@ -487,15 +487,16 @@ def assemble(
     confidence, confidence_reason, capped = score_confidence(proposal, context, alert)
 
     return Recommendation(
+        # TODO(2026-08-03): 같은 alert_id가 재처리되면(백엔드 재시도·배치 재실행)
+        # 문구가 다른 개선안이 중복 저장된다. 백엔드가 alert_id 유니크 키로 upsert.
         recommendation_id=f"REC-{uuid.uuid4().hex[:12]}",
         alert_id=alert.alert_id,
         created_at=datetime.now(timezone.utc),
         proposal=proposal,
         # citations는 CS 원문 인용용이다(evidence.inquiry_ids 중 실제로 인용한 문의).
-        # raw_text 조회 경로가 아직 없어서 진짜 인용문을 채울 수 없다 — 예전엔
-        # inquiry_id만 있고 quote=""인 가짜 Citation을 넣어놨는데(2026-07-27 정리),
-        # 그게 오히려 "인용이 있다"고 오해하게 만들어서 빈 리스트로 정직하게 바꿨다.
-        # TODO: raw_text 경로 생기면 실제 인용으로 채울 것(§4-3).
+        # 빈 리스트가 정직한 값 — quote=""인 Citation은 "인용이 있다"는 오해를 만든다.
+        # TODO(2026-08-03): 조회 경로는 원본 DB(cs·reviews) 직접 읽기로 확정.
+        # item_id ↔ cs/reviews PK 연결만 확인되면 실제 인용으로 채울 것(§4-3).
         citations=[],
         evaluator=evaluator,
         similar_case=context.get("similar_case"),
