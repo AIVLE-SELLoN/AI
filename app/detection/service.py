@@ -69,6 +69,7 @@ from app.detection.alert import PRODUCT_LEVEL_VERDICTS, build_alert, build_root_
 from app.detection.cause import diagnose_cause
 from app.detection.combine import combine_sources, pick_primary_source, source_signal
 from app.detection.confidence import decide_confidence, decide_recommended_action
+from app.detection.loader import build_rows, check_coverage, unreliable_slots
 from app.detection.scope import is_in_scope, pick_main_aspect
 from app.detection.statistics import run_detection
 from app.detection.suppression import filter_suppressed
@@ -357,6 +358,7 @@ async def _diagnose(candidates: dict, texts: dict, client: Any) -> None:
 async def detect_anomaly(
     items: list[ClassifiedItem],
     *,
+    documents: list[dict] | None = None,
     detected_at: datetime | None = None,
     window_end: date | None = None,
     prior_alerts: list[DetectionAlert] | None = None,
@@ -369,7 +371,18 @@ async def detect_anomaly(
     """[0]~[8] 전체 파이프라인. ClassifiedItem 집합 → 발행할 DetectionAlert.
 
     Args:
-        items: 분류(Agent1) 산출물.
+        items: 분류(Agent1) 산출물. **분자의 출처.**
+        documents: 원본 문서(문의·리뷰). **분모의 출처.** 주면 loader.build_rows() 로
+            조인하고, 안 주면 items 에서 분모를 센다(normalize).
+
+            ⚠️ **리뷰를 판정하려면 반드시 줘야 한다.** aspect 가 0개인 리뷰는
+            `classified_item` 에 행이 아예 없어서(explode_to_rows 가 aspect 마다 1행),
+            items 만으로 분모를 세면 그 문서가 통째로 빠지고 부정률이 부풀려진다
+            — 오탐 방향이다(탐지 분모 산출 방식 §1, loader 모듈 docstring).
+            CS 는 `_cs_empty_fallback` 이 aspect >= 1 을 보장해 items 만으로도 맞지만,
+            운영과 같은 경로를 쓰는 편이 회귀에 강하다.
+
+            필요한 키 — id · product · channel · source · created_at · text(선택)
         detected_at: 탐지 시각. 없으면 현재 시각.
         window_end: 현재 윈도우 마지막 날. 없으면 items 의 최신 날짜.
         prior_alerts: 과거 알림. 재알림 억제(§6) + 기준선 오염 방지(§150)에 쓴다.
@@ -381,16 +394,25 @@ async def detect_anomaly(
             일치하는 건. **확신도 보강용이지 판정 권한이 없다**(로직 §[7]). 없으면
             timestamp_matched=False 로 두고 확신도가 '높음'까지 못 갈 뿐, 기각하지 않는다.
         unreliable_denominators: 분류 커버리지 미달로 **분모를 믿을 수 없는**
-            (product, channel, source) 집합. 로더가 `loader.unreliable_slots()` 로
-            넘긴다. 검정 전에 family 에서 빠진다 — 분모가 깎인 슬롯은 p값이 실제보다
-            작게 나오고, BH 는 step-up 이라 그 하나가 기각 개수를 늘려 **다른 상품의
-            임계까지 완화**시키기 때문이다.
+            (product, channel, source) 집합. 검정 전에 family 에서 빠진다 — 분모가
+            깎인 슬롯은 p값이 실제보다 작게 나오고, BH 는 step-up 이라 그 하나가 기각
+            개수를 늘려 **다른 상품의 임계까지 완화**시키기 때문이다.
+
+            **documents 를 줬는데 이 값을 안 주면 여기서 직접 계산한다**
+            (`check_coverage` → `unreliable_slots`). 분모의 출처를 넘겨놓고 커버리지를
+            안 보면 로더를 쓰는 의미가 절반이라, 안전한 쪽을 기본값으로 둔다.
+            직접 넘기면 그 값을 그대로 쓴다(평가 스크립트가 자기 방식으로 계산할 때).
         client: LlmClient (테스트 목킹용 주입).
 
     Returns:
         (발행할 알림, 억제된 알림)
     """
-    rows = normalize(items)
+    if documents is not None:
+        rows = build_rows(documents, items)
+        if unreliable_denominators is None:
+            unreliable_denominators = unreliable_slots(check_coverage(documents, items))
+    else:
+        rows = normalize(items)
     if not rows:
         return [], []
 
