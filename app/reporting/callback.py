@@ -21,7 +21,6 @@ from app.core.schemas import (
     CSGuidelineInput,
     CSGuidelineOutput,
     GenerationCallback,
-    MonthlyReportInput,
     MonthlyReportOutput,
     PdfS3Meta,
 )
@@ -41,8 +40,6 @@ class GenerationResult:
 
 
 def build_monthly_callback(
-    input_data: MonthlyReportInput | None,
-    output: MonthlyReportOutput | None,
     *,
     status: CallbackStatus,
     report_id: str,
@@ -52,7 +49,8 @@ def build_monthly_callback(
 ) -> GenerationCallback:
     """월간 리포트 콜백 조립. **월 1건**만 나간다(PDF 가 월 1개 합본이라서).
 
-    input_data 는 합본 경로에서 None 이다 — 콜백에 상품별 정보가 들어가지 않기 때문이다.
+    입력·출력을 인자로 받지 않는다 — 월간은 `source_payload` 를 보내지 않으므로 콜백에
+    담을 것이 없다(합본이라 상품별 정보도 들어가지 않는다).
     """
     return GenerationCallback(
         report_id=report_id,

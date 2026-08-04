@@ -1,5 +1,13 @@
 """PDF S3 적재 — 문서 생성 스키마 §3-1.
 
+🚧 **아직 스텁이다.** 실제 업로드(boto3)를 하지 않고 메타데이터만 만든다.
+   AWS 버킷·자격증명이 준비되기 전이라 의도적으로 비워 뒀다.
+   그래서 `S3_ENABLED` 가 꺼져 있으면 **성공을 반환하지 않고 예외를 던진다** —
+   업로드하지 않은 파일을 "적재 완료"로 보고하면 백엔드 연동 순간 셀러 화면에
+   죽은 링크가 뜨고, 월간은 재생성 경로도 없다. 이 PR 의 원칙
+   ("검증을 통과하지 못한 문서를 성공처럼 내보내지 않는다")을 여기에도 적용한다.
+   실제 구현을 붙일 때는 이 docstring 과 S3_ENABLED 기본값을 함께 정리할 것.
+
 ⚠️ 보존 정책이 문서 종류별로 다르다 (2026-08-03 확정). 삭제는 **S3 Lifecycle** 이 하고,
    코드는 같은 값으로 "언제 사라지는지"(`object_expires_at`)를 계산해 알려주기만 한다.
 
@@ -15,12 +23,17 @@ presigned URL 은 객체 수명과 별개인 "링크의 만료"다. 만료 후�
 
 from __future__ import annotations
 
+import os
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from app.core import constants
 from app.core.schemas import PdfS3Meta
+
+# 실제 업로드 구현이 붙기 전까지는 꺼둔다. 켜면 아래 upload 가 메타데이터만 만들고
+# 성공을 반환하므로, boto3 연동이 끝난 뒤에만 기본값을 True 로 바꿀 것.
+S3_ENABLED = os.getenv("S3_ENABLED", "false").lower() in ("1", "true", "yes")
 
 MONTHLY_BUCKET_NAME = "sellon-reports"
 GUIDELINE_BUCKET_NAME = "sellon-temp-reports"
@@ -66,6 +79,13 @@ _STORAGE_POLICY: dict[str, StoragePolicy] = {
 }
 
 
+class S3NotConfiguredError(Exception):
+    """S3 업로드가 아직 구현·구성되지 않았을 때. 호출부가 FAILED_ERROR 로 변환한다.
+
+    "업로드한 척"보다 실패가 낫다 — 죽은 링크가 셀러에게 나가는 것을 막는다.
+    """
+
+
 class PdfSizeExceededError(Exception):
     """PDF 가 10MB 상한을 넘었을 때. 호출부가 FAILED_SIZE_EXCEEDED 로 변환한다.
 
@@ -88,12 +108,20 @@ async def upload_pdf_to_s3(
     product_group_id: str,
     identifier: str,
 ) -> PdfS3Meta:
-    """PDF 바이너리를 S3 에 적재하고 메타데이터를 반환한다.
+    """🚧 스텁 — **실제 업로드는 하지 않고** 적재 메타데이터만 만든다.
 
     Raises:
         PdfSizeExceededError: 용량이 MAX_PDF_SIZE_BYTES 를 초과할 때.
+        S3NotConfiguredError: S3_ENABLED 가 꺼져 있을 때(=아직 미구현).
     """
     file_size = len(pdf_bytes)
+    if not S3_ENABLED:
+        raise S3NotConfiguredError(
+            f"S3 업로드가 아직 구현되지 않았습니다(S3_ENABLED=false). "
+            f"업로드하지 않은 파일을 성공으로 보고하지 않습니다 ({report_type}/{identifier}, "
+            f"{file_size} bytes)"
+        )
+
     if file_size > constants.MAX_PDF_SIZE_BYTES:
         raise PdfSizeExceededError(
             f"PDF 용량 초과: {file_size} bytes > {constants.MAX_PDF_SIZE_BYTES} bytes "

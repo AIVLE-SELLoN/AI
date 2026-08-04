@@ -105,10 +105,10 @@ def validate_monthly_report(
     errors: list[str] = []
 
     # 1. 식별자 일치 — 입력값 그대로 되돌려줘야 한다(§1-2)
-    if output_data.master_product_code != input_data.master_product_code:
+    if output_data.product_group_id != input_data.product_group_id:
         errors.append(
-            f"master_product_code 불일치: 입력({input_data.master_product_code}) "
-            f"!= 출력({output_data.master_product_code})"
+            f"product_group_id 불일치: 입력({input_data.product_group_id}) "
+            f"!= 출력({output_data.product_group_id})"
         )
     if output_data.report_month != input_data.report_month:
         errors.append(
@@ -163,6 +163,6 @@ def validate_monthly_report(
     if not is_valid:
         logger.warning(
             f"[VALIDATION FAILED] report_month={input_data.report_month} | "
-            f"master_product_code={input_data.master_product_code} | errors={errors}"
+            f"product_group_id={input_data.product_group_id} | errors={errors}"
         )
     return is_valid, errors

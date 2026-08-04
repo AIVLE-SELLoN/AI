@@ -45,6 +45,7 @@ from app.reporting.pdf_compiler import build_book_context, compile_monthly_book
 from app.reporting.s3_uploader import (
     REPORT_TYPE_MONTHLY,
     PdfSizeExceededError,
+    S3NotConfiguredError,
     upload_pdf_to_s3,
 )
 
@@ -57,7 +58,7 @@ PROMPT_VERSION = "monthly_report_v4"
 
 def build_report_id(input_data: MonthlyReportInput) -> str:
     """상품별 추적용 ID. 예: RPT-202607-P001 — 로그·배치 결과에서만 쓴다."""
-    return f"RPT-{input_data.report_month.replace('-', '')}-{input_data.master_product_code}"
+    return f"RPT-{input_data.report_month.replace('-', '')}-{input_data.product_group_id}"
 
 
 def build_book_report_id(report_month: str) -> str:
@@ -200,7 +201,7 @@ def build_prompt(
         report_month=input_data.report_month,
         start_date=input_data.start_date.isoformat(),
         end_date=input_data.end_date.isoformat(),
-        master_product_code=input_data.master_product_code,
+        master_product_code=input_data.product_group_id,
         product_name=input_data.product_name,
         total_voc_count=str(input_data.total_voc_count),
         stage_label=_resolve_stage_label(input_data),
@@ -293,8 +294,6 @@ async def compile_and_upload_monthly_book(
         return GenerationResult(
             output=None,
             callback=build_monthly_callback(
-                None,
-                None,
                 status=CallbackStatus.FAILED_ERROR,
                 report_id=report_id,
                 notice_message="생성에 성공한 상품이 없어 월간 보고서를 만들지 못했습니다.",
@@ -321,12 +320,22 @@ async def compile_and_upload_monthly_book(
             product_group_id="ALL",  # 월 1개 합본이라 상품 구분이 없다
             identifier=report_month,
         )
+    except S3NotConfiguredError as exc:
+        # 업로드하지 않은 파일을 성공으로 보고하지 않는다(스텁 상태에서의 안전장치).
+        logger.error(f"[FAILED_ERROR] {trace_base} | {exc!s}")
+        return GenerationResult(
+            output=None,
+            callback=build_monthly_callback(
+                status=CallbackStatus.FAILED_ERROR,
+                report_id=report_id,
+                notice_message="S3 업로드가 아직 구성되지 않아 문서를 저장하지 못했습니다.",
+            ),
+        )
     except PdfSizeExceededError as exc:
         logger.error(f"[FAILED_SIZE_EXCEEDED] {trace_base} | {exc!s}")
         return GenerationResult(
             output=None,
             callback=build_monthly_callback(
-                None, None,
                 status=CallbackStatus.FAILED_SIZE_EXCEEDED,
                 report_id=report_id,
                 notice_message="월간 보고서 파일 용량이 상한을 초과해 발송이 중단되었습니다.",
@@ -337,7 +346,6 @@ async def compile_and_upload_monthly_book(
         return GenerationResult(
             output=None,
             callback=build_monthly_callback(
-                None, None,
                 status=CallbackStatus.FAILED_ERROR,
                 report_id=report_id,
                 notice_message="월간 보고서 파일 생성 중 오류가 발생했습니다.",
@@ -351,8 +359,6 @@ async def compile_and_upload_monthly_book(
     return GenerationResult(
         output=None,  # 합본은 단일 output 이 없다 — 본문은 PDF 안에만 있다
         callback=build_monthly_callback(
-            None,
-            None,
             status=CallbackStatus.SUCCESS,
             report_id=report_id,
             pdf_s3_meta=pdf_s3_meta,

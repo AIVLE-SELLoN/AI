@@ -16,7 +16,6 @@ from app.core.constants import (
     MAX_PDF_SIZE_BYTES,
     MONTHLY_ASPECT_COUNT,
     RATIO_SUM_TOLERANCE,
-    SEVERITY_STAGE_LABEL,
 )
 
 # ── 공통 Enum (schemas.md §3) ────────────────────────────────────
@@ -441,6 +440,17 @@ class MonthlyAspectDistribution(BaseModel):
         if self.aspect not in MONTHLY_ASPECTS:
             raise ValueError(f"월간 연산 대상 aspect 가 아닙니다(색상/사이즈/소재): {self.aspect}")
         total = self.positive_ratio + self.neutral_ratio + self.negative_ratio
+
+        # 관측이 0건이면 비율도 전부 0 이다. 합을 1.00 으로 맞추려고 중립 100% 로
+        # 채우면 "관측이 없다"가 "전부 중립이다"로 바뀌어, LLM 이 없는 관측을 있는 것처럼
+        # 서술하게 된다(§4-4 수치 팩트체크로도 못 걸러낸다).
+        if self.total_count == 0:
+            if total > RATIO_SUM_TOLERANCE:
+                raise ValueError(
+                    f"total_count=0 이면 세 비율도 0 이어야 합니다: {total}"
+                )
+            return self
+
         if abs(total - 1.0) > RATIO_SUM_TOLERANCE:
             raise ValueError(
                 f"세 비율의 합은 1.00(±{RATIO_SUM_TOLERANCE})이어야 합니다: {total}"
@@ -538,12 +548,21 @@ class MonthlyChannelDivergenceInput(BaseModel):
         if len(labels) != len(set(labels)):
             raise ValueError(f"comparison_pair 는 중복될 수 없습니다: {labels}")
 
-        scored = [p for p in self.pairs if p.jsd_score is not None]
-        if scored:
-            worst = max(scored, key=lambda p: p.jsd_score)
+        # worst_pair 는 **가장 위험한 쌍**(severity 등급 → excess 순)이다.
+        # ⚠️ jsd_score 최댓값으로 고르면 안 된다. severity 는 excess(= jsd − baseline)와
+        #    유의성으로 정해지고 baseline 은 쌍마다 다르므로(표본이 작을수록 크다),
+        #    jsd 가 가장 큰 쌍이 SAFE 인데 다른 쌍이 CRISIS 인 상황이 생긴다. 그때
+        #    리포트 제목에는 "안정 단계"가 박히고 is_crisis=true 로 나간다.
+        judged = [p for p in self.pairs if p.severity is not None]
+        if judged:
+            severity_rank = {Severity.CRISIS: 3, Severity.CAUTION: 2, Severity.SAFE: 1}
+            worst = max(
+                judged,
+                key=lambda p: (severity_rank[p.severity], p.jsd_score - p.jsd_baseline),
+            )
             if self.worst_pair != worst.comparison_pair:
                 raise ValueError(
-                    f"worst_pair 는 jsd_score 최댓값 쌍이어야 합니다: "
+                    f"worst_pair 는 가장 위험한 쌍(severity → excess)이어야 합니다: "
                     f"{self.worst_pair!r} != {worst.comparison_pair!r}"
                 )
         elif self.worst_pair not in labels:
@@ -568,8 +587,10 @@ class MonthlyReportInput(BaseModel):
     )
     start_date: date = Field(..., description="전월 시작일 (YYYY-MM-01)")
     end_date: date = Field(..., description="전월 종료일 (YYYY-MM-DD, 말일)")
-    master_product_code: str = Field(
-        ..., alias="product_group_id", description="마스터 상품 그룹 고유 ID"
+    # 정본 필드명은 프로젝트 런타임 식별자인 product_group_id 로 통일한다
+    # (CSGuidelineInput 과 방향이 반대이면 join·직렬화에서 계속 헷갈린다).
+    product_group_id: str = Field(
+        ..., alias="master_product_code", description="마스터 상품 그룹 고유 ID"
     )
     product_name: str = Field(..., description="상품명")
     total_voc_count: int = Field(
@@ -652,8 +673,8 @@ class MonthlyReportOutput(BaseModel):
     """월간 보고서 출력 (LLM 생성 구간)."""
 
     report_id: str = Field(..., description="월간 보고서 고유 ID (예: RPT-202608-P001)")
-    master_product_code: str = Field(
-        ..., alias="product_group_id", description="마스터 상품 그룹 고유 ID (입력값과 일치)"
+    product_group_id: str = Field(
+        ..., alias="master_product_code", description="마스터 상품 그룹 고유 ID (입력값과 일치)"
     )
     report_month: str = Field(
         ..., pattern=r"^\d{4}-\d{2}$", description="보고서 연월 (입력값과 일치)"
@@ -897,68 +918,10 @@ class GenerationCallback(BaseModel):
         return self
 
 
-# ── §4-4. 교차검증 함수 (모델 하나로는 판정 못 하는 규칙) ─────────────────
+# ── §4-4. 교차검증 ──────────────────────────────────────────────────────
 #
-# 구조·도메인 검증은 위 모델의 validator 가 담당하고, 여기서는 입력↔출력을
-# 맞대봐야 하는 그라운딩 규칙만 다룬다. 수치 팩트체크·금지 표현 검사는
-# app/reporting/*_validator.py 의 몫이다(LLM 텍스트 검사라 계약 밖).
-
-
-def validate_monthly_output_grounded(
-    output: MonthlyReportOutput, input_data: MonthlyReportInput
-) -> None:
-    """월간 리포트 출력이 입력과 정합한지 검증.
-
-    - master_product_code · report_month 가 입력값과 일치
-    - aspect_summaries 의 aspect 집합이 입력과 동일
-    - cause_title 이 worst_pair 의 severity 단계 라벨을 포함(다른 단계 라벨 혼입 금지)
-    """
-    if output.master_product_code != input_data.master_product_code:
-        raise ValueError(
-            f"master_product_code 가 입력값과 다릅니다: "
-            f"{output.master_product_code!r} != {input_data.master_product_code!r}"
-        )
-    if output.report_month != input_data.report_month:
-        raise ValueError(
-            f"report_month 가 입력값과 다릅니다: {output.report_month!r} != {input_data.report_month!r}"
-        )
-
-    in_aspects = {d.aspect for d in input_data.aspect_distributions}
-    out_aspects = {s.aspect for s in output.aspect_summaries}
-    if in_aspects != out_aspects:
-        raise ValueError(f"aspect_summaries 의 aspect 집합이 입력과 다릅니다: {out_aspects} != {in_aspects}")
-
-    worst = next(
-        (p for p in input_data.channel_divergence.pairs
-         if p.comparison_pair == input_data.channel_divergence.worst_pair),
-        None,
-    )
-    if worst is None or worst.severity is None:
-        return  # 전 쌍 보류 등으로 단계가 없으면 라벨 검사 대상 아님
-
-    required = SEVERITY_STAGE_LABEL[worst.severity.value]
-    title = output.channel_divergence_cause.cause_title
-    if required not in title:
-        raise ValueError(f"cause_title 에 '{required}' 라벨이 포함돼야 합니다: {title!r}")
-
-    mixed = [label for key, label in SEVERITY_STAGE_LABEL.items()
-             if label != required and label in title and key != worst.severity.value]
-    if mixed:
-        raise ValueError(f"cause_title 에 다른 단계의 라벨이 섞였습니다: {mixed} (기대: {required})")
-
-
-def validate_guideline_output_grounded(
-    output: CSGuidelineOutput, input_data: CSGuidelineInput
-) -> None:
-    """CS 가이드라인 출력이 입력과 정합한지 검증.
-
-    - alert_id 가 입력값과 일치
-    - inquiry_specific_guides[].item_id ⊆ linked_inquiries[].item_id
-    """
-    if output.alert_id != input_data.alert_id:
-        raise ValueError(f"alert_id 가 입력값과 다릅니다: {output.alert_id!r} != {input_data.alert_id!r}")
-
-    allowed = {i.item_id for i in input_data.linked_inquiries}
-    invalid = [g.item_id for g in output.inquiry_specific_guides if g.item_id not in allowed]
-    if invalid:
-        raise ValueError(f"inquiry_specific_guides 가 linked_inquiries 밖의 문의를 가리킵니다: {invalid}")
+# 입력↔출력을 맞대보는 그라운딩 검증(식별자 일치·단계 라벨 대조·cs_id 포함관계)은
+# `app/reporting/{monthly_report_validator,cs_reply_validator}.py` 가 **유일한 구현**이다.
+# 예전에는 같은 규칙이 여기에도 있었는데, 아무도 호출하지 않으면서 규칙만 두 벌이 되어
+# 한쪽만 고치기 쉬운 상태였다. 검증기 쪽은 반려 사유 목록을 돌려줘 재시도 프롬프트에
+# 그대로 되먹일 수 있으므로 그쪽으로 일원화했다.

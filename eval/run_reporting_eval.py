@@ -111,7 +111,7 @@ def _monthly_case(
         report_month="2026-07",
         start_date=date(2026, 7, 1),
         end_date=date(2026, 7, 31),
-        master_product_code="P001",
+        product_group_id="P001",
         product_name="미디 원피스",
         total_voc_count=450,
         aspect_distributions=[
@@ -153,7 +153,7 @@ def _monthly_case(
 
     output = MonthlyReportOutput(
         report_id="RPT-202607-P001",
-        master_product_code="P001",
+        product_group_id="P001",
         report_month="2026-07",
         aspect_summaries=[
             {"aspect": "색상", "summary_text": "부정 의견이 전월 대비 8%p 올라 50%를 기록했습니다."},
@@ -223,7 +223,7 @@ def _cs_case(
     )
 
     output = CSGuidelineOutput(
-        guideline_id="GD-20260528-P001",
+        guideline_id="GD-20260528-P001-COUPANG",
         alert_id="ALT-20260528-P001-COUPANG",
         summary={
             "issue_title": "쿠팡 색상 불만 급증 대응 가이드",
@@ -281,7 +281,7 @@ def _monthly_mutations() -> dict[str, tuple[MutationFn, bool]]:
         out.channel_divergence_cause.cause_title += " (일부는 안정 단계)"
 
     def wrong_product_code(out: MonthlyReportOutput) -> None:
-        out.master_product_code = "P999"
+        out.product_group_id = "P999"
 
     def drop_aspect(out: MonthlyReportOutput) -> None:
         out.aspect_summaries[2].aspect = out.aspect_summaries[0].aspect

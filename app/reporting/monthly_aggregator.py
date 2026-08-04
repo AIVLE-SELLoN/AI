@@ -21,6 +21,7 @@ import logging
 import sqlite3
 from datetime import date, datetime, timedelta
 
+from app.core.schemas import MONTHLY_ASPECTS as SCHEMA_MONTHLY_ASPECTS
 from app.core.schemas import (
     Aspect,
     ChannelDivergencePair,
@@ -39,8 +40,13 @@ from app.reporting.metrics_calculator import (
 
 logger = logging.getLogger("MonthlyAggregator")
 
-# 월간 리포트가 다루는 속성 3종(스키마 §4-1 "Aspect (월간 연산)")
-MONTHLY_ASPECTS: tuple[str, ...] = (Aspect.COLOR.value, Aspect.SIZE.value, Aspect.MATERIAL.value)
+# JSD 카테고리 축 — **순서가 의미를 갖는다**(채널 간 분포를 같은 순서로 비교해야 한다).
+# schemas.MONTHLY_ASPECTS 는 같은 3종의 frozenset(순서 없음)이라 이름을 달리 둔다.
+# 아래 assert 로 두 정의가 갈라지지 않게 묶어 둔다.
+JSD_ASPECT_ORDER: tuple[str, ...] = (Aspect.COLOR.value, Aspect.SIZE.value, Aspect.MATERIAL.value)
+assert {Aspect(a) for a in JSD_ASPECT_ORDER} == set(SCHEMA_MONTHLY_ASPECTS), (
+    "JSD_ASPECT_ORDER 와 schemas.MONTHLY_ASPECTS 가 어긋났습니다"
+)
 
 # 채널 분열은 채널쌍 전수를 본다. 조합 순서를 고정해 라벨이 실행마다 흔들리지 않게 한다.
 CHANNEL_PAIRS: tuple[tuple[str, str], ...] = (
@@ -106,7 +112,7 @@ def _fetch_aspect_sentiments(
         (product_group_id, start, end),
     ).fetchall()
 
-    result: dict[str, dict[int, int]] = {a: {} for a in MONTHLY_ASPECTS}
+    result: dict[str, dict[int, int]] = {a: {} for a in JSD_ASPECT_ORDER}
     for aspect, sentiment, count in rows:
         if aspect in result:
             result[aspect][int(sentiment)] = count
@@ -131,11 +137,11 @@ def _fetch_negative_aspect_counts_by_channel(
     ).fetchall()
 
     counts: dict[str, list[int]] = {}
-    index = {a: i for i, a in enumerate(MONTHLY_ASPECTS)}
+    index = {a: i for i, a in enumerate(JSD_ASPECT_ORDER)}
     for channel, aspect, count in rows:
         if aspect not in index:
             continue
-        counts.setdefault(channel, [0] * len(MONTHLY_ASPECTS))[index[aspect]] = count
+        counts.setdefault(channel, [0] * len(JSD_ASPECT_ORDER))[index[aspect]] = count
     return counts
 
 
@@ -143,15 +149,13 @@ def _build_distributions(
     sentiments: dict[str, dict[int, int]],
 ) -> list[MonthlyAspectDistribution]:
     distributions = []
-    for aspect in MONTHLY_ASPECTS:
+    for aspect in JSD_ASPECT_ORDER:
         by_sentiment = sentiments.get(aspect, {})
         pos, neu, neg = by_sentiment.get(1, 0), by_sentiment.get(0, 0), by_sentiment.get(-1, 0)
         p_ratio, n_ratio, neg_ratio = calculate_sentiment_ratios(pos, neu, neg)
         total = pos + neu + neg
-        if total == 0:
-            # 표본이 없으면 비율 합이 0이 되어 스키마(합=1.00)에 걸린다. 중립 1.0 으로 둔다 —
-            # "관측 없음"을 부정 0%로 표현하는 게 셀러에게도 정확하다.
-            p_ratio, n_ratio, neg_ratio = 0.0, 1.0, 0.0
+        # 관측 0건이면 비율도 0 으로 둔다(스키마가 이 경우를 허용한다).
+        # 중립 100% 로 채우면 없는 관측을 있는 것처럼 보고하게 된다.
         distributions.append(
             MonthlyAspectDistribution(
                 aspect=aspect,
@@ -173,7 +177,7 @@ def _build_drifts(
         return (by_sentiment.get(-1, 0) / total) if total else 0.0
 
     drifts = []
-    for aspect in MONTHLY_ASPECTS:
+    for aspect in JSD_ASPECT_ORDER:
         drift_rate, status = calculate_sentiment_drift(
             _neg_ratio(current, aspect), _neg_ratio(previous, aspect)
         )
@@ -227,8 +231,8 @@ def aggregate_monthly_inputs(
         for left, right in CHANNEL_PAIRS:
             pair, p_value = build_channel_divergence_pair(
                 f"{left}_VS_{right}",
-                channel_counts.get(left, [0] * len(MONTHLY_ASPECTS)),
-                channel_counts.get(right, [0] * len(MONTHLY_ASPECTS)),
+                channel_counts.get(left, [0] * len(JSD_ASPECT_ORDER)),
+                channel_counts.get(right, [0] * len(JSD_ASPECT_ORDER)),
                 **permutation_kwargs,
             )
             if p_value is not None:
@@ -265,7 +269,7 @@ def aggregate_monthly_inputs(
                 report_month=report_month,
                 start_date=start,
                 end_date=end,
-                master_product_code=row["product_group_id"],
+                product_group_id=row["product_group_id"],
                 # 상품명은 커머스 DB 소관이라 여기서는 코드로 대체한다.
                 # 연동되면 이 한 줄만 조인으로 바꾸면 된다.
                 product_name=row["product_group_id"],

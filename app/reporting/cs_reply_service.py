@@ -28,6 +28,7 @@ from app.reporting.pdf_compiler import ReportType, compile_report_to_pdf
 from app.reporting.s3_uploader import (
     REPORT_TYPE_GUIDELINE,
     PdfSizeExceededError,
+    S3NotConfiguredError,
     upload_pdf_to_s3,
 )
 
@@ -186,6 +187,19 @@ async def generate_cs_reply_pipeline(
             report_type=REPORT_TYPE_GUIDELINE,  # → 임시 버킷 (DB 원본으로 재컴파일 가능)
             product_group_id=input_data.product_group_id,
             identifier=input_data.alert_id,
+        )
+    except S3NotConfiguredError as exc:
+        # 업로드하지 않은 파일을 성공으로 보고하지 않는다(스텁 상태에서의 안전장치).
+        logger.error(f"[FAILED_ERROR] {trace_base} | {exc!s}")
+        return GenerationResult(
+            output=None,
+            callback=build_guideline_callback(
+                input_data,
+                final_output,
+                status=CallbackStatus.FAILED_ERROR,
+                guideline_id=guideline_id,
+                notice_message="S3 업로드가 아직 구성되지 않아 문서를 저장하지 못했습니다.",
+            ),
         )
     except PdfSizeExceededError as exc:
         logger.error(f"[FAILED_SIZE_EXCEEDED] {trace_base} | {exc!s}")

@@ -238,28 +238,45 @@ def finalize_pair(pair: ChannelDivergencePair, *, bh_significant: bool) -> Chann
     )
 
 
+def _worst_rank(pair: ChannelDivergencePair) -> tuple[int, float]:
+    """worst_pair 정렬 키 — (severity 등급, excess).
+
+    ⚠️ jsd_score 최댓값으로 고르면 안 된다. severity 는 `excess = jsd − baseline` 과
+       유의성으로 정해지는데 baseline 은 쌍마다 다르다(표본이 작을수록 크다). 그래서
+       jsd 가 가장 큰 쌍이 SAFE 이고 다른 쌍이 CRISIS 인 상황이 실제로 생기고,
+       그때 리포트 제목에는 "안정 단계"가 박히면서 is_crisis=true 로 나간다.
+       판정과 대표 쌍 선정이 **같은 기준**을 봐야 한다.
+    """
+    rank = {Severity.CRISIS: 3, Severity.CAUTION: 2, Severity.SAFE: 1}
+    severity_rank = rank.get(pair.severity, 0)  # 보류(severity=None)는 최하위
+    excess = (
+        pair.jsd_score - pair.jsd_baseline
+        if pair.jsd_score is not None and pair.jsd_baseline is not None
+        else float("-inf")
+    )
+    return severity_rank, excess
+
+
 def build_channel_divergence(
     pairs: list[ChannelDivergencePair],
     calculated_at,
 ) -> MonthlyChannelDivergenceInput:
     """채널쌍들을 묶어 MonthlyChannelDivergenceInput 을 만든다(worst_pair·is_crisis 롤업).
 
-    worst_pair 는 jsd_score 최댓값 쌍이고, 전 쌍이 보류면 첫 쌍 라벨을 쓴다
-    (스키마가 worst_pair 를 필수로 요구하므로 라벨 자체는 있어야 한다).
+    worst_pair 는 **가장 위험한 쌍**(severity → excess 순)이다. 전 쌍이 보류면 첫 쌍
+    라벨을 쓴다(스키마가 worst_pair 를 필수로 요구하므로 라벨 자체는 있어야 한다).
     is_crisis 는 판정된 쌍이 하나도 없으면 null 이다.
     """
     if not pairs:
         raise ValueError("channel_divergence 는 최소 1개 채널쌍이 필요합니다")
 
-    scored = [p for p in pairs if p.jsd_score is not None]
+    judged = [p for p in pairs if p.severity is not None]
     worst_pair = (
-        max(scored, key=lambda p: p.jsd_score).comparison_pair
-        if scored
-        else pairs[0].comparison_pair
+        max(judged, key=_worst_rank).comparison_pair if judged else pairs[0].comparison_pair
     )
 
-    judged = [p.is_crisis for p in pairs if p.is_crisis is not None]
-    is_crisis = any(judged) if judged else None
+    crisis_flags = [p.is_crisis for p in pairs if p.is_crisis is not None]
+    is_crisis = any(crisis_flags) if crisis_flags else None
 
     return MonthlyChannelDivergenceInput(
         calculated_at=calculated_at,

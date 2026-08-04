@@ -202,14 +202,14 @@ async def _generate_one(
         logger.info(f"[HOLD] {report_id} (VOC {input_data.total_voc_count}건)")
         return {
             "report_id": report_id,
-            "product_group_id": input_data.master_product_code,
+            "product_group_id": input_data.product_group_id,
             "status": CallbackStatus.HOLD_INSUFFICIENT_DATA.value,
         }
 
     if dry_run:
         return {
             "report_id": report_id,
-            "product_group_id": input_data.master_product_code,
+            "product_group_id": input_data.product_group_id,
             "status": "DRY_RUN",
         }
 
@@ -221,7 +221,7 @@ async def _generate_one(
             logger.exception(f"[ISOLATED FAILURE] {report_id}")
             return {
                 "report_id": report_id,
-                "product_group_id": input_data.master_product_code,
+                "product_group_id": input_data.product_group_id,
                 "status": CallbackStatus.FAILED_ERROR.value,
                 "error": f"{type(exc).__name__}: {exc}",
             }
@@ -229,7 +229,7 @@ async def _generate_one(
         logger.info(f"[{status.value}] {report_id} ({time.monotonic() - started:.1f}초)")
         return {
             "report_id": report_id,
-            "product_group_id": input_data.master_product_code,
+            "product_group_id": input_data.product_group_id,
             "status": status.value,
             "errors": errors,
             "input": input_data,
@@ -241,7 +241,7 @@ async def run_generate(args: argparse.Namespace) -> int:
     inputs = load_inputs(args.month)
     if args.products:
         wanted = set(args.products.split(","))
-        inputs = [i for i in inputs if i.master_product_code in wanted]
+        inputs = [i for i in inputs if i.product_group_id in wanted]
     if args.limit:
         inputs = inputs[: args.limit]
 
@@ -269,7 +269,7 @@ async def run_generate(args: argparse.Namespace) -> int:
             for r in results
             if r["status"] == CallbackStatus.SUCCESS.value and r.get("output")
         ]
-        items.sort(key=lambda i: i["input"].master_product_code)
+        items.sort(key=lambda i: i["input"].product_group_id)
         held = [
             r["product_group_id"] for r in results
             if r["status"] == CallbackStatus.HOLD_INSUFFICIENT_DATA.value

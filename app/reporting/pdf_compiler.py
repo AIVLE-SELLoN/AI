@@ -188,7 +188,7 @@ _MONTHLY_SECTION_HTML = """
     <div class="meta">
         보고서 ID {{ report.report_id }} · {{ report.report_month }}
         ({{ input.start_date }} ~ {{ input.end_date }})<br>
-        마스터 상품 코드 {{ report.master_product_code }} · 월간 총 VOC {{ input.total_voc_count }}건
+        마스터 상품 코드 {{ report.product_group_id }} · 월간 총 VOC {{ input.total_voc_count }}건
         {% if input.channel_divergence and input.channel_divergence.calculated_at %}
         · 집계 기준 {{ input.channel_divergence.calculated_at[:16]|replace('T', ' ') }}
         {% endif %}
@@ -411,7 +411,7 @@ def build_book_context(
 
         summary_rows.append(
             {
-                "code": report.get("master_product_code"),
+                "code": report.get("product_group_id"),
                 "product_name": input_data.get("product_name"),
                 "total_voc": input_data.get("total_voc_count", 0),
                 "worst_aspect": charts["worst_aspect"].get("aspect"),

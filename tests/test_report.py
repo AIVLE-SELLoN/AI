@@ -57,6 +57,7 @@ from app.reporting.pdf_compiler import MONTHLY_COVER_HTML, build_book_context
 from app.reporting.s3_uploader import (
     REPORT_TYPE_GUIDELINE,
     REPORT_TYPE_MONTHLY,
+    S3NotConfiguredError,
     resolve_storage_policy,
     upload_pdf_to_s3,
 )
@@ -160,7 +161,7 @@ def monthly_input() -> MonthlyReportInput:
         report_month="2026-07",
         start_date=date(2026, 7, 1),
         end_date=date(2026, 7, 31),
-        master_product_code="P001",
+        product_group_id="P001",
         product_name="미디 원피스",
         total_voc_count=450,
         aspect_distributions=[
@@ -222,7 +223,7 @@ def monthly_output() -> MonthlyReportOutput:
     """monthly_input 과 정합한 정상 출력. cause_title 에 CRISIS 단계 라벨('위험 단계') 포함."""
     return MonthlyReportOutput(
         report_id="RPT-202607-P001",
-        master_product_code="P001",
+        product_group_id="P001",
         report_month="2026-07",
         aspect_summaries=[
             {"aspect": "색상", "summary_text": "부정 의견이 전월 대비 8%p 올라 50%를 기록했습니다."},
@@ -346,10 +347,10 @@ def test_monthly_validator_accepts_grounded_output(monthly_input, monthly_output
 
 
 def test_monthly_validator_rejects_identifier_mismatch(monthly_input, monthly_output) -> None:
-    monthly_output.master_product_code = "P999"
+    monthly_output.product_group_id = "P999"
     is_valid, errors = validate_monthly_report(monthly_input, monthly_output)
     assert not is_valid
-    assert any("master_product_code" in e for e in errors)
+    assert any("product_group_id" in e for e in errors)
 
 
 def test_monthly_validator_rejects_missing_aspect(monthly_input, monthly_output) -> None:
@@ -557,17 +558,28 @@ def test_storage_policy_differs_by_document_type() -> None:
 
 
 @pytest.mark.asyncio
+async def test_upload_refuses_when_s3_not_configured() -> None:
+    """S3 미구성 상태에서는 성공을 반환하지 않는다 — 죽은 링크가 나가는 것을 막는다."""
+    with patch("app.reporting.s3_uploader.S3_ENABLED", False), pytest.raises(S3NotConfiguredError):
+        await upload_pdf_to_s3(
+            pdf_bytes=b"%PDF", report_type=REPORT_TYPE_MONTHLY,
+            product_group_id="ALL", identifier="2026-07",
+        )
+
+
+@pytest.mark.asyncio
 async def test_upload_sets_object_expiry_by_policy() -> None:
     """업로드 결과에 자동 삭제 시각(다운로드 기한)이 정책대로 박혀야 한다."""
     before = datetime.now(UTC)
-    monthly_meta = await upload_pdf_to_s3(
-        pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_MONTHLY,
-        product_group_id="P001", identifier="2026-07",
-    )
-    guideline_meta = await upload_pdf_to_s3(
-        pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_GUIDELINE,
-        product_group_id="P001", identifier="ALT-1",
-    )
+    with patch("app.reporting.s3_uploader.S3_ENABLED", True):
+        monthly_meta = await upload_pdf_to_s3(
+            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_MONTHLY,
+            product_group_id="ALL", identifier="2026-07",
+        )
+        guideline_meta = await upload_pdf_to_s3(
+            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_GUIDELINE,
+            product_group_id="P001", identifier="ALT-1",
+        )
 
     monthly_days = (monthly_meta.object_expires_at - before).total_seconds() / 86400
     guideline_hours = (guideline_meta.object_expires_at - before).total_seconds() / 3600
@@ -607,7 +619,6 @@ async def test_monthly_callback_rejects_source_payload_requirement(monthly_input
         file_size_bytes=482913,
     )
     callback = build_monthly_callback(
-        monthly_input, monthly_output,
         status=CallbackStatus.SUCCESS, report_id="RPT-202607-P001", pdf_s3_meta=meta,
     )
     assert callback.source_payload is None

@@ -18,9 +18,13 @@ import re
 
 from app.core import constants
 
-# `13%`, `8%p`, `450건`, `0.54` 를 잡는다. 단위 없는 정수(`3개`, `2번`)는
+# `13%`, `8%p`, `450건`, `1,200건`, `0.54` 를 잡는다. 단위 없는 정수(`3개`, `2번`)는
 # 오탐이 너무 많아 일부러 제외하고, 단위 없는 **소수**만 점수로 본다.
-_NUMBER_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*(%p|%|건|)")
+#
+# ⚠️ 천단위 콤마를 반드시 받아야 한다. 없으면 `1,200건` 이 `200건` 으로 잘려
+#    맞는 문장을 반려하고(1200 이 허용집합인데 200 을 비교) 틀린 문장을 통과시킨다
+#    (허용집합에 200 이 있으면 그대로 승인). 표지 템플릿도 콤마 표기를 쓴다.
+_NUMBER_PATTERN = re.compile(r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s*(%p|%|건|)")
 
 UNIT_PERCENT = "%"
 UNIT_PERCENT_POINT = "%p"
@@ -34,7 +38,7 @@ def extract_metric_numbers(text: str) -> list[tuple[float, str]]:
     for raw_value, unit in _NUMBER_PATTERN.findall(text):
         if unit == UNIT_SCORE and "." not in raw_value:
             continue  # 단위 없는 정수는 팩트체크 대상 아님(순번·개수 표기 오탐 방지)
-        found.append((float(raw_value), unit))
+        found.append((float(raw_value.replace(",", "")), unit))
     return found
 
 
