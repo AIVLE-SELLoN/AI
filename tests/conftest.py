@@ -1,5 +1,14 @@
 """공용 pytest 픽스처. pytest가 자동 수집하므로 각 tests/test_*.py에서 import 불필요."""
 
+import os
+
+# pipeline.py의 @traceable은 LLM이 mock이어도 트레이스를 실제로 전송한다 — 테스트가
+# LangSmith 월 한도를 소진한다(2026-08-04 초과 확인). app import보다 먼저 꺼야 하고,
+# app.config의 load_dotenv()는 override=False라 여기서 박아두면 .env가 못 덮는다.
+# setdefault라 `LANGSMITH_TRACING=true pytest`로 그 실행만 켤 수 있다.
+os.environ.setdefault("LANGSMITH_TRACING", "false")
+os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
+
 import pytest
 
 from app.core.schemas import (
