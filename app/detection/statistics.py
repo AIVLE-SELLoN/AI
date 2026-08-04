@@ -55,19 +55,23 @@ def run_one_test(cur_neg: int, cur_total: int, past_neg: int, past_total: int) -
     }
 
 
-def build_batch(all_combinations: list) -> tuple[list, list]:
+def build_batch(
+    all_combinations: list, *, unreliable_denominators: set | None = None
+) -> tuple[list, list]:
     """윈도우 하나에 대해 '판정 가능한' 검정을 전부 모은다 (관문① 적용).
 
     Args:
         all_combinations: [(product, aspect, channel, source, counts), ...]
             counts = (cur_neg, cur_total, past_neg, past_total)
+        unreliable_denominators: 분모를 믿을 수 없는 (product, channel, source) 집합.
+            분류 커버리지 미달 슬롯을 로더가 넘긴다 (loader.check_coverage).
 
     Returns:
         (batch, held)
           - batch: 판정 가능한 검정 결과 리스트 (각 dict 에 "key" 부착)
           - held:  판정하지 않은 (product, channel, source) 리스트. 중복 없음.
 
-    보류 사유가 둘이고 **적용 범위가 다르다** — 묶지 말 것:
+    보류 사유가 셋이고 **적용 범위가 다르다** — 묶지 말 것:
       ① 최소표본 미달 → (상품, 채널) 전체. 그 채널의 6 aspect × 2 source 12검정이
          통째로 빠진다 (로직 §5·§215, config 보고 §304). CS 가 부족하면 리뷰도 함께.
          분모가 작으면 비율이 널뛴다는 규칙이라, 기준 단위도 분모와 같은 (상품, 채널)이다.
@@ -75,10 +79,20 @@ def build_batch(all_combinations: list) -> tuple[list, list]:
          (aggregate §97·§181 — 색상 알림이 나갔던 날을 뺄 때 그 날의 사이즈 문의까지
          빠지면 사이즈의 과거 기준이 이유 없이 깎이므로). 색상의 기준선이 비었다고
          같은 채널의 사이즈·소재까지 판정을 접으면 그 이상이 조용히 사라진다.
+      ③ 분류 커버리지 미달 → 그 (상품, 채널, source). 분모가 source 마다 따로 집계되니
+         CS 가 빠졌다고 리뷰 분모까지 틀린 건 아니다.
+
+    ③을 **검정 전에** 빼는 이유: 분모가 깎인 슬롯은 부정률이 부풀려져 p값이 실제보다
+    작게 나온다. BH 는 step-up 이라 가짜로 작은 p값 하나가 기각 개수(k)를 늘려
+    **나머지 검정의 임계까지 완화**시킨다 — 한 상품의 데이터 결함이 다른 상품을
+    오탐시킨다. 반대로 빼는 쪽은 m 이 조금 줄 뿐이라 영향이 작다(실측: 1슬롯 제외 시
+    m 1,464→1,428, 다른 상품 발화 변화 없음).
 
     ①을 source 별로 좁히면 family 크기(m)가 달라져 BH 컷오프가 어긋난다.
     반대로 ②를 채널 단위로 넓히면 aspect 격리(로직 §150)가 깨진다. 범위를 섞지 말 것.
     """
+    unreliable = unreliable_denominators or set()
+
     held_pairs: set = set()  # ① (product, channel)
     held_slots: set = set()  # ② (product, aspect, channel, source)
     sources_of: dict = {}  # (product, channel) → 입력에 실제로 있던 source 들
@@ -105,16 +119,20 @@ def build_batch(all_combinations: list) -> tuple[list, list]:
             for (product, channel) in held_pairs
             for source in sources_of[(product, channel)]
         }
+        | {
+            slot
+            for slot in unreliable
+            if slot[:2] in sources_of  # 이번 배치에 실제로 있는 슬롯만
+        }
     )
 
     batch: list = []
     for product, aspect, channel, source, counts in all_combinations:
-        if (product, channel) in held_pairs or (
-            product,
-            aspect,
-            channel,
-            source,
-        ) in held_slots:
+        if (
+            (product, channel) in held_pairs
+            or (product, aspect, channel, source) in held_slots
+            or (product, channel, source) in unreliable
+        ):
             continue
         cur_neg, cur_total, past_neg, past_total = counts
         result = run_one_test(cur_neg, cur_total, past_neg, past_total)
@@ -153,13 +171,20 @@ def decide_fires(batch: list, q: float = BH_FDR_Q) -> list:
     return batch
 
 
-def run_detection(all_combinations: list, q: float = BH_FDR_Q) -> tuple[list, list]:
+def run_detection(
+    all_combinations: list,
+    q: float = BH_FDR_Q,
+    *,
+    unreliable_denominators: set | None = None,
+) -> tuple[list, list]:
     """[2] 전체 진입점 — 집계 결과를 받아 발화 판정까지.
 
     build_batch(관문①) → decide_fires(관문②③) 를 엮은 것.
     반환: (발화 판정이 담긴 batch, 보류된 (상품,채널,source) 리스트)
     """
-    batch, held = build_batch(all_combinations)
+    batch, held = build_batch(
+        all_combinations, unreliable_denominators=unreliable_denominators
+    )
     decide_fires(batch, q=q)
     return batch, held
 

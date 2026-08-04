@@ -161,6 +161,31 @@ def test_build_alert_out_of_scope_aspect_keeps_scope_in_false():
     assert alert.recommended_action == RecommendedAction.LOGISTICS_CHECK
 
 
+@pytest.mark.parametrize(
+    "verdict", [Verdict.GLOBAL, Verdict.TENTATIVE_GLOBAL, Verdict.INDETERMINATE]
+)
+def test_scope_in_ignores_verdict(verdict):
+    """scope_in 은 **순수 aspect 속성** — verdict 를 섞지 않는다 (스키마 §3).
+
+    문서가 서로 어긋난 지점이라 회귀가 조용히 들어올 수 있다: §3 필드정의는
+    "개선안 생성 여부와 별개"인데 §5.1·§3.2 표는 전역형·구분불가 행을
+    scope_in=false 로 적어놨다. scope.is_in_scope 가 §3 을 따른다고 선언했으므로
+    여기서 못박는다 — 색상은 어떤 verdict 에서도 scope_in=true 다.
+
+    recommended_action 은 반대로 verdict 를 본다. 둘을 같이 검사해서, 조치가
+    verdict 에 반응하는데도 scope_in 은 흔들리지 않는다는 걸 한 테스트에 남긴다.
+    """
+    alert = build_alert(
+        _judgement(verdict=verdict, root_cause=None),
+        detected_at=datetime(2026, 7, 7),
+        window_start=date(2026, 7, 1),
+        window_end=date(2026, 7, 7),
+        seq=itertools.count(1),
+    )
+    assert alert.scope_in is True
+    assert alert.recommended_action != RecommendedAction.GENERATE_RECOMMENDATION
+
+
 # ── 재알림 억제 (로직 §6) ─────────────────────────────────────────
 def _alert(
     product="P001",
@@ -398,6 +423,34 @@ def _scenario_items():
                 )
             )
     return items
+
+
+@pytest.mark.asyncio
+async def test_unreliable_denominator_suppresses_that_slot_end_to_end():
+    """분류 커버리지 미달 슬롯은 알림이 안 나간다 — detect_anomaly 까지 배선 확인.
+
+    build_batch 에 인자만 만들어두고 호출부에서 안 넘기면 아무 일도 안 일어난다.
+    실제로 그 실수를 했었기 때문에, 파이프라인 끝에서 결과가 달라지는지로 검증한다.
+    """
+    items = _scenario_items()
+    fired_slot = ("P001", Channel.COUPANG.value, Source.CS.value)
+
+    baseline, _ = await detect_anomaly(
+        items,
+        detected_at=datetime(2026, 7, 7, 9, 0),
+        window_end=date(2026, 7, 7),
+        client=_FakeClient(),
+    )
+    assert len(baseline) == 1  # 원래는 발화한다
+
+    alerts, _ = await detect_anomaly(
+        items,
+        detected_at=datetime(2026, 7, 7, 9, 0),
+        window_end=date(2026, 7, 7),
+        unreliable_denominators={fired_slot},
+        client=_FakeClient(),
+    )
+    assert alerts == []  # 분모를 믿을 수 없으므로 검정 자체를 안 한다
 
 
 @pytest.mark.asyncio

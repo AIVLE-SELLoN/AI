@@ -16,6 +16,7 @@ fixture: tests/fixtures/raw_cs_reviews.json (협업 규칙 4, 정답 없는 계�
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -165,6 +166,24 @@ def test_parse_llm_response_invalid_sentiment_value_raises():
     data = {"aspects": [{"aspect": "색상", "sentiment": 5}]}  # -1/0/1 밖의 값
     with pytest.raises(LlmParseError):
         _parse_llm_response(data, Source.CS, trace_key="test")
+
+
+def test_parse_llm_response_cs_empty_fallback_is_not_negative():
+    """폴백이 어느 aspect의 분자도 늘리면 안 된다 — 중립이라 부정 집계에 안 잡힌다.
+
+    위 ..._falls_back_to_etc_neutral 이 값 자체를 보고, 여기서는 그 값이 탐지 산식에
+    안전한지(부정이 아닌지)를 따로 못박는다. 폴백을 -1 로 바꾸면 없던 이상이 생긴다.
+    """
+    result = _parse_llm_response({"aspects": []}, Source.CS, trace_key="test")
+    assert result[0].sentiment != Sentiment.NEGATIVE
+
+
+def test_parse_llm_response_cs_empty_is_logged(caplog):
+    """조용히 채우지 않는다 — 빈도가 프롬프트 개선의 측정 대상이자 회귀 신호다."""
+    with caplog.at_level(logging.WARNING, logger="app.classification.service"):
+        _parse_llm_response({"aspects": []}, Source.CS, trace_key="item_id=INQ-1")
+    assert "cs_empty_aspects" in caplog.text
+    assert "INQ-1" in caplog.text  # 추적 키 포함 (컨벤션 4장)
 
 
 # ── 4. _classify_one — LLM을 가짜로 대체해서 프롬프트1/2 분기 검증 ────────────

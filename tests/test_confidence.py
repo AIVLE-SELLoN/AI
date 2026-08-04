@@ -15,11 +15,7 @@ from app.detection.combine import (
     pick_primary_source,
     source_signal,
 )
-from app.detection.confidence import (
-    decide_confidence,
-    decide_recommended_action,
-    is_scope_in,
-)
+from app.detection.confidence import decide_confidence, decide_recommended_action
 
 
 # ── [7] 확신도 판정표 (로직 §[7]) ─────────────────────────────────
@@ -76,10 +72,7 @@ def test_out_of_scope_aspect_never_generates_recommendation():
         assert action != RecommendedAction.GENERATE_RECOMMENDATION
 
 
-def test_scope_in_is_pure_aspect_property():
-    """scope_in 은 verdict 와 무관한 aspect 속성 (스키마 §3 필드정의)."""
-    assert is_scope_in("색상") is True
-    assert is_scope_in("파손") is False
+# scope_in 자체는 [5] 소관 — test_detection.py(값) · test_pipeline.py(verdict 무관성).
 
 
 # ── [8] CS·리뷰 종합 (로직 §5, 스키마 §3.1) ───────────────────────

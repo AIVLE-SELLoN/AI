@@ -29,7 +29,8 @@ from app.core.schemas import (
     SourceSignals,
     Verdict,
 )
-from app.detection.confidence import decide_recommended_action, is_scope_in
+from app.detection.confidence import decide_recommended_action
+from app.detection.scope import is_in_scope
 
 # 상품 단위로 1건만 발행하는 판정들 — 채널은 ALL 로 접힌다. (§5.1)
 PRODUCT_LEVEL_VERDICTS = frozenset({Verdict.GLOBAL, Verdict.TENTATIVE_GLOBAL})
@@ -127,8 +128,8 @@ def build_alert(
         ),
         root_cause=root_cause,
         detection_confidence=judgement["confidence"],
-        # scope_in 은 순수 aspect 속성 — verdict 를 섞지 않는다 (confidence.is_scope_in 주석).
-        scope_in=is_scope_in(aspect),
+        # scope_in 은 순수 aspect 속성 — verdict 를 섞지 않는다 (scope.is_in_scope 주석).
+        scope_in=is_in_scope(aspect),
         recommended_action=decide_recommended_action(
             verdict, aspect, root_cause.consistent if root_cause else None
         ),

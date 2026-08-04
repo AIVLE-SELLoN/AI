@@ -16,12 +16,13 @@
   문의·리뷰 원본에 옵션 정보가 없어서, 옵션 레벨 ID 를 받으면 집계가 성립하지 않는다.
   → 여기서는 ClassifiedItem.product_group_id 를 그룹 레벨로 **가정**한다.
 
-⚠️ BH 배치 범위 (문서 확인 필요):
+BH 배치 범위 — **두 소스를 한 family 로 묶는다** (로직 §[2-B] family 표):
   build_combinations 가 cs·review 조합을 한 리스트로 내므로 BH-FDR 이 두 소스에
-  걸쳐 한 번에 적용된다. 로직 §116 은 "[0]~[7]을 source별 독립 수행"이라 하는데,
-  BH family 를 source별로 쪼개야 하는지는 문서에 명시가 없다. 지금은 한 배치로 두었다
-  (m 이 커져 컷오프가 보수적 = 오탐에 안전한 쪽). 부록 A 캘리브레이션 m≈1,464 가
-  어느 쪽 기준인지 확인 필요.
+  걸쳐 한 번에 적용된다. 로직 §116 의 "source별 독립 수행"은 [0][1] 집계와 [3]~[7]
+  판정을 가리키며, BH family 는 그 예외다 — 문서 family 표가 상품당 검정 수를
+  **"36검정(6 aspect × 3 채널 × 2 source)"** 으로 세어 2 source 를 family 안에 넣고
+  있고, 그 합계 1,464 가 부록 A 캘리브레이션 기준이기 때문이다.
+  → eval/run_detection_eval.py 실측 배치도 1,464 로 일치한다(회귀 감시 지점).
 
 ──────────────────────────────────────────────────────────────────────────
 원인 분류 — 프롬프트3 (classify_cause_v1.md) 미결 / 주의
@@ -67,12 +68,8 @@ from app.detection.aggregate import build_combinations
 from app.detection.alert import PRODUCT_LEVEL_VERDICTS, build_alert, build_root_cause
 from app.detection.cause import diagnose_cause
 from app.detection.combine import combine_sources, pick_primary_source, source_signal
-from app.detection.confidence import (
-    decide_confidence,
-    decide_recommended_action,
-    is_scope_in,
-)
-from app.detection.scope import pick_main_aspect
+from app.detection.confidence import decide_confidence, decide_recommended_action
+from app.detection.scope import is_in_scope, pick_main_aspect
 from app.detection.statistics import run_detection
 from app.detection.suppression import filter_suppressed
 from app.detection.verdict import run_verdict
@@ -148,7 +145,9 @@ def normalize(items: list[ClassifiedItem]) -> list[dict]:
     return rows
 
 
-def _window_bounds(rows: list[dict], window_end: date | None) -> tuple[int, int, date, date]:
+def _window_bounds(
+    rows: list[dict], window_end: date | None
+) -> tuple[int, int, date, date]:
     """현재 윈도우 [cur_start, cur_end] 를 day ordinal 과 date 양쪽으로 낸다."""
     cur_end = window_end.toordinal() if window_end else max(r["day"] for r in rows)
     cur_start = cur_end - CURRENT_WINDOW_DAYS + 1
@@ -169,9 +168,16 @@ def _alert_days(prior_alerts: list[DetectionAlert] | None) -> set:
     for alert in prior_alerts or []:
         if alert.channel == Channel.ALL:
             continue
-        for ordinal in range(alert.window_start.toordinal(), alert.window_end.toordinal() + 1):
+        for ordinal in range(
+            alert.window_start.toordinal(), alert.window_end.toordinal() + 1
+        ):
             excluded.add(
-                (alert.product_group_id, alert.main_aspect.value, alert.channel.value, ordinal)
+                (
+                    alert.product_group_id,
+                    alert.main_aspect.value,
+                    alert.channel.value,
+                    ordinal,
+                )
             )
     return excluded
 
@@ -217,12 +223,16 @@ def _build_candidates(
     candidates: dict[tuple, dict] = {}
     for (product, channel), by_aspect in buckets.items():
         deltas = {
-            aspect: _representative_delta(tests, product, aspect, channel, source, result)
+            aspect: _representative_delta(
+                tests, product, aspect, channel, source, result
+            )
             for aspect, result in by_aspect.items()
         }
         main, subs = pick_main_aspect(deltas)
         main_result = by_aspect[main]
-        stats_channel = _stats_channel(tests, product, main, channel, source, main_result)
+        stats_channel = _stats_channel(
+            tests, product, main, channel, source, main_result
+        )
 
         candidates[(product, channel)] = {
             "product": product,
@@ -278,9 +288,11 @@ def _stats_channel(
         return channel
     return max(
         result["channels"],
-        key=lambda ch: tests[(product, aspect, ch, source)]["delta"]
-        if (product, aspect, ch, source) in tests
-        else 0.0,
+        key=lambda ch: (
+            tests[(product, aspect, ch, source)]["delta"]
+            if (product, aspect, ch, source) in tests
+            else 0.0
+        ),
     )
 
 
@@ -314,7 +326,7 @@ async def _diagnose(candidates: dict, texts: dict, client: Any) -> None:
     targets = [
         (key, candidate)
         for key, candidate in candidates.items()
-        if candidate["verdict"] == Verdict.BIASED and is_scope_in(candidate["aspect"])
+        if candidate["verdict"] == Verdict.BIASED and is_in_scope(candidate["aspect"])
     ]
     if not targets:
         return
@@ -351,6 +363,7 @@ async def detect_anomaly(
     resolved_alert_ids: set | None = None,
     past_rate_fallback: dict | None = None,
     change_log: dict | None = None,
+    unreliable_denominators: set | None = None,
     client: Any = None,
 ) -> tuple[list[DetectionAlert], list[DetectionAlert]]:
     """[0]~[8] 전체 파이프라인. ClassifiedItem 집합 → 발행할 DetectionAlert.
@@ -367,6 +380,11 @@ async def detect_anomaly(
         change_log: {(product, aspect): change_id} — 상세페이지 수정 이력이 이상 시점과
             일치하는 건. **확신도 보강용이지 판정 권한이 없다**(로직 §[7]). 없으면
             timestamp_matched=False 로 두고 확신도가 '높음'까지 못 갈 뿐, 기각하지 않는다.
+        unreliable_denominators: 분류 커버리지 미달로 **분모를 믿을 수 없는**
+            (product, channel, source) 집합. 로더가 `loader.unreliable_slots()` 로
+            넘긴다. 검정 전에 family 에서 빠진다 — 분모가 깎인 슬롯은 p값이 실제보다
+            작게 나오고, BH 는 step-up 이라 그 하나가 기각 개수를 늘려 **다른 상품의
+            임계까지 완화**시키기 때문이다.
         client: LlmClient (테스트 목킹용 주입).
 
     Returns:
@@ -377,7 +395,9 @@ async def detect_anomaly(
         return [], []
 
     detected_at = detected_at or datetime.now()
-    cur_start, cur_end, window_start_date, window_end_date = _window_bounds(rows, window_end)
+    cur_start, cur_end, window_start_date, window_end_date = _window_bounds(
+        rows, window_end
+    )
 
     # [0][1] 집계 · 과거 기준
     combinations, texts = build_combinations(
@@ -391,7 +411,9 @@ async def detect_anomaly(
     )
 
     # [2] 검정 3관문 → [3] 편중/전역 판정
-    batch, held = run_detection(combinations)
+    batch, held = run_detection(
+        combinations, unreliable_denominators=unreliable_denominators
+    )
     verdict_results = run_verdict(batch, held)
 
     tests = {test["key"]: test for test in batch}
@@ -458,7 +480,11 @@ async def detect_anomaly(
     )
     logger.info(
         "detection 완료 window=%s~%s 검정=%d 발화=%d 발행=%d 억제=%d",
-        window_start_date, window_end_date, len(batch),
-        sum(1 for t in batch if t["fired"]), len(published), len(suppressed),
+        window_start_date,
+        window_end_date,
+        len(batch),
+        sum(1 for t in batch if t["fired"]),
+        len(published),
+        len(suppressed),
     )
     return published, suppressed

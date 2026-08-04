@@ -29,6 +29,7 @@ from app.core.schemas import (
 
 logger = logging.getLogger(__name__)
 
+
 def load_llm_prompt(module: str, name: str) -> str:
     """load_prompt()로 파일 전체를 읽되, "## System Prompt" 이전(파일 헤더 — 담당자·변경이력
     등 문서용 메타정보)은 잘라내고 그 이후만 반환한다.
@@ -193,9 +194,8 @@ def _parse_llm_response(data: dict, source: Source, *, trace_key: str) -> list[A
     if raw_aspects is None:
         raise LlmParseError(f"LLM 응답에 'aspects' 키 없음 [{trace_key}]: {data}")
 
-    if not raw_aspects and source == Source.CS:
-        logger.warning(f"cs_empty_aspects [{trace_key}]")
-        return [AspectSentiment(aspect=Aspect.ETC, sentiment=Sentiment.NEUTRAL, mixed_signal=None)]
+    if source == Source.CS and not raw_aspects:
+        return _cs_empty_fallback(trace_key)
 
     try:
         result = []
@@ -210,6 +210,43 @@ def _parse_llm_response(data: dict, source: Source, *, trace_key: str) -> list[A
         return result
     except (KeyError, ValueError) as exc:
         raise LlmParseError(f"aspects 파싱 실패 [{trace_key}]: {exc} (원본: {raw_aspects})") from exc
+
+
+def _cs_empty_fallback(trace_key: str) -> list[AspectSentiment]:
+    """CS 응답이 빈 배열일 때 '기타/중립' 1건으로 채운다. (2026-08-04 현진·서영 합의)
+
+    프롬프트1은 "CS는 반드시 6개 중 하나 이상"을 지시하지만 LLM이 지키지 않는 경우가
+    있다(실측 284건 중 6건, 2.1%). 리뷰는 빈 배열이 정상 출력이라 **CS 전용**이다.
+
+    ⚠️ 집계 산식만 보면 이 폴백은 no-op 이다(현진 정정, 2026-08-04). aggregate 의 분모는
+    ClassifiedItem 1건당 행 1개를 만든 뒤 aspect 내용과 무관하게 +1 하므로(§129),
+    빈 배열이든 기타/중립이든 분모+1·분자+0 으로 완전히 같다. 그러니 "빈 배열을 그냥
+    둔다"가 그 자체로 부정률을 왜곡하지는 않는다.
+
+    폴백이 실제로 막는 것은 둘이다:
+      ① detection.loader.check_coverage 가 "aspect 1개 이상"을 분류 성공의 기준으로
+         삼는다. 빈 배열이 남으면 그 (상품,채널,source) 슬롯이 커버리지 미달로 잡혀
+         **검정 자체에서 통째로 빠진다** — 실측으로 P019 의 CS 슬롯 2개가 사라졌고,
+         폴백 적용 후 0개가 됐다. 미탐이 아니라 '판정 자체를 안 함'이 된다.
+      ② 여기서 LlmParseError 로 던지는 대안은 더 나쁘다. ClassifiedItem 이 아예 안
+         만들어져 그 문의가 분모에서 빠지고, 부정률이 실제보다 **높게** 계산된다
+         (오탐 방향). 워커가 dead-letter 로 보내도 커버리지 구멍이 이동할 뿐이다.
+
+    '기타/중립'은 분모에 남기되 어느 aspect의 분자도 늘리지 않아 가장 보수적이다.
+
+    ⚠️ 조용히 채우지 않는다. 이게 얼마나 자주 도는지가 프롬프트 개선의 측정 대상이고,
+       빈도가 오르면 프롬프트 회귀 신호다.
+    ⚠️ 이 함수를 인라인으로 되돌리지 말 것 — eval/run_pipeline_eval.py 의 배치 경로가
+       _parse_llm_response 를 우회하므로 이 함수를 직접 불러 같은 규칙을 적용한다.
+       인라인으로 두면 규칙이 두 벌이 되어 갈라진다.
+    """
+    logger.warning(
+        "cs_empty_aspects [%s] LLM이 빈 배열 반환 → %s/%d 로 대체",
+        trace_key,
+        Aspect.ETC.value,
+        Sentiment.NEUTRAL.value,
+    )
+    return [AspectSentiment(aspect=Aspect.ETC, sentiment=Sentiment.NEUTRAL, mixed_signal=None)]
 
 
 # ── explode 저장 규약 (분류 워커 명세 §2, 2026-07-23 유지인 확정) ────────────────

@@ -92,6 +92,29 @@ def test_past_total_zero_holds_only_that_aspect():
     assert held == [("P100", "NAVER", "cs")]  # 보류 사실은 계속 보고된다
 
 
+def test_unreliable_denominator_slot_is_excluded_before_testing():
+    """분류 커버리지 미달 슬롯은 **검정 전에** family 에서 빠진다.
+
+    분모가 깎인 슬롯은 부정률이 부풀려져 p값이 실제보다 작게 나온다. BH 는
+    step-up 이라 가짜로 작은 p값 하나가 기각 개수를 늘려 나머지 검정의 임계까지
+    완화시킨다 — 한 상품의 데이터 결함이 다른 상품을 오탐시킨다.
+    """
+    combos = [
+        ("P001", "색상", "COUPANG", "cs", (26, 200, 40, 800)),  # 커버리지 미달로 가정
+        ("P001", "색상", "COUPANG", "review", (5, 40, 4, 160)),  # 같은 채널 다른 source
+        ("P002", "색상", "COUPANG", "cs", (26, 200, 40, 800)),  # 무관한 상품
+    ]
+    batch, held = build_batch(
+        combos, unreliable_denominators={("P001", "COUPANG", "cs")}
+    )
+
+    keys = [t["key"] for t in batch]
+    assert ("P001", "색상", "COUPANG", "cs") not in keys  # 검정 자체를 안 한다
+    assert ("P001", "색상", "COUPANG", "review") in keys  # 분모는 source 마다 따로다
+    assert ("P002", "색상", "COUPANG", "cs") in keys
+    assert ("P001", "COUPANG", "cs") in held  # 보류로 보고된다
+
+
 def test_hold_propagates_across_sources():
     """CS 가 표본 부족이면 그 (상품,채널)은 리뷰까지 함께 보류된다.
 

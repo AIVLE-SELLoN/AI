@@ -40,6 +40,11 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+# 리포트에 한글·'—'·'←' 가 들어간다. Windows 콘솔 기본이 cp949 라 재설정하지 않으면
+# 채점을 다 끝낸 **마지막 출력 단계에서** UnicodeEncodeError 로 죽는다 (지인님
+# run_recommendation_eval.py 와 같은 처리).
+sys.stdout.reconfigure(encoding="utf-8")
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -63,6 +68,14 @@ from app.detection.verdict import run_verdict
 CONFIG_ANOMALY = ROOT / "data" / "config" / "config_anomaly.csv"
 CONFIG_PRODUCTS = ROOT / "data" / "config" / "config_products.csv"
 GOLDEN_ANOMALY = ROOT / "data" / "golden" / "golden_anomaly.csv"
+
+DOC_FAMILY_SIZE = 1464
+"""로직 §[2-B] family 표의 검정 수 (42상품 × 36검정 1,512 − 보류 48).
+
+부록 A 의 컷오프 캘리브레이션이 이 m 기준이라, 여기서 벗어나면 컷오프도 함께
+움직인다. **판정 임계가 아니라 대조용 기준값**이므로 어겨도 실패시키지 않는다
+(상품이 늘면 정상적으로 커진다) — _report_family 가 한 줄 알리기만 한다.
+"""
 
 # ⚠️ str(Verdict.NORMAL) 은 "Verdict.NORMAL" 을 낸다(3.11+ StrEnum 아님). 반드시 .value.
 NORMAL = Verdict.NORMAL.value
@@ -202,7 +215,27 @@ def predict(config_rows: list[dict], products: list[str]) -> dict:
         "changes": change_log(config_rows),
         "n_batch": len(batch),
         "n_held": len(held),
+        "n_grid": len(combos),
     }
+
+
+def _report_family(pred: dict) -> None:
+    """BH family 크기가 그리드에서 유도한 값과 맞는지 대조한다. (로직 §[2-B] family 표)
+
+    왜 감시하나: BH 는 m 으로 컷오프를 정하는 상대평가라, family 가 조용히 달라지면
+    **모든 판정이 함께 움직인다.** 코드는 그대로인데 성적만 바뀌어서 원인을 찾기 어렵다.
+    실제로 겪은 두 경로 — ① 보류 범위를 (상품,채널)에서 (상품,채널,source)로 잘못
+    좁히면 m 이 늘고, ② 커버리지 미달 슬롯 제외가 켜지면 m 이 준다.
+
+    **고정값을 박지 않는다.** 상품이 늘면 m 이 커지는 게 정상이라 상수로 두면 오경보가
+    된다. 대신 그리드(상품×aspect×채널×source)에서 유도한 기대치와 대조하고, 문서
+    캘리브레이션(m=1,464)과 다를 때만 한 줄 알린다 — 실패가 아니라 재확인 신호다.
+    """
+    excluded = pred["n_grid"] - pred["n_batch"]
+    line = f"  family {pred['n_batch']} = 그리드 {pred['n_grid']} − 미검정 {excluded}"
+    if pred["n_batch"] != DOC_FAMILY_SIZE:
+        line += f"  ⚠️ 문서 캘리브레이션 {DOC_FAMILY_SIZE} 과 다름 — BH 컷오프 재확인"
+    print(line)
 
 
 _NO_ALERT = {
@@ -358,6 +391,7 @@ def report(m: dict, pred: dict, golden: list[dict], verbose: bool) -> None:
     print("실험① 이상탐지 — oracle (LLM 호출 0회)")
     print(f"{'=' * 62}")
     print(f"검정 배치 {pred['n_batch']}건 / 보류 {pred['n_held']}건")
+    _report_family(pred)
     print(f"채점 {m['n_scored']}건 (케이스×소스 단위)\n")
 
     print(f"■ 탐지율(recall)     {ratio(*m['recall'])}")
