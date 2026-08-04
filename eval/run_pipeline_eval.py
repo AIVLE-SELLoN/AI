@@ -23,11 +23,15 @@
 
 비용
 ----
-프롬프트1 은 현재 **문의 1건당 LLM 1회**다(service.py:69 — 배치 전환은 재검증 대기).
-프롬프트가 4,586 토큰인데 본문은 평균 14 토큰이라 호출의 99.7% 가 프롬프트 재전송이다.
+프롬프트1 은 현재 **문의 1건당 LLM 1회**다(service.py — 내부가 asyncio.gather 라
+동시 호출일 뿐 배치가 아니다). 실측 토큰(tiktoken o200k_base, gpt-4o-mini 기준):
 
-    건당 호출   현재 윈도우 12,274건 × 3회 ≈ $26
-    20건 배치   같은 규모                  ≈ $2
+    classify_aspect_v5 시스템 프롬프트   6,189 토큰
+    CS 문의 본문                          평균 14 토큰 (최대 34)
+    → 호출 1건의 99.8% 가 프롬프트 재전송
+
+    건당 호출   현재 윈도우 11,990건 × 3회 ≈ $34.3
+    20건 배치   같은 규모                  ≈ $2.6
 
 `classify_aspect(list) -> list` 는 이미 배치를 받는 모양이라, 내부가 배치로 바뀌어도
 이 스크립트는 그대로 동작한다.
@@ -52,6 +56,10 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+# ⚠️ 이게 없으면 Windows(cp949) 에서 **LLM 을 다 태운 뒤 리포트 출력에서** 죽는다.
+#    분류 캐시는 청크마다 저장되니 돈이 날아가진 않지만, 숫자를 못 본다.
+sys.stdout.reconfigure(encoding="utf-8")
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
@@ -67,7 +75,11 @@ from run_detection_eval import (  # ①과 배치·채점을 공유해야 비교
     score,
 )
 
-from app.classification.service import ClassifyRequestItem, classify_aspect
+from app.classification.service import (
+    PROMPT_ASPECT_VERSION,
+    ClassifyRequestItem,
+    classify_aspect,
+)
 from app.core.constants import CURRENT_WINDOW_DAYS
 from app.core.schemas import AspectSentiment, ClassifiedItem
 from app.detection.aggregate import count_window
@@ -196,9 +208,16 @@ async def classify_cached(
     tag 로 캐시를 갈라두는 이유: 파일럿(--limit)과 본실행이 같은 캐시를 쓰면,
     나중에 호출 방식이 바뀌었을 때(건당 → 배치) 한 회차 안에 두 방식의 결과가
     섞인다. 지금 파일럿을 돌려도 본실행 숫자가 오염되지 않게 분리한다.
+
+    캐시 키에 **프롬프트 버전을 넣는다.** 안 넣으면 Agent1 이 프롬프트를 고쳐도
+    파일명이 그대로라 옛 결과를 조용히 재사용한다 — "고쳤는데 숫자가 안 변한다"가
+    되고, 그게 캐시 탓인지 수정이 무효한 탓인지 구분할 방법이 없다.
+    ⚠️ 프롬프트 버전이 그대로인 채 **호출 방식만** 바뀌면(건당 → 배치) 이 키로는
+       못 잡는다. 그때는 캐시 파일을 직접 지울 것.
     """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_path = CACHE_DIR / f"pipeline_{tag}_run{run}.json"
+    # 대상이 CS 전용이라 프롬프트1 버전만 본다 (collect_documents 가 source=cs 만 모음).
+    cache_path = CACHE_DIR / f"pipeline_{tag}_{PROMPT_ASPECT_VERSION}_run{run}.json"
     cache: dict = (
         json.loads(cache_path.read_text(encoding="utf-8"))
         if cache_path.exists()
