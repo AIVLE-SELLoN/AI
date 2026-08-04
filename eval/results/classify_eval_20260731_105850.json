@@ -1,0 +1,716 @@
+{
+  "meta": {
+    "experiment": "③ 프롬프트1 aspect 분류 정확도",
+    "run_at": "2026-07-31T10:58:50",
+    "golden": "golden_cs_labels.csv",
+    "prompt_version": "classify_aspect_v5",
+    "model": "gpt-4o-mini",
+    "seed": 7,
+    "limit": 1000,
+    "chunk_size": 20
+  },
+  "scores": {
+    "n_sampled": 1000,
+    "n_scored": 1000,
+    "n_unanswered": 0,
+    "aspect_f1": 0.9975,
+    "aspect_precision": 0.996,
+    "aspect_recall": 0.999,
+    "sentiment_accuracy": 0.9499,
+    "exact_match_rate": 0.946,
+    "per_aspect": {
+      "기타": {
+        "precision": 0.9816,
+        "recall": 0.9938,
+        "n_true": 161
+      },
+      "사이즈": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 171
+      },
+      "색상": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 178
+      },
+      "소재": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 168
+      },
+      "오배송": {
+        "precision": 0.9938,
+        "recall": 1.0,
+        "n_true": 160
+      },
+      "파손": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 162
+      }
+    },
+    "mismatches": [
+      {
+        "inquiry_id": "INQ-033392",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-005189",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-009849",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-060483",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-092590",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-053141",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-021906",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-045420",
+        "raw_text": "결제는 됐는데 주문 내역에 안 떠요. 확인 부탁드립니다.",
+        "true_aspect": "기타",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-007366",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-009493",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-058792",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-096304",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-060509",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-096328",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-006526",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-004979",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-012088",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-031826",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-060376",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-066024",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-058708",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-070085",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-059679",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-054882",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-089207",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-035601",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-063048",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-015543",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-058094",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-080761",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-036423",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-051953",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-085758",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-096028",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-071727",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-068497",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-072144",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-070169",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-036974",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-017121",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-012042",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-022297",
+        "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+        "true_aspect": "기타",
+        "true_sentiment": 0,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-031027",
+        "raw_text": "실측 사이즈 문의드려요, 표기랑 차이나는 것 같아서요.",
+        "true_aspect": "사이즈",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-042185",
+        "raw_text": "실측 사이즈 문의드려요, 표기랑 차이나는 것 같아서요.",
+        "true_aspect": "사이즈",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-042329",
+        "raw_text": "모델핏이랑 실제랑 너무 다르게 나왔어요. 사이즈 다시 확인해주실 수 있나요?",
+        "true_aspect": "사이즈",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1
+          },
+          {
+            "aspect": "기타",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-034100",
+        "raw_text": "실측 사이즈 문의드려요, 표기랑 차이나는 것 같아서요.",
+        "true_aspect": "사이즈",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-016014",
+        "raw_text": "실측 사이즈 문의드려요, 표기랑 차이나는 것 같아서요.",
+        "true_aspect": "사이즈",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-091716",
+        "raw_text": "실측 사이즈 문의드려요, 표기랑 차이나는 것 같아서요.",
+        "true_aspect": "사이즈",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-062369",
+        "raw_text": "실측 사이즈 문의드려요, 표기랑 차이나는 것 같아서요.",
+        "true_aspect": "사이즈",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-005489",
+        "raw_text": "모델핏이랑 실제랑 너무 다르게 나왔어요. 사이즈 다시 확인해주실 수 있나요?",
+        "true_aspect": "사이즈",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1
+          },
+          {
+            "aspect": "기타",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-088684",
+        "raw_text": "실측 사이즈 문의드려요, 표기랑 차이나는 것 같아서요.",
+        "true_aspect": "사이즈",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-005332",
+        "raw_text": "실측 사이즈 문의드려요, 표기랑 차이나는 것 같아서요.",
+        "true_aspect": "사이즈",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-039530",
+        "raw_text": "모델핏이랑 실제랑 너무 다르게 나왔어요. 사이즈 다시 확인해주실 수 있나요?",
+        "true_aspect": "사이즈",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1
+          },
+          {
+            "aspect": "기타",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-008970",
+        "raw_text": "상세페이지의 사진이 너무 평면적으로 보여서, 실제로는 어떤 질감인지 잘 모르겠어요. 더 자세한 사진이 필요해요.",
+        "true_aspect": "소재",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 0
+          }
+        ]
+      }
+    ]
+  }
+}

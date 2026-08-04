@@ -1,0 +1,349 @@
+{
+  "meta": {
+    "experiment": "⑥ 원인분류 정확도",
+    "run_at": "2026-07-30T16:01:00",
+    "golden": "golden_cs_labels.csv",
+    "prompt_version": "classify_cause_v1",
+    "model": "gpt-4o",
+    "seed": 42,
+    "limit": 0,
+    "batch_size": 20
+  },
+  "scores": {
+    "n_sampled": 280,
+    "n_scored": 280,
+    "n_unanswered": 0,
+    "label_accuracy": 0.8464,
+    "per_aspect_accuracy": {
+      "사이즈": {
+        "accuracy": 0.9333,
+        "n": 60
+      },
+      "색상": {
+        "accuracy": 0.8187,
+        "n": 160
+      },
+      "소재": {
+        "accuracy": 0.8333,
+        "n": 60
+      }
+    },
+    "aspect_match_false_rate": 0.0357,
+    "confidence_buckets": {
+      "0.0~0.5": {
+        "accuracy": 0.4909,
+        "n": 55
+      },
+      "0.5~0.8": {
+        "accuracy": null,
+        "n": 0
+      },
+      "0.8~0.9": {
+        "accuracy": 0.9308,
+        "n": 130
+      },
+      "0.9~1.01": {
+        "accuracy": 0.9368,
+        "n": 95
+      }
+    },
+    "cause_identification": {
+      "n_groups": 14,
+      "consistent_verdict_match": 0.8571,
+      "label_match": 0.8571,
+      "groups": [
+        {
+          "group": [
+            "P001",
+            "색상",
+            "COUPANG"
+          ],
+          "n": 20,
+          "golden": {
+            "label": "사진_색감_오차",
+            "consistent": true
+          },
+          "predicted": {
+            "label": "사진_색감_오차",
+            "consistent": true
+          }
+        },
+        {
+          "group": [
+            "P003",
+            "색상",
+            "ZIGZAG"
+          ],
+          "n": 20,
+          "golden": {
+            "label": "실물_염색_편차",
+            "consistent": true
+          },
+          "predicted": {
+            "label": null,
+            "consistent": false
+          }
+        },
+        {
+          "group": [
+            "P004",
+            "사이즈",
+            "NAVER"
+          ],
+          "n": 20,
+          "golden": {
+            "label": "표기_오타",
+            "consistent": true
+          },
+          "predicted": {
+            "label": "표기_오타",
+            "consistent": true
+          }
+        },
+        {
+          "group": [
+            "P005",
+            "사이즈",
+            "COUPANG"
+          ],
+          "n": 20,
+          "golden": {
+            "label": "실측_표기_편차",
+            "consistent": true
+          },
+          "predicted": {
+            "label": "실측_표기_편차",
+            "consistent": true
+          }
+        },
+        {
+          "group": [
+            "P006",
+            "사이즈",
+            "ZIGZAG"
+          ],
+          "n": 20,
+          "golden": {
+            "label": "채널_사이즈_표준차이",
+            "consistent": true
+          },
+          "predicted": {
+            "label": "채널_사이즈_표준차이",
+            "consistent": true
+          }
+        },
+        {
+          "group": [
+            "P007",
+            "소재",
+            "ZIGZAG"
+          ],
+          "n": 20,
+          "golden": {
+            "label": "이미지_질감표현_부족",
+            "consistent": true
+          },
+          "predicted": {
+            "label": "이미지_질감표현_부족",
+            "consistent": true
+          }
+        },
+        {
+          "group": [
+            "P008",
+            "소재",
+            "COUPANG"
+          ],
+          "n": 20,
+          "golden": {
+            "label": "소재_정보_누락",
+            "consistent": true
+          },
+          "predicted": {
+            "label": "소재_정보_누락",
+            "consistent": true
+          }
+        },
+        {
+          "group": [
+            "P009",
+            "색상",
+            "NAVER"
+          ],
+          "n": 20,
+          "golden": {
+            "label": "조명_보정_차이",
+            "consistent": true
+          },
+          "predicted": {
+            "label": "조명_보정_차이",
+            "consistent": true
+          }
+        },
+        {
+          "group": [
+            "P010",
+            "소재",
+            "NAVER"
+          ],
+          "n": 20,
+          "golden": {
+            "label": "실제_원단_문제",
+            "consistent": true
+          },
+          "predicted": {
+            "label": null,
+            "consistent": false
+          }
+        },
+        {
+          "group": [
+            "P019",
+            "색상",
+            "COUPANG"
+          ],
+          "n": 20,
+          "golden": {
+            "label": "사진_색감_오차",
+            "consistent": true
+          },
+          "predicted": {
+            "label": "사진_색감_오차",
+            "consistent": true
+          }
+        },
+        {
+          "group": [
+            "P030",
+            "색상",
+            "COUPANG"
+          ],
+          "n": 20,
+          "golden": {
+            "label": "사진_색감_오차",
+            "consistent": true
+          },
+          "predicted": {
+            "label": "사진_색감_오차",
+            "consistent": true
+          }
+        },
+        {
+          "group": [
+            "P031",
+            "색상",
+            "COUPANG"
+          ],
+          "n": 20,
+          "golden": {
+            "label": "사진_색감_오차",
+            "consistent": true
+          },
+          "predicted": {
+            "label": "사진_색감_오차",
+            "consistent": true
+          }
+        },
+        {
+          "group": [
+            "P033",
+            "색상",
+            "COUPANG"
+          ],
+          "n": 20,
+          "golden": {
+            "label": null,
+            "consistent": false
+          },
+          "predicted": {
+            "label": null,
+            "consistent": false
+          }
+        },
+        {
+          "group": [
+            "P034",
+            "색상",
+            "COUPANG"
+          ],
+          "n": 20,
+          "golden": {
+            "label": "사진_색감_오차",
+            "consistent": true
+          },
+          "predicted": {
+            "label": "사진_색감_오차",
+            "consistent": true
+          }
+        }
+      ]
+    },
+    "confusion": [
+      {
+        "true": "실물_염색_편차",
+        "pred": "기타",
+        "n": 12
+      },
+      {
+        "true": "사진_색감_오차",
+        "pred": "기타",
+        "n": 6
+      },
+      {
+        "true": "실물_염색_편차",
+        "pred": "사진_색감_오차",
+        "n": 5
+      },
+      {
+        "true": "실제_원단_문제",
+        "pred": "기타",
+        "n": 5
+      },
+      {
+        "true": "실측_표기_편차",
+        "pred": "기타",
+        "n": 4
+      },
+      {
+        "true": "실제_원단_문제",
+        "pred": "이미지_질감표현_부족",
+        "n": 4
+      },
+      {
+        "true": "기타",
+        "pred": "소재_정보_누락",
+        "n": 1
+      },
+      {
+        "true": "사진_색감_오차",
+        "pred": "실물_염색_편차",
+        "n": 1
+      },
+      {
+        "true": "사진_색감_오차",
+        "pred": "조명_보정_차이",
+        "n": 1
+      },
+      {
+        "true": "조명_보정_차이",
+        "pred": "기타",
+        "n": 1
+      },
+      {
+        "true": "조명_보정_차이",
+        "pred": "실물_염색_편차",
+        "n": 1
+      },
+      {
+        "true": "기타",
+        "pred": "실물_염색_편차",
+        "n": 1
+      },
+      {
+        "true": "기타",
+        "pred": "사진_색감_오차",
+        "n": 1
+      }
+    ]
+  }
+}

@@ -26,6 +26,27 @@ langgraph==1.2.9
 scipy==1.18.0
 statsmodels==0.14.6
 
+# --- 리포팅: 템플릿 렌더링 ---
+# app/reporting/pdf_compiler.py 가 모듈 최상단에서 import 한다. tests/test_report.py
+# 가 그 모듈을 끌고 오므로, 빼면 pytest 가 수집 단계에서 통째로 멈춘다.
+# 순수 파이썬이라 네이티브 의존성이 없어 이미지에 넣어도 부담이 없다.
+jinja2==3.1.6
+
+# ⚠️ weasyprint(PDF 렌더링)는 여기 없다 — requirements.lock 에만 있다.
+#    GTK 네이티브 라이브러리를 쓰는데 python:3.12-slim 에는 없어서, 넣어도 이미지
+#    안에서는 PDF 가 안 나온다. 리포팅 라우터도 아직 501 스텁이라 컨테이너가 PDF
+#    경로를 타지 않는다. pdf_compiler 는 weasyprint 를 함수 안에서 import 하므로
+#    없어도 import 는 통과한다.
+#    나중에 실제로 이미지에 넣게 되면 Dockerfile 에 apt-get(libpango·libcairo 등)
+#    단계를 함께 추가해야 한다.
+#    로컬 설치 — Windows: GTK3-Runtime Win64(환경변수 추가 옵션 필수)
+#                macOS:   brew install cairo pango gdk-pixbuf libffi
+
+# --- docker kafka 컨테이너 환경 ---
+# ⚠️ kafka-python 과 **같은 `kafka` 모듈**을 설치한다. 둘 다 깔면 충돌하므로,
+#    기존에 kafka-python 이 있으면 먼저 `pip uninstall kafka-python` 할 것.
+kafka-python-ng==2.2.3
+
 # --- 개발/테스트 ---
 pytest==9.1.1
 pytest-asyncio==1.4.0

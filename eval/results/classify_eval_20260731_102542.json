@@ -1,0 +1,54 @@
+{
+  "meta": {
+    "experiment": "③ 프롬프트1 aspect 분류 정확도",
+    "run_at": "2026-07-31T10:25:42",
+    "golden": "golden_cs_labels.csv",
+    "prompt_version": "classify_aspect_v4",
+    "model": "gpt-4o-mini",
+    "seed": 42,
+    "limit": 300,
+    "chunk_size": 20
+  },
+  "scores": {
+    "n_sampled": 300,
+    "n_scored": 300,
+    "n_unanswered": 0,
+    "aspect_f1": 0.5067,
+    "aspect_precision": 0.5067,
+    "aspect_recall": 0.5067,
+    "sentiment_accuracy": 0.8816,
+    "exact_match_rate": 0.4467,
+    "per_aspect": {
+      "기타": {
+        "precision": 0.2449,
+        "recall": 1.0,
+        "n_true": 48
+      },
+      "사이즈": {
+        "precision": 1.0,
+        "recall": 0.902,
+        "n_true": 51
+      },
+      "색상": {
+        "precision": 1.0,
+        "recall": 0.3889,
+        "n_true": 54
+      },
+      "소재": {
+        "precision": 1.0,
+        "recall": 0.72,
+        "n_true": 50
+      },
+      "오배송": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "n_true": 48
+      },
+      "파손": {
+        "precision": 1.0,
+        "recall": 0.0204,
+        "n_true": 49
+      }
+    }
+  }
+}
