@@ -16,12 +16,13 @@
   문의·리뷰 원본에 옵션 정보가 없어서, 옵션 레벨 ID 를 받으면 집계가 성립하지 않는다.
   → 여기서는 ClassifiedItem.product_group_id 를 그룹 레벨로 **가정**한다.
 
-⚠️ BH 배치 범위 (문서 확인 필요):
+BH 배치 범위 — **두 소스를 한 family 로 묶는다** (로직 §[2-B] family 표):
   build_combinations 가 cs·review 조합을 한 리스트로 내므로 BH-FDR 이 두 소스에
-  걸쳐 한 번에 적용된다. 로직 §116 은 "[0]~[7]을 source별 독립 수행"이라 하는데,
-  BH family 를 source별로 쪼개야 하는지는 문서에 명시가 없다. 지금은 한 배치로 두었다
-  (m 이 커져 컷오프가 보수적 = 오탐에 안전한 쪽). 부록 A 캘리브레이션 m≈1,464 가
-  어느 쪽 기준인지 확인 필요.
+  걸쳐 한 번에 적용된다. 로직 §116 의 "source별 독립 수행"은 [0][1] 집계와 [3]~[7]
+  판정을 가리키며, BH family 는 그 예외다 — 문서 family 표가 상품당 검정 수를
+  **"36검정(6 aspect × 3 채널 × 2 source)"** 으로 세어 2 source 를 family 안에 넣고
+  있고, 그 합계 1,464 가 부록 A 캘리브레이션 기준이기 때문이다.
+  → eval/run_detection_eval.py 실측 배치도 1,464 로 일치한다(회귀 감시 지점).
 
 ──────────────────────────────────────────────────────────────────────────
 원인 분류 — 프롬프트3 (classify_cause_v1.md) 미결 / 주의
@@ -67,12 +68,8 @@ from app.detection.aggregate import build_combinations
 from app.detection.alert import PRODUCT_LEVEL_VERDICTS, build_alert, build_root_cause
 from app.detection.cause import diagnose_cause
 from app.detection.combine import combine_sources, pick_primary_source, source_signal
-from app.detection.confidence import (
-    decide_confidence,
-    decide_recommended_action,
-    is_scope_in,
-)
-from app.detection.scope import pick_main_aspect
+from app.detection.confidence import decide_confidence, decide_recommended_action
+from app.detection.scope import is_in_scope, pick_main_aspect
 from app.detection.statistics import run_detection
 from app.detection.suppression import filter_suppressed
 from app.detection.verdict import run_verdict
@@ -329,7 +326,7 @@ async def _diagnose(candidates: dict, texts: dict, client: Any) -> None:
     targets = [
         (key, candidate)
         for key, candidate in candidates.items()
-        if candidate["verdict"] == Verdict.BIASED and is_scope_in(candidate["aspect"])
+        if candidate["verdict"] == Verdict.BIASED and is_in_scope(candidate["aspect"])
     ]
     if not targets:
         return

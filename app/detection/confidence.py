@@ -96,16 +96,3 @@ def decide_recommended_action(
 
     # 편중은 맞으나 원인이 분산 → 개선안을 만들 근거가 없다.
     return RecommendedAction.CHANNEL_OPERATION_CHECK
-
-
-def is_scope_in(aspect: str) -> bool:
-    """scope_in 필드 값. **순수 aspect 속성**이다 (탐지 결과 스키마 §3).
-
-    ⚠️ 문서 내 모순 주의: §3 필드정의는 "순수 aspect 속성 — 색상·사이즈·소재=true,
-       개선안 생성 여부와 별개"라고 명시하는데, §5.1·§3.2 표는 전역형·구분불가 행을
-       scope_in=false 로 적어놨다. **§3 을 따른다** — §3 이 이 혼동을 명시적으로
-       선점한 문장이고, verdict 를 섞으면 "순수 aspect 속성"이라는 정의가 깨진다.
-       (Agent3 는 recommended_action=="개선안 생성" 으로 작동 여부를 판단하므로
-        scope_in 에 verdict 를 섞지 않아도 동작에는 영향이 없다.)
-    """
-    return aspect in SCOPE_ASPECTS
