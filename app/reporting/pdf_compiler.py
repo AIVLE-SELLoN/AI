@@ -81,6 +81,12 @@ MONTHLY_COVER_HTML = """
             {{ held_products|join(', ') }} — VOC 10건 미만이라 분석하지 않았습니다.
         </div>
         {% endif %}
+        {% if failed_products %}
+        <div class="meta" style="margin-top:2mm">
+            생성에 실패해 이번 호에서 빠진 상품 {{ failed_products|length }}개:
+            {{ failed_products|join(', ') }} — 데이터는 정상이며 운영자가 확인 중입니다.
+        </div>
+        {% endif %}
     </section>
 """
 
@@ -367,6 +373,7 @@ def build_book_context(
     items: list[dict[str, Any]],
     *,
     held_products: list[str] | None = None,
+    failed_products: list[str] | None = None,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     """월간 합본 표지 + 상품별 섹션 컨텍스트.
@@ -426,7 +433,10 @@ def build_book_context(
         "crisis_product_count": crisis_products,
         "brand_sentiment": (weighted_sentiment / weighted_total) if weighted_total else 0.0,
         "summary_rows": sorted(summary_rows, key=lambda r: -r["worst_ratio"]),
+        # ⚠️ 보류(표본 부족)와 실패(검증 미통과)를 **합치지 않는다**. 합치면 VOC 500건인
+        #    상품이 표지에 "VOC 10건 미만이라 분석하지 않았다"고 잘못 인쇄된다.
         "held_products": held_products or [],
+        "failed_products": failed_products or [],
     }
 
 

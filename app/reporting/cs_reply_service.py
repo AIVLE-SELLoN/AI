@@ -23,6 +23,7 @@ from app.core.prompts import load_prompt
 from app.core.schemas import CallbackStatus, CSGuidelineInput, CSGuidelineOutput
 from app.reporting.callback import GenerationResult, build_guideline_callback
 from app.reporting.cs_reply_validator import validate_cs_guideline
+from app.reporting.ids import build_guideline_id as _build_guideline_id
 from app.reporting.pdf_compiler import ReportType, compile_report_to_pdf
 from app.reporting.s3_uploader import (
     REPORT_TYPE_GUIDELINE,
@@ -33,16 +34,13 @@ from app.reporting.s3_uploader import (
 logger = logging.getLogger("CSReplyService")
 
 # v3: 지시문 압축 + 문의 목록을 JSON → 파이프 표로 바꾼 토큰 절감판.
-PROMPT_VERSION = "cs_reply_v3"
+# v4: guideline_id 를 서버가 계산해 주입 — 모델이 만들면 알림별 유일성이 깨진다.
+PROMPT_VERSION = "cs_reply_v4"
 
 
 def build_guideline_id(input_data: CSGuidelineInput) -> str:
-    """GD-{탐지일 YYYYMMDD}-{마스터 상품 그룹}. 예: GD-20260528-P001
-
-    생성 시각이 아니라 **탐지 시각**을 쓴다 — 재생성해도 같은 알림이면 같은 ID 가 나와야
-    Spring Boot 쪽에서 중복 문서를 구분할 수 있다.
-    """
-    return f"GD-{input_data.detected_at.strftime('%Y%m%d')}-{input_data.product_group_id}"
+    """alert_id 에서 파생한 가이드라인 ID. 규칙 본문은 `ids.build_guideline_id` 참고."""
+    return _build_guideline_id(input_data.alert_id)
 
 
 def _build_stats_summary(input_data: CSGuidelineInput) -> str:
@@ -107,6 +105,8 @@ def build_prompt(
     )
     return template.substitute(
         inquiry_table=_build_inquiry_table(input_data),
+        # 서버가 계산한 ID 를 그대로 주입한다 — 모델이 만들면 알림별 유일성이 깨진다
+        guideline_id=build_guideline_id(input_data),
         alert_id=input_data.alert_id,
         detected_at=input_data.detected_at.isoformat(),
         product_group_id=input_data.product_group_id,

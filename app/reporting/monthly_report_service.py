@@ -282,7 +282,8 @@ async def compile_and_upload_monthly_book(
     (2026-08-03 확정), 표지에 전사 요약과 상품 목록이 들어간다.
 
     ⚠️ 상품 하나가 실패해도 합본은 나간다 — 나머지 상품의 리포트까지 막을 이유가 없다.
-       빠진 상품은 표지에 보류/실패로 표기된다.
+       빠진 상품은 표지에 **보류(표본 부족)와 실패(검증 미통과)를 구분해서** 표기한다.
+       둘을 합치면 데이터가 멀쩡한 상품이 '표본 부족'으로 잘못 안내된다.
     """
     report_id = build_book_report_id(report_month)
     trace_base = f"report_id={report_id}"
@@ -310,7 +311,8 @@ async def compile_and_upload_monthly_book(
                 }
                 for item in items
             ],
-            held_products=(held_products or []) + (failed_products or []),
+            held_products=held_products or [],
+            failed_products=failed_products or [],
         )
         pdf_bytes = compile_monthly_book(context)
         pdf_s3_meta = await upload_pdf_to_s3(

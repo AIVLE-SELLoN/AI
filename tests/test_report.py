@@ -17,6 +17,7 @@ from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from jinja2 import BaseLoader, Environment, select_autoescape
 
 from app.core import constants
 from app.core.schemas import (
@@ -52,6 +53,7 @@ from app.reporting.monthly_report_service import (
     generate_monthly_report_output,
 )
 from app.reporting.monthly_report_validator import validate_monthly_report
+from app.reporting.pdf_compiler import MONTHLY_COVER_HTML, build_book_context
 from app.reporting.s3_uploader import (
     REPORT_TYPE_GUIDELINE,
     REPORT_TYPE_MONTHLY,
@@ -131,7 +133,7 @@ def cs_input() -> CSGuidelineInput:
 def cs_output() -> CSGuidelineOutput:
     """cs_input 과 정합한 정상 출력."""
     return CSGuidelineOutput(
-        guideline_id="GD-20260528-P001",
+        guideline_id="GD-20260528-P001-COUPANG",
         alert_id="ALT-20260528-P001-COUPANG",
         summary={
             "issue_title": "쿠팡 색상 불만 급증 대응 가이드",
@@ -304,6 +306,35 @@ def test_cs_validator_skips_factcheck_on_excluded_fields(cs_input, cs_output) ->
     cs_output.ops_action_guide = "14일 내 재촬영을 완료하세요."
     is_valid, errors = validate_cs_guideline(cs_input, cs_output)
     assert is_valid, errors
+
+
+def test_guideline_id_is_unique_per_alert(cs_input) -> None:
+    """알림이 다르면 ID 도 달라야 한다 — 같으면 백엔드 upsert 가 앞의 가이드를 덮어쓴다.
+
+    탐지는 (상품, aspect, 채널) 단위로 발화하므로 같은 날 같은 상품에 알림이 여러 건
+    나오는 것이 정상이다. 예전 규칙(GD-{탐지일}-{상품})은 이 경우를 구분하지 못했다.
+    """
+    coupang = cs_input.model_copy(deep=True)
+    naver = cs_input.model_copy(deep=True)
+    naver.alert_id = "ALT-20260528-P001-NAVER"
+    naver.channel = Channel.NAVER
+    naver.main_aspect = Aspect.SIZE
+
+    assert cs_reply_service.build_guideline_id(coupang) != cs_reply_service.build_guideline_id(naver)
+    assert cs_reply_service.build_guideline_id(coupang) == "GD-20260528-P001-COUPANG"
+    assert cs_reply_service.build_guideline_id(naver) == "GD-20260528-P001-NAVER"
+    # 같은 알림이면 몇 번을 만들어도 같은 ID (재생성 멱등)
+    assert cs_reply_service.build_guideline_id(coupang) == cs_reply_service.build_guideline_id(
+        cs_input.model_copy(deep=True)
+    )
+
+
+def test_cs_validator_rejects_wrong_guideline_id(cs_input, cs_output) -> None:
+    """모델이 ID 를 임의로 만들면 반려한다(서버 계산값과 1:1 이어야 한다)."""
+    cs_output.guideline_id = "GD-20260528-P001"  # 채널이 빠진 옛 형식
+    is_valid, errors = validate_cs_guideline(cs_input, cs_output)
+    assert not is_valid
+    assert any("guideline_id 불일치" in e for e in errors)
 
 
 # ── 3. monthly_report_validator ──────────────────────────────────────────
@@ -498,12 +529,12 @@ async def test_cs_pipeline_success(cs_input, cs_output) -> None:
         result = await generate_cs_reply_pipeline(cs_input)
 
     assert result.callback.status == CallbackStatus.SUCCESS
-    assert result.callback.guideline_id == "GD-20260528-P001"
+    assert result.callback.guideline_id == "GD-20260528-P001-COUPANG"
     assert result.callback.report_id is None
     assert result.output.inquiry_specific_guides[0].item_id == "INQ-000001"
     # CS 는 데이터를 DB 에 적재한다 → 재컴파일 원본(입력+출력)이 반드시 실려야 한다
     assert result.callback.source_payload["input"]["alert_id"] == cs_input.alert_id
-    assert result.callback.source_payload["output"]["guideline_id"] == "GD-20260528-P001"
+    assert result.callback.source_payload["output"]["guideline_id"] == "GD-20260528-P001-COUPANG"
 
 
 def test_storage_policy_differs_by_document_type() -> None:
@@ -585,10 +616,29 @@ async def test_monthly_callback_rejects_source_payload_requirement(monthly_input
     # 반대로 CS 가이드라인은 source_payload 가 없으면 스키마가 거부해야 한다
     with pytest.raises(ValueError, match="source_payload"):
         GenerationCallback(
-            guideline_id="GD-20260528-P001",
+            guideline_id="GD-20260528-P001-COUPANG",
             status=CallbackStatus.SUCCESS,
             pdf_s3_meta=meta,
         )
+
+
+def test_book_cover_separates_held_and_failed() -> None:
+    """보류(표본 부족)와 실패(검증 미통과)를 표지에서 구분한다.
+
+    합쳐 넘기면 VOC 500건인 상품이 "VOC 10건 미만이라 분석하지 않았다"고 잘못 인쇄된다.
+    """
+    context = build_book_context(
+        "2026-07", [], held_products=["P090"], failed_products=["P001"]
+    )
+    assert context["held_products"] == ["P090"]
+    assert context["failed_products"] == ["P001"]
+
+    env = Environment(loader=BaseLoader(), autoescape=select_autoescape(["html"]))
+    cover = env.from_string(MONTHLY_COVER_HTML).render(**context)
+    assert "P090" in cover.split("생성에 실패해")[0]  # 보류 문구 쪽
+    failed_line = cover.split("생성에 실패해")[1]
+    assert "P001" in failed_line
+    assert "VOC 10건 미만" not in failed_line  # 실패 상품에 표본 부족이라 적지 않는다
 
 
 # ── 5. 프롬프트 압축 (토큰 절감이 데이터를 흘리지 않는지) ────────────────

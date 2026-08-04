@@ -26,6 +26,7 @@ from app.reporting.grounding import (
     find_forbidden_expressions,
     ratio_to_percent,
 )
+from app.reporting.ids import build_guideline_id
 
 logger = logging.getLogger("CSGuidelineValidator")
 
@@ -69,10 +70,19 @@ def validate_cs_guideline(
     """CS 가이드라인 LLM 출력의 그라운딩 검증. (통과여부, 사유목록)."""
     errors: list[str] = []
 
-    # 1. 식별자 일치
+    # 1. 식별자 일치 — alert_id 와 그로부터 파생되는 guideline_id 둘 다 본다.
+    #    가이드라인은 알림과 1:1 이라, ID 가 어긋나면 백엔드 upsert 에서 다른 알림의
+    #    가이드라인을 덮어쓰게 된다.
     if generated_output.alert_id != input_data.alert_id:
         errors.append(
             f"alert_id 불일치: 입력({input_data.alert_id}) != 출력({generated_output.alert_id})"
+        )
+
+    expected_guideline_id = build_guideline_id(input_data.alert_id)
+    if generated_output.guideline_id != expected_guideline_id:
+        errors.append(
+            f"guideline_id 불일치: 기대({expected_guideline_id}) "
+            f"!= 출력({generated_output.guideline_id})"
         )
 
     # 2. cs_id 포함관계 — 맞춤 가이드는 linked_inquiries 안의 문의만 가리켜야 한다
