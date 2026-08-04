@@ -37,6 +37,10 @@ jinja2==3.1.6
 #    안에서는 PDF 가 안 나온다. 리포팅 라우터도 아직 501 스텁이라 컨테이너가 PDF
 #    경로를 타지 않는다. pdf_compiler 는 weasyprint 를 함수 안에서 import 하므로
 #    없어도 import 는 통과한다.
+#    ⚠️ (2026-08-04) 리포팅 라우터는 구현됐지만 PDF 를 만들지 않는다 — 월간 합본 PDF 는
+#    scripts/generate_monthly_reports.py 배치가 만든다. **컨테이너에서 이 배치를 돌릴
+#    계획이면** weasyprint + GTK apt 단계를 Dockerfile 에 추가해야 한다. 현재 compose 에
+#    배치 서비스는 없고 호스트에서 실행하는 전제다.
 #    나중에 실제로 이미지에 넣게 되면 Dockerfile 에 apt-get(libpango·libcairo 등)
 #    단계를 함께 추가해야 한다.
 #    로컬 설치 — Windows: GTK3-Runtime Win64(환경변수 추가 옵션 필수)
