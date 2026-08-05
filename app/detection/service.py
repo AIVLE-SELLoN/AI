@@ -90,9 +90,26 @@ _NO_ALERT_VERDICTS = frozenset({Verdict.NORMAL})
 
 
 class DetectRequest(BaseModel):
-    """POST /detect 요청. items 는 분류(Agent1) 산출물 그대로."""
+    """POST /detect 요청. items 는 분류(Agent1) 산출물 그대로.
+
+    ⚠️ **운영 진입점은 배치(`app/batch/daily.py`)이고 이 API 는 재현·디버깅용이다.**
+       (백엔드 확정 구조 — 메인→AI 방향 큐에 '탐지 요청'이 없고, items 를 손에 든 건
+       분류를 수행하는 AI 노드 자신뿐이다. 2026-08-05 지인님 정리)
+
+       그래서 `documents` 를 **반드시 같이 보낼 것.** 없으면 분모를 items 기준으로 세어
+       (`normalize`) 운영과 결과가 달라진다 — 재현 도구가 다른 분모를 쓰면 결과가
+       이상할 때 로직 문제인지 경로 차이인지 구분할 수 없다.
+    """
 
     items: list[ClassifiedItem]
+    documents: list[dict] | None = Field(
+        default=None,
+        description=(
+            "원본 문서(문의·리뷰). **분모의 출처.** 필요한 키 — "
+            "id · product · channel · source · created_at · text(선택). "
+            "없으면 분모를 items 에서 세므로 운영 경로와 결과가 달라진다."
+        ),
+    )
     window_end: date | None = Field(
         default=None,
         description="현재 윈도우 마지막 날. 없으면 items 의 최신 날짜를 쓴다.",

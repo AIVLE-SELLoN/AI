@@ -6,9 +6,14 @@
 라우터는 얇게 — 판정 로직은 전부 service.py 아래 단계별 모듈에 있다.
 """
 
+import logging
+
 from fastapi import APIRouter
 
+from app.core.schemas import Source
 from app.detection.service import DetectRequest, DetectResponse, detect_anomaly
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["detection"])
 
@@ -23,12 +28,26 @@ async def ping() -> dict[str, str]:
 async def detect(request: DetectRequest) -> DetectResponse:
     """ClassifiedItem 집합 → DetectionAlert (편중형/전역형 + 원인라벨).
 
+    ⚠️ **운영 진입점이 아니다.** 매일 도는 배치(`app/batch/daily.py`)가 `detect_anomaly()`
+       를 직접 부른다. 이 API 는 "이 케이스만 넣으면 왜 알림이 안 뜨지?"를 보는
+       재현·디버깅 창구다 (2026-08-05 지인님 결선 정리).
+
     ⚠️ BH-FDR 은 배치 연산이라 **한 번에 윈도우 전체를 넘겨야 한다.** 상품 하나만
        따로 호출하면 다중검정 보정의 family 가 그 상품으로 좁아져 컷오프가 달라진다
        (로직 §8). 상품별 분할 호출 금지.
     """
+    if request.documents is None and any(i.source == Source.REVIEW for i in request.items):
+        # 리뷰는 aspect 0개면 classified_item 에 행이 아예 없다. items 로 분모를 세면
+        # 그 문서가 통째로 빠져 부정률이 부풀려진다 — **오탐 방향**이라 조용히 두면 안 된다.
+        # CS 는 _cs_empty_fallback 이 aspect >= 1 을 보장해 items 만으로도 맞다.
+        logger.warning(
+            "documents 없이 리뷰가 섞인 요청 — 분모를 items 에서 세므로 부정률이 "
+            "과대추정되고 운영 경로와 결과가 달라집니다. documents 를 함께 보내세요."
+        )
+
     alerts, suppressed = await detect_anomaly(
         request.items,
+        documents=request.documents,
         window_end=request.window_end,
         prior_alerts=request.prior_alerts,
         resolved_alert_ids=set(request.resolved_alert_ids),

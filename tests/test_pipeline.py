@@ -5,6 +5,7 @@ LLM 은 목킹한다 (비용 0). 통합 테스트는 "숫자를 넣으면 몇 �
 """
 
 import itertools
+import logging
 from datetime import date, datetime
 
 import pytest
@@ -630,3 +631,64 @@ async def test_documents_auto_coverage_ignores_review():
     """
     documents, items = _review_scenario()
     assert unreliable_slots(check_coverage(documents, items)) == set()
+
+
+# ── POST /detect 의 documents 패스스루 (지인님 결선 정리 2026-08-05) ──────
+#
+# /detect 는 운영 경로가 아니라 **재현·디버깅 창구**다(운영은 app/batch/daily.py).
+# 그래서 운영과 같은 분모 경로를 타야 한다 — 다른 분모를 쓰면 결과가 이상할 때
+# 로직 문제인지 경로 차이인지 구분할 수 없다.
+#
+# ⚠️ detect_anomaly 에 documents 인자가 있어도 **라우터가 안 넘기면 소용없다.**
+#    실제로 그런 상태로 하루 넘게 있었다(2026-08-04~05). 그래서 서비스 함수가 아니라
+#    **HTTP 요청으로** 알림 발행이 갈리는지 확인한다.
+
+
+def _detect_via_http(payload: dict, monkeypatch) -> dict:
+    """POST /detect 를 실제로 태운다. [6] 만 스텁으로 막아 LLM 호출 0."""
+    from fastapi.testclient import TestClient
+
+    import app.detection.service as svc
+    from app.main import app as fastapi_app
+
+    async def _stub_cause(aspect, items, *, client=None, trace_key=""):
+        return {
+            "label": "사진_색감_오차", "consistent": True,
+            "count": len(items), "total": len(items), "freq": {}, "cs_ids": [],
+        }
+
+    monkeypatch.setattr(svc, "diagnose_cause", _stub_cause)
+    response = TestClient(fastapi_app).post("/api/v1/detect", json=payload)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _review_payload() -> tuple[list[dict], list[dict]]:
+    """_review_scenario() 를 JSON 직렬화해 요청 본문으로 만든다."""
+    documents, items = _review_scenario()
+    docs = [{**d, "created_at": d["created_at"].isoformat()} for d in documents]
+    return docs, [i.model_dump(mode="json") for i in items]
+
+
+def test_detect_endpoint_passes_documents_through(monkeypatch):
+    """documents 를 실으면 라우터가 그걸 분모로 쓴다 — 오탐이 사라져야 한다."""
+    docs, items = _review_payload()
+    base = {"items": items, "window_end": "2026-07-07"}
+
+    # documents 없이 = 옛 경로. 무관 리뷰가 분모에서 빠져 오탐이 난다.
+    without = _detect_via_http(base, monkeypatch)
+    assert without["alerts"], "이 시나리오는 documents 가 없으면 오탐이 나야 한다(테스트 전제)"
+
+    # documents 를 실으면 분모가 원본 기준 → 알림 0건.
+    with_docs = _detect_via_http({**base, "documents": docs}, monkeypatch)
+    assert with_docs["alerts"] == []
+    assert with_docs["suppressed"] == []
+
+
+def test_detect_endpoint_warns_when_review_without_documents(monkeypatch, caplog):
+    """documents 없이 리뷰가 섞이면 경고를 남긴다 (조용히 틀리면 안 된다)."""
+    _docs, items = _review_payload()
+
+    with caplog.at_level(logging.WARNING, logger="app.detection.router"):
+        _detect_via_http({"items": items, "window_end": "2026-07-07"}, monkeypatch)
+    assert any("documents" in r.message for r in caplog.records)
