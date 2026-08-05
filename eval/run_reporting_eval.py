@@ -164,6 +164,13 @@ def _monthly_case(
             "cause_title": f"쿠팡-네이버 채널 평판 격차 {stage_label}",
             "cause_description": "쿠팡 채널의 색상 불만 비중이 높아 이미지 운영 점검이 필요합니다.",
         },
+        channel_pair_analyses=[
+            {
+                "comparison_pair": "COUPANG_VS_NAVER",
+                "cause_analysis": ["쿠팡 채널에서 색상 관련 부정 의견 비중이 상대적으로 높습니다."],
+                "recommended_actions": ["쿠팡 상세 페이지 대표 이미지를 원본 색상 기준으로 교체하세요."],
+            }
+        ],
         cause_analysis_results=["색상 부정 의견이 전체 450건 중 가장 큰 비중을 차지했습니다."],
         recommended_actions=["쿠팡 대표 이미지를 원본 색상 기준으로 교체하세요."],
     )

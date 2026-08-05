@@ -17,7 +17,7 @@ from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from jinja2 import BaseLoader, Environment, select_autoescape
+from jinja2 import BaseLoader, Environment, StrictUndefined, select_autoescape
 
 from app.core import constants
 from app.core.schemas import (
@@ -53,7 +53,10 @@ from app.reporting.monthly_report_service import (
     generate_monthly_report_output,
 )
 from app.reporting.monthly_report_validator import validate_monthly_report
-from app.reporting.pdf_compiler import MONTHLY_COVER_HTML, build_book_context
+from app.reporting.pdf_compiler import (
+    MONTHLY_BOOK_HTML,
+    build_book_context,
+)
 from app.reporting.s3_uploader import (
     REPORT_TYPE_GUIDELINE,
     REPORT_TYPE_MONTHLY,
@@ -234,9 +237,57 @@ def monthly_output() -> MonthlyReportOutput:
             "cause_title": "쿠팡-네이버 채널 평판 격차 위험 단계",
             "cause_description": "쿠팡 채널의 색상 불만 비중이 뚜렷하게 높아 이미지 운영 점검이 필요합니다.",
         },
+        channel_pair_analyses=[
+            {
+                "comparison_pair": "COUPANG_VS_NAVER",
+                "cause_analysis": ["쿠팡 채널의 색상 부정 의견 비중이 네이버보다 높습니다."],
+                "recommended_actions": ["쿠팡 대표 이미지를 원본 색상 기준으로 교체하세요."],
+            },
+            {
+                # 보류 쌍 — 수치를 붙이지 않는다(§보류 시 판정 문구 금지)
+                "comparison_pair": "COUPANG_VS_ZIGZAG",
+                "cause_analysis": ["표본이 부족해 두 채널 간 차이를 판단하지 않았습니다."],
+                "recommended_actions": ["지그재그 채널 리뷰 수집량을 늘린 뒤 재확인하세요."],
+            },
+        ],
         cause_analysis_results=["색상 속성 부정 의견이 전체 450건 중 가장 큰 비중을 차지했습니다."],
         recommended_actions=["쿠팡 대표 이미지를 원본 색상 기준으로 교체하세요."],
     )
+
+
+def test_monthly_validator_requires_analysis_for_every_pair(
+    monthly_input: MonthlyReportInput, monthly_output: MonthlyReportOutput
+) -> None:
+    """쌍별 분석이 비면 반려 — PDF 게이지 바로 아래가 통째로 빈칸이 된다."""
+    output = monthly_output.model_copy(update={"channel_pair_analyses": []})
+    passed, errors = validate_monthly_report(monthly_input, output)
+    assert passed is False
+    assert any("채널쌍 분석 누락" in e for e in errors)
+
+
+def test_monthly_validator_rejects_unknown_pair(
+    monthly_input: MonthlyReportInput, monthly_output: MonthlyReportOutput
+) -> None:
+    """입력에 없는 채널쌍 분석은 반려 — 없는 게이지 자리에 붙을 문장이다."""
+    ghost = monthly_output.channel_pair_analyses[0].model_copy(
+        update={"comparison_pair": "NAVER_VS_ZIGZAG"}
+    )
+    output = monthly_output.model_copy(update={"channel_pair_analyses": [ghost]})
+    passed, errors = validate_monthly_report(monthly_input, output)
+    assert passed is False
+    assert any("입력에 없는 채널쌍" in e for e in errors)
+
+
+def test_monthly_validator_factchecks_pair_analysis(
+    monthly_input: MonthlyReportInput, monthly_output: MonthlyReportOutput
+) -> None:
+    """쌍별 원인 문장의 수치도 팩트체크 대상이다."""
+    bad = monthly_output.channel_pair_analyses[0].model_copy(
+        update={"cause_analysis": ["쿠팡 색상 부정 의견이 전체 9999건으로 집계됐습니다."]}
+    )
+    output = monthly_output.model_copy(update={"channel_pair_analyses": [bad]})
+    passed, _ = validate_monthly_report(monthly_input, output)
+    assert passed is False
 
 
 # ── 2. cs_reply_validator ────────────────────────────────────────────────
@@ -633,23 +684,87 @@ async def test_monthly_callback_rejects_source_payload_requirement(monthly_input
         )
 
 
-def test_book_cover_separates_held_and_failed() -> None:
-    """보류(표본 부족)와 실패(검증 미통과)를 표지에서 구분한다.
+def test_book_template_renders_without_undefined_vars(monthly_input, monthly_output) -> None:
+    """합본 템플릿이 필요한 컨텍스트를 전부 받는지 — 렌더링까지 해봐야 잡힌다.
 
-    합쳐 넘기면 VOC 500건인 상품이 "VOC 10건 미만이라 분석하지 않았다"고 잘못 인쇄된다.
+    파이프라인 테스트는 compile_monthly_book 을 mock 하므로 템플릿 변수 누락을 못 잡는다.
+    실제로 `pair_label` 을 {% with %} 바인딩에 안 넘겨 합본만 터진 적이 있다.
     """
     context = build_book_context(
-        "2026-07", [], held_products=["P090"], failed_products=["P001"]
+        "2026-07",
+        [
+            {
+                "input": monthly_input.model_dump(mode="json"),
+                "report": monthly_output.model_dump(mode="json"),
+            }
+        ],
     )
-    assert context["held_products"] == ["P090"]
-    assert context["failed_products"] == ["P001"]
+    env = Environment(
+        loader=BaseLoader(),
+        autoescape=select_autoescape(["html"]),
+        undefined=StrictUndefined,  # 정의 안 된 변수를 즉시 에러로
+    )
+    html = env.from_string(MONTHLY_BOOK_HTML).render(**context)
 
+    assert "쿠팡 vs 네이버" in html  # 채널 라벨이 한글로 치환됐는지
+    assert "원인 분석 결과" in html  # 채널쌍 카드 안으로 옮겨간 항목
+    assert "권장 조치 사항" in html
+    assert "CRITICAL RISKS" not in html  # 삭제된 카드
+    assert "STABLE" not in html  # 삭제된 상태 배지
+
+
+@pytest.mark.asyncio
+async def test_book_notice_separates_held_and_failed(monthly_input, monthly_output) -> None:
+    """보류(표본 부족)와 실패(검증 미통과)를 콜백 안내 문구에서 구분한다.
+
+    표지 페이지를 없앤 뒤(2026-08-04) 이 안내는 notice_message 로만 나간다. 둘을 합쳐
+    보내면 VOC 500건인 상품이 "VOC 10건 미만이라 분석하지 않았다"고 잘못 안내된다.
+    """
+    items = [{"input": monthly_input, "report": monthly_output}]
+    with (
+        patch("app.reporting.monthly_report_service.compile_monthly_book", return_value=b"%PDF-"),
+        patch(
+            "app.reporting.monthly_report_service.upload_pdf_to_s3", new_callable=AsyncMock
+        ) as mock_upload,
+    ):
+        mock_upload.return_value = PdfS3Meta(
+            s3_bucket_name="sellon-reports",
+            s3_file_path="reports/monthly/2026/08/",
+            original_file_name="monthly_2026-07.pdf",
+            new_file_name="monthly_ALL_2026-07_20260801_a1b2.pdf",
+            s3_full_key="reports/monthly/2026/08/monthly_ALL_2026-07_20260801_a1b2.pdf",
+            created_at=datetime.now(UTC),
+            file_size_bytes=497000,
+        )
+        result = await compile_and_upload_monthly_book(
+            "2026-07", items, held_products=["P090"], failed_products=["P001"]
+        )
+
+    notice = result.callback.notice_message
+    assert notice is not None
+    held_part, failed_part = notice.split("생성에 실패해")
+    assert "P090" in held_part
+    assert "P001" in failed_part
+    assert "미만" not in failed_part  # 실패 상품에 표본 부족이라 적지 않는다
+
+
+def test_book_has_no_cover_page(monthly_input, monthly_output) -> None:
+    """총합 요약(표지) 페이지는 만들지 않는다 — 첫 페이지가 곧 첫 상품 리포트다."""
+    context = build_book_context(
+        "2026-07",
+        [
+            {
+                "input": monthly_input.model_dump(mode="json"),
+                "report": monthly_output.model_dump(mode="json"),
+            }
+        ],
+    )
     env = Environment(loader=BaseLoader(), autoescape=select_autoescape(["html"]))
-    cover = env.from_string(MONTHLY_COVER_HTML).render(**context)
-    assert "P090" in cover.split("생성에 실패해")[0]  # 보류 문구 쪽
-    failed_line = cover.split("생성에 실패해")[1]
-    assert "P001" in failed_line
-    assert "VOC 10건 미만" not in failed_line  # 실패 상품에 표본 부족이라 적지 않는다
+    html = env.from_string(MONTHLY_BOOK_HTML).render(**context)
+
+    assert "월간 CS·품질 분석 보고서" not in html  # 표지 제목
+    assert "상품별 요약" not in html  # 표지 표
+    assert html.index(monthly_input.product_name) < len(html)  # 첫 상품이 곧바로 나온다
 
 
 # ── 5. 프롬프트 압축 (토큰 절감이 데이터를 흘리지 않는지) ────────────────

@@ -23,6 +23,14 @@ if sys.platform == "win32":
         os.environ["PATH"] = gtk_path + os.path.pathsep + os.environ.get("PATH", "")
 
 
+# 채널 코드 → 화면 표기. 리포트는 셀러가 읽는 문서라 영문 코드를 그대로 쓰지 않는다.
+# 게이지 폭(px) — A4 가로(297mm) - 좌우 여백(24mm) 의 60% 열에서 카드 안쪽 여백을 뺀 값.
+# CSS 로 늘리면 viewBox 비율 때문에 높이까지 커져 페이지가 넘치므로, 생성 시점에 맞춘다.
+GAUGE_WIDTH_PX = 715
+
+CHANNEL_LABEL = {"COUPANG": "쿠팡", "NAVER": "네이버", "ZIGZAG": "지그재그"}
+
+
 class ReportType(str, Enum):
     CS_GUIDELINE = "cs_guideline"
     MONTHLY_REPORT = "monthly_report"
@@ -31,72 +39,15 @@ class ReportType(str, Enum):
 # 월간 합본 표지 — **화면에 띄우는 건 이 첫 페이지 하나뿐**이다(2026-08-03 확정).
 # 전체 PDF 는 presigned URL 로 내려받으므로, 표지만 봐도 그 달의 상태가 파악되도록
 # 전사 요약(총 VOC·위험 상품 수·최다 위험 상품)과 상품 목록을 여기 담는다.
-MONTHLY_COVER_HTML = """
-    <section class="cover">
-        <h1>{{ report_month }} 월간 CS·품질 분석 보고서</h1>
-        <div class="meta">
-            대상 상품 {{ product_count }}개 · 분석 기간 {{ period }} · 생성 {{ generated_at }}
-        </div>
-
-        <div class="kpi-row">
-            <div class="kpi">
-                <div class="label">전체 VOC</div>
-                <div class="value">{{ '{:,}'.format(total_voc) }}건</div>
-                <div class="sub">{{ product_count }}개 상품 합계</div>
-            </div>
-            <div class="kpi">
-                <div class="label">RISK 속성 보유 상품</div>
-                <div class="value">{{ risk_product_count }}개</div>
-                <div class="sub">전월 대비 +3%p 이상</div>
-            </div>
-            <div class="kpi">
-                <div class="label">채널 격차 위험</div>
-                <div class="value">{{ crisis_product_count }}개</div>
-                <div class="sub">CRISIS 단계 채널쌍 보유</div>
-            </div>
-            <div class="kpi accent">
-                <div class="label">BRAND SENTIMENT</div>
-                <div class="value">{{ '%.1f'|format(brand_sentiment) }}%</div>
-                <div class="sub">전 상품 긍정+중립 가중평균</div>
-            </div>
-        </div>
-
-        <h2>상품별 요약</h2>
-        <table>
-            <tr><th>상품</th><th>VOC</th><th>최다 부정 속성</th><th>부정률</th><th>RISK</th><th>채널 격차</th></tr>
-        {% for row in summary_rows %}
-            <tr>
-                <td>{{ row.product_name }} <span style="color:#868e96">({{ row.code }})</span></td>
-                <td>{{ '{:,}'.format(row.total_voc) }}</td>
-                <td>{{ row.worst_aspect }}</td>
-                <td>{{ '%.0f'|format(row.worst_ratio * 100) }}%</td>
-                <td>{% if row.risk_count %}<span class="risk">{{ row.risk_count }}건</span>{% else %}-{% endif %}</td>
-                <td>{{ row.severity or '판정 보류' }}</td>
-            </tr>
-        {% endfor %}
-        </table>
-        {% if held_products %}
-        <div class="meta" style="margin-top:4mm">
-            표본 부족으로 보류된 상품 {{ held_products|length }}개:
-            {{ held_products|join(', ') }} — VOC 10건 미만이라 분석하지 않았습니다.
-        </div>
-        {% endif %}
-        {% if failed_products %}
-        <div class="meta" style="margin-top:2mm">
-            생성에 실패해 이번 호에서 빠진 상품 {{ failed_products|length }}개:
-            {{ failed_products|join(', ') }} — 데이터는 정상이며 운영자가 확인 중입니다.
-        </div>
-        {% endif %}
-    </section>
-"""
-
-
 _BASE_CSS = """
-    @page { size: A4; margin: 16mm 14mm; }
-    body { font-family: 'Malgun Gothic', 'Noto Sans KR', sans-serif; font-size: 10.5pt; color: #1a1a1a; }
-    h1 { font-size: 17pt; margin: 0 0 4mm; }
-    h2 { font-size: 12pt; margin: 7mm 0 2mm; border-bottom: 1px solid #ccc; padding-bottom: 1mm; }
-    .meta { color: #666; font-size: 9pt; margin-bottom: 6mm; }
+    /* 가로(landscape) — 세로로 두면 좌우 시각자료가 잘려 한 눈에 안 들어온다(2026-08-04) */
+    @page { size: A4 landscape; margin: 12mm 12mm; }
+    body { font-family: 'Malgun Gothic', 'Noto Sans KR', sans-serif; font-size: 9pt; color: #1a1a1a; }
+    /* ⚠️ 한글 어절 단위 줄바꿈(word-break: keep-all)은 weasyprint 63.1 이 무시한다.
+       줄 끝에 한 글자만 넘어가는 것은 폭·글자 크기로 조절할 수밖에 없다. */
+    h1 { font-size: 14pt; margin: 0 0 1.5mm; }
+    h2 { font-size: 10pt; margin: 1mm 0 1.2mm; border-bottom: 1px solid #ccc; padding-bottom: 0.8mm; }
+    .meta { color: #666; font-size: 8pt; margin-bottom: 3mm; }
     table { width: 100%; border-collapse: collapse; margin-bottom: 3mm; }
     th, td { border: 1px solid #ddd; padding: 2mm 2.5mm; text-align: left; font-size: 9.5pt; }
     th { background: #f4f4f4; }
@@ -105,33 +56,64 @@ _BASE_CSS = """
     .quote { background: #f8f8f8; border-left: 3px solid #999; padding: 2mm 3mm; margin-bottom: 2mm; }
 
     /* KPI 카드 — 대시보드 상단과 같은 구성 */
-    .kpi-row { display: flex; gap: 3mm; margin-bottom: 5mm; }
-    .kpi { flex: 1; border: 1px solid #e9ecef; border-radius: 3mm; padding: 3mm; }
+    .kpi-row { display: flex; gap: 2.5mm; margin-bottom: 2mm; }
+    .kpi { flex: 1; border: 1px solid #e9ecef; border-radius: 3mm; padding: 2.2mm 2.5mm; }
     .kpi .label { font-size: 7.5pt; color: #868e96; letter-spacing: .3px; }
-    .kpi .value { font-size: 15pt; font-weight: bold; margin-top: 1mm; }
+    .kpi .value { font-size: 13pt; font-weight: bold; margin-top: 0.5mm; }
     .kpi .sub { font-size: 8pt; color: #868e96; margin-top: 1mm; }
     .kpi.accent { background: #4c6ef5; border-color: #4c6ef5; color: #fff; }
     .kpi.accent .label, .kpi.accent .sub { color: #dbe4ff; }
 
     /* 속성 카드 3열 — 도넛 + 범례 */
     .aspect-row { display: flex; gap: 3mm; margin-bottom: 4mm; }
-    .aspect-card { flex: 1; border: 1px solid #e9ecef; border-radius: 3mm; padding: 3mm; }
+    .aspect-card { flex: 1; border: 1px solid #e9ecef; border-radius: 3mm; padding: 2.2mm 2.5mm; }
     .aspect-card .head { display: flex; justify-content: space-between; align-items: center; }
-    .aspect-card .title { font-size: 10.5pt; font-weight: bold; }
+    .aspect-card .title { font-size: 9.5pt; font-weight: bold; }
     .badge { font-size: 7.5pt; font-weight: bold; padding: 0.6mm 2mm; border-radius: 2mm;
              background: #e6fcf5; color: #0ca678; }
     .badge.risk { background: #fff5f5; color: #f03e3e; }
     .aspect-card .chart { text-align: center; margin: 2mm 0; }
-    .legend { font-size: 8.5pt; color: #495057; }
+    .legend { font-size: 8pt; color: #495057; line-height: 1.5; }
     .legend .dot { display: inline-block; width: 2mm; height: 2mm; border-radius: 50%; margin-right: 1.2mm; }
-    .aspect-card .note { font-size: 8.5pt; color: #495057; margin-top: 2mm; line-height: 1.45; }
+    .aspect-card .note { font-size: 7.5pt; color: #495057; margin-top: 1.5mm; line-height: 1.35; }
     .aspect-card .note.risk { background: #fff5f5; border-radius: 2mm; padding: 2mm; }
     .gauge-box { border: 1px solid #e9ecef; border-radius: 3mm; padding: 3mm; margin-bottom: 3mm; }
 
-    /* 합본: 표지 다음부터 상품마다 새 페이지 — 첫 페이지만 화면 미리보기로 쓴다 */
+    /* 상품 페이지 2단 — 좌: VOC·감성분포 / 우: 채널 격차 */
+    /* 상품 페이지의 KPI 는 좌측 열(감성 분포) 위에만 놓이므로 폭을 왼쪽 셀에 맞춘다.
+       표지 KPI 는 전체 폭을 써야 하니 이 제한을 걸지 않는다. */
+    .kpi-row.section { width: 29%; }
+    .gauge-block svg { display: block; }
+    /* 행 단위 그리드 — 좌(감성 카드) : 우(게이지)를 같은 행에 묶어 세로 정렬을 보장한다 */
+    .grid-row { display: flex; gap: 4mm; align-items: stretch; }
+    .grid-row .cell-left { width: 29%; display: flex; }
+    .grid-row .cell-right { width: 71%; display: flex; }
+    .grid-row .cell-left > *, .grid-row .cell-right > * { width: 100%; }
+    /* 제목 행은 세로로 쌓아야 밑줄이 열 전체로 이어진다(가로 flex 면 부제가 옆에 붙는다) */
+    .grid-row.head { align-items: flex-start; }
+    .grid-row.head .cell-left, .grid-row.head .cell-right { flex-direction: column; }
+    .summary-line { font-size: 8pt; color: #495057; background: #f8f9fa; border-radius: 2mm;
+                    padding: 1.2mm 2.5mm; margin-bottom: 1.5mm; line-height: 1.4; }
+    /* 범례는 왼쪽, 도넛은 오른쪽 정렬 */
+    .aspect-card .row { display: flex; align-items: center; gap: 2mm; }
+    .aspect-card .row .chart { margin: 0 0 0 auto; }
+    /* 감성 분포 카드와 게이지 블록의 높이를 맞춰 좌우가 나란히 떨어지게 한다 */
+    .aspect-card, .gauge-block { margin-bottom: 1.2mm; }
+    .gauge-block { border: 1px solid #e9ecef; border-radius: 3mm; padding: 1.6mm 2.5mm; margin-bottom: 1.2mm; }
+    .gauge-block .pair { font-size: 9.5pt; font-weight: bold; margin-bottom: 1mm; }
+    /* 게이지 아래 원인·조치는 각각 **독립된 카드**로 감싼다(2026-08-04 화면 확정) */
+    .gauge-block .pair-note { display: flex; gap: 2.5mm; margin-top: 1.5mm; }
+    .note-card { flex: 1; border: 1px solid #e9ecef; border-radius: 2.5mm;
+                 background: #fbfbfc; padding: 1.6mm 2.2mm; }
+    .note-card h4 { font-size: 8pt; margin: 0 0 1.2mm; color: #212529; }
+    .note-card ol { margin: 0; padding-left: 4mm; font-size: 8pt; color: #495057;
+                    line-height: 1.5; }
+    .note-card li { margin-bottom: 0.8mm; }
+    .note-card li:last-child { margin-bottom: 0; }
+
+    /* 합본: 상품마다 새 페이지 — 첫 상품 페이지를 화면 미리보기로 쓴다 */
     .product-page { page-break-before: always; }
-    .cover h1 { font-size: 20pt; }
-    .cover table td, .cover table th { font-size: 9pt; }
+    .product-page.first { page-break-before: auto; }  /* 첫 상품 앞의 빈 페이지 방지 */
 """
 
 # ⚠️ 통계 수치(p_value 등)는 §4-4 금지 표현이라 템플릿에 넣지 않는다.
@@ -179,105 +161,88 @@ CS_TEMPLATE_HTML = (
 
 # 상품 1개분 본문. 단건 PDF 와 월간 합본이 **같은 마크업을 공유**한다 —
 # 합본만 고치고 단건을 놓치면 두 문서의 수치 표기가 갈라진다.
+#
+# 레이아웃(2026-08-04 화면 확정):
+#   좌 — TOTAL VOC · BRAND SENTIMENT · 항목별 고객 감성 분포
+#   우 — 채널쌍 3종 평판 격차 게이지(한 화면에 전부)
+#   하 — 원인 분석 결과 · 권장 조치 사항
+# 삭제된 것: CRITICAL RISKS 카드, RISK/STABLE 배지, CRISIS DETECTED 심각도 표시,
+#            채널쌍 캐러셀(한 번에 하나만 보던 방식), 전월 대비 변동 막대,
+#            aspect 별 AI 요약 문장(카드 안 note).
 _MONTHLY_SECTION_HTML = """
-    <!-- ⚠️ 이 PDF 가 월간 리포트의 **유일한 산출물**이다(2026-08-03 확정).
-         데이터를 DB 에 적재하지 않고 S3 링크만 전달하며, **UI 는 이 PDF 를 뷰어로 그대로
-         띄운다**(값을 따로 렌더링하지 않는다). 즉 화면에서 볼 수치는 여기 전부 들어 있어야
-         하고, 표·차트를 빼면 그 수치는 어디에도 남지 않는다. -->
-    <h1>{{ input.product_name }} 월간 분석 보고서</h1>
+    <h1>{{ input.product_name }} <span style="color:#868e96">({{ input.product_group_id }})</span></h1>
     <div class="meta">
-        보고서 ID {{ report.report_id }} · {{ report.report_month }}
-        ({{ input.start_date }} ~ {{ input.end_date }})<br>
-        마스터 상품 코드 {{ report.product_group_id }} · 월간 총 VOC {{ input.total_voc_count }}건
+        {{ report.report_month }} 월간 분석 · {{ input.start_date }} ~ {{ input.end_date }}
+        · 보고서 ID {{ report.report_id }}
         {% if input.channel_divergence and input.channel_divergence.calculated_at %}
-        · 집계 기준 {{ input.channel_divergence.calculated_at[:16]|replace('T', ' ') }}
+        · 마지막 업데이트 {{ input.channel_divergence.calculated_at[:16]|replace('T', ' ') }}
         {% endif %}
     </div>
 
-    <div class="kpi-row">
+    <div class="summary-line">{{ report.channel_divergence_cause.cause_title }} —
+        {{ report.channel_divergence_cause.cause_description }}</div>
+
+    <div class="kpi-row section">
         <div class="kpi">
-            <div class="label">TOTAL VOC</div>
+            <div class="label">TOTAL VOC INSIGHT</div>
             <div class="value">{{ '{:,}'.format(input.total_voc_count) }}건</div>
-            <div class="sub">{{ input.start_date }} ~ {{ input.end_date }}</div>
-        </div>
-        <div class="kpi">
-            <div class="label">CRITICAL RISKS</div>
-            <div class="value">{{ risk_count }}건</div>
-            <div class="sub">변동 +3%p 이상 속성</div>
-        </div>
-        <div class="kpi">
-            <div class="label">최다 부정 속성</div>
-            <div class="value">{{ worst_aspect.aspect }}</div>
-            <div class="sub">부정 {{ '%.0f'|format(worst_aspect.negative_ratio * 100) }}%</div>
         </div>
         <div class="kpi accent">
             <div class="label">BRAND SENTIMENT</div>
             <div class="value">{{ '%.1f'|format(brand_sentiment) }}%</div>
-            <div class="sub">전 속성 긍정+중립 비중</div>
         </div>
     </div>
 
-    <h2>항목별 고객 감성 분포</h2>
-    <div class="aspect-row">
-    {% for dist in input.aspect_distributions %}
-        {% set drift = drift_by_aspect.get(dist.aspect) %}
-        <div class="aspect-card">
-            <div class="head">
-                <span class="title">{{ dist.aspect }}</span>
-                {% if drift and drift.status == 'RISK' %}
-                <span class="badge risk">RISK</span>{% else %}<span class="badge">STABLE</span>{% endif %}
+    {#- 좌우를 각각 하나의 열로 쌓으면 카드 높이가 달라 행이 어긋난다.
+        n 번째 감성 카드와 n 번째 게이지를 **같은 행**에 넣어 항상 나란히 떨어지게 한다. -#}
+    {% set pairs = input.channel_divergence.pairs %}
+    {% set dists = input.aspect_distributions %}
+    <div class="grid-row head">
+        <div class="cell-left"><h2>항목별 고객 감성 분포</h2></div>
+        <div class="cell-right"><h2>채널 간 평판 격차 분석</h2></div>
+    </div>
+    {% for k in range([dists|length, pairs|length]|max) %}
+    <div class="grid-row">
+        <div class="cell-left">
+            {% if k < dists|length %}{% set dist = dists[k] %}
+            <div class="aspect-card">
+                <div class="title">{{ dist.aspect }}</div>
+                <div style="font-size:8pt;color:#868e96">총 {{ '{:,}'.format(dist.total_count) }}건의 피드백</div>
+                <div class="row">
+                    <div class="legend">
+                        <span class="dot" style="background:#12b886"></span>좋아요 {{ '%.0f'|format(dist.positive_ratio * 100) }}%<br>
+                        <span class="dot" style="background:#ced4da"></span>보통 {{ '%.0f'|format(dist.neutral_ratio * 100) }}%<br>
+                        <span class="dot" style="background:#f03e3e"></span>별로예요 {{ '%.0f'|format(dist.negative_ratio * 100) }}%
+                    </div>
+                    <div class="chart">{{ donut_by_aspect.get(dist.aspect, '')|safe }}</div>
+                </div>
             </div>
-            <div class="sub" style="font-size:8pt;color:#868e96">총 {{ '{:,}'.format(dist.total_count) }}건의 피드백</div>
-            <div class="chart">{{ donut_by_aspect.get(dist.aspect, '')|safe }}</div>
-            <div class="legend">
-                <span class="dot" style="background:#12b886"></span>좋아요 {{ '%.0f'|format(dist.positive_ratio * 100) }}%<br>
-                <span class="dot" style="background:#ced4da"></span>보통 {{ '%.0f'|format(dist.neutral_ratio * 100) }}%<br>
-                <span class="dot" style="background:#f03e3e"></span>별로예요 {{ '%.0f'|format(dist.negative_ratio * 100) }}%
-            </div>
-            {% set summary = summary_by_aspect.get(dist.aspect) %}
-            {% if summary %}
-            <div class="note{% if drift and drift.status == 'RISK' %} risk{% endif %}">{{ summary }}</div>
             {% endif %}
         </div>
-    {% endfor %}
+        <div class="cell-right">
+            {% if k < pairs|length %}{% set pair = pairs[k] %}
+            {% set analysis = analysis_by_pair.get(pair.comparison_pair) %}
+            <div class="gauge-block">
+                <div class="pair">{{ pair_label.get(pair.comparison_pair, pair.comparison_pair) }}</div>
+                {{ gauge_by_pair.get(pair.comparison_pair, '')|safe }}
+                {% if analysis %}
+                <div class="pair-note">
+                    <div class="note-card">
+                        <h4>원인 분석 결과</h4>
+                        <ol>{% for t in analysis.cause_analysis %}<li>{{ t }}</li>{% endfor %}</ol>
+                    </div>
+                    <div class="note-card">
+                        <h4>💡 권장 조치 사항</h4>
+                        <ol>{% for t in analysis.recommended_actions %}<li>{{ t }}</li>{% endfor %}</ol>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
     </div>
-
-    <h2>전월 대비 변동</h2>
-    {{ drift_chart|safe }}
-
-    <h2>{{ report.channel_divergence_cause.cause_title }}</h2>
-    <p>{{ report.channel_divergence_cause.cause_description }}</p>
-    {% for pair in input.channel_divergence.pairs %}
-    <div class="gauge-box">{{ gauge_by_pair.get(pair.comparison_pair, '')|safe }}</div>
     {% endfor %}
-    <table>
-        <tr><th>채널쌍</th><th>표본</th><th>분열 점수</th><th>기준값</th><th>단계</th></tr>
-    {% for pair in input.channel_divergence.pairs %}
-        <tr>
-            <td>{{ pair.comparison_pair }}</td>
-            <td>{{ pair.sample_size }}</td>
-            <td>{{ '%.2f'|format(pair.jsd_score) if pair.jsd_score is not none else '판정 보류' }}</td>
-            <td>{{ '%.2f'|format(pair.jsd_baseline) if pair.jsd_baseline is not none else '-' }}</td>
-            <td>{{ pair.severity if pair.severity else pair.hold_reason }}</td>
-        </tr>
-    {% endfor %}
-    </table>
 
-    <h2>핵심 원인 분석</h2>
-    <ul>
-    {% for item in report.cause_analysis_results %}<li>{{ item }}</li>{% endfor %}
-    </ul>
-
-    <h2>권장 조치</h2>
-    <ul>
-    {% for item in report.recommended_actions %}<li>{{ item }}</li>{% endfor %}
-    </ul>
-
-    <div class="meta" style="margin-top:6mm">
-        · 변동(%p)은 전월 대비 부정 비율 변화이며, 3%p 이상이면 RISK 로 표시합니다.<br>
-        · 채널 분열 단계는 SAFE(안정) · CAUTION(주의) · CRISIS(위험) 순이며,
-          표본이 부족한 채널쌍은 "판정 보류"로 표기합니다.
-    </div>
 """
 
 _HTML_HEAD = (
@@ -295,12 +260,15 @@ MONTHLY_TEMPLATE_HTML = _HTML_HEAD + _MONTHLY_SECTION_HTML + "</body></html>"
 # 내려받는다(2026-08-03 확정). 상품마다 페이지를 나눠 목차 없이도 넘겨볼 수 있게 한다.
 MONTHLY_BOOK_HTML = (
     _HTML_HEAD
-    + MONTHLY_COVER_HTML
+    # ⚠️ 총합 요약(표지) 페이지는 만들지 않는다 (2026-08-04 확정). 화면에 띄우는 첫
+    #    페이지가 곧 첫 상품의 리포트다. 보류·실패 상품 안내는 PDF 대신 콜백의
+    #    notice_message 로 전달한다 — 표지를 지우면서 그 정보가 사라지면 안 된다.
     + """
-{% for item in items %}<section class="product-page">"""
+{% for item in items %}<section class="product-page{% if loop.first %} first{% endif %}">"""
     + """{% with report=item.report, input=item.input, drift_by_aspect=item.drift_by_aspect,
             donut_by_aspect=item.donut_by_aspect, gauge_by_pair=item.gauge_by_pair,
-            summary_by_aspect=item.summary_by_aspect, drift_chart=item.drift_chart,
+            drift_chart=item.drift_chart,
+            pair_label=item.pair_label, analysis_by_pair=item.analysis_by_pair,
             risk_count=item.risk_count, worst_aspect=item.worst_aspect,
             brand_sentiment=item.brand_sentiment %}"""
     + _MONTHLY_SECTION_HTML
@@ -315,7 +283,6 @@ def _build_monthly_chart_context(context: dict[str, Any]) -> dict[str, Any]:
     만든 값을 쓰면 팩트체크를 통과한 문장과 표지 숫자가 어긋날 수 있다.
     """
     input_data = context.get("input", {})
-    report = context.get("report", {})
 
     distributions = input_data.get("aspect_distributions", [])
     drifts = input_data.get("sentiment_drifts", [])
@@ -333,8 +300,9 @@ def _build_monthly_chart_context(context: dict[str, Any]) -> dict[str, Any]:
     gauge_by_pair = {
         p["comparison_pair"]: render_divergence_gauge(
             jsd_score=p.get("jsd_score"),
-            severity=p.get("severity"),
             comparison_pair=p["comparison_pair"],
+            sample_size=p.get("sample_size"),
+            width=GAUGE_WIDTH_PX,
         )
         for p in pairs
     }
@@ -355,12 +323,20 @@ def _build_monthly_chart_context(context: dict[str, Any]) -> dict[str, Any]:
     )
 
     return {
+        # 채널쌍 라벨을 화면과 같은 한글 표기로 (COUPANG_VS_NAVER → 쿠팡 vs 네이버)
+        "pair_label": {
+            p["comparison_pair"]: " vs ".join(
+                CHANNEL_LABEL.get(part, part) for part in p["comparison_pair"].split("_VS_")
+            )
+            for p in pairs
+        },
+        "analysis_by_pair": {
+            a["comparison_pair"]: a
+            for a in context.get("report", {}).get("channel_pair_analyses", [])
+        },
         "drift_by_aspect": drift_by_aspect,
         "donut_by_aspect": donut_by_aspect,
         "gauge_by_pair": gauge_by_pair,
-        "summary_by_aspect": {
-            s["aspect"]: s["summary_text"] for s in report.get("aspect_summaries", [])
-        },
         "drift_chart": render_drift_bars(drifts),
         "risk_count": sum(1 for d in drifts if d.get("status") == "RISK"),
         "worst_aspect": worst_aspect,
@@ -376,50 +352,20 @@ def build_book_context(
     failed_products: list[str] | None = None,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
-    """월간 합본 표지 + 상품별 섹션 컨텍스트.
+    """월간 합본(상품별 섹션) 컨텍스트.
 
     items 원소는 `{"input": MonthlyReportInput.model_dump(mode="json"),
                    "report": MonthlyReportOutput.model_dump(mode="json")}`.
 
-    표지 수치는 **입력 집계에서 직접 계산**한다. LLM 문장을 재해석해 표지를 만들면
-    본문과 표지가 어긋날 수 있다.
+    ⚠️ 총합 요약(표지) 페이지는 만들지 않는다 (2026-08-04 확정). 전사 합계·상품 목록
+       집계가 여기 있었으나, 렌더링하지 않는 수치를 계산해두면 나중에 본문과 어긋난
+       채로 되살아난다. `held_products`/`failed_products` 는 PDF 가 아니라 콜백
+       notice_message 로 나가므로 그대로 돌려준다.
     """
-    enriched, summary_rows = [], []
-    total_voc = risk_products = crisis_products = 0
-    weighted_sentiment = weighted_total = 0.0
-
+    enriched = []
     for item in items:
-        input_data, report = item["input"], item["report"]
-        charts = _build_monthly_chart_context({"input": input_data, "report": report})
-        enriched.append({"input": input_data, "report": report, **charts})
-
-        distributions = input_data.get("aspect_distributions", [])
-        severities = [
-            p.get("severity") for p in input_data["channel_divergence"]["pairs"] if p.get("severity")
-        ]
-        worst_pair_severity = (
-            "CRISIS" if "CRISIS" in severities else ("CAUTION" if "CAUTION" in severities else
-            ("SAFE" if severities else None))
-        )
-
-        total_voc += input_data.get("total_voc_count", 0)
-        risk_products += 1 if charts["risk_count"] else 0
-        crisis_products += 1 if worst_pair_severity == "CRISIS" else 0
-        section_total = sum(d.get("total_count", 0) for d in distributions)
-        weighted_sentiment += charts["brand_sentiment"] * section_total
-        weighted_total += section_total
-
-        summary_rows.append(
-            {
-                "code": report.get("product_group_id"),
-                "product_name": input_data.get("product_name"),
-                "total_voc": input_data.get("total_voc_count", 0),
-                "worst_aspect": charts["worst_aspect"].get("aspect"),
-                "worst_ratio": charts["worst_aspect"].get("negative_ratio", 0.0),
-                "risk_count": charts["risk_count"],
-                "severity": worst_pair_severity,
-            }
-        )
+        charts = _build_monthly_chart_context({"input": item["input"], "report": item["report"]})
+        enriched.append({"input": item["input"], "report": item["report"], **charts})
 
     first = items[0]["input"] if items else {}
     return {
@@ -428,13 +374,6 @@ def build_book_context(
         "product_count": len(items),
         "period": f"{first.get('start_date', '')} ~ {first.get('end_date', '')}",
         "generated_at": generated_at or datetime.now(UTC).astimezone().strftime("%Y-%m-%d %H:%M"),
-        "total_voc": total_voc,
-        "risk_product_count": risk_products,
-        "crisis_product_count": crisis_products,
-        "brand_sentiment": (weighted_sentiment / weighted_total) if weighted_total else 0.0,
-        "summary_rows": sorted(summary_rows, key=lambda r: -r["worst_ratio"]),
-        # ⚠️ 보류(표본 부족)와 실패(검증 미통과)를 **합치지 않는다**. 합치면 VOC 500건인
-        #    상품이 표지에 "VOC 10건 미만이라 분석하지 않았다"고 잘못 인쇄된다.
         "held_products": held_products or [],
         "failed_products": failed_products or [],
     }
