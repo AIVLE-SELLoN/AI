@@ -130,6 +130,13 @@ MAX_PDF_SIZE_BYTES = 10_485_760
 GUIDELINE_RETENTION_HOURS = 24
 """CS 가이드라인 PDF 자동 삭제까지의 시간. 출력 데이터가 DB 에 있어 언제든 재컴파일된다."""
 
+PRESIGNED_URL_TTL_HOURS = 24
+"""Pre-signed URL 만료까지의 시간 — **문서 종류 무관 24시간 고정**(인프라 §5, 2026-08-05).
+
+메일 발송 때마다 새로 발급하고 재사용하지 않는다. 만료되면 `s3_full_key` 로 다시 요청한다.
+⚠️ 객체보다 링크가 오래 살 수는 없다 — CS 가이드라인은 객체 수명도 24시간이라 두 값이 같다.
+"""
+
 MONTHLY_RETENTION_DAYS = 180
 """월간 리포트 PDF 자동 삭제까지의 일수(6개월).
 

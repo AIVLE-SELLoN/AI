@@ -340,9 +340,10 @@ async def compile_and_upload_monthly_book(
         pdf_bytes = compile_monthly_book(context)
         pdf_s3_meta = await upload_pdf_to_s3(
             pdf_bytes=pdf_bytes,
-            report_type=REPORT_TYPE_MONTHLY,  # → 6개월 보존 버킷
-            product_group_id="ALL",  # 월 1개 합본이라 상품 구분이 없다
-            identifier=report_month,
+            report_type=REPORT_TYPE_MONTHLY,  # → monthly-report 프리픽스 (6개월 보존)
+            # 경로의 {yyyy}/{mm} 와 파일명의 {yyyyMM} 은 **보고 대상 월**이다.
+            # 업로드 시각(1일 새벽)을 쓰면 7월 리포트가 2026/08 폴더로 들어간다.
+            period=report_month,
         )
     except S3NotConfiguredError as exc:
         # 업로드하지 않은 파일을 성공으로 보고하지 않는다(스텁 상태에서의 안전장치).

@@ -61,6 +61,7 @@ from app.reporting.s3_uploader import (
     REPORT_TYPE_GUIDELINE,
     REPORT_TYPE_MONTHLY,
     S3NotConfiguredError,
+    build_object_path,
     resolve_storage_policy,
     upload_pdf_to_s3,
 )
@@ -556,7 +557,8 @@ async def test_monthly_book_is_one_object_per_month(monthly_input, monthly_outpu
     # 상품이 3개여도 PDF 는 한 번만 만들고 한 번만 올린다
     assert mock_compile.call_count == 1
     assert mock_upload.await_count == 1
-    assert mock_upload.await_args.kwargs["product_group_id"] == "ALL"
+    # 월 1개 합본이라 상품 구분이 없다 — 경로 기준은 보고 대상 월이다
+    assert mock_upload.await_args.kwargs["period"] == "2026-07"
     assert result.callback.status == CallbackStatus.SUCCESS
     assert result.callback.report_id == build_book_report_id("2026-07")  # RPT-202607
     assert result.callback.source_payload is None
@@ -589,13 +591,78 @@ async def test_cs_pipeline_success(cs_input, cs_output) -> None:
     assert result.callback.source_payload["output"]["guideline_id"] == "GD-20260528-P001-COUPANG"
 
 
+# 인프라 문서의 {company_id} 자리 — 실제 값은 고객사 PK/UUID 다.
+_COMPANY_ID = "c0ffee00-0000-4000-8000-000000000000"
+
+
+def test_object_path_follows_infra_rule() -> None:
+    """인프라 「S3 파일 구조 규칙 정의」 경로·파일명 규칙 (2026-08-05 확정).
+
+        reports/companies/{company_id}/{report_type}/{yyyy}/{mm}/
+        {report_type}_{yyyyMM}_{uuid4}.pdf
+    """
+    path, name = build_object_path(REPORT_TYPE_MONTHLY, "2026-07", _COMPANY_ID)
+    assert path == f"reports/companies/{_COMPANY_ID}/monthly-report/2026/07/"
+    assert name.startswith("monthly-report_202607_")
+    assert name.endswith(".pdf")
+    # uuid4 가 붙어 같은 달을 다시 올려도 이전 객체를 덮어쓰지 않는다
+    _, name2 = build_object_path(REPORT_TYPE_MONTHLY, "2026-07", _COMPANY_ID)
+    assert name != name2
+
+    cs_path, cs_name = build_object_path(REPORT_TYPE_GUIDELINE, "2026-05", _COMPANY_ID)
+    assert cs_path == f"reports/companies/{_COMPANY_ID}/cs-guideline/2026/05/"
+    assert cs_name.startswith("cs-guideline_202605_")
+
+
+def test_object_path_rejects_bad_period() -> None:
+    """period 는 YYYY-MM 이어야 한다 — 폴더의 연월이 곧 파일명의 연월이다."""
+    for bad in ("2026/07", "202607", "2026-7", ""):
+        with pytest.raises(ValueError, match="period"):
+            build_object_path(REPORT_TYPE_MONTHLY, bad, _COMPANY_ID)
+
+
+@pytest.mark.asyncio
+async def test_upload_path_uses_report_period_not_upload_time() -> None:
+    """경로의 {yyyy}/{mm} 는 **보고 대상 월**이다.
+
+    업로드 시각을 쓰면 8/1 새벽에 올린 7월 리포트가 2026/08 폴더에 들어가면서
+    폴더의 연월과 파일명(`…_202607_…`)의 연월이 어긋난다.
+    """
+    with patch("app.reporting.s3_uploader.S3_ENABLED", True):
+        meta = await upload_pdf_to_s3(
+            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_MONTHLY, period="2026-07",
+            company_id=_COMPANY_ID,
+        )
+
+    assert "/2026/07/" in meta.s3_file_path
+    assert "_202607_" in meta.new_file_name
+    assert meta.s3_full_key == meta.s3_file_path + meta.new_file_name
+
+
+@pytest.mark.asyncio
+async def test_upload_refuses_without_company_id() -> None:
+    """company_id 를 모르면 올리지 않는다 — 경로가 회사 단위로 갈린다."""
+    with (
+        patch("app.reporting.s3_uploader.S3_ENABLED", True),
+        patch("app.reporting.s3_uploader.S3_DEFAULT_COMPANY_ID", ""),
+        pytest.raises(S3NotConfiguredError, match="company_id"),
+    ):
+        await upload_pdf_to_s3(
+            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_MONTHLY, period="2026-07"
+        )
+
+
 def test_storage_policy_differs_by_document_type() -> None:
-    """월간 6개월 / CS 24시간 자동 삭제 (S3 Lifecycle, 2026-08-03 확정)."""
+    """월간 6개월 / CS 1일 자동 삭제 (S3 Lifecycle).
+
+    버킷은 **하나**이고 문서 종류는 프리픽스로 가른다(인프라 2026-08-05) — Lifecycle
+    규칙이 프리픽스 단위로 걸리기 때문이다.
+    """
     monthly = resolve_storage_policy(REPORT_TYPE_MONTHLY)
     guideline = resolve_storage_policy(REPORT_TYPE_GUIDELINE)
 
-    assert monthly.bucket_name == "sellon-reports"
-    assert guideline.bucket_name == "sellon-temp-reports"
+    assert monthly.bucket_name == guideline.bucket_name  # 버킷 1개
+    assert (monthly.prefix, guideline.prefix) == ("monthly-report", "cs-guideline")
     assert monthly.retention_hours == constants.MONTHLY_RETENTION_DAYS * 24
     assert guideline.retention_hours == constants.GUIDELINE_RETENTION_HOURS
     # 월간은 원본을 보관하지 않아 만료되면 재생성이 불가능하다
@@ -604,7 +671,10 @@ def test_storage_policy_differs_by_document_type() -> None:
     # 링크가 객체보다 오래 살면 "받을 수 있다"는 잘못된 안내가 된다
     assert monthly.presigned_ttl_hours <= monthly.retention_hours
     assert guideline.presigned_ttl_hours <= guideline.retention_hours
-    # 등록되지 않은 종류는 6개월 버킷에 쌓지 않는다
+    # 링크 수명은 문서 종류와 무관하게 24시간 고정 (인프라 §5)
+    assert monthly.presigned_ttl_hours == constants.PRESIGNED_URL_TTL_HOURS
+    assert guideline.presigned_ttl_hours == constants.PRESIGNED_URL_TTL_HOURS
+    # 등록되지 않은 종류는 6개월 프리픽스에 쌓지 않는다
     assert resolve_storage_policy("unknown").retention_hours == guideline.retention_hours
 
 
@@ -613,8 +683,8 @@ async def test_upload_refuses_when_s3_not_configured() -> None:
     """S3 미구성 상태에서는 성공을 반환하지 않는다 — 죽은 링크가 나가는 것을 막는다."""
     with patch("app.reporting.s3_uploader.S3_ENABLED", False), pytest.raises(S3NotConfiguredError):
         await upload_pdf_to_s3(
-            pdf_bytes=b"%PDF", report_type=REPORT_TYPE_MONTHLY,
-            product_group_id="ALL", identifier="2026-07",
+            pdf_bytes=b"%PDF", report_type=REPORT_TYPE_MONTHLY, period="2026-07",
+            company_id="c0ffee00-0000-4000-8000-000000000000",
         )
 
 
@@ -624,12 +694,12 @@ async def test_upload_sets_object_expiry_by_policy() -> None:
     before = datetime.now(UTC)
     with patch("app.reporting.s3_uploader.S3_ENABLED", True):
         monthly_meta = await upload_pdf_to_s3(
-            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_MONTHLY,
-            product_group_id="ALL", identifier="2026-07",
+            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_MONTHLY, period="2026-07",
+            company_id=_COMPANY_ID,
         )
         guideline_meta = await upload_pdf_to_s3(
-            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_GUIDELINE,
-            product_group_id="P001", identifier="ALT-1",
+            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_GUIDELINE, period="2026-05",
+            company_id=_COMPANY_ID,
         )
 
     monthly_days = (monthly_meta.object_expires_at - before).total_seconds() / 86400
