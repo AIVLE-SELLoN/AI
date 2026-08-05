@@ -29,6 +29,7 @@ $pair_table
 {"report_id":"RPT-202607-P001","master_product_code":"P001","report_month":"2026-07",
 "aspect_summaries":[{"aspect":"색상","summary_text":"부정 의견이 전월 대비 8%p 올라 50%를 기록했습니다."}],
 "channel_divergence_cause":{"cause_title":"쿠팡-네이버 격차 $stage_label","cause_description":"쿠팡의 색상 불만 비중이 높아 이미지 운영 점검이 필요합니다."},
+"channel_pair_analyses":[{"comparison_pair":"COUPANG_VS_NAVER","cause_analysis":["쿠팡의 색상 부정 의견 비중이 네이버보다 높습니다."],"recommended_actions":["쿠팡 대표 이미지를 원본 색상 기준으로 교체하세요."]}],
 "cause_analysis_results":["색상 부정 의견이 전체 450건 중 비중이 가장 큽니다."],
 "recommended_actions":["쿠팡 대표 이미지를 원본 색상 기준으로 교체하세요."]}
 ```

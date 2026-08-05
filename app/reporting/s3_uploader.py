@@ -149,11 +149,25 @@ def build_object_path(report_type: str, period: str, company_id: str) -> tuple[s
     return s3_file_path, new_file_name
 
 
+def _build_original_file_name(prefix: str, period: str, source_id: str | None) -> str:
+    """표시용(원본) 파일명. `new_file_name` 과 달리 사람이 읽는 이름이다.
+
+    ⚠️ `PdfS3Meta` 의 필수 4종은 "메인이 파일을 다시 찾거나 **목록에 표시할 때** 필요한
+       최소 집합"이다. 그래서 월 여러 건이 나오는 문서(CS 가이드라인은 알림마다 1건)는
+       `{yyyyMM}` 만으로는 부족하다 — 5월 가이드라인이 전부 `cs-guideline_202605.pdf`
+       가 되어 목록에서 구분이 안 된다. 저장은 `new_file_name` 의 uuid4 로 안전하지만
+       표시용 이름은 별개 문제다.
+    """
+    stem = f"{prefix}_{period.replace('-', '')}"
+    return f"{stem}_{source_id}.pdf" if source_id else f"{stem}.pdf"
+
+
 async def upload_pdf_to_s3(
     pdf_bytes: bytes,
     report_type: str,
     period: str,
     company_id: str | None = None,
+    source_id: str | None = None,
 ) -> PdfS3Meta:
     """🚧 스텁 — **실제 업로드는 하지 않고** 적재 메타데이터만 만든다.
 
@@ -161,6 +175,10 @@ async def upload_pdf_to_s3(
         period: 보고 대상 기간 `YYYY-MM`. 경로의 `{yyyy}/{mm}` 와 파일명의 `{yyyyMM}`
             을 **같은 값**으로 만든다.
         company_id: 고객사 PK/UUID. 생략하면 `S3_COMPANY_ID` 환경변수를 쓴다.
+        source_id: 산출물을 가리키는 식별자(CS 는 `alert_id`). `original_file_name`
+            뒤에 붙는다. **월 여러 건이 나오는 문서에는 반드시 넘겨야 한다** — 없으면
+            같은 달 산출물이 전부 같은 표시용 이름이 되어 목록이 도배된다.
+            월간 리포트는 월 1건이라 생략한다.
 
     Raises:
         PdfSizeExceededError: 용량이 MAX_PDF_SIZE_BYTES 를 초과할 때.
@@ -196,7 +214,7 @@ async def upload_pdf_to_s3(
     return PdfS3Meta(
         s3_bucket_name=policy.bucket_name,
         s3_file_path=s3_file_path,
-        original_file_name=f"{policy.prefix}_{period.replace('-', '')}.pdf",
+        original_file_name=_build_original_file_name(policy.prefix, period, source_id),
         new_file_name=new_file_name,
         created_at=now,
         # 스키마가 s3_full_key == s3_file_path + new_file_name 을 강제한다

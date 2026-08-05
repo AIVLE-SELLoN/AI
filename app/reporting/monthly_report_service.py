@@ -334,8 +334,6 @@ async def compile_and_upload_monthly_book(
                 }
                 for item in items
             ],
-            held_products=held_products or [],
-            failed_products=failed_products or [],
         )
         pdf_bytes = compile_monthly_book(context)
         pdf_s3_meta = await upload_pdf_to_s3(

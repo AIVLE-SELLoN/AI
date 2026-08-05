@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -10,7 +9,6 @@ from jinja2 import BaseLoader, Environment, select_autoescape
 
 from app.reporting.charts import (
     render_divergence_gauge,
-    render_drift_bars,
     render_sentiment_donut,
 )
 
@@ -23,11 +21,11 @@ if sys.platform == "win32":
         os.environ["PATH"] = gtk_path + os.path.pathsep + os.environ.get("PATH", "")
 
 
-# 채널 코드 → 화면 표기. 리포트는 셀러가 읽는 문서라 영문 코드를 그대로 쓰지 않는다.
 # 게이지 폭(px) — A4 가로(297mm) - 좌우 여백(24mm) 의 60% 열에서 카드 안쪽 여백을 뺀 값.
 # CSS 로 늘리면 viewBox 비율 때문에 높이까지 커져 페이지가 넘치므로, 생성 시점에 맞춘다.
 GAUGE_WIDTH_PX = 715
 
+# 채널 코드 → 화면 표기. 리포트는 셀러가 읽는 문서라 영문 코드를 그대로 쓰지 않는다.
 CHANNEL_LABEL = {"COUPANG": "쿠팡", "NAVER": "네이버", "ZIGZAG": "지그재그"}
 
 
@@ -36,9 +34,6 @@ class ReportType(str, Enum):
     MONTHLY_REPORT = "monthly_report"
 
 
-# 월간 합본 표지 — **화면에 띄우는 건 이 첫 페이지 하나뿐**이다(2026-08-03 확정).
-# 전체 PDF 는 presigned URL 로 내려받으므로, 표지만 봐도 그 달의 상태가 파악되도록
-# 전사 요약(총 VOC·위험 상품 수·최다 위험 상품)과 상품 목록을 여기 담는다.
 _BASE_CSS = """
     /* 가로(landscape) — 세로로 두면 좌우 시각자료가 잘려 한 눈에 안 들어온다(2026-08-04) */
     @page { size: A4 landscape; margin: 12mm 12mm; }
@@ -80,8 +75,7 @@ _BASE_CSS = """
     .gauge-box { border: 1px solid #e9ecef; border-radius: 3mm; padding: 3mm; margin-bottom: 3mm; }
 
     /* 상품 페이지 2단 — 좌: VOC·감성분포 / 우: 채널 격차 */
-    /* 상품 페이지의 KPI 는 좌측 열(감성 분포) 위에만 놓이므로 폭을 왼쪽 셀에 맞춘다.
-       표지 KPI 는 전체 폭을 써야 하니 이 제한을 걸지 않는다. */
+    /* KPI 는 좌측 열(감성 분포) 위에만 놓이므로 폭을 왼쪽 셀에 맞춘다. */
     .kpi-row.section { width: 29%; }
     .gauge-block svg { display: block; }
     /* 행 단위 그리드 — 좌(감성 카드) : 우(게이지)를 같은 행에 묶어 세로 정렬을 보장한다 */
@@ -256,8 +250,9 @@ _HTML_HEAD = (
 # 단건(디버그·REST 확인용). 운영 산출물은 아래 합본이다.
 MONTHLY_TEMPLATE_HTML = _HTML_HEAD + _MONTHLY_SECTION_HTML + "</body></html>"
 
-# 월간 합본 — **운영 산출물**. 첫 페이지(표지)만 화면에 띄우고 전체는 presigned URL 로
-# 내려받는다(2026-08-03 확정). 상품마다 페이지를 나눠 목차 없이도 넘겨볼 수 있게 한다.
+# 월간 합본 — **운영 산출물**. 표지 없이 상품 페이지로 바로 시작하며(2026-08-04 확정),
+# 화면에는 **첫 상품 페이지**만 미리보기로 띄우고 전체는 presigned URL 로 내려받는다.
+# 상품마다 페이지를 나눠 목차 없이도 넘겨볼 수 있게 한다.
 MONTHLY_BOOK_HTML = (
     _HTML_HEAD
     # ⚠️ 총합 요약(표지) 페이지는 만들지 않는다 (2026-08-04 확정). 화면에 띄우는 첫
@@ -265,11 +260,9 @@ MONTHLY_BOOK_HTML = (
     #    notice_message 로 전달한다 — 표지를 지우면서 그 정보가 사라지면 안 된다.
     + """
 {% for item in items %}<section class="product-page{% if loop.first %} first{% endif %}">"""
-    + """{% with report=item.report, input=item.input, drift_by_aspect=item.drift_by_aspect,
+    + """{% with report=item.report, input=item.input,
             donut_by_aspect=item.donut_by_aspect, gauge_by_pair=item.gauge_by_pair,
-            drift_chart=item.drift_chart,
             pair_label=item.pair_label, analysis_by_pair=item.analysis_by_pair,
-            risk_count=item.risk_count, worst_aspect=item.worst_aspect,
             brand_sentiment=item.brand_sentiment %}"""
     + _MONTHLY_SECTION_HTML
     + """{% endwith %}</section>{% endfor %}</body></html>"""
@@ -278,17 +271,19 @@ MONTHLY_BOOK_HTML = (
 def _build_monthly_chart_context(context: dict[str, Any]) -> dict[str, Any]:
     """월간 템플릿이 쓰는 차트 SVG·파생 지표를 만든다.
 
-    분포와 드리프트는 스키마상 별도 배열이라 aspect 로 짝지어 준다. KPI 카드 값(위험
-    속성 수·최다 부정 속성·브랜드 감성)은 **입력 수치에서 그대로 계산**한다 — LLM 이
-    만든 값을 쓰면 팩트체크를 통과한 문장과 표지 숫자가 어긋날 수 있다.
+    KPI 카드 값(브랜드 감성)은 **입력 수치에서 그대로 계산**한다 — LLM 이 만든 값을
+    쓰면 팩트체크를 통과한 문장과 카드 숫자가 어긋날 수 있다.
+
+    ⚠️ 여기서 만드는 값은 **템플릿이 실제로 읽는 것만** 둔다. 화면 개편으로 참조가
+       사라진 값(전월 대비 변동 막대·RISK 배지·CRITICAL RISKS·최다 부정 속성 KPI)은
+       계산까지 함께 지웠다. 남겨두면 매 상품마다 쓰지도 않을 SVG 를 만들어 버리고,
+       나중에 본문과 어긋난 채로 되살아난다.
     """
     input_data = context.get("input", {})
 
     distributions = input_data.get("aspect_distributions", [])
-    drifts = input_data.get("sentiment_drifts", [])
     pairs = input_data.get("channel_divergence", {}).get("pairs", [])
 
-    drift_by_aspect = {d["aspect"]: d for d in drifts}
     donut_by_aspect = {
         d["aspect"]: render_sentiment_donut(
             positive_ratio=d["positive_ratio"],
@@ -318,10 +313,6 @@ def _build_monthly_chart_context(context: dict[str, Any]) -> dict[str, Any]:
         / total_count
         * 100
     )
-    worst_aspect = max(
-        distributions, key=lambda d: d.get("negative_ratio", 0.0), default={"aspect": "-", "negative_ratio": 0.0}
-    )
-
     return {
         # 채널쌍 라벨을 화면과 같은 한글 표기로 (COUPANG_VS_NAVER → 쿠팡 vs 네이버)
         "pair_label": {
@@ -334,12 +325,8 @@ def _build_monthly_chart_context(context: dict[str, Any]) -> dict[str, Any]:
             a["comparison_pair"]: a
             for a in context.get("report", {}).get("channel_pair_analyses", [])
         },
-        "drift_by_aspect": drift_by_aspect,
         "donut_by_aspect": donut_by_aspect,
         "gauge_by_pair": gauge_by_pair,
-        "drift_chart": render_drift_bars(drifts),
-        "risk_count": sum(1 for d in drifts if d.get("status") == "RISK"),
-        "worst_aspect": worst_aspect,
         "brand_sentiment": brand_sentiment,
     }
 
@@ -347,35 +334,28 @@ def _build_monthly_chart_context(context: dict[str, Any]) -> dict[str, Any]:
 def build_book_context(
     report_month: str,
     items: list[dict[str, Any]],
-    *,
-    held_products: list[str] | None = None,
-    failed_products: list[str] | None = None,
-    generated_at: str | None = None,
 ) -> dict[str, Any]:
     """월간 합본(상품별 섹션) 컨텍스트.
 
     items 원소는 `{"input": MonthlyReportInput.model_dump(mode="json"),
                    "report": MonthlyReportOutput.model_dump(mode="json")}`.
 
-    ⚠️ 총합 요약(표지) 페이지는 만들지 않는다 (2026-08-04 확정). 전사 합계·상품 목록
-       집계가 여기 있었으나, 렌더링하지 않는 수치를 계산해두면 나중에 본문과 어긋난
-       채로 되살아난다. `held_products`/`failed_products` 는 PDF 가 아니라 콜백
-       notice_message 로 나가므로 그대로 돌려준다.
+    ⚠️ 총합 요약(표지) 페이지는 만들지 않는다 (2026-08-04 확정). 표지가 쓰던 값
+       (전사 합계·상품 목록·기간·생성 시각·보류/실패 목록)은 **계산까지 함께 지웠다** —
+       렌더링하지 않는 값을 컨텍스트에 남겨두면 나중에 본문과 어긋난 채로 되살아난다.
+       보류·실패 상품 안내는 컨텍스트가 아니라 콜백 notice_message 로 나간다
+       (`monthly_report_service._build_excluded_notice`).
     """
-    enriched = []
-    for item in items:
-        charts = _build_monthly_chart_context({"input": item["input"], "report": item["report"]})
-        enriched.append({"input": item["input"], "report": item["report"], **charts})
-
-    first = items[0]["input"] if items else {}
     return {
-        "items": enriched,
         "report_month": report_month,
-        "product_count": len(items),
-        "period": f"{first.get('start_date', '')} ~ {first.get('end_date', '')}",
-        "generated_at": generated_at or datetime.now(UTC).astimezone().strftime("%Y-%m-%d %H:%M"),
-        "held_products": held_products or [],
-        "failed_products": failed_products or [],
+        "items": [
+            {
+                "input": item["input"],
+                "report": item["report"],
+                **_build_monthly_chart_context({"input": item["input"], "report": item["report"]}),
+            }
+            for item in items
+        ],
     }
 
 

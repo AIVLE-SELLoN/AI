@@ -23,13 +23,6 @@ COLOR_TEXT = "#212529"
 COLOR_MUTED = "#868e96"
 
 # 게이지 구간 색 (SAFE / CAUTION / CRISIS)
-SEVERITY_COLOR = {
-    "SAFE": "#12b886",
-    "CAUTION": "#fab005",
-    "CRISIS": "#f03e3e",
-}
-
-
 def _arc_dasharray(ratio: float, circumference: float) -> str:
     """도넛 조각 길이. 비율이 0이면 0 길이로 그려 선이 삐져나오지 않게 한다."""
     length = max(0.0, min(1.0, ratio)) * circumference
@@ -95,6 +88,9 @@ def _gradient_slices(x: float, width: float, y: float, height: float, slices: in
     강하고 그라디언트는 렌더러 버전을 탄다. 인쇄물에서 색이 통째로 빠지는 사고를 피하려고
     확실히 그려지는 방식으로 만든다.
     """
+    # slices=1 이면 아래 i/(slices-1) 이 0 나눗셈이 된다. 지금 호출부는 기본값뿐이라
+    # 도달하지 않지만, 인자를 열어둔 함수라 방어한다.
+    slices = max(2, slices)
     stops = [(0.0, (18, 184, 134)), (0.5, (250, 176, 5)), (1.0, (240, 62, 62))]
 
     def color_at(t: float) -> str:
@@ -123,8 +119,14 @@ def render_divergence_gauge(
 ) -> str:
     """채널 간 평판 격차 게이지 — 안전(0.0) ~ 위험(0.6+) 위에 현재 점수를 찍는다.
 
-    ⚠️ severity(안정/주의/위험 단계)는 **표시하지 않는다**(2026-08-04 확정).
-       판정 단계는 내부 값이고, 셀러 화면에는 점수와 위치만 보여준다.
+    ⚠️ 게이지에는 severity 배지(CRISIS DETECTED 등)를 **달지 않는다**(2026-08-04 확정).
+       여기서는 점수와 위치만 보여준다.
+
+       단, 단계 라벨 자체가 문서에서 사라진 것은 아니다 — 페이지 상단 요약 문장
+       (`channel_divergence_cause.cause_title`)에는 "위험 단계"처럼 그대로 들어가고,
+       검증기 `_validate_stage_label` 이 그 포함을 **강제**한다. 그 라벨은 게이지 색과
+       문구가 어긋나는 것을 잡는 유일한 앵커라 빼면 검증이 약해진다.
+       (2026-08-05 리뷰 확인: 배지만 삭제, 문장은 유지)
 
     판정이 보류된 채널쌍은 마커를 찍지 않는다 — 표본 부족으로 판정하지 않은 값을
     위치로 표시하면 없는 근거를 만드는 셈이다.
@@ -184,35 +186,3 @@ def render_divergence_gauge(
     return "".join(parts)
 
 
-def render_drift_bars(drifts: list[dict], width: int = 300) -> str:
-    """속성별 전월 대비 변동(%p) 막대. 0을 가운데 두고 좌우로 뻗는다.
-
-    증감이 한눈에 보여야 해서 0 기준 양방향으로 그린다 — 상승만 빨강으로 칠해
-    "나빠진 항목"이 즉시 눈에 띄게 한다.
-    """
-    row_h, pad_top = 26, 14
-    height = pad_top + row_h * len(drifts) + 6
-    mid = width * 0.55  # 0 기준선 (오른쪽 상승 폭을 더 넓게 쓴다)
-    scale = width * 0.4 / 10.0  # 10%p 를 화면 폭 40% 로 매핑
-
-    parts = [
-        (
-            f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
-            f'xmlns="http://www.w3.org/2000/svg">'
-        ),
-        f'<line x1="{mid}" y1="6" x2="{mid}" y2="{height - 4}" stroke="#dee2e6" stroke-width="1"/>',
-    ]
-    for i, drift in enumerate(drifts):
-        y = pad_top + row_h * i
-        value = float(drift.get("drift_rate", 0.0)) * 100
-        bar_len = min(abs(value) * scale, width * 0.4)
-        color = COLOR_NEGATIVE if value >= 0 else COLOR_POSITIVE
-        x = mid if value >= 0 else mid - bar_len
-        parts.append(
-            f'<text x="4" y="{y + 12}" font-size="10" fill="{COLOR_TEXT}">{drift.get("aspect", "")}</text>'
-            f'<rect x="{x:.1f}" y="{y + 3}" width="{bar_len:.1f}" height="12" fill="{color}" rx="2"/>'
-            f'<text x="{mid + width * 0.4 + 4:.1f}" y="{y + 13}" font-size="10" '
-            f'fill="{color}">{value:+.1f}%p</text>'
-        )
-    parts.append("</svg>")
-    return "".join(parts)

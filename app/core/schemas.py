@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.constants import (
     DRIFT_RISK_THRESHOLD,
+    MAX_CHANNEL_PAIRS,
     MAX_PDF_SIZE_BYTES,
     MONTHLY_ASPECT_COUNT,
     RATIO_SUM_TOLERANCE,
@@ -290,7 +291,7 @@ def validate_citations_grounded(recommendation: Recommendation, alert: Detection
 #     두 모델을 맞대봐야 하는 것은 맨 아래 교차검증 함수로 뺐다.
 #
 # 임계값·고정 문구는 컨벤션(매직넘버 금지)대로 constants.py 에 있고 상단에서 import 한다:
-#   MONTHLY_ASPECT_COUNT / DRIFT_RISK_THRESHOLD / RATIO_SUM_TOLERANCE /
+#   MONTHLY_ASPECT_COUNT / MAX_CHANNEL_PAIRS / DRIFT_RISK_THRESHOLD / RATIO_SUM_TOLERANCE /
 #   MAX_PDF_SIZE_BYTES / SEVERITY_STAGE_LABEL / HOLD_INSUFFICIENT_DATA_NOTICE
 #   (마지막 둘은 검증기·콜백에서 쓰므로 app.core.constants 에서 직접 가져다 쓸 것)
 #
@@ -539,7 +540,10 @@ class MonthlyChannelDivergenceInput(BaseModel):
         None, description="내부 판정값 (pairs[] 롤업, 전 쌍 보류면 null)"
     )
     pairs: list[ChannelDivergencePair] = Field(
-        ..., min_length=1, max_length=3, description="채널쌍 전수 (comparison_pair 중복 불가)"
+        ...,
+        min_length=1,
+        max_length=MAX_CHANNEL_PAIRS,
+        description="채널쌍 전수 (comparison_pair 중복 불가)",
     )
 
     @model_validator(mode="after")
@@ -709,7 +713,7 @@ class MonthlyReportOutput(BaseModel):
     )
     channel_pair_analyses: list[ChannelPairAnalysis] = Field(
         default_factory=list,
-        max_length=3,
+        max_length=MAX_CHANNEL_PAIRS,
         description="채널쌍별 원인·조치 (입력 pairs 와 1:1). 리포트에서 게이지 아래 표시",
     )
     cause_analysis_results: list[str] = Field(

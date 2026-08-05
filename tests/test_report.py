@@ -282,13 +282,23 @@ def test_monthly_validator_rejects_unknown_pair(
 def test_monthly_validator_factchecks_pair_analysis(
     monthly_input: MonthlyReportInput, monthly_output: MonthlyReportOutput
 ) -> None:
-    """쌍별 원인 문장의 수치도 팩트체크 대상이다."""
-    bad = monthly_output.channel_pair_analyses[0].model_copy(
+    """쌍별 원인 문장의 수치도 팩트체크 대상이다.
+
+    ⚠️ 쌍을 **빼지 않고** 하나만 오염시킨다. 쌍을 떨어뜨리면 "채널쌍 분석 누락" 이 함께
+       올라와, 팩트체크를 통째로 지워도 passed=False 라서 테스트가 통과해 버린다.
+    """
+    analyses = [a.model_copy(deep=True) for a in monthly_output.channel_pair_analyses]
+    analyses[0] = analyses[0].model_copy(
         update={"cause_analysis": ["쿠팡 색상 부정 의견이 전체 9999건으로 집계됐습니다."]}
     )
-    output = monthly_output.model_copy(update={"channel_pair_analyses": [bad]})
-    passed, _ = validate_monthly_report(monthly_input, output)
+    output = monthly_output.model_copy(update={"channel_pair_analyses": analyses})
+
+    passed, errors = validate_monthly_report(monthly_input, output)
     assert passed is False
+    assert any("수치 팩트체크 실패" in e for e in errors)
+    assert any("channel_pair_analyses[COUPANG_VS_NAVER].cause_analysis[0]" in e for e in errors)
+    # 쌍은 그대로 두었으므로 커버리지 반려는 섞이지 않아야 한다
+    assert not any("채널쌍 분석 누락" in e for e in errors)
 
 
 # ── 2. cs_reply_validator ────────────────────────────────────────────────

@@ -101,6 +101,14 @@ aspect_distributions·sentiment_drifts·aspect_summaries 세 배열의 길이가
 서로 aspect 집합이 같아야 한다. CS 탐지용 6종(Aspect enum 전체)과 달리 3종으로 제한된다.
 """
 
+MAX_CHANNEL_PAIRS = 3
+"""월간 채널쌍 최대 개수 = C(채널 3종, 2) = 3.
+
+⚠️ 채널이 늘면 이 값도 함께 키워야 한다. 검증기가 "입력 pairs 전부에 분석이 있을 것" 을
+   요구하므로, 입력 쌍이 이 상한을 넘으면 LLM 이 아무리 잘 써도 스키마가 잘라내 **영구
+   FAILED_VALIDATION** 이 된다(재시도로도 못 빠져나온다).
+"""
+
 DRIFT_RISK_THRESHOLD = 0.03
 """sentiment_drifts[].status 가 RISK 가 되는 ΔP_neg 하한. 스키마 §1-1.
 
