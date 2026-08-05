@@ -127,10 +127,19 @@ def validate_monthly_report(
             f"입력에 없는 속성 생성: [{', '.join(a.value for a in extra)}]"
         )
 
-    # 3. 단계 라벨 대조 (§1-2)
+    # 3. 채널쌍별 분석은 입력 pairs 와 1:1 이어야 한다 — 게이지 바로 아래 붙는 문장이라
+    #    쌍이 어긋나면 다른 채널 이야기가 그 자리에 나간다.
+    input_pairs = {p.comparison_pair for p in input_data.channel_divergence.pairs}
+    output_pairs = {a.comparison_pair for a in output_data.channel_pair_analyses}
+    if missing_pairs := input_pairs - output_pairs:
+        errors.append(f"채널쌍 분석 누락: {sorted(missing_pairs)}")
+    if unknown_pairs := output_pairs - input_pairs:
+        errors.append(f"입력에 없는 채널쌍 분석: {sorted(unknown_pairs)}")
+
+    # 4. 단계 라벨 대조 (§1-2)
     errors.extend(_validate_stage_label(input_data, output_data))
 
-    # 4. 수치 팩트체크 + 금지 표현 — §4-4 가 지정한 대상 필드에만 적용
+    # 5. 수치 팩트체크 + 금지 표현 — §4-4 가 지정한 대상 필드에만 적용
     allowed = build_allowed_numbers(input_data)
     targets: list[tuple[str, str]] = [
         (f"aspect_summaries[{s.aspect.value}].summary_text", s.summary_text)
@@ -149,6 +158,12 @@ def validate_monthly_report(
         (f"cause_analysis_results[{i}]", text)
         for i, text in enumerate(output_data.cause_analysis_results)
     )
+    # 쌍별 원인 분석도 수치를 담으므로 같은 기준으로 검사한다
+    targets.extend(
+        (f"channel_pair_analyses[{analysis.comparison_pair}].cause_analysis[{i}]", text)
+        for analysis in output_data.channel_pair_analyses
+        for i, text in enumerate(analysis.cause_analysis)
+    )
 
     for field_name, text in targets:
         errors.extend(check_numbers_grounded(text, allowed, field_name=field_name))
@@ -158,6 +173,14 @@ def validate_monthly_report(
     # 금지 표현은 어느 필드에도 나오면 안 된다.
     for i, text in enumerate(output_data.recommended_actions):
         errors.extend(find_forbidden_expressions(text, field_name=f"recommended_actions[{i}]"))
+    for analysis in output_data.channel_pair_analyses:
+        for i, text in enumerate(analysis.recommended_actions):
+            errors.extend(
+                find_forbidden_expressions(
+                    text,
+                    field_name=f"channel_pair_analyses[{analysis.comparison_pair}].recommended_actions[{i}]",
+                )
+            )
 
     is_valid = not errors
     if not is_valid:

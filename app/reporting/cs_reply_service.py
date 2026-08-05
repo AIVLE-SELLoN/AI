@@ -184,9 +184,13 @@ async def generate_cs_reply_pipeline(
         )
         pdf_s3_meta = await upload_pdf_to_s3(
             pdf_bytes=pdf_bytes,
-            report_type=REPORT_TYPE_GUIDELINE,  # → 임시 버킷 (DB 원본으로 재컴파일 가능)
-            product_group_id=input_data.product_group_id,
-            identifier=input_data.alert_id,
+            report_type=REPORT_TYPE_GUIDELINE,  # → cs-guideline 프리픽스 (1일 보존)
+            # CS 는 대상 "기간"이 없으므로 탐지 연월을 경로 기준으로 쓴다.
+            # 생성 시각이 아니라 탐지 시각이라 재생성해도 같은 폴더에 떨어진다.
+            period=input_data.detected_at.strftime("%Y-%m"),
+            # CS 는 알림마다 1건씩 나오므로 표시용 파일명에 alert_id 를 붙인다.
+            # 없으면 같은 달 가이드라인이 전부 같은 이름이 되어 목록에서 구분이 안 된다.
+            source_id=input_data.alert_id,
         )
     except S3NotConfiguredError as exc:
         # 업로드하지 않은 파일을 성공으로 보고하지 않는다(스텁 상태에서의 안전장치).

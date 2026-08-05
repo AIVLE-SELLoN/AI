@@ -1,0 +1,39 @@
+# 줄바꿈 정규화 — 저장소에는 LF 로 저장하고, 체크아웃은 OS 관례를 따른다.
+#
+# 왜 필요한가: Windows 에서 파일을 통째로 다시 쓰는 도구(파이썬 Path.write_text 등)가
+# LF 를 CRLF 로 바꿔 놓으면, 실제로는 몇 줄만 고쳤는데 **파일 전체가 변경**으로 잡힌다.
+# 공유 파일(app/core/*)에서 그러면 blame 이 팀 전체에 영향을 준다.
+# 실제로 PR #28 에서 .env.example 11줄 수정이 93줄로, constants.py 15줄이 467줄로 부풀었다.
+#
+# ⚠️ 기존 파일 중 CRLF 로 커밋된 것들이 있다(app/core/schemas.py 등). 이 설정만으로는
+#    바뀌지 않고, 그 파일을 **다음에 고치는 사람**의 커밋에서 통째로 정규화된다.
+#    한 번에 정리하려면 `git add --renormalize .` 를 **별도 커밋**으로 올려야 하는데,
+#    모든 팀원의 파일을 건드리므로 팀 합의 후 진행할 것.
+
+* text=auto
+
+# 텍스트로 확정 (확장자로 판별이 애매한 것 방지)
+*.py    text diff=python
+*.md    text
+*.json  text
+*.yml   text
+*.yaml  text
+*.toml  text
+*.csv   text
+*.html  text
+*.css   text
+*.txt   text
+.env.example text
+
+# 셸 스크립트는 LF 여야 실행된다 (컨테이너·CI 에서 CRLF 면 깨진다)
+*.sh    text eol=lf
+Dockerfile text eol=lf
+
+# 바이너리 — 변환 금지
+*.pdf   binary
+*.png   binary
+*.jpg   binary
+*.ico   binary
+*.db    binary
+*.sqlite binary
+*.xlsx  binary

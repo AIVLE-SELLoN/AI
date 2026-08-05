@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.constants import (
     DRIFT_RISK_THRESHOLD,
+    MAX_CHANNEL_PAIRS,
     MAX_PDF_SIZE_BYTES,
     MONTHLY_ASPECT_COUNT,
     RATIO_SUM_TOLERANCE,
@@ -290,7 +291,7 @@ def validate_citations_grounded(recommendation: Recommendation, alert: Detection
 #     두 모델을 맞대봐야 하는 것은 맨 아래 교차검증 함수로 뺐다.
 #
 # 임계값·고정 문구는 컨벤션(매직넘버 금지)대로 constants.py 에 있고 상단에서 import 한다:
-#   MONTHLY_ASPECT_COUNT / DRIFT_RISK_THRESHOLD / RATIO_SUM_TOLERANCE /
+#   MONTHLY_ASPECT_COUNT / MAX_CHANNEL_PAIRS / DRIFT_RISK_THRESHOLD / RATIO_SUM_TOLERANCE /
 #   MAX_PDF_SIZE_BYTES / SEVERITY_STAGE_LABEL / HOLD_INSUFFICIENT_DATA_NOTICE
 #   (마지막 둘은 검증기·콜백에서 쓰므로 app.core.constants 에서 직접 가져다 쓸 것)
 #
@@ -539,7 +540,10 @@ class MonthlyChannelDivergenceInput(BaseModel):
         None, description="내부 판정값 (pairs[] 롤업, 전 쌍 보류면 null)"
     )
     pairs: list[ChannelDivergencePair] = Field(
-        ..., min_length=1, max_length=3, description="채널쌍 전수 (comparison_pair 중복 불가)"
+        ...,
+        min_length=1,
+        max_length=MAX_CHANNEL_PAIRS,
+        description="채널쌍 전수 (comparison_pair 중복 불가)",
     )
 
     @model_validator(mode="after")
@@ -669,6 +673,25 @@ class MonthlyChannelDivergenceCause(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class ChannelPairAnalysis(BaseModel):
+    """채널쌍 1개에 대한 원인·조치. 리포트가 쌍마다 따로 보여준다(2026-08-04 화면 확정).
+
+    보고서 전체 단위(`cause_analysis_results`/`recommended_actions`)와 별개다 —
+    전자는 "이 상품 전체"의 결론이고, 이건 "이 채널쌍" 한정이다. 화면에서 게이지 바로
+    아래 붙기 때문에 쌍과 어긋나면 곧바로 오독이 된다.
+    """
+
+    comparison_pair: str = Field(
+        ..., pattern=r"^[A-Z]+_VS_[A-Z]+$", description="대상 채널쌍 (입력과 동일 표기)"
+    )
+    cause_analysis: list[str] = Field(
+        ..., min_length=1, max_length=2, description="이 채널쌍의 원인 분석 (단문)"
+    )
+    recommended_actions: list[str] = Field(
+        ..., min_length=1, max_length=2, description="이 채널쌍의 권장 조치 (단문)"
+    )
+
+
 class MonthlyReportOutput(BaseModel):
     """월간 보고서 출력 (LLM 생성 구간)."""
 
@@ -686,7 +709,12 @@ class MonthlyReportOutput(BaseModel):
         description="속성별 요약 문구 목록 (aspect 집합이 입력과 동일)",
     )
     channel_divergence_cause: MonthlyChannelDivergenceCause = Field(
-        ..., description="채널 분열 사유 분석"
+        ..., description="채널 분열 사유 분석 (전체 요약 1건)"
+    )
+    channel_pair_analyses: list[ChannelPairAnalysis] = Field(
+        default_factory=list,
+        max_length=MAX_CHANNEL_PAIRS,
+        description="채널쌍별 원인·조치 (입력 pairs 와 1:1). 리포트에서 게이지 아래 표시",
     )
     cause_analysis_results: list[str] = Field(
         ..., min_length=1, max_length=5, description="핵심 원인 분석 결과 목록 (단문 문장 리스트)"
@@ -700,6 +728,10 @@ class MonthlyReportOutput(BaseModel):
 
     @model_validator(mode="after")
     def _validate_aspects(self) -> MonthlyReportOutput:
+        pair_labels = [a.comparison_pair for a in self.channel_pair_analyses]
+        if len(pair_labels) != len(set(pair_labels)):
+            raise ValueError(f"channel_pair_analyses 의 comparison_pair 가 중복됩니다: {pair_labels}")
+
         aspects = {s.aspect for s in self.aspect_summaries}
         if len(aspects) != MONTHLY_ASPECT_COUNT:
             raise ValueError(f"aspect_summaries 의 aspect 가 중복됩니다: {aspects}")
