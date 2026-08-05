@@ -97,14 +97,18 @@ except ImportError:  # pragma: no cover - 인프라 도입 전
         return f"trace-{uuid.uuid4().hex[:16]}"
 
     async def publish_anomaly_analyzed(alert: Any, rec: Any, trace_id: str) -> None:
-        logger.info("[MQ 미구현] ai.anomaly.analyzed 발행 생략 alert=%s", alert.alert_id)
+        logger.info(
+            "[MQ 미구현] ai.anomaly.analyzed 발행 생략 alert=%s", alert.alert_id
+        )
 
     async def publish_guideline_generated(guideline: Any, trace_id: str) -> None:
         logger.info("[MQ 미구현] ai.guideline.generated 발행 생략")
 
 
 try:  # pragma: no cover
-    from app.recommendation.pipeline import generate_for_alert  # type: ignore[attr-defined]
+    from app.recommendation.pipeline import (
+        generate_for_alert,  # type: ignore[attr-defined]
+    )
 
     RECOMMENDATION_AVAILABLE = True
 except ImportError:  # pragma: no cover
@@ -116,7 +120,9 @@ except ImportError:  # pragma: no cover
 
 
 try:  # pragma: no cover
-    from app.reporting.cs_reply_service import generate_guideline  # type: ignore[attr-defined]
+    from app.reporting.cs_reply_service import (
+        generate_guideline,  # type: ignore[attr-defined]
+    )
 
     GUIDELINE_AVAILABLE = True
 except ImportError:  # pragma: no cover
@@ -150,7 +156,9 @@ class _CountingClient:
         self.calls = 0
         self.empty_extractions = 0
 
-    async def complete_json(self, prompt: str, *, trace_key: str = "-", **_: object) -> dict:
+    async def complete_json(
+        self, prompt: str, *, trace_key: str = "-", **_: object
+    ) -> dict:
         import re
 
         self.calls += 1
@@ -210,10 +218,20 @@ def load_inputs() -> tuple[list[ClassifiedItem], list[dict]]:
     #    source_signals 한쪽이 영원히 null 이 되고, BH family 도 절반으로 줄어
     #    컷오프가 달라진다(실측: CS 만 756검정 / 둘 다 1,464검정).
     sources = [
-        ("cs", "data/input/input_cs_inquiries.csv", "data/golden/golden_cs_labels.csv",
-         "inquiry_id", "inquired_at"),
-        ("review", "data/input/input_reviews.csv", "data/golden/golden_review_labels.csv",
-         "review_id", "created_at"),
+        (
+            "cs",
+            "data/input/input_cs_inquiries.csv",
+            "data/golden/golden_cs_labels.csv",
+            "inquiry_id",
+            "inquired_at",
+        ),
+        (
+            "review",
+            "data/input/input_reviews.csv",
+            "data/golden/golden_review_labels.csv",
+            "review_id",
+            "created_at",
+        ),
     ]
 
     for source, input_csv, golden_csv, id_key, time_key in sources:
@@ -259,7 +277,9 @@ def load_inputs() -> tuple[list[ClassifiedItem], list[dict]]:
 # ── 발행 기록 캐시 ──────────────────────────────────────────────
 
 
-def load_prior_alerts(window_end: date, path: Path = STATE_PATH) -> list[DetectionAlert]:
+def load_prior_alerts(
+    window_end: date, path: Path = STATE_PATH
+) -> list[DetectionAlert]:
     """캐시에서 `prior_alerts` 를 읽는다. 없으면 빈 리스트(첫 실행)."""
     if not path.exists():
         return []
@@ -289,10 +309,10 @@ def save_published(
         existing[alert.alert_id] = alert.model_dump(mode="json")
 
     cutoff = date.fromordinal(window_end.toordinal() - STATE_RETENTION_DAYS)
-    kept = [a for a in existing.values() if date.fromisoformat(a["window_end"]) >= cutoff]
-    path.write_text(
-        json.dumps(kept, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    kept = [
+        a for a in existing.values() if date.fromisoformat(a["window_end"]) >= cutoff
+    ]
+    path.write_text(json.dumps(kept, ensure_ascii=False, indent=2), encoding="utf-8")
     return len(kept)
 
 
@@ -327,7 +347,12 @@ async def run_batch(
         logger.warning("분류 커버리지 미달 %d슬롯 — 검정에서 제외됩니다", len(gaps))
 
     prior = load_prior_alerts(window_end or date.today(), state_path)
-    logger.info("입력 items=%d documents=%d prior_alerts=%d", len(items), len(documents), len(prior))
+    logger.info(
+        "입력 items=%d documents=%d prior_alerts=%d",
+        len(items),
+        len(documents),
+        len(prior),
+    )
 
     # ⚠️ dry-run 이어도 [6] 원인분류는 detect_anomaly 안에서 돈다. 스텁을 안 주면
     #    "LLM 0회"라고 해놓고 실제로 과금된다.
@@ -355,7 +380,6 @@ async def run_batch(
             counts["발행"] += 2
             continue
 
-
         # ⚠️ alert 1건이 터져도 배치는 계속한다. 여기서 던지면 **이미 LLM 비용을 쓴
         #    앞쪽 알림들까지 발행되지 않고 날아간다.** 실패는 모아서 끝에 요약한다.
         rec = guideline = None
@@ -363,19 +387,25 @@ async def run_batch(
             rec = await generate_for_alert(alert)
             counts["개선안"] += 1
         except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
-            failures.append({"alert_id": alert.alert_id, "stage": "개선안", "error": repr(exc)})
+            failures.append(
+                {"alert_id": alert.alert_id, "stage": "개선안", "error": repr(exc)}
+            )
 
         try:
             guideline = await generate_guideline(alert, rec)
             counts["가이드라인"] += 1
         except Exception as exc:  # noqa: BLE001
-            failures.append({"alert_id": alert.alert_id, "stage": "가이드라인", "error": repr(exc)})
+            failures.append(
+                {"alert_id": alert.alert_id, "stage": "가이드라인", "error": repr(exc)}
+            )
 
         try:
             await publish_anomaly_analyzed(alert, rec, trace_id)
             counts["발행"] += 1
         except Exception as exc:  # noqa: BLE001
-            failures.append({"alert_id": alert.alert_id, "stage": "발행:이상", "error": repr(exc)})
+            failures.append(
+                {"alert_id": alert.alert_id, "stage": "발행:이상", "error": repr(exc)}
+            )
 
         if guideline is not None:
             try:
@@ -383,11 +413,21 @@ async def run_batch(
                 counts["발행"] += 1
             except Exception as exc:  # noqa: BLE001
                 failures.append(
-                    {"alert_id": alert.alert_id, "stage": "발행:가이드", "error": repr(exc)}
+                    {
+                        "alert_id": alert.alert_id,
+                        "stage": "발행:가이드",
+                        "error": repr(exc),
+                    }
                 )
 
     # 캐시는 dry-run 에서 건드리지 않는다 — 안 보낸 걸 보냈다고 기록하지 않는다.
-    cached = 0 if dry_run else save_published(alerts, alerts[0].window_end, state_path) if alerts else 0
+    cached = (
+        0
+        if dry_run
+        else save_published(alerts, alerts[0].window_end, state_path)
+        if alerts
+        else 0
+    )
 
     return {
         "trace_id": trace_id,
@@ -412,14 +452,18 @@ def print_summary(summary: dict) -> None:
     print("\n" + "=" * 62)
     print(f"배치 요약  trace_id={summary['trace_id']}  {summary['elapsed_sec']}초")
     print("=" * 62)
-    print(f"  입력          items {summary['items']} / documents {summary['documents']}")
+    print(
+        f"  입력          items {summary['items']} / documents {summary['documents']}"
+    )
     print(f"  prior_alerts  {summary['prior_alerts']}건")
     print(f"  발행          {summary['published']}건")
     print(f"  억제          {summary['suppressed']}건  ← 발행 아님")
     print(f"  후속 처리     {summary['processed']}건")
     if summary["dry_run"]:
-        print(f"\n  [dry-run] LLM 호출 0회. 실제로 돌리면:")
-        print(f"     Agent2 [6] 원인분류 : {summary['cause_calls']}회  ← 스텁이 가로채 실측")
+        print("\n  [dry-run] LLM 호출 0회. 실제로 돌리면:")
+        print(
+            f"     Agent2 [6] 원인분류 : {summary['cause_calls']}회  ← 스텁이 가로채 실측"
+        )
         print(f"     후속 단계           : {summary['llm_calls']}")
         print("     개선안 1건당 LLM 2~4회. 가이드라인은 별도.")
     if summary["failures"]:
@@ -441,9 +485,14 @@ def print_summary(summary: dict) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--window-end", default=None, help="현재 윈도우 마지막 날 (YYYY-MM-DD)")
     ap.add_argument(
-        "--max-alerts", type=int, default=None, help="후속 처리할 alert 수 상한 (비용 통제)"
+        "--window-end", default=None, help="현재 윈도우 마지막 날 (YYYY-MM-DD)"
+    )
+    ap.add_argument(
+        "--max-alerts",
+        type=int,
+        default=None,
+        help="후속 처리할 alert 수 상한 (비용 통제)",
     )
     ap.add_argument(
         "--dry-run", action="store_true", help="LLM 0회 — 몇 번 부를지만 실측한다"
