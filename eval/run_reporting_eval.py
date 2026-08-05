@@ -164,6 +164,13 @@ def _monthly_case(
             "cause_title": f"쿠팡-네이버 채널 평판 격차 {stage_label}",
             "cause_description": "쿠팡 채널의 색상 불만 비중이 높아 이미지 운영 점검이 필요합니다.",
         },
+        channel_pair_analyses=[
+            {
+                "comparison_pair": "COUPANG_VS_NAVER",
+                "cause_analysis": ["쿠팡 채널에서 색상 관련 부정 의견 비중이 상대적으로 높습니다."],
+                "recommended_actions": ["쿠팡 상세 페이지 대표 이미지를 원본 색상 기준으로 교체하세요."],
+            }
+        ],
         cause_analysis_results=["색상 부정 의견이 전체 450건 중 가장 큰 비중을 차지했습니다."],
         recommended_actions=["쿠팡 대표 이미지를 원본 색상 기준으로 교체하세요."],
     )
@@ -344,8 +351,9 @@ def run_storage_policy_check() -> dict[str, Any]:
     되므로, 배포 전에 두 값이 같은지 여기서 확인한다.
 
     검사 항목:
-      - 문서 종류별 버킷이 분리돼 있는가
-      - 보존 기간이 확정값(월간 6개월 / CS 24시간)과 같은가
+      - 문서 종류별 **프리픽스**가 분리돼 있는가 (버킷은 하나, Lifecycle 은 프리픽스 단위)
+      - 보존 기간이 확정값(월간 6개월 / CS 1일)과 같은가
+      - 링크 수명이 문서 종류 무관 24시간 고정인가 (인프라 §5)
       - 링크 만료가 객체 만료를 넘지 않는가 (넘으면 스키마가 거부한다)
       - 재컴파일 불가 문서(월간)의 보존이 충분히 긴가
     """
@@ -354,9 +362,17 @@ def run_storage_policy_check() -> dict[str, Any]:
     unknown = resolve_storage_policy("unknown-type")
 
     checks = {
-        "버킷 분리": monthly.bucket_name != guideline.bucket_name,
+        # 버킷은 하나이고 Lifecycle 이 프리픽스 단위로 걸린다 — 프리픽스가 같으면
+        # 6개월 규칙과 1일 규칙이 같은 객체에 겹친다.
+        "프리픽스 분리": monthly.prefix != guideline.prefix,
+        "버킷 단일": monthly.bucket_name == guideline.bucket_name,
         "월간 보존 = 6개월": monthly.retention_hours == constants.MONTHLY_RETENTION_DAYS * 24,
-        "CS 보존 = 24시간": guideline.retention_hours == constants.GUIDELINE_RETENTION_HOURS,
+        "CS 보존 = 1일": guideline.retention_hours == constants.GUIDELINE_RETENTION_HOURS,
+        "링크 수명 24h 고정": (
+            monthly.presigned_ttl_hours
+            == guideline.presigned_ttl_hours
+            == constants.PRESIGNED_URL_TTL_HOURS
+        ),
         "월간 링크 ≤ 객체 수명": monthly.presigned_ttl_hours <= monthly.retention_hours,
         "CS 링크 ≤ 객체 수명": guideline.presigned_ttl_hours <= guideline.retention_hours,
         "월간은 재컴파일 불가로 표시": monthly.recompilable is False,
@@ -374,12 +390,14 @@ def run_storage_policy_check() -> dict[str, Any]:
         "policies": {
             "monthly": {
                 "bucket": monthly.bucket_name,
+                "prefix": monthly.prefix,
                 "retention": monthly.retention_label,
                 "presigned_hours": monthly.presigned_ttl_hours,
                 "recompilable": monthly.recompilable,
             },
             "cs_guideline": {
                 "bucket": guideline.bucket_name,
+                "prefix": guideline.prefix,
                 "retention": guideline.retention_label,
                 "presigned_hours": guideline.presigned_ttl_hours,
                 "recompilable": guideline.recompilable,

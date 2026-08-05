@@ -53,7 +53,8 @@ logger = logging.getLogger("MonthlyReportService")
 
 # 프롬프트 버전 — 매직스트링 방지. 교체 시 이 한 줄만 바꾼다(구버전 파일은 남겨둔다).
 # v4: 지시문 압축 + 데이터를 JSON → 파이프 표로 바꾼 토큰 절감판.
-PROMPT_VERSION = "monthly_report_v4"
+# v5: 채널쌍별 원인·조치(channel_pair_analyses) 생성 추가 — 리포트가 게이지마다 따로 보여준다.
+PROMPT_VERSION = "monthly_report_v5"
 
 
 def build_report_id(input_data: MonthlyReportInput) -> str:
@@ -269,6 +270,29 @@ async def generate_monthly_report_output(
     return None, CallbackStatus.FAILED_VALIDATION, last_errors
 
 
+def _build_excluded_notice(
+    held_products: list[str] | None,
+    failed_products: list[str] | None,
+) -> str | None:
+    """합본에서 빠진 상품 안내. 표지를 없앴으므로(2026-08-04) 이 정보는 콜백으로 나간다.
+
+    보류와 실패를 **한 문장에 섞지 않는다** — VOC 500건짜리 상품이 '표본 부족'으로
+    안내되면 셀러가 데이터가 없다고 오해한다.
+    """
+    parts = []
+    if held_products:
+        parts.append(
+            f"표본 부족으로 보류된 상품 {len(held_products)}개: {', '.join(held_products)} "
+            f"— VOC {constants.MIN_VOC_COUNT_FOR_REPORT}건 미만이라 분석하지 않았습니다."
+        )
+    if failed_products:
+        parts.append(
+            f"생성에 실패해 이번 호에서 빠진 상품 {len(failed_products)}개: "
+            f"{', '.join(failed_products)} — 데이터는 정상이며 운영자가 확인 중입니다."
+        )
+    return " ".join(parts) or None
+
+
 async def compile_and_upload_monthly_book(
     report_month: str,
     items: list[dict[str, Any]],
@@ -310,15 +334,14 @@ async def compile_and_upload_monthly_book(
                 }
                 for item in items
             ],
-            held_products=held_products or [],
-            failed_products=failed_products or [],
         )
         pdf_bytes = compile_monthly_book(context)
         pdf_s3_meta = await upload_pdf_to_s3(
             pdf_bytes=pdf_bytes,
-            report_type=REPORT_TYPE_MONTHLY,  # → 6개월 보존 버킷
-            product_group_id="ALL",  # 월 1개 합본이라 상품 구분이 없다
-            identifier=report_month,
+            report_type=REPORT_TYPE_MONTHLY,  # → monthly-report 프리픽스 (6개월 보존)
+            # 경로의 {yyyy}/{mm} 와 파일명의 {yyyyMM} 은 **보고 대상 월**이다.
+            # 업로드 시각(1일 새벽)을 쓰면 7월 리포트가 2026/08 폴더로 들어간다.
+            period=report_month,
         )
     except S3NotConfiguredError as exc:
         # 업로드하지 않은 파일을 성공으로 보고하지 않는다(스텁 상태에서의 안전장치).
@@ -362,5 +385,6 @@ async def compile_and_upload_monthly_book(
             status=CallbackStatus.SUCCESS,
             report_id=report_id,
             pdf_s3_meta=pdf_s3_meta,
+            notice_message=_build_excluded_notice(held_products, failed_products),
         ),
     )

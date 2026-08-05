@@ -17,7 +17,7 @@ from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from jinja2 import BaseLoader, Environment, select_autoescape
+from jinja2 import BaseLoader, Environment, StrictUndefined, select_autoescape
 
 from app.core import constants
 from app.core.schemas import (
@@ -40,6 +40,7 @@ from app.reporting import cs_reply_service, monthly_report_service
 from app.reporting.callback import build_monthly_callback
 from app.reporting.cs_reply_service import generate_cs_reply_pipeline
 from app.reporting.cs_reply_validator import validate_cs_guideline
+from app.reporting.ids import build_guideline_id
 from app.reporting.metrics_calculator import (
     build_channel_divergence_pair,
     calculate_jsd_bits,
@@ -53,11 +54,16 @@ from app.reporting.monthly_report_service import (
     generate_monthly_report_output,
 )
 from app.reporting.monthly_report_validator import validate_monthly_report
-from app.reporting.pdf_compiler import MONTHLY_COVER_HTML, build_book_context
+from app.reporting.pdf_compiler import (
+    MONTHLY_BOOK_HTML,
+    build_book_context,
+)
 from app.reporting.s3_uploader import (
     REPORT_TYPE_GUIDELINE,
     REPORT_TYPE_MONTHLY,
     S3NotConfiguredError,
+    _build_original_file_name,
+    build_object_path,
     resolve_storage_policy,
     upload_pdf_to_s3,
 )
@@ -234,9 +240,67 @@ def monthly_output() -> MonthlyReportOutput:
             "cause_title": "쿠팡-네이버 채널 평판 격차 위험 단계",
             "cause_description": "쿠팡 채널의 색상 불만 비중이 뚜렷하게 높아 이미지 운영 점검이 필요합니다.",
         },
+        channel_pair_analyses=[
+            {
+                "comparison_pair": "COUPANG_VS_NAVER",
+                "cause_analysis": ["쿠팡 채널의 색상 부정 의견 비중이 네이버보다 높습니다."],
+                "recommended_actions": ["쿠팡 대표 이미지를 원본 색상 기준으로 교체하세요."],
+            },
+            {
+                # 보류 쌍 — 수치를 붙이지 않는다(§보류 시 판정 문구 금지)
+                "comparison_pair": "COUPANG_VS_ZIGZAG",
+                "cause_analysis": ["표본이 부족해 두 채널 간 차이를 판단하지 않았습니다."],
+                "recommended_actions": ["지그재그 채널 리뷰 수집량을 늘린 뒤 재확인하세요."],
+            },
+        ],
         cause_analysis_results=["색상 속성 부정 의견이 전체 450건 중 가장 큰 비중을 차지했습니다."],
         recommended_actions=["쿠팡 대표 이미지를 원본 색상 기준으로 교체하세요."],
     )
+
+
+def test_monthly_validator_requires_analysis_for_every_pair(
+    monthly_input: MonthlyReportInput, monthly_output: MonthlyReportOutput
+) -> None:
+    """쌍별 분석이 비면 반려 — PDF 게이지 바로 아래가 통째로 빈칸이 된다."""
+    output = monthly_output.model_copy(update={"channel_pair_analyses": []})
+    passed, errors = validate_monthly_report(monthly_input, output)
+    assert passed is False
+    assert any("채널쌍 분석 누락" in e for e in errors)
+
+
+def test_monthly_validator_rejects_unknown_pair(
+    monthly_input: MonthlyReportInput, monthly_output: MonthlyReportOutput
+) -> None:
+    """입력에 없는 채널쌍 분석은 반려 — 없는 게이지 자리에 붙을 문장이다."""
+    ghost = monthly_output.channel_pair_analyses[0].model_copy(
+        update={"comparison_pair": "NAVER_VS_ZIGZAG"}
+    )
+    output = monthly_output.model_copy(update={"channel_pair_analyses": [ghost]})
+    passed, errors = validate_monthly_report(monthly_input, output)
+    assert passed is False
+    assert any("입력에 없는 채널쌍" in e for e in errors)
+
+
+def test_monthly_validator_factchecks_pair_analysis(
+    monthly_input: MonthlyReportInput, monthly_output: MonthlyReportOutput
+) -> None:
+    """쌍별 원인 문장의 수치도 팩트체크 대상이다.
+
+    ⚠️ 쌍을 **빼지 않고** 하나만 오염시킨다. 쌍을 떨어뜨리면 "채널쌍 분석 누락" 이 함께
+       올라와, 팩트체크를 통째로 지워도 passed=False 라서 테스트가 통과해 버린다.
+    """
+    analyses = [a.model_copy(deep=True) for a in monthly_output.channel_pair_analyses]
+    analyses[0] = analyses[0].model_copy(
+        update={"cause_analysis": ["쿠팡 색상 부정 의견이 전체 9999건으로 집계됐습니다."]}
+    )
+    output = monthly_output.model_copy(update={"channel_pair_analyses": analyses})
+
+    passed, errors = validate_monthly_report(monthly_input, output)
+    assert passed is False
+    assert any("수치 팩트체크 실패" in e for e in errors)
+    assert any("channel_pair_analyses[COUPANG_VS_NAVER].cause_analysis[0]" in e for e in errors)
+    # 쌍은 그대로 두었으므로 커버리지 반려는 섞이지 않아야 한다
+    assert not any("채널쌍 분석 누락" in e for e in errors)
 
 
 # ── 2. cs_reply_validator ────────────────────────────────────────────────
@@ -505,7 +569,8 @@ async def test_monthly_book_is_one_object_per_month(monthly_input, monthly_outpu
     # 상품이 3개여도 PDF 는 한 번만 만들고 한 번만 올린다
     assert mock_compile.call_count == 1
     assert mock_upload.await_count == 1
-    assert mock_upload.await_args.kwargs["product_group_id"] == "ALL"
+    # 월 1개 합본이라 상품 구분이 없다 — 경로 기준은 보고 대상 월이다
+    assert mock_upload.await_args.kwargs["period"] == "2026-07"
     assert result.callback.status == CallbackStatus.SUCCESS
     assert result.callback.report_id == build_book_report_id("2026-07")  # RPT-202607
     assert result.callback.source_payload is None
@@ -538,13 +603,129 @@ async def test_cs_pipeline_success(cs_input, cs_output) -> None:
     assert result.callback.source_payload["output"]["guideline_id"] == "GD-20260528-P001-COUPANG"
 
 
+# 인프라 문서의 {company_id} 자리 — 실제 값은 고객사 PK/UUID 다.
+_COMPANY_ID = "c0ffee00-0000-4000-8000-000000000000"
+
+
+def test_object_path_follows_infra_rule() -> None:
+    """인프라 「S3 파일 구조 규칙 정의」 경로·파일명 규칙 (2026-08-05 확정).
+
+        reports/companies/{company_id}/{report_type}/{yyyy}/{mm}/
+        {report_type}_{yyyyMM}_{uuid4}.pdf
+    """
+    path, name = build_object_path(REPORT_TYPE_MONTHLY, "2026-07", _COMPANY_ID)
+    assert path == f"reports/companies/{_COMPANY_ID}/monthly-report/2026/07/"
+    assert name.startswith("monthly-report_202607_")
+    assert name.endswith(".pdf")
+    # uuid4 가 붙어 같은 달을 다시 올려도 이전 객체를 덮어쓰지 않는다
+    _, name2 = build_object_path(REPORT_TYPE_MONTHLY, "2026-07", _COMPANY_ID)
+    assert name != name2
+
+    cs_path, cs_name = build_object_path(REPORT_TYPE_GUIDELINE, "2026-05", _COMPANY_ID)
+    assert cs_path == f"reports/companies/{_COMPANY_ID}/cs-guideline/2026/05/"
+    assert cs_name.startswith("cs-guideline_202605_")
+
+
+def test_object_path_rejects_bad_period() -> None:
+    """period 는 YYYY-MM 이어야 한다 — 폴더의 연월이 곧 파일명의 연월이다."""
+    for bad in ("2026/07", "202607", "2026-7", ""):
+        with pytest.raises(ValueError, match="period"):
+            build_object_path(REPORT_TYPE_MONTHLY, bad, _COMPANY_ID)
+
+
+@pytest.mark.asyncio
+async def test_upload_path_uses_report_period_not_upload_time() -> None:
+    """경로의 {yyyy}/{mm} 는 **보고 대상 월**이다.
+
+    업로드 시각을 쓰면 8/1 새벽에 올린 7월 리포트가 2026/08 폴더에 들어가면서
+    폴더의 연월과 파일명(`…_202607_…`)의 연월이 어긋난다.
+    """
+    with patch("app.reporting.s3_uploader.S3_ENABLED", True):
+        meta = await upload_pdf_to_s3(
+            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_MONTHLY, period="2026-07",
+            company_id=_COMPANY_ID,
+        )
+
+    assert "/2026/07/" in meta.s3_file_path
+    assert "_202607_" in meta.new_file_name
+    assert meta.s3_full_key == meta.s3_file_path + meta.new_file_name
+
+
+@pytest.mark.asyncio
+async def test_upload_refuses_without_company_id() -> None:
+    """company_id 를 모르면 올리지 않는다 — 경로가 회사 단위로 갈린다."""
+    with (
+        patch("app.reporting.s3_uploader.S3_ENABLED", True),
+        patch("app.reporting.s3_uploader.S3_DEFAULT_COMPANY_ID", ""),
+        pytest.raises(S3NotConfiguredError, match="company_id"),
+    ):
+        await upload_pdf_to_s3(
+            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_MONTHLY, period="2026-07"
+        )
+
+
+@pytest.mark.asyncio
+async def test_cs_original_file_name_differs_by_alert(cs_input, cs_output) -> None:
+    """같은 달 CS 가이드라인이라도 알림이 다르면 **표시용 파일명**이 달라야 한다.
+
+    `original_file_name` 은 메인이 목록에 표시할 때 쓰는 이름이다. CS 는 알림마다 1건씩
+    나오므로 `{yyyyMM}` 만으로는 5월 가이드라인이 전부 `cs-guideline_202605.pdf` 가 되어
+    목록이 도배된다(저장 자체는 `new_file_name` 의 uuid4 로 안전하다).
+
+    ⚠️ 업로더를 mock 하지 않고 **실제 함수**를 태운다 — mock 하면 서비스가 source_id 를
+       넘기는지, 업로더가 그걸 이름에 붙이는지 둘 다 검증되지 않는다.
+    """
+    naver_input = cs_input.model_copy(update={"alert_id": "ALT-20260528-P001-NAVER"})
+
+    async def _run(input_data: CSGuidelineInput):
+        output = cs_output.model_copy(
+            update={
+                "alert_id": input_data.alert_id,
+                "guideline_id": build_guideline_id(input_data.alert_id),
+            }
+        )
+        with patch("app.reporting.cs_reply_service.get_llm_client") as mock_get_client:
+            mock_client = AsyncMock()
+            mock_client.complete_json.return_value = output.model_dump(mode="json")
+            mock_get_client.return_value = mock_client
+            return await generate_cs_reply_pipeline(input_data)
+
+    with (
+        patch("app.reporting.s3_uploader.S3_ENABLED", True),
+        patch("app.reporting.s3_uploader.S3_DEFAULT_COMPANY_ID", _COMPANY_ID),
+        patch("app.reporting.cs_reply_service.upload_pdf_to_s3", upload_pdf_to_s3),
+    ):
+        coupang = await _run(cs_input)
+        naver = await _run(naver_input)
+
+    first = coupang.callback.pdf_s3_meta.original_file_name
+    second = naver.callback.pdf_s3_meta.original_file_name
+    assert first != second
+    assert cs_input.alert_id in first
+    assert naver_input.alert_id in second
+
+
+def test_monthly_original_file_name_has_no_source_id() -> None:
+    """월간은 월 1건이라 source_id 를 붙이지 않는다 — 달만으로 유일하다."""
+    assert _build_original_file_name("monthly-report", "2026-07", None) == (
+        "monthly-report_202607.pdf"
+    )
+    assert _build_original_file_name("cs-guideline", "2026-05", "ALT-1") == (
+        "cs-guideline_202605_ALT-1.pdf"
+    )
+
+
 def test_storage_policy_differs_by_document_type() -> None:
-    """월간 6개월 / CS 24시간 자동 삭제 (S3 Lifecycle, 2026-08-03 확정)."""
+    """월간 6개월 / CS 1일 자동 삭제 (S3 Lifecycle).
+
+    버킷은 **하나**이고 문서 종류는 프리픽스로 가른다(인프라 2026-08-05) — Lifecycle
+    규칙이 프리픽스 단위로 걸리기 때문이다.
+    """
     monthly = resolve_storage_policy(REPORT_TYPE_MONTHLY)
     guideline = resolve_storage_policy(REPORT_TYPE_GUIDELINE)
 
-    assert monthly.bucket_name == "sellon-reports"
-    assert guideline.bucket_name == "sellon-temp-reports"
+    assert monthly.bucket_name == guideline.bucket_name  # 버킷 1개
+    assert (monthly.prefix, guideline.prefix) == ("monthly-report", "cs-guideline")
     assert monthly.retention_hours == constants.MONTHLY_RETENTION_DAYS * 24
     assert guideline.retention_hours == constants.GUIDELINE_RETENTION_HOURS
     # 월간은 원본을 보관하지 않아 만료되면 재생성이 불가능하다
@@ -553,7 +734,10 @@ def test_storage_policy_differs_by_document_type() -> None:
     # 링크가 객체보다 오래 살면 "받을 수 있다"는 잘못된 안내가 된다
     assert monthly.presigned_ttl_hours <= monthly.retention_hours
     assert guideline.presigned_ttl_hours <= guideline.retention_hours
-    # 등록되지 않은 종류는 6개월 버킷에 쌓지 않는다
+    # 링크 수명은 문서 종류와 무관하게 24시간 고정 (인프라 §5)
+    assert monthly.presigned_ttl_hours == constants.PRESIGNED_URL_TTL_HOURS
+    assert guideline.presigned_ttl_hours == constants.PRESIGNED_URL_TTL_HOURS
+    # 등록되지 않은 종류는 6개월 프리픽스에 쌓지 않는다
     assert resolve_storage_policy("unknown").retention_hours == guideline.retention_hours
 
 
@@ -562,8 +746,8 @@ async def test_upload_refuses_when_s3_not_configured() -> None:
     """S3 미구성 상태에서는 성공을 반환하지 않는다 — 죽은 링크가 나가는 것을 막는다."""
     with patch("app.reporting.s3_uploader.S3_ENABLED", False), pytest.raises(S3NotConfiguredError):
         await upload_pdf_to_s3(
-            pdf_bytes=b"%PDF", report_type=REPORT_TYPE_MONTHLY,
-            product_group_id="ALL", identifier="2026-07",
+            pdf_bytes=b"%PDF", report_type=REPORT_TYPE_MONTHLY, period="2026-07",
+            company_id="c0ffee00-0000-4000-8000-000000000000",
         )
 
 
@@ -573,12 +757,12 @@ async def test_upload_sets_object_expiry_by_policy() -> None:
     before = datetime.now(UTC)
     with patch("app.reporting.s3_uploader.S3_ENABLED", True):
         monthly_meta = await upload_pdf_to_s3(
-            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_MONTHLY,
-            product_group_id="ALL", identifier="2026-07",
+            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_MONTHLY, period="2026-07",
+            company_id=_COMPANY_ID,
         )
         guideline_meta = await upload_pdf_to_s3(
-            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_GUIDELINE,
-            product_group_id="P001", identifier="ALT-1",
+            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_GUIDELINE, period="2026-05",
+            company_id=_COMPANY_ID,
         )
 
     monthly_days = (monthly_meta.object_expires_at - before).total_seconds() / 86400
@@ -633,23 +817,87 @@ async def test_monthly_callback_rejects_source_payload_requirement(monthly_input
         )
 
 
-def test_book_cover_separates_held_and_failed() -> None:
-    """보류(표본 부족)와 실패(검증 미통과)를 표지에서 구분한다.
+def test_book_template_renders_without_undefined_vars(monthly_input, monthly_output) -> None:
+    """합본 템플릿이 필요한 컨텍스트를 전부 받는지 — 렌더링까지 해봐야 잡힌다.
 
-    합쳐 넘기면 VOC 500건인 상품이 "VOC 10건 미만이라 분석하지 않았다"고 잘못 인쇄된다.
+    파이프라인 테스트는 compile_monthly_book 을 mock 하므로 템플릿 변수 누락을 못 잡는다.
+    실제로 `pair_label` 을 {% with %} 바인딩에 안 넘겨 합본만 터진 적이 있다.
     """
     context = build_book_context(
-        "2026-07", [], held_products=["P090"], failed_products=["P001"]
+        "2026-07",
+        [
+            {
+                "input": monthly_input.model_dump(mode="json"),
+                "report": monthly_output.model_dump(mode="json"),
+            }
+        ],
     )
-    assert context["held_products"] == ["P090"]
-    assert context["failed_products"] == ["P001"]
+    env = Environment(
+        loader=BaseLoader(),
+        autoescape=select_autoescape(["html"]),
+        undefined=StrictUndefined,  # 정의 안 된 변수를 즉시 에러로
+    )
+    html = env.from_string(MONTHLY_BOOK_HTML).render(**context)
 
+    assert "쿠팡 vs 네이버" in html  # 채널 라벨이 한글로 치환됐는지
+    assert "원인 분석 결과" in html  # 채널쌍 카드 안으로 옮겨간 항목
+    assert "권장 조치 사항" in html
+    assert "CRITICAL RISKS" not in html  # 삭제된 카드
+    assert "STABLE" not in html  # 삭제된 상태 배지
+
+
+@pytest.mark.asyncio
+async def test_book_notice_separates_held_and_failed(monthly_input, monthly_output) -> None:
+    """보류(표본 부족)와 실패(검증 미통과)를 콜백 안내 문구에서 구분한다.
+
+    표지 페이지를 없앤 뒤(2026-08-04) 이 안내는 notice_message 로만 나간다. 둘을 합쳐
+    보내면 VOC 500건인 상품이 "VOC 10건 미만이라 분석하지 않았다"고 잘못 안내된다.
+    """
+    items = [{"input": monthly_input, "report": monthly_output}]
+    with (
+        patch("app.reporting.monthly_report_service.compile_monthly_book", return_value=b"%PDF-"),
+        patch(
+            "app.reporting.monthly_report_service.upload_pdf_to_s3", new_callable=AsyncMock
+        ) as mock_upload,
+    ):
+        mock_upload.return_value = PdfS3Meta(
+            s3_bucket_name="sellon-reports",
+            s3_file_path="reports/monthly/2026/08/",
+            original_file_name="monthly_2026-07.pdf",
+            new_file_name="monthly_ALL_2026-07_20260801_a1b2.pdf",
+            s3_full_key="reports/monthly/2026/08/monthly_ALL_2026-07_20260801_a1b2.pdf",
+            created_at=datetime.now(UTC),
+            file_size_bytes=497000,
+        )
+        result = await compile_and_upload_monthly_book(
+            "2026-07", items, held_products=["P090"], failed_products=["P001"]
+        )
+
+    notice = result.callback.notice_message
+    assert notice is not None
+    held_part, failed_part = notice.split("생성에 실패해")
+    assert "P090" in held_part
+    assert "P001" in failed_part
+    assert "미만" not in failed_part  # 실패 상품에 표본 부족이라 적지 않는다
+
+
+def test_book_has_no_cover_page(monthly_input, monthly_output) -> None:
+    """총합 요약(표지) 페이지는 만들지 않는다 — 첫 페이지가 곧 첫 상품 리포트다."""
+    context = build_book_context(
+        "2026-07",
+        [
+            {
+                "input": monthly_input.model_dump(mode="json"),
+                "report": monthly_output.model_dump(mode="json"),
+            }
+        ],
+    )
     env = Environment(loader=BaseLoader(), autoescape=select_autoescape(["html"]))
-    cover = env.from_string(MONTHLY_COVER_HTML).render(**context)
-    assert "P090" in cover.split("생성에 실패해")[0]  # 보류 문구 쪽
-    failed_line = cover.split("생성에 실패해")[1]
-    assert "P001" in failed_line
-    assert "VOC 10건 미만" not in failed_line  # 실패 상품에 표본 부족이라 적지 않는다
+    html = env.from_string(MONTHLY_BOOK_HTML).render(**context)
+
+    assert "월간 CS·품질 분석 보고서" not in html  # 표지 제목
+    assert "상품별 요약" not in html  # 표지 표
+    assert html.index(monthly_input.product_name) < len(html)  # 첫 상품이 곧바로 나온다
 
 
 # ── 5. 프롬프트 압축 (토큰 절감이 데이터를 흘리지 않는지) ────────────────
