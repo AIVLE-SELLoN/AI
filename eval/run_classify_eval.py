@@ -21,8 +21,12 @@
     python eval/run_classify_eval.py --limit 300       # 미니 (기본)
     python eval/run_classify_eval.py --limit 0         # 전량(96,514건 — 매우 비쌈, 권장 안 함)
     python eval/run_classify_eval.py --prompt-version classify_aspect_v3   # 버전 비교
+    python eval/run_classify_eval.py --only-negative --limit 300 --mode batch  # 🆕 대표지표①②
+        # 용(부정N+비부정N 균형표본 — PR 리뷰 반영 후 FPR도 같이 나옴)
 
-재현성: --seed로 표본이 고정된다. 결과 JSON에 프롬프트 버전·모델·시드·일시를 남긴다.
+재현성: --seed로 표본이 고정된다. 결과 JSON에 프롬프트 버전·해시·모델·시드·모드·
+       only_negative 여부·일시를 남긴다(PR 리뷰 반영 — 같은 prompt_version 문자열이라도
+       파일을 제자리수정하면 내용이 달라질 수 있어 해시로 구분).
 """
 
 from __future__ import annotations
@@ -88,21 +92,11 @@ def load_dataset(golden_path: Path) -> list[dict]:
     return rows
 
 
-def sample_rows(rows: list[dict], limit: int, seed: int, only_negative: bool = False) -> list[dict]:
-    """true_aspect 비율을 유지한 층화 표본. limit<=0이면 전량.
-
-    only_negative=True면 sentiment=-1인 것만 대상으로 표본을 뽑는다(지인님 A안
-    ①②, 2026-08-04) — 탐지가 실제로 소비하는 값은 부정(전체의 7.3%)뿐인데,
-    aspect 기준으로만 층화하면 --limit 300에도 부정이 약 22건밖에 안 뽑혀서
-    "부정 한정 aspect 정확도" 같은 지표가 통계적으로 무의미해진다.
-    """
-    if only_negative:
-        rows = [r for r in rows if r["true_sentiment"] == -1]
-
+def _stratified_by_aspect(rows: list[dict], limit: int, rng: random.Random) -> list[dict]:
+    """true_aspect 비율을 유지한 층화 표본(내부 헬퍼). limit<=0이면 전량."""
     if limit <= 0 or limit >= len(rows):
-        return rows
+        return list(rows)
 
-    rng = random.Random(seed)
     by_aspect: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         by_aspect[r["true_aspect"]].append(r)
@@ -116,8 +110,40 @@ def sample_rows(rows: list[dict], limit: int, seed: int, only_negative: bool = F
     leftover = [r for r in rows if r["inquiry_id"] not in chosen_ids]
     rng.shuffle(leftover)
     picked.extend(leftover[: max(0, limit - len(picked))])
-    # aspect 순서대로 쌓여 있어 그냥 자르면 뒤쪽 aspect가 덜 뽑힌다 — 자르기 전에 섞는다.
     rng.shuffle(picked)
+    return picked[:limit]
+
+
+def sample_rows(rows: list[dict], limit: int, seed: int, only_negative: bool = False) -> list[dict]:
+    """true_aspect 비율을 유지한 층화 표본. limit<=0이면 전량.
+
+    ⚠️ only_negative 동작 변경(PR 리뷰 반영, 2026-08-05) — 기존엔 sentiment=-1인
+    것만 걸러서 뽑았는데, 그러면 골든에 비부정(0/1) 표본이 아예 없어져서
+    score()의 neg_fp·neg_tn이 구조적으로 항상 0이 된다(오탐을 원리적으로 측정
+    불가 — "모든 문의를 부정으로 뭉개는" 최악의 모델도 precision 100%가 나옴).
+    이제 only_negative=True면 **부정 N건 + 비부정 N건을 절반씩 균형 표본**으로
+    뽑는다 — 부정 쪽에서 tp/fn(재현율), 비부정 쪽에서 fp/tn(오탐률)을 같이
+    측정할 수 있게. limit이 홀수면 부정 쪽에 1건 더 준다.
+    """
+    rng = random.Random(seed)
+
+    if not only_negative:
+        return _stratified_by_aspect(rows, limit, rng)
+
+    neg_rows = [r for r in rows if r["true_sentiment"] == -1]
+    nonneg_rows = [r for r in rows if r["true_sentiment"] != -1]
+
+    if limit <= 0:
+        # 전량이면 부정 전체 + 비부정 전체(양쪽 다 무제한)
+        return _stratified_by_aspect(neg_rows, 0, rng) + _stratified_by_aspect(nonneg_rows, 0, rng)
+
+    neg_limit = (limit + 1) // 2  # 홀수면 부정 쪽에 1건 더
+    nonneg_limit = limit // 2
+    picked = _stratified_by_aspect(neg_rows, neg_limit, rng) + _stratified_by_aspect(nonneg_rows, nonneg_limit, rng)
+    rng.shuffle(picked)
+    return picked
+
+
     return picked[:limit]
 
 
@@ -373,8 +399,18 @@ def score(rows: list[dict], predictions: dict[str, list[dict]]) -> dict:
         return round(p, 4), round(r, 4), round(f, 4)
 
     neg_precision, neg_recall, neg_f1 = _prf1(neg_tp, neg_fp, neg_fn)
+    # ⚠️ PR 리뷰 반영(2026-08-05) — fp+tn==0(비부정 표본이 0건)이면 precision·F1은
+    # "측정 불가"이지 100%가 아니다. only_negative 표본이 부정만 있던 예전 버전에선
+    # 이 조건이 항상 참이라서, "전부 부정으로 뭉개는" 최악의 모델도 precision 100%가
+    # 나오는 함정이 있었다. sample_rows()가 이제 비부정도 같이 뽑아오므로 정상적으로는
+    # fp+tn>0이어야 하지만, 혹시 비부정 표본이 우연히 0건인 극단적 케이스를 대비해 null 처리.
+    has_nonneg_sample = (neg_fp + neg_tn) > 0
+    neg_fpr = round(neg_fp / (neg_fp + neg_tn), 4) if has_nonneg_sample else None
+    neg_precision_reported = neg_precision if has_nonneg_sample else None
+    neg_f1_reported = neg_f1 if has_nonneg_sample else None
     neg_asp_precision, neg_asp_recall, neg_asp_f1 = _prf1(neg_aspect_tp, neg_aspect_fp, neg_aspect_fn)
     n_true_negative = neg_tp + neg_fn  # 골든상 부정인 문항 수(표본 크기 확인용)
+    n_true_nonnegative = neg_fp + neg_tn  # 골든상 비부정인 문항 수(FPR 측정 가능 여부 확인용)
 
     return {
         "n_sampled": len(rows),
@@ -397,13 +433,22 @@ def score(rows: list[dict], predictions: dict[str, list[dict]]) -> dict:
         },
         # ── 이상탐지 소비 지표(부정만) — 지인님 A안, 2026-08-04부터 대표 지표 ──
         "negative_detection": {
-            "note": "탐지 분자를 결정하는 값 — 문의 단위 부정/비부정 2분류",
-            "precision": neg_precision, "recall": neg_recall, "f1": neg_f1,
+            "note": "탐지 분자를 결정하는 값 — 문의 단위 부정/비부정 2분류. "
+                    "precision·f1은 비부정 표본(fp+tn)이 0건이면 null(측정불가, 100%로 착각 금지)",
+            "precision": neg_precision_reported, "recall": neg_recall, "f1": neg_f1_reported,
+            "fpr": neg_fpr,
             "tp": neg_tp, "fp": neg_fp, "fn": neg_fn, "tn": neg_tn,
+            "n_true_negative": n_true_negative, "n_true_nonnegative": n_true_nonnegative,
         },
         "negative_scoped_aspect": {
-            "note": "골든이 부정인 문항만 대상 — aspect까지 맞아야 올바른 분자에 잡힘",
-            "precision": neg_asp_precision, "recall": neg_asp_recall, "f1": neg_asp_f1,
+            "note": (
+                "골든이 부정인 문항만 대상 — aspect까지 맞아야 올바른 분자에 잡힘. "
+                "PR 리뷰 반영: 단일 aspect 출력에서는 fp==fn이 구조적으로 성립해 "
+                "precision=recall=F1이 항상 같은 값이라 accuracy 하나로 통합함 "
+                "(multi_output_diagnostic.rate가 0%보다 커지면 이 등식이 깨지므로 그때 재분리)"
+            ),
+            "accuracy": neg_asp_precision,  # == recall == f1 (위 note 참고)
+            "tp": neg_aspect_tp, "fp": neg_aspect_fp, "fn": neg_aspect_fn,
             "n_true_negative": n_true_negative,
             "n_true_negative_warning": (
                 f"부정 표본이 {n_true_negative}건뿐 — 신뢰구간이 넓을 수 있음. "
@@ -429,9 +474,13 @@ def report(result: dict) -> None:
 
     nd = s["negative_detection"]
     na = s["negative_scoped_aspect"]
-    print(f"\n★★★ [대표지표] ① 부정 판별 정확도(탐지 분자 결정)  P={nd['precision']:.1%} R={nd['recall']:.1%} F1={nd['f1']:.1%}")
-    print(f"    tp={nd['tp']} fp={nd['fp']} fn={nd['fn']} tn={nd['tn']}")
-    print(f"★★★ [대표지표] ② 부정 한정 aspect 정확도(탐지 분자 위치 결정)  P={na['precision']:.1%} R={na['recall']:.1%} F1={na['f1']:.1%}")
+    p_str = f"{nd['precision']:.1%}" if nd["precision"] is not None else "측정불가(비부정 표본 0건)"
+    f1_str = f"{nd['f1']:.1%}" if nd["f1"] is not None else "측정불가"
+    fpr_str = f"{nd['fpr']:.1%}" if nd["fpr"] is not None else "측정불가(비부정 표본 0건)"
+    print(f"\n★★★ [대표지표] ① 부정 판별 정확도(탐지 분자 결정)  P={p_str} R={nd['recall']:.1%} F1={f1_str}")
+    print(f"    🆕 FPR(오탐률) = {fpr_str}  — eval/README.md가 경고한 '부정 강화하면 FPR 상승' 여부를 실제로 보는 값")
+    print(f"    tp={nd['tp']} fp={nd['fp']} fn={nd['fn']} tn={nd['tn']}  (골든 부정 n={nd['n_true_negative']}, 비부정 n={nd['n_true_nonnegative']})")
+    print(f"★★★ [대표지표] ② 부정 한정 aspect 정확도(탐지 분자 위치 결정)  accuracy={na['accuracy']:.1%}  (tp={na['tp']} fp={na['fp']} fn={na['fn']})")
     print(f"    골든 부정 표본 n={na['n_true_negative']}" + (f"  ⚠️ {na['n_true_negative_warning']}" if na["n_true_negative_warning"] else ""))
 
     md = s["multi_output_diagnostic"]
@@ -475,6 +524,10 @@ async def main_async(args: argparse.Namespace) -> None:
         print(f"\n⚠️ 청크 실패로 무응답 처리된 건: {len(failed_ids)}건")
 
     from app.config import get_settings
+    import hashlib
+
+    prompt_path = ROOT / "app" / "classification" / "prompts" / f"{classification_service.PROMPT_ASPECT_VERSION}.md"
+    prompt_hash = hashlib.md5(prompt_path.read_bytes()).hexdigest()[:12] if prompt_path.exists() else None
 
     result = {
         "meta": {
@@ -482,11 +535,16 @@ async def main_async(args: argparse.Namespace) -> None:
             "run_at": datetime.now().isoformat(timespec="seconds"),
             "golden": golden_path.name,
             "prompt_version": classification_service.PROMPT_ASPECT_VERSION,
+            "prompt_hash": prompt_hash,  # 🆕 PR 리뷰 반영 — 파일명은 같아도 제자리수정으로 내용이
+                                          # 달라질 수 있어, 어느 JSON이 어느 실제 프롬프트 내용으로
+                                          # 나온 건지 이 해시로 구분(같은 이름=다른 프롬프트 문제 해결)
             "model": get_settings().llm_model,
             "seed": args.seed,
             "limit": args.limit,
             "chunk_size": args.chunk_size,
             "mode": args.mode,  # 🆕 per_item(기존, item당 개별호출) vs batch(청크당 호출 1회)
+            "only_negative": args.only_negative,  # 🆕 PR 리뷰 반영 — 이 플래그 없인 8개 JSON이
+                                                    # run_at 빼고 구분 불가능했음
         },
         "scores": score(sampled, predictions),
     }
