@@ -10,6 +10,7 @@ from datetime import date, datetime
 import pytest
 
 from app.core.schemas import (
+    AspectSentiment,
     Channel,
     ClassifiedItem,
     DetectionConfidence,
@@ -24,6 +25,7 @@ from app.detection.alert import (
     build_root_cause,
     resolve_channel,
 )
+from app.detection.loader import build_rows, check_coverage, unreliable_slots
 from app.detection.service import _build_candidates, detect_anomaly, normalize
 from app.detection.suppression import filter_suppressed
 from app.detection.verdict import run_verdict
@@ -528,3 +530,103 @@ async def test_pipeline_scattered_cause_gives_low_confidence():
 @pytest.mark.asyncio
 async def test_pipeline_empty_input_returns_nothing():
     assert await detect_anomaly([]) == ([], [])
+
+
+# ── documents 경유(로더) — 리뷰 분모 (탐지 분모 산출 방식 §1) ──────
+def _review_scenario():
+    """**부정률은 그대로인데 무관 리뷰만 늘어난** 리뷰 시나리오.
+
+    무관 리뷰(aspect 0개)는 classified_item 에 행이 없다 — explode_to_rows 가 aspect
+    마다 1행을 만들기 때문이다. 그래서 items 만으로 분모를 세면 그 문서가 통째로 빠진다.
+
+        과거 28일  리뷰 200건 = 색상부정 40 + 색상긍정 160 + 무관 0
+        현재 7일   리뷰 100건 = 색상부정 20 + 색상긍정 30  + 무관 50
+
+        원본으로 세면(정답)   과거 40/200=20%  →  현재 20/100=20%   변화 없음
+        items 로 세면(버그)   과거 40/200=20%  →  현재 20/50 =40%   +20%p 급등
+
+    즉 **"칭찬 리뷰가 늘었다"가 "불만이 두 배로 늘었다"로 둔갑**한다. 채널마다 같은
+    모양으로 깔아 3채널 전부 이 착시를 겪게 한다.
+    """
+    documents: list[dict] = []
+    items: list[ClassifiedItem] = []
+    counter = itertools.count(1)
+
+    def add(day: datetime, channel: str, aspects: list | None) -> None:
+        doc_id = f"RVW-{next(counter)}"
+        documents.append(
+            {
+                "id": doc_id,
+                "product": "P001",
+                "channel": channel,
+                "source": "review",
+                "created_at": day,
+                "text": "리뷰 원문",
+            }
+        )
+        if aspects is None:  # 무관 리뷰 — ClassifiedItem 자체가 안 만들어진다
+            return
+        items.append(
+            ClassifiedItem(
+                item_id=doc_id,
+                source="review",
+                channel=channel,
+                product_group_id="P001",
+                raw_text="리뷰 원문",
+                aspects=aspects,
+                created_at=day,
+            )
+        )
+
+    neg = [AspectSentiment(aspect="색상", sentiment=-1)]
+    pos = [AspectSentiment(aspect="색상", sentiment=1)]
+
+    for channel in ("COUPANG", "NAVER", "ZIGZAG"):
+        for i in range(200):  # 과거 28일 (6/3 ~ 6/30)
+            add(datetime(2026, 6, 3 + (i % 28), 12, 0), channel, neg if i < 40 else pos)
+        for i in range(100):  # 현재 7일 (7/1 ~ 7/7)
+            day = datetime(2026, 7, 1 + (i % 7), 12, 0)
+            add(day, channel, neg if i < 20 else pos if i < 50 else None)
+    return documents, items
+
+
+@pytest.mark.asyncio
+async def test_documents_prevent_review_false_positive_end_to_end():
+    """무관 리뷰가 늘었을 뿐인데 알림이 나가면 안 된다 — documents 배선 확인.
+
+    ⚠️ build_rows 를 직접 부르는 것만으로는 검증이 안 된다. detect_anomaly 가 실제로
+       그 경로를 타는지 봐야 한다(인자만 만들어두고 안 쓰는 실수를 이미 한 적 있다).
+       그래서 **파이프라인 끝에서 알림 유무가 갈리는지**로 확인한다.
+    """
+    documents, items = _review_scenario()
+    kwargs = {
+        "detected_at": datetime(2026, 7, 7, 9, 0),
+        "window_end": date(2026, 7, 7),
+        "client": _FakeClient(),
+    }
+
+    # items 만 주면 분모가 깎여 20% → 40% 로 보이고 오탐이 난다.
+    wrong, _ = await detect_anomaly(items, **kwargs)
+    assert wrong, "이 시나리오는 items 만 주면 오탐이 나야 한다(테스트 전제)"
+
+    # documents 를 주면 분모가 원본 기준이라 부정률이 그대로 20% → 알림 없음.
+    right, _ = await detect_anomaly(items, documents=documents, **kwargs)
+    assert right == []
+
+
+def test_documents_row_count_is_document_count():
+    """분모의 출처가 원본이라는 것 자체를 숫자로 못박는다."""
+    documents, items = _review_scenario()
+    assert len(build_rows(documents, items)) == len(documents) == 900
+    assert len(normalize(items)) == len(items) == 750  # 무관 150건이 빠진다
+
+
+@pytest.mark.asyncio
+async def test_documents_auto_coverage_ignores_review():
+    """documents 를 주면 커버리지를 자동 계산하는데, 리뷰는 대상이 아니다.
+
+    check_coverage 가 리뷰까지 봤다면 무관 리뷰 150건 때문에 이 슬롯들이 통째로
+    검정에서 빠졌을 것이다(지인 리뷰 2026-08-04).
+    """
+    documents, items = _review_scenario()
+    assert unreliable_slots(check_coverage(documents, items)) == set()
