@@ -1,0 +1,13 @@
+# blame 에서 건너뛸 커밋 — 코드 내용이 아니라 서식만 바꾼 것들.
+#
+# 사용법 (각자 한 번씩 실행해야 로컬 git blame 에 적용된다):
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# GitHub 은 이 파일을 자동으로 읽어 blame 화면에서 해당 커밋을 건너뛴다.
+#
+# ⚠️ 여기 적는 커밋은 **내용 변경이 없어야** 한다. 로직이 섞인 커밋을 넣으면
+#    그 변경의 책임자를 영영 못 찾는다.
+
+# chore: 줄바꿈을 LF 로 일괄 정규화 (2026-08-05)
+# 24파일 6,519줄. CRLF → LF 변환만이라 git diff --ignore-cr-at-eol 이 비어 있다.
+06033c63de34ae0197fd448e51850945b1e6546f
