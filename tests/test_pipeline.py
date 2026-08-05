@@ -6,10 +6,11 @@ LLM 은 목킹한다 (비용 0). 통합 테스트는 "숫자를 넣으면 몇 �
 
 import itertools
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 
+from app.core.constants import CURRENT_WINDOW_DAYS, RENOTIFY_BLOCK_DAYS
 from app.core.schemas import (
     AspectSentiment,
     Channel,
@@ -692,3 +693,48 @@ def test_detect_endpoint_warns_when_review_without_documents(monkeypatch, caplog
     with caplog.at_level(logging.WARNING, logger="app.detection.router"):
         _detect_via_http({"items": items, "window_end": "2026-07-07"}, monkeypatch)
     assert any("documents" in r.message for r in caplog.records)
+
+
+# ── 억제 기간 불변식 (지인님 지적 2026-08-05) ─────────────────────
+#
+# 억제된 날은 알림이 안 나가 prior_alerts 에 안 남는데도 기준선에서 빠진다.
+# 억제가 풀린 뒤 나가는 알림의 윈도우가 그 구간을 덮어주기 때문이다.
+# block > CURRENT_WINDOW_DAYS 가 되면 그 덮개가 끊기고, 틈에 남은 이상 구간이
+# 과거 기준선에 섞여 '새로운 평소'로 굳는다 → 알림이 스스로 꺼진다.
+
+
+def test_renotify_block_days_within_current_window():
+    """불변식: 억제 기간 <= 현재 윈도우. 지금 여유가 0 이다."""
+    assert RENOTIFY_BLOCK_DAYS <= CURRENT_WINDOW_DAYS, (
+        f"억제 {RENOTIFY_BLOCK_DAYS}일 > 윈도우 {CURRENT_WINDOW_DAYS}일 — "
+        "두 알림 윈도우 사이에 기준선이 덮이지 않는 틈이 생긴다"
+    )
+
+
+def _uncovered_days(block_days: int, cycles: int = 4) -> list[date]:
+    """연속 발행 시 어느 알림 윈도우에도 안 들어가는 날짜를 센다."""
+    first = date(2026, 1, 20)
+    fires = [first + timedelta(days=block_days * i) for i in range(cycles)]
+    covered: set[date] = set()
+    for fire in fires:
+        start = fire - timedelta(days=CURRENT_WINDOW_DAYS - 1)
+        covered |= {
+            start + timedelta(days=k) for k in range((fire - start).days + 1)
+        }
+    span_start = first - timedelta(days=CURRENT_WINDOW_DAYS - 1)
+    span = [
+        span_start + timedelta(days=k)
+        for k in range((fires[-1] - span_start).days + 1)
+    ]
+    return [d for d in span if d not in covered]
+
+
+def test_current_block_days_leaves_no_gap():
+    """현재 설정에서는 빈틈이 없다 — 위 불변식이 실제로 성립하는지 숫자로 확인."""
+    assert _uncovered_days(RENOTIFY_BLOCK_DAYS) == []
+
+
+def test_longer_block_days_would_break_baseline():
+    """⚠️ 늘리면 실제로 깨진다 — 불변식이 형식적 assert 가 아님을 보인다."""
+    assert len(_uncovered_days(CURRENT_WINDOW_DAYS + 1)) > 0
+    assert len(_uncovered_days(14)) >= 21

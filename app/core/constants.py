@@ -66,6 +66,24 @@ RENOTIFY_BLOCK_DAYS = 7
 
 일별 슬라이딩이라 같은 이상이 윈도우에서 빠질 때까지 매일 재탐지된다. 억제가 없으면
 셀러에게 같은 알림이 7일 내내 간다. [1]의 기준선 오염 방지와 짝을 이루는 규칙이다.
+
+🔴 **불변식: RENOTIFY_BLOCK_DAYS <= CURRENT_WINDOW_DAYS. 지금 여유가 0 이다.**
+   (지인님 지적, 2026-08-05)
+
+   억제된 날(d2~d7)은 알림이 발행되지 않아 `prior_alerts` 에 안 남는다. 그런데도
+   기준선에서 빠지는 이유는, 억제가 풀린 뒤 d8 에 나가는 알림의 윈도우가 d2~d8 이라
+   그 구간을 **덮어주기** 때문이다(`service._alert_days` 가 window_start~window_end 를
+   제외한다).
+
+   이 값을 CURRENT_WINDOW_DAYS 보다 키우면 두 알림 윈도우 사이에 틈이 생기고, 그
+   틈의 이상 구간이 과거 기준선에 섞여 **'새로운 평소'로 굳는다 → 알림이 스스로 꺼진다.**
+
+       block=7   덮이지 않는 날 0개
+       block=8   3개
+       block=14  21개
+
+   → 늘리려면 CURRENT_WINDOW_DAYS 를 함께 늘리거나, 억제된 날짜를 따로 기록해
+     `_alert_days` 에 넘겨야 한다. tests/test_pipeline.py 가 이 불변식을 고정한다.
 """
 
 RENOTIFY_DELTA_JUMP = 0.05
