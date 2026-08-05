@@ -1,0 +1,397 @@
+{
+  "meta": {
+    "experiment": "③ 프롬프트1 aspect 분류 정확도",
+    "run_at": "2026-08-05T01:13:37",
+    "golden": "golden_cs_labels.csv",
+    "prompt_version": "classify_aspect_v5",
+    "model": "gpt-4o-mini",
+    "seed": 7,
+    "limit": 300,
+    "chunk_size": 20,
+    "mode": "per_item"
+  },
+  "scores": {
+    "n_sampled": 300,
+    "n_scored": 300,
+    "n_unanswered": 0,
+    "aspect_f1": 0.9687,
+    "aspect_f1_note": "대시보드·채널비교분석·개선리포트 소비 지표(중립 포함) — 탐지는 안 씀",
+    "aspect_precision": 0.9577,
+    "aspect_recall": 0.98,
+    "sentiment_accuracy": 0.9626,
+    "exact_match_rate": 0.92,
+    "per_aspect": {
+      "기타": {
+        "precision": 0.84,
+        "recall": 1.0,
+        "n_true": 21
+      },
+      "사이즈": {
+        "precision": 0.9895,
+        "recall": 1.0,
+        "n_true": 94
+      },
+      "색상": {
+        "precision": 0.9439,
+        "recall": 0.9902,
+        "n_true": 102
+      },
+      "소재": {
+        "precision": 0.9821,
+        "recall": 1.0,
+        "n_true": 55
+      },
+      "오배송": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 9
+      },
+      "파손": {
+        "precision": 0.9333,
+        "recall": 0.7368,
+        "n_true": 19
+      }
+    },
+    "negative_detection": {
+      "note": "탐지 분자를 결정하는 값 — 문의 단위 부정/비부정 2분류",
+      "precision": 1.0,
+      "recall": 0.96,
+      "f1": 0.9796,
+      "tp": 288,
+      "fp": 0,
+      "fn": 12,
+      "tn": 0
+    },
+    "negative_scoped_aspect": {
+      "note": "골든이 부정인 문항만 대상 — aspect까지 맞아야 올바른 분자에 잡힘",
+      "precision": 0.9577,
+      "recall": 0.98,
+      "f1": 0.9687,
+      "n_true_negative": 300,
+      "n_true_negative_warning": null
+    },
+    "multi_output_diagnostic": {
+      "note": "예측 측 다중 aspect 출력 건수 — explode 계약 근거 진단(정답 없어 recall 계산 불가)",
+      "rate": 0.0233,
+      "count": 7
+    },
+    "mismatches": [
+      {
+        "inquiry_id": "INQ-047534",
+        "raw_text": "화면으로 볼 때보다 실물이 훨씬 칙칙한데, 원래 이런 색인가요?",
+        "true_aspect": "색상",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-060520",
+        "raw_text": "모델핏이랑 실제랑 너무 다르게 나왔어요. 사이즈 다시 확인해주실 수 있나요?",
+        "true_aspect": "사이즈",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1
+          },
+          {
+            "aspect": "기타",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-000001",
+        "raw_text": "상세페이지의 색상이 너무 화사하게 보정된 것 같아요. 실제 색상은 어떤가요?",
+        "true_aspect": "색상",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-010318",
+        "raw_text": "이 제품의 세탁 방법에 대한 정보가 부족한 것 같아요. 세탁 시 주의사항을 알려주세요.",
+        "true_aspect": "소재",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-057066",
+        "raw_text": "화면으로 볼 때보다 실물이 훨씬 칙칙한데, 원래 이런 색인가요?",
+        "true_aspect": "색상",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-036041",
+        "raw_text": "모델핏이랑 실제랑 너무 다르게 나왔어요. 사이즈 다시 확인해주실 수 있나요?",
+        "true_aspect": "사이즈",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1
+          },
+          {
+            "aspect": "기타",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-006425",
+        "raw_text": "모델핏이랑 실제랑 너무 다르게 나왔어요. 사이즈 다시 확인해주실 수 있나요?",
+        "true_aspect": "사이즈",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1
+          },
+          {
+            "aspect": "기타",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-056528",
+        "raw_text": "화면으로 볼 때보다 실물이 훨씬 칙칙한데, 원래 이런 색인가요?",
+        "true_aspect": "색상",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-044577",
+        "raw_text": "화면으로 볼 때보다 실물이 훨씬 칙칙한데, 원래 이런 색인가요?",
+        "true_aspect": "파손",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-011803",
+        "raw_text": "이 제품의 원단이 어떤 특성이 있는지 궁금한데, 추가 정보가 있을까요?",
+        "true_aspect": "소재",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-010057",
+        "raw_text": "상세페이지에 소재 정보가 누락되어 있어서요. 이 제품의 원단 성분을 알려주세요.",
+        "true_aspect": "소재",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-041273",
+        "raw_text": "모델핏이랑 실제랑 너무 다르게 나왔어요. 사이즈 다시 확인해주실 수 있나요?",
+        "true_aspect": "사이즈",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1
+          },
+          {
+            "aspect": "기타",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-036956",
+        "raw_text": "화면으로 볼 때보다 실물이 훨씬 칙칙한데, 원래 이런 색인가요?",
+        "true_aspect": "색상",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-089122",
+        "raw_text": "M 사이즈 시켰는데 S 사이즈가 배달왔어요. 재발송 가능한가요?",
+        "true_aspect": "오배송",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1
+          },
+          {
+            "aspect": "오배송",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-033640",
+        "raw_text": "화면으로 볼 때보다 실물이 훨씬 칙칙한데, 원래 이런 색인가요?",
+        "true_aspect": "색상",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-091694",
+        "raw_text": "제품에 이염이 있는데 정상 제품 맞나요?",
+        "true_aspect": "파손",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-044992",
+        "raw_text": "화면으로 볼 때보다 실물이 훨씬 칙칙한데, 원래 이런 색인가요?",
+        "true_aspect": "파손",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-044663",
+        "raw_text": "화면으로 볼 때보다 실물이 훨씬 칙칙한데, 원래 이런 색인가요?",
+        "true_aspect": "파손",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-051597",
+        "raw_text": "카키색을 주문했는데 검은색이 왔어요. 교환해주세요.",
+        "true_aspect": "오배송",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": -1
+          },
+          {
+            "aspect": "오배송",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-046791",
+        "raw_text": "받은 제품의 색상이 이전에 구매한 것과 다르게 느껴져서 궁금해요. 이럴 경우 어떻게 되나요?",
+        "true_aspect": "색상",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-044639",
+        "raw_text": "제품에 스크래치가 나 있어요. 확인 후 답변 부탁드립니다.",
+        "true_aspect": "색상",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "파손",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-044749",
+        "raw_text": "상세페이지 사진에서 본 색이랑 실물이 너무 차이나네요. 반품하고 싶은데 어떻게 해야 하나요?",
+        "true_aspect": "파손",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-019677",
+        "raw_text": "카키색을 주문했는데 검은색이 왔어요. 교환해주세요.",
+        "true_aspect": "오배송",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": -1
+          },
+          {
+            "aspect": "오배송",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-051725",
+        "raw_text": "상세페이지의 색상이 너무 다르게 보이는데, 실물 색상에 대한 정보가 필요해요.",
+        "true_aspect": "색상",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 0
+          }
+        ]
+      }
+    ]
+  }
+}
