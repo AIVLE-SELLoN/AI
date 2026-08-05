@@ -40,6 +40,7 @@ from app.reporting import cs_reply_service, monthly_report_service
 from app.reporting.callback import build_monthly_callback
 from app.reporting.cs_reply_service import generate_cs_reply_pipeline
 from app.reporting.cs_reply_validator import validate_cs_guideline
+from app.reporting.ids import build_guideline_id
 from app.reporting.metrics_calculator import (
     build_channel_divergence_pair,
     calculate_jsd_bits,
@@ -61,6 +62,7 @@ from app.reporting.s3_uploader import (
     REPORT_TYPE_GUIDELINE,
     REPORT_TYPE_MONTHLY,
     S3NotConfiguredError,
+    _build_original_file_name,
     build_object_path,
     resolve_storage_policy,
     upload_pdf_to_s3,
@@ -660,6 +662,57 @@ async def test_upload_refuses_without_company_id() -> None:
         await upload_pdf_to_s3(
             pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_MONTHLY, period="2026-07"
         )
+
+
+@pytest.mark.asyncio
+async def test_cs_original_file_name_differs_by_alert(cs_input, cs_output) -> None:
+    """같은 달 CS 가이드라인이라도 알림이 다르면 **표시용 파일명**이 달라야 한다.
+
+    `original_file_name` 은 메인이 목록에 표시할 때 쓰는 이름이다. CS 는 알림마다 1건씩
+    나오므로 `{yyyyMM}` 만으로는 5월 가이드라인이 전부 `cs-guideline_202605.pdf` 가 되어
+    목록이 도배된다(저장 자체는 `new_file_name` 의 uuid4 로 안전하다).
+
+    ⚠️ 업로더를 mock 하지 않고 **실제 함수**를 태운다 — mock 하면 서비스가 source_id 를
+       넘기는지, 업로더가 그걸 이름에 붙이는지 둘 다 검증되지 않는다.
+    """
+    naver_input = cs_input.model_copy(update={"alert_id": "ALT-20260528-P001-NAVER"})
+
+    async def _run(input_data: CSGuidelineInput):
+        output = cs_output.model_copy(
+            update={
+                "alert_id": input_data.alert_id,
+                "guideline_id": build_guideline_id(input_data.alert_id),
+            }
+        )
+        with patch("app.reporting.cs_reply_service.get_llm_client") as mock_get_client:
+            mock_client = AsyncMock()
+            mock_client.complete_json.return_value = output.model_dump(mode="json")
+            mock_get_client.return_value = mock_client
+            return await generate_cs_reply_pipeline(input_data)
+
+    with (
+        patch("app.reporting.s3_uploader.S3_ENABLED", True),
+        patch("app.reporting.s3_uploader.S3_DEFAULT_COMPANY_ID", _COMPANY_ID),
+        patch("app.reporting.cs_reply_service.upload_pdf_to_s3", upload_pdf_to_s3),
+    ):
+        coupang = await _run(cs_input)
+        naver = await _run(naver_input)
+
+    first = coupang.callback.pdf_s3_meta.original_file_name
+    second = naver.callback.pdf_s3_meta.original_file_name
+    assert first != second
+    assert cs_input.alert_id in first
+    assert naver_input.alert_id in second
+
+
+def test_monthly_original_file_name_has_no_source_id() -> None:
+    """월간은 월 1건이라 source_id 를 붙이지 않는다 — 달만으로 유일하다."""
+    assert _build_original_file_name("monthly-report", "2026-07", None) == (
+        "monthly-report_202607.pdf"
+    )
+    assert _build_original_file_name("cs-guideline", "2026-05", "ALT-1") == (
+        "cs-guideline_202605_ALT-1.pdf"
+    )
 
 
 def test_storage_policy_differs_by_document_type() -> None:

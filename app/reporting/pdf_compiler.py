@@ -346,8 +346,10 @@ def build_book_context(
        보류·실패 상품 안내는 컨텍스트가 아니라 콜백 notice_message 로 나간다
        (`monthly_report_service._build_excluded_notice`).
     """
+    # ⚠️ report_month 를 여기 담지 않는다 — 합본 템플릿이 읽지 않는다. 본문의
+    #    {{ report.report_month }} 는 item.report 에서 오는 **별개 값**이다.
+    #    인자로는 계속 받는다(호출부 계약이자, 페이지 구성이 월 단위임을 드러낸다).
     return {
-        "report_month": report_month,
         "items": [
             {
                 "input": item["input"],

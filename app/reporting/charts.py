@@ -22,7 +22,6 @@ COLOR_NEGATIVE = "#f03e3e"
 COLOR_TEXT = "#212529"
 COLOR_MUTED = "#868e96"
 
-# 게이지 구간 색 (SAFE / CAUTION / CRISIS)
 def _arc_dasharray(ratio: float, circumference: float) -> str:
     """도넛 조각 길이. 비율이 0이면 0 길이로 그려 선이 삐져나오지 않게 한다."""
     length = max(0.0, min(1.0, ratio)) * circumference
