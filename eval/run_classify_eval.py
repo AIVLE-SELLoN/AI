@@ -36,9 +36,11 @@ import asyncio
 import csv
 import json
 import random
+import re
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime
+from difflib import SequenceMatcher
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -53,6 +55,7 @@ from app.core.schemas import Channel, Source
 GOLDEN_LABELS = ROOT / "data" / "golden" / "golden_cs_labels.csv"
 INPUT_INQUIRIES = ROOT / "data" / "input" / "input_cs_inquiries.csv"
 RESULTS_DIR = ROOT / "eval" / "results"
+PROMPT_DIR = ROOT / "app" / "classification" / "prompts"
 
 VALID_ASPECTS = {"색상", "사이즈", "소재", "파손", "오배송", "기타"}
 
@@ -90,6 +93,60 @@ def load_dataset(golden_path: Path) -> list[dict]:
     if missing_text:
         print(f"⚠️  텍스트를 못 찾은 골든 행 {missing_text}건 — 채점에서 제외")
     return rows
+
+
+def parse_few_shot_examples(prompt_version: str) -> list[str]:
+    """프롬프트 파일에서 few-shot '입력:' 문장을 전부 파싱한다(§6 B안 1번, 지인님 리뷰
+    2026-08-06). 하드코딩 목록 대신 파일을 직접 읽어서, 예시가 늘어나도 자동 반영된다
+    (`USED_PREFIXES` 방식의 반대 — 그쪽은 71603 재라벨링 스크립트 전용이고, 이건 우리
+    자체 코퍼스 채점용이라 목적이 다름).
+    """
+    path = PROMPT_DIR / f"{prompt_version}.md"
+    if not path.exists():
+        print(f"⚠️  프롬프트 파일 없음: {path} — few-shot 유출 검사 건너뜀")
+        return []
+    content = path.read_text(encoding="utf-8")
+    return re.findall(r'입력: "(.+?)"', content)
+
+
+def compute_leak_map(rows: list[dict], few_shot_texts: list[str], threshold: float) -> dict[str, dict]:
+    """골든의 고유 raw_text마다, few-shot 예시들과의 최대 유사도를 계산해 유출 여부를
+    판정한다(§6 B안 — "완전일치 + 유사도 임계", 실험④의 prefix 부분일치와 다름 — 실험③은
+    문장 전체가 템플릿이라 전체 유사도가 더 맞음). SequenceMatcher는 difflib.SequenceMatcher.
+    ratio()로, 지인님이 노션에 기록한 예시20(1.00)·25(0.88)·20-2(0.79)를 그대로 재현하는
+    걸 확인한 알고리즘이다(2026-08-06 검증).
+
+    Returns: {raw_text: {"is_leaked": bool, "max_similarity": float, "matched_example": str|None}}
+    """
+    if not few_shot_texts:
+        return {}
+    unique_texts = {r["raw_text"] for r in rows}
+    leak_map: dict[str, dict] = {}
+    for text in unique_texts:
+        best_sim = 0.0
+        best_match: str | None = None
+        for fs in few_shot_texts:
+            sim = SequenceMatcher(None, text, fs).ratio()
+            if sim > best_sim:
+                best_sim, best_match = sim, fs
+        is_leaked = best_sim >= threshold
+        leak_map[text] = {
+            "is_leaked": is_leaked,
+            "max_similarity": round(best_sim, 4),
+            "matched_example": best_match if is_leaked else None,
+        }
+    return leak_map
+
+
+def tag_leaked_rows(rows: list[dict], leak_map: dict[str, dict]) -> None:
+    """rows 각 행에 is_leaked·leak_similarity를 in-place로 붙인다(load_dataset() 직후
+    단계 — §6 B안 2번). leak_map이 비어있으면(few-shot 파싱 실패 등) 전부 False로 채워
+    이후 로직이 안전하게 동작하게 한다.
+    """
+    for r in rows:
+        info = leak_map.get(r["raw_text"], {"is_leaked": False, "max_similarity": 0.0})
+        r["is_leaked"] = info["is_leaked"]
+        r["leak_similarity"] = info["max_similarity"]
 
 
 def _stratified_by_aspect(rows: list[dict], limit: int, rng: random.Random) -> list[dict]:
@@ -301,7 +358,55 @@ async def run_batch_chunks(
     return predictions, failed_ids
 
 
-def score(rows: list[dict], predictions: dict[str, list[dict]]) -> dict:
+def _basic_metrics(rows_subset: list[dict], predictions: dict[str, list[dict]]) -> dict:
+    """aspect_f1·sentiment_accuracy·exact_match_rate만 계산하는 경량 헬퍼.
+
+    score()의 메인 루프와 로직은 동일하되(같은 tp/fp/fn·정답 판정 규칙), 임의의 행
+    부분집합에 적용 가능하게 분리했다 — leak_filter의 "제외 후" 값을 실제로 재계산하는
+    용도(§6 B안 4번, 지인님 리뷰 2026-08-06). LLM 재호출 없음 — predictions는 이미 있는
+    걸 그대로 재사용.
+    """
+    tp = fp = fn = 0
+    sent_correct = sent_total = 0
+    exact_match = 0
+    for r in rows_subset:
+        pred_aspects = predictions[r["inquiry_id"]]
+        pred_aspect_set = {p["aspect"] for p in pred_aspects}
+        true_aspect = r["true_aspect"]
+        true_sentiment = r["true_sentiment"]
+
+        if true_aspect in pred_aspect_set:
+            tp += 1
+        else:
+            fn += 1
+        fp += len(pred_aspect_set - {true_aspect})
+
+        matched_pred = next((p for p in pred_aspects if p["aspect"] == true_aspect), None)
+        item_exact = len(pred_aspect_set) == 1 and true_aspect in pred_aspect_set
+        if matched_pred is not None:
+            sent_total += 1
+            sent_ok = matched_pred["sentiment"] == true_sentiment
+            sent_correct += sent_ok
+            item_exact = item_exact and sent_ok
+        else:
+            item_exact = False
+        exact_match += item_exact
+
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    n = len(rows_subset)
+    return {
+        "aspect_f1": round(f1, 4),
+        "aspect_precision": round(precision, 4),
+        "aspect_recall": round(recall, 4),
+        "sentiment_accuracy": round(sent_correct / sent_total, 4) if sent_total else 0.0,
+        "exact_match_rate": round(exact_match / n, 4) if n else 0.0,
+        "n_scored": n,
+    }
+
+
+def score(rows: list[dict], predictions: dict[str, list[dict]], leak_threshold: float | None = None) -> dict:
     """aspect F1(다중예측 vs 단일정답 set 비교) + 감성정확도 + 완전일치
     + 지인님 A안 지표 3종(2026-08-04, 실험③ 지표 재설계).
 
@@ -461,6 +566,58 @@ def score(rows: list[dict], predictions: dict[str, list[dict]]) -> dict:
             "count": multi_output_count,
         },
         "mismatches": mismatches,  # 🆕
+        "leak_filter": _compute_leak_filter(scored, predictions, leak_threshold),  # 🆕
+    }
+
+
+def _compute_leak_filter(
+    scored: list[dict],
+    predictions: dict[str, list[dict]],
+    leak_threshold: float | None = None,
+) -> dict:
+    """§6 B안(2026-08-06, 지인님 리뷰) — few-shot 유출 제외 전/후 병기.
+
+    영향받는 지표는 aspect_f1·sentiment_accuracy·exact_match_rate뿐이다(대시보드·
+    리포트 소비 영역, §6 본문 명시). negative_detection/negative_scoped_aspect(탐지
+    소비, 부정만)는 그대로 둔다 — 오탐 자체는 실제로 일어난 사건이라 부정판별 지표에서
+    빼면 오히려 왜곡된다.
+
+    "전" 값은 score()의 최상위 aspect_f1 등(이미 계산됨, scored 전체 기준)을 그대로
+    쓰면 되고, 여기서는 "후"(clean_rows만) 값만 _basic_metrics()로 추가 계산한다.
+    LLM 재호출 없음 — 이미 있는 predictions 재사용(§6 요구사항: "검증에 LLM 재실행 불필요").
+
+    rows에 is_leaked 태그가 없으면(tag_leaked_rows() 미호출) 유출 없음으로 간주 —
+    이 필드를 몰라도 기존 호출부는 그대로 동작한다(하위호환).
+    """
+    tagged = [r for r in scored if "is_leaked" in r]
+    if not tagged:
+        return {"note": "유출 태깅 안 됨(tag_leaked_rows 미호출) — leak_filter 정보 없음", "applied": False}
+
+    leaked_rows = [r for r in scored if r.get("is_leaked")]
+    clean_rows = [r for r in scored if not r.get("is_leaked")]
+
+    if not leaked_rows:
+        return {
+            "note": "이번 표본에 유출 few-shot과 겹치는 문항이 0건",
+            "applied": True, "n_excluded_rows_in_sample": 0,
+        }
+
+    after = _basic_metrics(clean_rows, predictions)
+
+    return {
+        "note": "제외 후(leak_excluded_*)는 clean_rows만으로 재집계한 값 — LLM 재호출 없음",
+        "applied": True,
+        "threshold_used": leak_threshold,
+        "n_excluded_unique_templates": len({r["raw_text"] for r in leaked_rows}),
+        "n_excluded_rows_in_sample": len(leaked_rows),
+        "excluded_pct_of_sample": round(len(leaked_rows) / len(scored), 4) if scored else 0.0,
+        "excluded_examples": sorted(
+            {(r["raw_text"], r["leak_similarity"]) for r in leaked_rows}, key=lambda x: -x[1]
+        )[:10],
+        "leak_excluded_aspect_f1": after["aspect_f1"],
+        "leak_excluded_sentiment_accuracy": after["sentiment_accuracy"],
+        "leak_excluded_exact_match_rate": after["exact_match_rate"],
+        "leak_excluded_n_scored": after["n_scored"],
     }
 
 
@@ -505,10 +662,21 @@ async def main_async(args: argparse.Namespace) -> None:
     rows = load_dataset(golden_path)
     sampled = sample_rows(rows, args.limit, args.seed, only_negative=args.only_negative)
 
+    # 🆕 §6 B안 — few-shot 유출 태깅(2026-08-06, 지인님 리뷰)
+    # ⚠️ leak_threshold<=0이면 검사 자체를 끈다(few_shot_texts를 안 채워서 compute_leak_map이
+    # 빈 결과 반환 → 전부 is_leaked=False). threshold=0.0을 compute_leak_map에 그대로 넘기면
+    # SequenceMatcher.ratio()>=0.0이 사실상 항상 참이라 오히려 전부 유출로 잡히므로 여기서 분기.
+    few_shot_texts = parse_few_shot_examples(classification_service.PROMPT_ASPECT_VERSION) if args.leak_threshold > 0 else []
+    leak_map = compute_leak_map(sampled, few_shot_texts, args.leak_threshold)
+    tag_leaked_rows(sampled, leak_map)
+    n_leaked_in_sample = sum(1 for r in sampled if r["is_leaked"])
+
     print(f"골든: {golden_path}")
     print(f"전체 {len(rows)}건 → 표본 {len(sampled)}건")
     print(f"  aspect 구성: {dict(Counter(r['true_aspect'] for r in sampled))}")
     print(f"  프롬프트 버전: {classification_service.PROMPT_ASPECT_VERSION}")
+    if few_shot_texts:
+        print(f"  few-shot 유출 검사: {len(few_shot_texts)}개 예시 대비, 표본 중 {n_leaked_in_sample}건 유출(임계 {args.leak_threshold})")
 
     if args.dry_run:
         n_chunks = -(-len(sampled) // args.chunk_size)
@@ -545,8 +713,10 @@ async def main_async(args: argparse.Namespace) -> None:
             "mode": args.mode,  # 🆕 per_item(기존, item당 개별호출) vs batch(청크당 호출 1회)
             "only_negative": args.only_negative,  # 🆕 PR 리뷰 반영 — 이 플래그 없인 8개 JSON이
                                                     # run_at 빼고 구분 불가능했음
+            "leak_threshold": args.leak_threshold,  # 🆕 §6 B안 — few-shot 유출 판정 유사도 임계
+            "few_shot_examples_checked": len(few_shot_texts),  # 🆕 파싱된 few-shot 개수(0이면 검사 자체가 스킵됨)
         },
-        "scores": score(sampled, predictions),
+        "scores": score(sampled, predictions, leak_threshold=args.leak_threshold),
     }
     report(result)
 
@@ -565,6 +735,12 @@ def main() -> None:
     parser.add_argument(
         "--only-negative", action="store_true",
         help="sentiment=-1인 문항만 표본으로 뽑는다(지인님 A안 — 탐지가 실제로 소비하는 부분만 통계적으로 의미 있게 검증)",
+    )
+    parser.add_argument(
+        "--leak-threshold", type=float, default=0.75,
+        help="few-shot과 코퍼스 문장의 유사도가 이 값 이상이면 유출로 판정(§6 B안, 2026-08-06)."
+             " difflib.SequenceMatcher 기준 — 예시20(1.00완전일치)·25(0.88)·20-2(0.79) 3건을"
+             " 전부 잡으려면 0.75 이하 필요(예시20-2가 기준선). 0으로 주면 검사 자체를 끔.",
     )
     parser.add_argument("--chunk-size", type=int, default=20, help="청크당 문의 수")
     parser.add_argument("--concurrency", type=int, default=4, help="동시 청크 호출 수")

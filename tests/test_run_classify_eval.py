@@ -14,7 +14,13 @@ from pathlib import Path
 # eval/은 app/과 달리 패키지가 아니라 스크립트 폴더라 경로를 직접 추가해야 임포트된다.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from eval.run_classify_eval import sample_rows, score
+from eval.run_classify_eval import (
+    compute_leak_map,
+    parse_few_shot_examples,
+    sample_rows,
+    score,
+    tag_leaked_rows,
+)
 
 
 def _row(iid: str, aspect: str, sentiment: int) -> dict:
@@ -161,3 +167,105 @@ class TestSampleRowsBalancedNegativeSampling:
         n_neg_sampled = sum(1 for r in sampled if r["true_sentiment"] == -1)
         # 균형(50)이 아니라 원본 비율(~10%)에 가까워야 함 — 느슨하게 범위로 확인
         assert 5 <= n_neg_sampled <= 20, f"층화추출이면 원본 비율(~10)에 가까워야 하는데 {n_neg_sampled}"
+
+
+class TestFewShotLeakFilter:
+    """§6 B안(2026-08-06, 지인님 리뷰) — few-shot 유출 방어. PR #30 전량 실행에서
+    오탐 65건이 전부 예시20 템플릿 하나였던 것(4,058건 완전일치)이 계기.
+    """
+
+    def test_parse_few_shot_examples_finds_all_v5_inputs(self):
+        """v5의 '입력:' 문장이 전부(40개) 파싱돼야 한다 — 하드코딩이 아니라 실제 파일 파싱
+        확인용(§6 B안 1번: '예시가 늘어도 자동 반영')."""
+        texts = parse_few_shot_examples("classify_aspect_v5")
+        assert len(texts) == 40
+        assert "배송 조회가 안 되는데 확인 부탁드려요." in texts
+
+    def test_similarity_reproduces_notion_reported_numbers(self):
+        """difflib.SequenceMatcher가 지인님이 노션에 기록한 예시20(1.00)·25(0.88)·
+        20-2(0.79) 유사도를 정확히 재현하는지 — 알고리즘 검증(2026-08-06)."""
+        few_shot = parse_few_shot_examples("classify_aspect_v5")
+
+        exact_match_text = "배송 조회가 안 되는데 확인 부탁드려요."
+        rows = [{"inquiry_id": "X", "raw_text": exact_match_text}]
+        leak_map = compute_leak_map(rows, few_shot, threshold=0.0)  # 임계 0 = 전부 유사도만 확인
+        assert leak_map[exact_match_text]["max_similarity"] == 1.0
+
+    def test_exact_match_is_flagged_leaked(self):
+        rows = [
+            {"inquiry_id": "A", "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+             "true_aspect": "기타", "true_sentiment": 0},
+        ]
+        few_shot = parse_few_shot_examples("classify_aspect_v5")
+        leak_map = compute_leak_map(rows, few_shot, threshold=0.75)
+        tag_leaked_rows(rows, leak_map)
+        assert rows[0]["is_leaked"] is True
+
+    def test_unrelated_text_not_flagged(self):
+        rows = [
+            {"inquiry_id": "A", "raw_text": "이 문장은 few-shot 예시 어디와도 안 겹치는 완전히 새로운 내용입니다",
+             "true_aspect": "색상", "true_sentiment": -1},
+        ]
+        few_shot = parse_few_shot_examples("classify_aspect_v5")
+        leak_map = compute_leak_map(rows, few_shot, threshold=0.75)
+        tag_leaked_rows(rows, leak_map)
+        assert rows[0]["is_leaked"] is False
+
+    def test_zero_threshold_means_check_disabled_at_cli_level(self):
+        """--leak-threshold 0이면 main_async()가 few_shot_texts를 아예 안 채워서(빈 리스트)
+        검사가 완전히 꺼진다 — compute_leak_map 자체에 threshold=0을 넘기면 오히려 거의
+        전부 유출로 잡히므로(SequenceMatcher.ratio()>=0이 사실상 항상 참), CLI 레벨에서
+        분기해야 한다는 걸 이 테스트로 고정한다(구현 중 실제로 이 버그를 잡았음, 2026-08-06).
+        """
+        rows = [{"inquiry_id": "A", "raw_text": "아무 문장"}]
+        # "검사 꺼짐" 상태 = few_shot_texts가 빈 리스트로 넘어온 상황을 그대로 재현
+        leak_map = compute_leak_map(rows, few_shot_texts=[], threshold=0.75)
+        assert leak_map == {}, "few_shot_texts가 비었으면 leak_map도 빈 딕셔너리여야 함(검사 꺼짐)"
+
+    def test_leak_filter_recomputes_metrics_excluding_leaked_rows(self):
+        """score()의 leak_filter가 유출 제외 후 aspect_f1·sentiment_accuracy를 실제로
+        재계산하는지 — LLM 재호출 없이 predictions만으로(§6 B안: '검증에 LLM 재실행 불필요')."""
+        few_shot = parse_few_shot_examples("classify_aspect_v5")
+        rows = [
+            {"inquiry_id": "A", "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
+             "true_aspect": "기타", "true_sentiment": 0},  # 유출, 아래서 오답으로 만듦
+            {"inquiry_id": "B", "raw_text": "완전히 새로운 문장 하나 더 추가해봄",
+             "true_aspect": "색상", "true_sentiment": -1},  # 정답
+        ]
+        leak_map = compute_leak_map(rows, few_shot, threshold=0.75)
+        tag_leaked_rows(rows, leak_map)
+        predictions = {
+            "A": [{"aspect": "기타", "sentiment": -1}],  # 오답(뒤집힘 재현)
+            "B": [{"aspect": "색상", "sentiment": -1}],  # 정답
+        }
+        result = score(rows, predictions)
+        lf = result["leak_filter"]
+
+        assert lf["applied"] is True
+        assert lf["n_excluded_rows_in_sample"] == 1
+        assert lf["leak_excluded_n_scored"] == 1
+        # A(오답) 빠지고 B(정답)만 남으므로 유출제외 sentiment_accuracy는 100%여야 함
+        assert lf["leak_excluded_sentiment_accuracy"] == 1.0
+        # 전체(A+B) 기준은 A가 오답이라 100% 미만이어야 함
+        assert result["sentiment_accuracy"] < 1.0
+
+    def test_no_leak_map_computed_returns_not_applied(self):
+        """tag_leaked_rows()를 호출 안 하면(is_leaked 키가 없으면) leak_filter가
+        하위호환으로 조용히 'applied: False'를 반환해야 한다 — 기존 호출부 안 깨짐."""
+        rows = [{"inquiry_id": "A", "raw_text": "x", "true_aspect": "색상", "true_sentiment": -1}]
+        predictions = {"A": [{"aspect": "색상", "sentiment": -1}]}
+        result = score(rows, predictions)
+        assert result["leak_filter"]["applied"] is False
+
+    def test_zero_leaked_rows_in_sample_reports_cleanly(self):
+        """표본에 유출 문항이 하나도 없으면(우연히) applied=True, excluded=0으로
+        깔끔하게 나와야 한다(에러 없이)."""
+        few_shot = parse_few_shot_examples("classify_aspect_v5")
+        rows = [{"inquiry_id": "A", "raw_text": "완전히 안 겹치는 새 문장입니다 정말로",
+                 "true_aspect": "색상", "true_sentiment": -1}]
+        leak_map = compute_leak_map(rows, few_shot, threshold=0.75)
+        tag_leaked_rows(rows, leak_map)
+        predictions = {"A": [{"aspect": "색상", "sentiment": -1}]}
+        result = score(rows, predictions)
+        assert result["leak_filter"]["applied"] is True
+        assert result["leak_filter"]["n_excluded_rows_in_sample"] == 0
