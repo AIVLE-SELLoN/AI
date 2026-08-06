@@ -38,12 +38,16 @@ import argparse
 import asyncio
 import json
 import logging
+import os
+import sys
 import uuid
 from collections import Counter
 from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+
+from pydantic import ValidationError
 
 from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
 from app.core.schemas import ClassifiedItem, DetectionAlert
@@ -89,6 +93,18 @@ STATE_RETENTION_DAYS = CURRENT_WINDOW_DAYS + PAST_WINDOW_DAYS
 # ── 담당자 미완성 함수 — import 폴백 ────────────────────────────
 # 시그니처는 지인님 결선 정리(2026-08-05)의 예시 코드를 그대로 따른다.
 # 실물이 생기면 아래 except 가 안 타므로 이 파일은 손댈 필요가 없다.
+#
+# ⚠️ **모듈이 없을 때만 폴백한다.** `except ImportError` 로 통째로 삼키면, 모듈은
+#    올라왔는데 그 안의 의존성(예: `aio_pika`)이 없어서 나는 ImportError 까지 먹고
+#    조용히 no-op 이 된다 — 요약엔 "미연결"로 찍혀서 보는 사람은 "아직 안 만들었나"
+#    로 읽고, 이벤트가 하나도 안 나가는데 배치는 정상 종료한다.
+#    (지인님 PR 리뷰 §6, 2026-08-06)
+
+
+def _missing(exc: ImportError, module: str) -> bool:
+    """그 모듈 자체가 없어서 난 ImportError 인가. 아니면 진짜 오류라 다시 던진다."""
+    return exc.name == module or (exc.name or "").startswith(module + ".")
+
 
 try:  # pragma: no cover - 실물이 생기면 이쪽
     from app.core.mq import (  # type: ignore[attr-defined]
@@ -98,7 +114,9 @@ try:  # pragma: no cover - 실물이 생기면 이쪽
     )
 
     MQ_AVAILABLE = True
-except ImportError:  # pragma: no cover - 인프라 도입 전
+except ImportError as exc:  # pragma: no cover - 인프라 도입 전
+    if not _missing(exc, "app.core.mq"):
+        raise
     MQ_AVAILABLE = False
 
     def new_trace_id() -> str:
@@ -119,7 +137,9 @@ try:  # pragma: no cover
     )
 
     RECOMMENDATION_AVAILABLE = True
-except ImportError:  # pragma: no cover
+except ImportError as exc:  # pragma: no cover
+    if not _missing(exc, "app.recommendation.pipeline"):
+        raise
     RECOMMENDATION_AVAILABLE = False
 
     async def generate_for_alert(alert: Any) -> Any:
@@ -133,7 +153,9 @@ try:  # pragma: no cover
     )
 
     GUIDELINE_AVAILABLE = True
-except ImportError:  # pragma: no cover
+except ImportError as exc:  # pragma: no cover
+    if not _missing(exc, "app.reporting.cs_reply_service"):
+        raise
     GUIDELINE_AVAILABLE = False
 
     async def generate_guideline(alert: Any, rec: Any) -> Any:
@@ -141,15 +163,31 @@ except ImportError:  # pragma: no cover
         return None
 
 
+# [2] 개선안 생성 게이트. `recommended_action == "개선안 생성"` 인 alert 만 Agent3 로
+#     간다 — 큐 규약이 recommendation 을 그때만 non-null 로 못박고 있다.
+#     Agent3 가 아직 안 붙은 지금도 **dry-run 호출 수 추정에 필요**하므로 폴백을 둔다
+#     (조치 7종 중 개선안 생성은 1종뿐이라, 게이트 없이 세면 크게 과대추정된다).
+try:  # pragma: no cover
+    from app.recommendation.pipeline import should_generate
+except ImportError as exc:  # pragma: no cover
+    if not _missing(exc, "app.recommendation.pipeline"):
+        raise
+
+    def should_generate(alert: Any) -> bool:
+        return getattr(alert.recommended_action, "value", "") == "개선안 생성"
+
+
 # ── dry-run 스텁 ────────────────────────────────────────────────
 
 STUB_CAUSE = "사진_색감_오차"
 """스텁이 돌려줄 원인 라벨. `SCOPE_LIMIT_LABELS`(실물_염색_편차·실제_원단_문제)를
 피한다 — 그 라벨이면 Agent3 가 라우팅·생성을 통째로 건너뛰어 호출 수 추정이 어긋난다.
-(crosscheck 스크립트와 같은 이유·같은 값)"""
+
+⚠️ `scripts/crosscheck_agent2_to_agent3.py` 도 이 값과 `CountingClient` 를 그대로
+   가져다 쓴다. 두 도구가 같은 호출 수를 내야 하므로 복제하지 말 것."""
 
 
-class _CountingClient:
+class CountingClient:
     """LLM 을 부르지 않고 호출 횟수만 세는 스텁. `--dry-run` 전용.
 
     `detect_anomaly(client=...)` 에 주입하면 [6] 원인분류가 **실제로 몇 번 불릴지**를
@@ -190,7 +228,9 @@ class _CountingClient:
 # ── 입력 ────────────────────────────────────────────────────────
 
 
-def load_inputs_from_db() -> tuple[list[ClassifiedItem], list[dict]]:
+def load_inputs_from_db(
+    window_end: date | None = None,
+) -> tuple[list[ClassifiedItem], list[dict]]:
     """(items, documents) 를 원본 DB 에서 읽는다. **기본 입력원.**
 
     items 는 워커가 분류해 `classified_item` 에 넣은 결과, documents 는 `cs`·`reviews`
@@ -205,6 +245,14 @@ def load_inputs_from_db() -> tuple[list[ClassifiedItem], list[dict]]:
 
     평가·재현으로 배치를 돌리려면 `scripts/golden_inputs.load_golden_inputs` 를
     주입한다 — 골든을 `app/` 안에서 읽지 않기 위해 밖으로 뺐다(eval/README §232).
+
+    Args:
+        window_end: 현재 윈도우 마지막 날. 주면 그 이전
+            `CURRENT_WINDOW_DAYS + PAST_WINDOW_DAYS`(35일)만 읽으면 된다.
+            **지금 시그니처에 넣어두는 이유** — 없이 DB 로 가면 매 배치가 전량을
+            풀스캔한다(현재 CSV 기준 128,228건). 나중에 붙이려면 호출부까지
+            같이 고쳐야 한다. (지인님 PR 리뷰 잔가지, 2026-08-06)
+            None 이면 전량을 읽고 호출부가 최신 날짜로 윈도우를 정한다.
     """
     raise NotImplementedError(
         "classified_item 테이블 미구현 (rawDB 스키마 §5 확정 대기). "
@@ -216,16 +264,68 @@ def load_inputs_from_db() -> tuple[list[ClassifiedItem], list[dict]]:
 # ── 발행 기록 캐시 ──────────────────────────────────────────────
 
 
+def _as_date(value: Any) -> date:
+    """documents 의 `created_at`(str 또는 datetime)에서 날짜만 뽑는다."""
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    return value.date() if isinstance(value, datetime) else value
+
+
+def _read_state(path: Path) -> list[dict]:
+    """캐시 파일을 **항목 단위로 방어하며** 읽는다.
+
+    ⚠️ 이게 유일한 상태 저장소인데 자가복구 경로가 없으면, 쓰다 만 JSON 하나로 배치가
+       영구히 못 뜬다. 사람이 파일을 지워야 다시 도는데 그러면 억제·기준선이 첫 실행으로
+       리셋된다 — `STATE_PATH` docstring ①② 가 경고한 그 시나리오다.
+       `DetectionAlert` 에 필수 필드가 하나 추가되는 것만으로도 같은 상태가 된다
+       (스키마는 전원 회의 확정 사항이라 실제로 바뀐다).
+       (지인님 PR 리뷰 §3, 2026-08-06)
+    """
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("발행 기록 캐시가 손상됐습니다 — 빈 상태로 진행합니다 (%s)", exc)
+        return []
+    if not isinstance(raw, list):
+        logger.warning("발행 기록 캐시 형식이 예상과 다릅니다 — 빈 상태로 진행합니다")
+        return []
+    return [a for a in raw if isinstance(a, dict) and "alert_id" in a]
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """임시파일에 쓰고 `os.replace` 로 갈아끼운다. 도중에 죽어도 반쪽 파일이 안 남는다."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def load_prior_alerts(
     window_end: date, path: Path = STATE_PATH
 ) -> list[DetectionAlert]:
-    """캐시에서 `prior_alerts` 를 읽는다. 없으면 빈 리스트(첫 실행)."""
-    if not path.exists():
-        return []
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    alerts = [DetectionAlert.model_validate(a) for a in raw]
+    """캐시에서 `prior_alerts` 를 읽는다. 없으면 빈 리스트(첫 실행).
+
+    깨진 항목은 버리고 경고만 남긴다 — 하나 때문에 배치 전체가 멈추면 안 된다.
+    """
     cutoff = date.fromordinal(window_end.toordinal() - STATE_RETENTION_DAYS)
-    return [a for a in alerts if a.window_end >= cutoff]
+    alerts: list[DetectionAlert] = []
+    dropped = 0
+    for item in _read_state(path):
+        try:
+            alert = DetectionAlert.model_validate(item)
+        except ValidationError:
+            dropped += 1
+            continue
+        if alert.window_end >= cutoff:
+            alerts.append(alert)
+    if dropped:
+        logger.warning(
+            "발행 기록 %d건이 현재 스키마와 안 맞아 건너뜁니다 (억제가 그만큼 약해집니다)",
+            dropped,
+        )
+    return alerts
 
 
 def save_published(
@@ -233,17 +333,18 @@ def save_published(
 ) -> int:
     """발행된 알림을 캐시에 누적한다. 반환값은 저장 후 총 건수.
 
-    ⚠️ **`published` 만 넣는다. `suppressed` 는 넣으면 안 된다.** `prior_alerts` 의
-       정의가 "과거 **발행된** 알림"이라, 억제된 걸 넣으면 다음 배치가 그걸 기준으로
-       또 억제해 이중 억제가 된다.
+    ⚠️ **여기 넣는 것은 "실제로 발행에 성공한 알림"뿐이다.**
+       - `suppressed` 는 안 넣는다 — 정의가 "과거 **발행된** 알림"이라 억제분을 넣으면
+         다음 배치가 그걸 기준으로 또 억제해 이중 억제가 된다.
+       - **`--max-alerts` 로 잘린 알림, 발행이 실패한 알림도 안 넣는다.** 넣으면 다음
+         배치가 그걸 직전 알림으로 보고 `RENOTIFY_BLOCK_DAYS` 만큼 억제해서 **셀러가
+         그 알림을 영영 못 본다.** `resolved_alert_ids` 가 빈 집합이라 조기 해제 경로도
+         없다. MQ 가 5분 죽으면 그날 알림이 7일간 침묵하는 형태다.
+         (지인님 PR 리뷰 §1, 2026-08-06)
 
     같은 `alert_id` 는 덮어쓴다(같은 날 재실행 시 중복 누적 방지).
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    existing: dict[str, dict] = {}
-    if path.exists():
-        for a in json.loads(path.read_text(encoding="utf-8")):
-            existing[a["alert_id"]] = a
+    existing: dict[str, dict] = {a["alert_id"]: a for a in _read_state(path)}
     for alert in published:
         existing[alert.alert_id] = alert.model_dump(mode="json")
 
@@ -251,7 +352,7 @@ def save_published(
     kept = [
         a for a in existing.values() if date.fromisoformat(a["window_end"]) >= cutoff
     ]
-    path.write_text(json.dumps(kept, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_write(path, json.dumps(kept, ensure_ascii=False, indent=2))
     return len(kept)
 
 
@@ -264,7 +365,7 @@ async def run_batch(
     max_alerts: int | None = None,
     dry_run: bool = False,
     state_path: Path = STATE_PATH,
-    load_inputs: Callable[[], tuple[list[ClassifiedItem], list[dict]]] | None = None,
+    load_inputs: Callable[..., tuple[list[ClassifiedItem], list[dict]]] | None = None,
 ) -> dict:
     """탐지 → 개선안 → 가이드라인 → 발행. 배치 1회.
 
@@ -286,22 +387,37 @@ async def run_batch(
     started = datetime.now()
     logger.info("배치 시작 trace_id=%s dry_run=%s", trace_id, dry_run)
 
-    items, documents = loader()
-    gaps = unreliable_slots(check_coverage(documents, items))
-    if gaps:
-        logger.warning("분류 커버리지 미달 %d슬롯 — 검정에서 제외됩니다", len(gaps))
+    items, documents = loader(window_end)
+
+    # ⚠️ **window_end 를 여기서 한 번만 확정한다.** 로드·탐지·저장이 같은 값을 써야 한다.
+    #    읽기는 실행 시각(`date.today()`), 쓰기는 데이터 시각(`window_end`)이면, 데이터가
+    #    오늘보다 STATE_RETENTION_DAYS 이상 뒤처진 상태(백필·유입 지연)에서 로드가 방금
+    #    저장한 캐시를 통째로 버려 **매 배치가 첫 실행처럼 굴러간다.** 억제 모듈이 경과일을
+    #    데이터 시각으로 세는 것과 같은 이유다. (지인님 PR 리뷰 §5, 2026-08-06)
+    if window_end is None and documents:
+        window_end = max(_as_date(d["created_at"]) for d in documents)
+
+    # check_coverage 를 두 번 돌리지 않는다 — detect_anomaly 도 안에서 같은 계산을 한다.
+    # 넘겨주면 128k 스캔이 한 번 줄고, "경고에 찍힌 슬롯 = 실제로 family 에서 빠진 슬롯"
+    # 이 보장된다.
+    unreliable = unreliable_slots(check_coverage(documents, items))
+    if unreliable:
+        logger.warning(
+            "분류 커버리지 미달 %d슬롯 — 검정에서 제외됩니다", len(unreliable)
+        )
 
     prior = load_prior_alerts(window_end or date.today(), state_path)
     logger.info(
-        "입력 items=%d documents=%d prior_alerts=%d",
+        "입력 items=%d documents=%d prior_alerts=%d window_end=%s",
         len(items),
         len(documents),
         len(prior),
+        window_end,
     )
 
     # ⚠️ dry-run 이어도 [6] 원인분류는 detect_anomaly 안에서 돈다. 스텁을 안 주면
     #    "LLM 0회"라고 해놓고 실제로 과금된다.
-    stub = _CountingClient() if dry_run else None
+    stub = CountingClient() if dry_run else None
 
     alerts, suppressed = await detect_anomaly(
         items,
@@ -310,31 +426,40 @@ async def run_batch(
         prior_alerts=prior,
         # 백엔드가 어디서 줄지 미정 — 정해질 때까지 빈 집합 (지인님 결선 §8).
         resolved_alert_ids=set(),
+        unreliable_denominators=unreliable,
         client=stub,
     )
 
     targets = alerts if max_alerts is None else alerts[:max_alerts]
     failures: list[dict] = []
-    counts = Counter()
+    counts: Counter[str] = Counter()
+    # ⚠️ **발행에 성공한 것만** 캐시에 넣는다. save_published docstring 참고.
+    delivered: list[DetectionAlert] = []
 
     for alert in targets:
+        # [2] 개선안 게이트 — 조치 7종 중 '개선안 생성' 일 때만 Agent3 가 돈다.
+        wants_recommendation = should_generate(alert)
+
         if dry_run:
-            # 실제로 몇 번 부를지만 센다. 추정이 아니라 발행 대상 실측이다.
-            counts["개선안"] += 1
+            # 실제로 몇 번 부를지만 센다. 추정이 아니라 실측이다 — 게이트를 안 태우면
+            # Agent3 비용이 크게 과대추정된다(조치 7종 중 1종만 해당).
+            if wants_recommendation:
+                counts["개선안"] += 1
             counts["가이드라인"] += 1
-            counts["발행"] += 2
+            counts["발행:이상"] += 1
             continue
 
         # ⚠️ alert 1건이 터져도 배치는 계속한다. 여기서 던지면 **이미 LLM 비용을 쓴
         #    앞쪽 알림들까지 발행되지 않고 날아간다.** 실패는 모아서 끝에 요약한다.
         rec = guideline = None
-        try:
-            rec = await generate_for_alert(alert)
-            counts["개선안"] += 1
-        except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
-            failures.append(
-                {"alert_id": alert.alert_id, "stage": "개선안", "error": repr(exc)}
-            )
+        if wants_recommendation:
+            try:
+                rec = await generate_for_alert(alert)
+                counts["개선안"] += 1
+            except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
+                failures.append(
+                    {"alert_id": alert.alert_id, "stage": "개선안", "error": repr(exc)}
+                )
 
         try:
             guideline = await generate_guideline(alert, rec)
@@ -346,7 +471,8 @@ async def run_batch(
 
         try:
             await publish_anomaly_analyzed(alert, rec, trace_id)
-            counts["발행"] += 1
+            counts["발행:이상"] += 1
+            delivered.append(alert)
         except Exception as exc:  # noqa: BLE001
             failures.append(
                 {"alert_id": alert.alert_id, "stage": "발행:이상", "error": repr(exc)}
@@ -355,7 +481,7 @@ async def run_batch(
         if guideline is not None:
             try:
                 await publish_guideline_generated(guideline, trace_id)
-                counts["발행"] += 1
+                counts["발행:가이드"] += 1
             except Exception as exc:  # noqa: BLE001
                 failures.append(
                     {
@@ -367,10 +493,8 @@ async def run_batch(
 
     # 캐시는 dry-run 에서 건드리지 않는다 — 안 보낸 걸 보냈다고 기록하지 않는다.
     cached = (
-        0
-        if dry_run
-        else save_published(alerts, alerts[0].window_end, state_path)
-        if alerts
+        save_published(delivered, window_end, state_path)
+        if (not dry_run and delivered and window_end)
         else 0
     )
 
@@ -390,6 +514,9 @@ async def run_batch(
         # 억제된 건가"를 알 수 없으므로 따로 센다 (지인님 결선 §6-②).
         "suppressed": len(suppressed),
         "processed": len(targets),
+        # 발행에 성공해 캐시에 들어간 건수. published(탐지) 와 다를 수 있고,
+        # 그 차이가 곧 "다음 배치에서 다시 시도될 알림"이다.
+        "delivered": len(delivered),
         "llm_calls": dict(counts),
         "cause_calls": stub.calls if stub else None,
         "failures": failures,
@@ -406,18 +533,32 @@ def print_summary(summary: dict) -> None:
         f"  [{summary['input_source']}]"
     )
     if summary["input_source"] == "load_golden_inputs":
-        print("  ⚠️ 골든 라벨(oracle) 입력 — 분류 오차 0%. 이 숫자는 탐지 성능이 아니다.")
+        print(
+            "  ⚠️ 골든 라벨(oracle) 입력 — 분류 오차 0%. 이 숫자는 탐지 성능이 아니다."
+        )
     print(f"  prior_alerts  {summary['prior_alerts']}건")
-    print(f"  발행          {summary['published']}건")
+    print(f"  탐지          {summary['published']}건")
     print(f"  억제          {summary['suppressed']}건  ← 발행 아님")
     print(f"  후속 처리     {summary['processed']}건")
+    if not summary["dry_run"]:
+        print(
+            f"  발행 성공     {summary['delivered']}건  ← 캐시(prior_alerts)에 들어간 것"
+        )
+        missed = summary["processed"] - summary["delivered"]
+        if missed > 0 or summary["published"] > summary["processed"]:
+            print(
+                f"  ↳ 캐시에 안 넣음 {summary['published'] - summary['delivered']}건"
+                " (상한으로 잘렸거나 발행 실패) — 다음 배치에서 다시 시도됩니다"
+            )
     if summary["dry_run"]:
         print("\n  [dry-run] LLM 호출 0회. 실제로 돌리면:")
         print(
             f"     Agent2 [6] 원인분류 : {summary['cause_calls']}회  ← 스텁이 가로채 실측"
         )
         print(f"     후속 단계           : {summary['llm_calls']}")
-        print("     개선안 1건당 LLM 2~4회. 가이드라인은 별도.")
+        print(
+            "     개선안은 recommended_action=='개선안 생성' 인 alert 만 (1건당 LLM 2~4회)."
+        )
     if summary["failures"]:
         print(f"\n  ⚠️ 실패 {len(summary['failures'])}건 (배치는 계속 진행됨)")
         for f in summary["failures"][:10]:
@@ -456,6 +597,13 @@ def main() -> None:
         help="db(기본, 운영) / golden(평가·재현 전용 — scripts/golden_inputs.py)."
         " golden 은 분류 오차가 0 이라 결과가 탐지 성능이 아니다. 요약이 경고를 낸다.",
     )
+    ap.add_argument(
+        "--state-path",
+        default=None,
+        help=f"발행 기록 캐시 경로 (기본 {STATE_PATH}). 디버그 실행이 운영 캐시를"
+        " 오염시키지 않게 따로 지정할 것 — 캐시가 오염되면 그 알림이 억제 기간 내내"
+        " 셀러에게 안 간다.",
+    )
     args = ap.parse_args()
 
     loader = None
@@ -474,10 +622,17 @@ def main() -> None:
             window_end=date.fromisoformat(args.window_end) if args.window_end else None,
             max_alerts=args.max_alerts,
             dry_run=args.dry_run,
+            state_path=Path(args.state_path) if args.state_path else STATE_PATH,
             load_inputs=loader,
         )
     )
     print_summary(summary)
+
+    # ⚠️ 계속 도는 것과 성공으로 보고하는 것은 다르다. 실패가 있으면 비-0 으로 끝내야
+    #    cron·k8s Job 이 알아챈다 — 안 그러면 모든 알림이 발행 실패해도 성공한 배치다.
+    #    (지인님 PR 리뷰 §4, 2026-08-06)
+    if summary["failures"]:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

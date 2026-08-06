@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import csv
+from datetime import date
 from pathlib import Path
 
 from app.core.schemas import AspectSentiment, ClassifiedItem
@@ -40,8 +41,14 @@ def _read_csv(rel: str) -> list[dict]:
         return list(csv.DictReader(f))
 
 
-def load_golden_inputs() -> tuple[list[ClassifiedItem], list[dict]]:
+def load_golden_inputs(
+    window_end: date | None = None,
+) -> tuple[list[ClassifiedItem], list[dict]]:
     """골든 라벨(oracle)로 (items, documents) 를 만든다. LLM 0회.
+
+    Args:
+        window_end: 운영 로더와 시그니처를 맞추기 위한 인자. 골든은 60일치가
+            전부라 무시한다 — DB 로더는 이 값으로 35일 범위조회를 건다.
 
     Returns:
         items:     분자의 출처 (ClassifiedItem)

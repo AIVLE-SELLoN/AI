@@ -654,8 +654,12 @@ def _detect_via_http(payload: dict, monkeypatch) -> dict:
 
     async def _stub_cause(aspect, items, *, client=None, trace_key=""):
         return {
-            "label": "사진_색감_오차", "consistent": True,
-            "count": len(items), "total": len(items), "freq": {}, "cs_ids": [],
+            "label": "사진_색감_오차",
+            "consistent": True,
+            "count": len(items),
+            "total": len(items),
+            "freq": {},
+            "cs_ids": [],
         }
 
     monkeypatch.setattr(svc, "diagnose_cause", _stub_cause)
@@ -678,7 +682,9 @@ def test_detect_endpoint_passes_documents_through(monkeypatch):
 
     # documents 없이 = 옛 경로. 무관 리뷰가 분모에서 빠져 오탐이 난다.
     without = _detect_via_http(base, monkeypatch)
-    assert without["alerts"], "이 시나리오는 documents 가 없으면 오탐이 나야 한다(테스트 전제)"
+    assert without["alerts"], (
+        "이 시나리오는 documents 가 없으면 오탐이 나야 한다(테스트 전제)"
+    )
 
     # documents 를 실으면 분모가 원본 기준 → 알림 0건.
     with_docs = _detect_via_http({**base, "documents": docs}, monkeypatch)
@@ -718,13 +724,10 @@ def _uncovered_days(block_days: int, cycles: int = 4) -> list[date]:
     covered: set[date] = set()
     for fire in fires:
         start = fire - timedelta(days=CURRENT_WINDOW_DAYS - 1)
-        covered |= {
-            start + timedelta(days=k) for k in range((fire - start).days + 1)
-        }
+        covered |= {start + timedelta(days=k) for k in range((fire - start).days + 1)}
     span_start = first - timedelta(days=CURRENT_WINDOW_DAYS - 1)
     span = [
-        span_start + timedelta(days=k)
-        for k in range((fires[-1] - span_start).days + 1)
+        span_start + timedelta(days=k) for k in range((fires[-1] - span_start).days + 1)
     ]
     return [d for d in span if d not in covered]
 

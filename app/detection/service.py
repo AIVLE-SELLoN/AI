@@ -89,6 +89,22 @@ _NO_ALERT_VERDICTS = frozenset({Verdict.NORMAL})
 # service.py 에 두는 게 팀 선례 (classification 의 ClassifyRequestItem, 커밋 c785672).
 
 
+class RawDocument(BaseModel):
+    """분모의 출처가 되는 원본 문서 1건. `loader.build_rows()` 가 요구하는 키만 받는다.
+
+    dict 로 받으면 키가 빠졌을 때 `build_rows` 안에서 KeyError 가 나 500 이 된다.
+    재현·디버깅 창구에서는 어느 필드가 빠졌는지 422 로 알려주는 편이 쓸모 있다.
+    (지인님 PR 리뷰 잔가지, 2026-08-06)
+    """
+
+    id: str
+    product: str
+    channel: str
+    source: str
+    created_at: datetime
+    text: str = ""
+
+
 class DetectRequest(BaseModel):
     """POST /detect 요청. items 는 분류(Agent1) 산출물 그대로.
 
@@ -102,11 +118,10 @@ class DetectRequest(BaseModel):
     """
 
     items: list[ClassifiedItem]
-    documents: list[dict] | None = Field(
+    documents: list[RawDocument] | None = Field(
         default=None,
         description=(
-            "원본 문서(문의·리뷰). **분모의 출처.** 필요한 키 — "
-            "id · product · channel · source · created_at · text(선택). "
+            "원본 문서(문의·리뷰). **분모의 출처.** "
             "없으면 분모를 items 에서 세므로 운영 경로와 결과가 달라진다."
         ),
     )

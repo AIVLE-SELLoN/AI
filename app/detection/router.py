@@ -8,7 +8,7 @@
 
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from app.core.schemas import Source
 from app.detection.service import DetectRequest, DetectResponse, detect_anomaly
@@ -36,7 +36,21 @@ async def detect(request: DetectRequest) -> DetectResponse:
        따로 호출하면 다중검정 보정의 family 가 그 상품으로 좁아져 컷오프가 달라진다
        (로직 §8). 상품별 분할 호출 금지.
     """
-    if request.documents is None and any(i.source == Source.REVIEW for i in request.items):
+    # ⚠️ `documents: []` 는 거절한다. 빈 리스트를 그대로 넘기면 build_rows 가 0행을 내고
+    #    detect_anomaly 의 `if not rows` 에 걸려 **조용히 빈 응답**이 나간다. 재현 창구인데
+    #    "왜 아무것도 안 뜨지?"가 정확히 이 형태다. (지인님 PR 리뷰 §8, 2026-08-06)
+    if request.documents is not None and not request.documents:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "documents 가 빈 배열입니다. 분모의 출처라 이대로면 알림이 0건으로 나갑니다. "
+                "items 기준 분모로 돌리려면 documents 필드를 아예 생략하세요."
+            ),
+        )
+
+    if request.documents is None and any(
+        i.source == Source.REVIEW for i in request.items
+    ):
         # 리뷰는 aspect 0개면 classified_item 에 행이 아예 없다. items 로 분모를 세면
         # 그 문서가 통째로 빠져 부정률이 부풀려진다 — **오탐 방향**이라 조용히 두면 안 된다.
         # CS 는 _cs_empty_fallback 이 aspect >= 1 을 보장해 items 만으로도 맞다.
@@ -47,7 +61,9 @@ async def detect(request: DetectRequest) -> DetectResponse:
 
     alerts, suppressed = await detect_anomaly(
         request.items,
-        documents=request.documents,
+        documents=[d.model_dump() for d in request.documents]
+        if request.documents
+        else None,
         window_end=request.window_end,
         prior_alerts=request.prior_alerts,
         resolved_alert_ids=set(request.resolved_alert_ids),

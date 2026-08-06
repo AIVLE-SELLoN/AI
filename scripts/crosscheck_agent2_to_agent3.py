@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -45,6 +44,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # 서로 안 맞게 된다. 같은 폴더의 형제 모듈이라 sys.path 로 잡는다.
 from check_agent1_to_agent2 import DAY1, read
 
+# dry-run 스텁은 배치(app/batch/daily.py)와 **같은 것을 쓴다.** 복제하면 한쪽만
+# 고쳤을 때 두 도구의 실측 호출 수가 갈린다 (지인님 PR 리뷰, 2026-08-06).
+from app.batch.daily import STUB_CAUSE, CountingClient
 from app.core.schemas import (
     AspectSentiment,
     ClassifiedItem,
@@ -60,46 +62,7 @@ from app.recommendation.pipeline import (
     should_generate,
 )
 
-# 스텁이 돌려줄 원인 라벨. SCOPE_LIMIT_LABELS(실물_염색_편차·실제_원단_문제)를 피한다 —
-# 그 라벨이면 Agent3 가 라우팅·생성을 통째로 건너뛰어 호출 수 추정이 실제와 어긋난다.
-STUB_CAUSE = "사진_색감_오차"
-
-
-class CountingClient:
-    """LLM 을 부르지 않고 호출 횟수만 세는 스텁. --dry-run 전용.
-
-    detect_anomaly(client=...) 에 주입하면 [6] 원인분류가 **실제로 몇 번 불릴지**를
-    돈 한 푼 안 쓰고 실측할 수 있다. 후보 수를 눈으로 세는 추정이 아니라, 실제 판정
-    로직이 부르는 횟수 그대로다.
-
-    프롬프트에 박힌 cs_id 를 그대로 되돌려준다 — 개수를 맞춰야 root_cause.total 과
-    evidence.inquiry_ids 가 현실적인 크기로 나오고, 그래야 recommended_action 이
-    실제와 비슷하게 산출된다.
-    """
-
-    def __init__(self) -> None:
-        self.calls = 0
-        self.empty_extractions = 0
-
-    async def complete_json(self, prompt: str, *, trace_key: str = "-", **_: object) -> dict:
-        self.calls += 1
-        cs_ids = re.findall(r'"cs_id"\s*:\s*"([^"]+)"', prompt)
-        if not cs_ids:
-            # 프롬프트 포맷이 바뀌면 여기가 조용히 0개가 되고, root_cause 가 미특정으로
-            # 빠져 게이트 통과 수(=Agent3 호출 수)를 실제보다 적게 추정하게 된다.
-            self.empty_extractions += 1
-        return {
-            "results": [
-                {
-                    "cs_id": cs_id,
-                    "cause": STUB_CAUSE,
-                    "confidence": 0.9,
-                    "evidence": "",
-                    "aspect_match": True,
-                }
-                for cs_id in cs_ids
-            ]
-        }
+_ = STUB_CAUSE  # 리포트 문구가 이 값을 인용한다
 
 
 def build_items(
