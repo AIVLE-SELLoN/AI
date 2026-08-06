@@ -23,7 +23,7 @@ from app.core.prompts import load_prompt
 from app.core.schemas import CallbackStatus, CSGuidelineInput, CSGuidelineOutput
 from app.reporting.callback import GenerationResult, build_guideline_callback
 from app.reporting.cs_reply_validator import validate_cs_guideline
-from app.reporting.ids import build_guideline_id as _build_guideline_id
+from app.core.ids import build_guideline_id as _build_guideline_id
 from app.reporting.pdf_compiler import ReportType, compile_report_to_pdf
 from app.reporting.s3_uploader import (
     REPORT_TYPE_GUIDELINE,

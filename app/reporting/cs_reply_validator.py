@@ -26,7 +26,7 @@ from app.reporting.grounding import (
     find_forbidden_expressions,
     ratio_to_percent,
 )
-from app.reporting.ids import build_guideline_id
+from app.core.ids import build_guideline_id
 
 logger = logging.getLogger("CSGuidelineValidator")
 

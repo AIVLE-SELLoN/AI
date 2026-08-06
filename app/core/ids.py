@@ -1,8 +1,10 @@
-"""산출물 식별자 생성 — 서비스와 검증기가 **같은 규칙**을 쓰도록 한 곳에 모은다.
+"""산출물 식별자 생성 — 서비스·검증기·발행기가 **같은 규칙**을 쓰도록 한 곳에 모은다.
 
-검증기가 서비스를 import 하면 순환이 되므로(서비스가 검증기를 부른다) 여기로 뺐다.
-ID 규칙이 갈라지면 백엔드 upsert 가 엉뚱한 문서를 덮어쓰기 때문에, 두 곳이 반드시
-같은 함수를 봐야 한다.
+ID 규칙이 갈라지면 백엔드 upsert 가 엉뚱한 문서를 덮어쓰기 때문에, 쓰는 곳이 반드시
+같은 함수를 봐야 한다. 원래 `app/reporting/` 안에 있었는데(검증기가 서비스를 import 하면
+순환이라 거기로 뺐던 것), 2026-08-06 에 `app/core/mq.py` 가 발행 payload 를 만들면서
+두 번째 컴포넌트가 생겨 core 로 올렸다 — core 가 컴포넌트를 import 하는 역방향 의존을
+만들지 않기 위해서다.
 """
 
 from __future__ import annotations
@@ -25,5 +27,5 @@ def build_guideline_id(alert_id: str) -> str:
     붙여 **어떤 입력에서도 alert_id 와 1:1** 을 보장한다.
     """
     if alert_id.startswith(ALERT_ID_PREFIX):
-        return f"{GUIDELINE_ID_PREFIX}{alert_id[len(ALERT_ID_PREFIX):]}"
+        return f"{GUIDELINE_ID_PREFIX}{alert_id[len(ALERT_ID_PREFIX) :]}"
     return f"{GUIDELINE_ID_PREFIX}{alert_id}"
