@@ -387,9 +387,15 @@ def build_rows_for_window_group(rows: list[dict], rng: random.Random, pid_map: d
     data_rows, label_rows = [], []
 
     windows = [
-        (first["window_start_day"] - 28, first["window_start_day"] - 1, first["past_total"], "past_neg", False),
         (first["window_start_day"], first["window_end_day"], first["cur_total"], "cur_neg", True),
+        (first["window_start_day"] - 28, first["window_start_day"] - 1, first["past_total"], "past_neg", False),
     ]
+    # ⚠️ 순서 반전(서영님 실험⑥ 피드백, 2026-08-05): cause_queue(aspect당 CAUSE_SAMPLE_COUNT개)를
+    # 과거·현재 두 창이 공유하는데, 원래는 과거(28일)가 먼저 돌아서 cause_queue를 거의 다 소진하고
+    # 현재 윈도우(7일)엔 하나도 안 남았음. 운영 [6] 원인분류는 현재 윈도우 텍스트만 읽으므로
+    # (과거 윈도우 cause 텍스트는 어디서도 안 읽음 — 과거는 베이스라인 rate 계산용일 뿐),
+    # 현재 윈도우가 cause_queue를 먼저 전부 가져가도록 순서를 바꿈. 배분비율은 100:0(현재:과거)
+    # — 과거에 나눠줄 이유가 없음(아무도 안 읽는 텍스트에 유한한 LLM 생성 샘플을 나눠주는 건 낭비).
 
     # aspect별로 (일별 부정 배분, 원인분류 텍스트 큐) 미리 계산
     per_aspect = {}

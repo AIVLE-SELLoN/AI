@@ -1,0 +1,189 @@
+{
+  "meta": {
+    "experiment": "③ 프롬프트1 aspect 분류 정확도",
+    "run_at": "2026-08-05T10:01:13",
+    "golden": "golden_cs_labels.csv",
+    "prompt_version": "classify_aspect_v5",
+    "model": "gpt-4o-mini",
+    "seed": 15,
+    "limit": 300,
+    "chunk_size": 20,
+    "mode": "batch"
+  },
+  "scores": {
+    "n_sampled": 300,
+    "n_scored": 300,
+    "n_unanswered": 0,
+    "aspect_f1": 0.98,
+    "aspect_f1_note": "대시보드·채널비교분석·개선리포트 소비 지표(중립 포함) — 탐지는 안 씀",
+    "aspect_precision": 0.98,
+    "aspect_recall": 0.98,
+    "sentiment_accuracy": 0.9898,
+    "exact_match_rate": 0.97,
+    "per_aspect": {
+      "기타": {
+        "precision": 0.9545,
+        "recall": 1.0,
+        "n_true": 21
+      },
+      "사이즈": {
+        "precision": 1.0,
+        "recall": 0.9894,
+        "n_true": 94
+      },
+      "색상": {
+        "precision": 0.9714,
+        "recall": 0.9903,
+        "n_true": 103
+      },
+      "소재": {
+        "precision": 0.9818,
+        "recall": 1.0,
+        "n_true": 54
+      },
+      "오배송": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 9
+      },
+      "파손": {
+        "precision": 0.9375,
+        "recall": 0.7895,
+        "n_true": 19
+      }
+    },
+    "negative_detection": {
+      "note": "탐지 분자를 결정하는 값 — 문의 단위 부정/비부정 2분류",
+      "precision": 1.0,
+      "recall": 0.9867,
+      "f1": 0.9933,
+      "tp": 296,
+      "fp": 0,
+      "fn": 4,
+      "tn": 0
+    },
+    "negative_scoped_aspect": {
+      "note": "골든이 부정인 문항만 대상 — aspect까지 맞아야 올바른 분자에 잡힘",
+      "precision": 0.98,
+      "recall": 0.98,
+      "f1": 0.98,
+      "n_true_negative": 300,
+      "n_true_negative_warning": null
+    },
+    "multi_output_diagnostic": {
+      "note": "예측 측 다중 aspect 출력 건수 — explode 계약 근거 진단(정답 없어 recall 계산 불가)",
+      "rate": 0.0,
+      "count": 0
+    },
+    "mismatches": [
+      {
+        "inquiry_id": "INQ-043979",
+        "raw_text": "받은 제품의 색상이 기대와 달라서 교환하고 싶습니다. 절차가 어떻게 되나요?",
+        "true_aspect": "파손",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-043923",
+        "raw_text": "지퍼가 고장난 채로 왔어요. 환불 처리 가능할까요?",
+        "true_aspect": "색상",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "파손",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-010318",
+        "raw_text": "이 제품의 세탁 방법에 대한 정보가 부족한 것 같아요. 세탁 시 주의사항을 알려주세요.",
+        "true_aspect": "소재",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-063034",
+        "raw_text": "제품에 이염이 있는데 정상 제품 맞나요?",
+        "true_aspect": "파손",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-044634",
+        "raw_text": "색깔이 사진이랑 완전 다르게 와서 당황했어요. 반품 가능할까요?",
+        "true_aspect": "파손",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": -1
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-004529",
+        "raw_text": "상세페이지와 상품 라벨의 사이즈가 달라서 혼란스러워요. 어떤 게 맞는지 알려주세요.",
+        "true_aspect": "사이즈",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "기타",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-000147",
+        "raw_text": "상품 사진이 너무 보정된 것 같아서 실물 색상이 궁금해요. 확인 부탁드립니다.",
+        "true_aspect": "색상",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-000146",
+        "raw_text": "상세 사진이 너무 화사하게 보정된 것 같아요. 실물 색상은 어떤지 궁금합니다.",
+        "true_aspect": "색상",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-044664",
+        "raw_text": "화면으로 볼때는 예쁜 연핑크 색이었는데 실물은 완전 진한 핑크색이에요. 환불 요청드립니다.",
+        "true_aspect": "파손",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": -1
+          }
+        ]
+      }
+    ]
+  }
+}
