@@ -27,6 +27,7 @@ volumes:
   kafka-1-data:
   kafka-2-data:
   kafka-3-data:
+  rabbitmq-data:
 
 x-kafka-common: &kafka-common
   image: confluentinc/cp-kafka:7.5.0
@@ -200,3 +201,38 @@ services:
       - ./data/input:/app/data/input:ro
       - ./data/config:/app/data/config:ro
     profiles: ["eval"]
+
+  # RabbitMQ — AI → 메인 이벤트 발행 (docs/mq_events.md).
+  #
+  # ⚠️ **이건 로컬 검증용이다. 운영 브로커는 백엔드가 띄운다.**
+  #    운영 접속 정보(C1)를 기다리는 동안 "메시지가 실제로 오가는지"를 확인하려고 둔다 —
+  #    MQ_ENABLED=false 로 두면 "안 터진다"만 확인되고 발행 자체는 검증이 안 된다.
+  #    (Kafka 를 우리가 띄워서 유입 구간을 검증한 것과 같은 방식)
+  #
+  # 접속 정보가 오면 .env 의 MQ_HOST 만 그쪽으로 돌리면 되고 이 서비스는 안 띄우면 된다.
+  #
+  #   docker compose up -d rabbitmq
+  #   관리 UI: http://localhost:15672  (기본 sellon/sellon — 큐·메시지를 눈으로 본다)
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: sellon-rabbitmq
+    networks:
+      - app-network
+    ports:
+      - "5672:5672"      # AMQP — app/core/mq.py 가 붙는 포트
+      - "15672:15672"    # 관리 UI
+    environment:
+      RABBITMQ_DEFAULT_USER: ${MQ_USER:-sellon}
+      RABBITMQ_DEFAULT_PASS: ${MQ_PASSWORD:-sellon}
+      RABBITMQ_DEFAULT_VHOST: ${MQ_VHOST:-/}
+    volumes:
+      # 볼륨이 없으면 재시작마다 exchange·큐가 날아간다. 발행기가 exchange 를 선언하므로
+      # 발행은 계속 되지만, 그 사이 쌓여 있던 메시지가 사라져 수신 검증이 헛돈다.
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
