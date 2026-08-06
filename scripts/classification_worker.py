@@ -559,20 +559,26 @@ class ClassificationWorker:
     def classify_items(
         self, items: list[ClassifyRequestItem]
     ) -> tuple[list[ClassifiedItem], list[tuple[str, str, str]]]:
-        """원문 N건을 **건별로 격리해서** 동시에 분류한다. 실패는 그 건에만 국한된다.
+        """원문 N건을 분류한다. 실패는 **그 건에만** 국한된다.
 
-        ⚠️ 배치 재호출을 하지 않는 이유(비용):
-        classify_aspect() 안의 asyncio.gather 는 return_exceptions 를 쓰지 않아 1건만
-        실패해도 배치 전체가 예외로 떨어진다. 그런데 이 실패는 대부분 **결정적**이다 —
-        예를 들어 리뷰에 대해 LLM 이 '파손'을 뱉으면 schemas 의 리뷰 aspect 제약
-        (색상/사이즈/소재)에 매번 걸린다. 배치를 통째로 다시 부르면 성공했을 나머지
-        건까지 매 재시도마다 다시 과금된다(batch 10 기준 9건 × 재시도 횟수).
+        격리는 classify_aspect() 가 한다 (계약, 2026-08-04):
+          - 반환 길이·순서가 요청과 같아 zip(items, 반환) 이 성립한다.
+          - 성공은 ClassifiedItem, 실패는 **예외 객체를 그 자리에 담아** 돌려준다.
+            함수 자체는 raise 하지 않는다.
 
-        그래서 처음부터 건별 호출을 gather(return_exceptions=True) 로 묶는다:
-          - LLM 호출 수는 그대로다(원래도 프롬프트는 1건씩 처리한다 — 1건 = 1콜).
-          - 동시 실행이라 처리 속도도 그대로다.
-          - 일시적 오류(네트워크·레이트리밋) 재시도는 llm_client 가 MAX_RETRY 로 이미 한다.
-            여기서 또 재시도하면 이중 과금이다.
+        ⚠️ 여기서 배치를 통째로 재호출하지 않는다(비용). 이 실패는 대부분 **결정적**이라
+           — 리뷰에 대해 LLM 이 '파손'을 뱉으면 schemas 의 리뷰 aspect 제약
+           (색상/사이즈/소재)에 매번 걸린다 — 다시 부르면 성공했을 나머지 건까지 매번
+           다시 과금된다. 일시적 오류(네트워크·레이트리밋) 재시도는 llm_client 가
+           MAX_RETRY 로 이미 한다. 여기서 또 하면 이중 과금이다.
+
+        ⚠️ 예전에는 건별 classify_aspect([item]) 를 다시 gather(return_exceptions=True)
+           로 감쌌다. 계약이 바뀐 뒤로는 **그러면 안 된다** — 안쪽이 raise 를 안 하므로
+           바깥 gather 는 예외를 볼 일이 없고, outcome 이 `[LlmParseError(...)]` 라는
+           **리스트**로 와서 아래 isinstance(outcome, BaseException) 이 영원히 False 가
+           된다. 그러면 dead-letter 에 안 남고 예외 객체가 results 에 섞여 들어가
+           persist 단계에서 AttributeError 로 배치가 통째로 터진다(=그 건은 어디에도
+           남지 않고 영구 유실). 조용히 깨지는 형태라 주석으로 못 박아 둔다.
 
         Returns:
             (분류 성공 목록, [(event_id, "classify", 오류메시지)]) — 실패는 호출부가
@@ -590,14 +596,18 @@ class ClassificationWorker:
                 failures.append((item.item_id, "classify", f"{type(outcome).__name__}: {outcome}"))
                 logger.error(f"[ITEM FAILED] item_id={item.item_id} 분류 실패: {outcome!s}")
                 continue
-            results.extend(outcome)
+            # outcome 은 item 1건에 대응하는 ClassifiedItem 이다(리스트가 아니다)
+            results.append(outcome)
         return results, failures
 
-    async def _classify_all(self, items: list[ClassifyRequestItem]) -> list[Any]:
-        """건별 classify_aspect 를 동시에 돌리고 예외를 결과 자리에 그대로 담아 온다."""
-        return await asyncio.gather(
-            *(classify_aspect([item]) for item in items), return_exceptions=True
-        )
+    async def _classify_all(
+        self, items: list[ClassifyRequestItem]
+    ) -> list[ClassifiedItem | Exception]:
+        """분류 결과를 그대로 받아 온다 — 격리는 classify_aspect() 가 한다.
+
+        여기서 gather 로 한 번 더 감싸면 실패 판정이 무력화된다(위 docstring 참고).
+        """
+        return await classify_aspect(items)
 
     def persist_batch(
         self,
