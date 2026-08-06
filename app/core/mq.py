@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.config import get_settings
-from app.core.exceptions import MqDisabledError, MqPublishError
+from app.core.exceptions import MqConfigError, MqDisabledError, MqPublishError
 from app.core.ids import ALERT_ID_PREFIX, GUIDELINE_ID_PREFIX
 from app.core.schemas import DetectionAlert, GenerationCallback, Recommendation
 
@@ -63,11 +63,16 @@ def _now_iso() -> str:
     )
 
 
-def build_envelope(event_type: str, payload: dict, trace_id: str) -> dict:
+def build_envelope(
+    event_type: str, payload: dict, trace_id: str, *, company_id: str = ""
+) -> dict:
     """공통 Envelope 조립. **키는 camelCase, payload 안은 손대지 않는다**(§3).
 
     `occurredAt` 은 **발행 시각**이지 탐지 시각이 아니다 — 개선안 생성에 5~20초가
     걸려서 `payload.detected_at` 과 몇 분씩 벌어진다. 화면의 "탐지 시각"은 payload 쪽이다.
+
+    `companyId` 는 백엔드가 회사 구분용으로 추가한 필드다(§3). 값은 배포마다 고정이라
+    설정에서 온다 — `_publish()` 가 채워 넣고, 여기서는 받은 값을 그대로 싣는다.
     """
     return {
         "eventId": str(uuid.uuid4()),
@@ -75,6 +80,7 @@ def build_envelope(event_type: str, payload: dict, trace_id: str) -> dict:
         "occurredAt": _now_iso(),
         "source": SOURCE,
         "traceId": trace_id,
+        "companyId": company_id,
         "payload": payload,
     }
 
@@ -196,8 +202,17 @@ async def _publish(event_type: str, payload: dict, trace_id: str, *, key: str) -
         raise MqDisabledError(
             f"MQ_ENABLED=false 라 {event_type}({key}) 를 발행하지 않았습니다"
         )
+    if not settings.mq_company_id:
+        # 빈 값으로 내보내면 백엔드 DB 에 회사 미상 행이 쌓인다. 나중에 어느 회사 것인지
+        # 복구할 방법이 없으므로(발행 시각 말고 단서가 없다) 아예 안 보낸다.
+        raise MqConfigError(
+            f"MQ_COMPANY_ID 가 비어 있어 {event_type}({key}) 를 발행하지 않았습니다 "
+            "(MQ 컨벤션 §3 — Envelope 의 companyId 는 배포마다 고정값)"
+        )
 
-    envelope = build_envelope(event_type, payload, trace_id)
+    envelope = build_envelope(
+        event_type, payload, trace_id, company_id=settings.mq_company_id
+    )
     body = json.dumps(envelope, ensure_ascii=False).encode("utf-8")
 
     try:
@@ -237,16 +252,31 @@ def _build_message(envelope: dict, body: bytes) -> Any:
     )
 
 
-async def _get_exchange(settings: Any) -> Any:
-    """`app.events` 토픽 exchange. 연결·채널은 프로세스당 하나를 재사용한다.
+async def resolve_exchange(channel: Any, settings: Any) -> Any:
+    """`app.events` 토픽 exchange 를 얻는다. **남의 토폴로지를 다시 선언하지 않는다.**
 
-    exchange 는 durable topic 으로 선언한다 — 백엔드가 이미 만들어 뒀으면 같은 인자라
-    무해하고(멱등), 인자가 다르면 PRECONDITION_FAILED 로 시끄럽게 터진다. 로컬
-    docker-compose 처럼 아직 없는 환경에서는 이 선언이 만들어 준다.
+    운영 exchange 는 백엔드 인프라가 만들고 quorum·DLX·TTL 설정이 붙어 있다. 우리가
+    `declare` 로 다른 인자를 들이밀면 브로커가 `PRECONDITION_FAILED` 로 거부해서 발행도
+    수신도 아예 못 뜬다. 그래서 기본은 **있는 것을 확인만** 한다(passive).
+
+    `MQ_DECLARE_TOPOLOGY=true` 일 때만 우리가 만든다 — 로컬 docker-compose 처럼 아직
+    아무것도 없는 환경 전용이다. 컨슈머도 같은 함수를 쓴다.
     """
+    from aio_pika import ExchangeType
+
+    if settings.mq_declare_topology:
+        return await channel.declare_exchange(
+            settings.mq_exchange, ExchangeType.TOPIC, durable=True
+        )
+    # ensure=True 면 passive declare 로 존재만 확인한다 — 없으면 그 자리에서 터진다.
+    return await channel.get_exchange(settings.mq_exchange, ensure=True)
+
+
+async def _get_exchange(settings: Any) -> Any:
+    """발행용 exchange. 연결·채널은 프로세스당 하나를 재사용한다."""
     global _connection, _channel
 
-    from aio_pika import ExchangeType, connect_robust
+    from aio_pika import connect_robust
 
     if _channel is None or _channel.is_closed:
         if _connection is None or _connection.is_closed:
@@ -259,9 +289,7 @@ async def _get_exchange(settings: Any) -> Any:
             )
         _channel = await _connection.channel(publisher_confirms=True)
 
-    return await _channel.declare_exchange(
-        settings.mq_exchange, ExchangeType.TOPIC, durable=True
-    )
+    return await resolve_exchange(_channel, settings)
 
 
 async def close_mq() -> None:

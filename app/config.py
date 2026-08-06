@@ -41,9 +41,18 @@ class Settings(BaseSettings):
     mq_port: int = 5672
     mq_user: str = ""
     mq_password: str = ""
-    mq_vhost: str = "/"
+    mq_vhost: str = "/app"
+    # Envelope 의 companyId. 백엔드가 회사 구분용으로 추가했고 "하드코딩으로 박아두라"고
+    # 했다(MQ 컨벤션 §3). 빈 값으로 발행하면 백엔드 DB 에 회사 미상 행이 쌓이고
+    # 나중에 되돌리기 어려우므로, 비어 있으면 발행을 막는다.
+    mq_company_id: str = ""
     mq_exchange: str = "app.events"
     mq_publish_timeout_seconds: int = 10
+    # exchange·큐를 우리가 만들지, 이미 있는 걸 쓸지. **기본은 안 만든다.**
+    # 운영 토폴로지(app.events · ai.inbound)는 백엔드 인프라가 소유하고 quorum·DLX·TTL
+    # 설정이 붙어 있다. 우리가 다른 인자로 선언하면 PRECONDITION_FAILED 로 거부당해
+    # 아예 못 뜬다. 로컬 docker-compose 처럼 아무것도 없는 환경에서만 true 로 켠다.
+    mq_declare_topology: bool = False
 
     # --- 앱 ---
     log_level: str = "INFO"

@@ -33,6 +33,14 @@ class MqPublishError(AiServiceError):
     """MQ 접속·발행 실패. 재시도 대상(다음 배치가 다시 시도한다)."""
 
 
+class MqConfigError(AiServiceError):
+    """MQ 설정이 불완전해 발행할 수 없다 (예: companyId 미설정).
+
+    접속은 되는데 **내용이 틀린 메시지**를 내보내는 상황을 막는다 — 그건 안 보내는
+    것보다 나쁘다. 받는 쪽 DB 에 남고 나중에 어느 것이 잘못됐는지 못 가려낸다.
+    """
+
+
 class HitlContextUnavailableError(AiServiceError):
     """HITL 이벤트에 alert·recommendation 전문이 없어 컬렉션2에 적재할 수 없다.
 

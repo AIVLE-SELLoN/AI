@@ -128,6 +128,19 @@ async def dispatch(event_type: str, body: bytes) -> None:
     handler(envelope.get("payload", {}))
 
 
+async def resolve_queue(channel: Any, queue_name: str, settings: Any) -> Any:
+    """`ai.inbound` 큐를 얻는다. **우리 큐가 아니다 — 다시 선언하지 않는다.**
+
+    계약(§2-1)상 `ai.inbound` 는 **이미 있는 큐이고 우리는 바인딩만 추가**한다. 백엔드가
+    quorum 타입에 DLX·delivery-limit·TTL 을 걸어 만들어 뒀는데 우리가 맨 인자로
+    `declare` 하면 브로커가 `PRECONDITION_FAILED` 로 거부해 컨슈머가 아예 못 뜬다.
+    로컬에선 우리가 만든 큐라 이 사고가 안 나서 조용히 통과한다 — 실제로 붙일 때 터진다.
+    """
+    if settings.mq_declare_topology:
+        return await channel.declare_queue(queue_name, durable=True)
+    return await channel.get_queue(queue_name, ensure=True)
+
+
 async def consume(*, queue_name: str = INBOUND_QUEUE) -> None:
     """`ai.inbound` 를 구독한다. **Manual ACK** (§10) — 처리에 성공한 것만 확인한다.
 
@@ -141,7 +154,9 @@ async def consume(*, queue_name: str = INBOUND_QUEUE) -> None:
     Raises:
         MqDisabledError: `MQ_ENABLED=false`.
     """
-    from aio_pika import ExchangeType, connect_robust
+    from aio_pika import connect_robust
+
+    from app.core.mq import resolve_exchange
 
     settings = get_settings()
     if not settings.mq_enabled:
@@ -157,11 +172,13 @@ async def consume(*, queue_name: str = INBOUND_QUEUE) -> None:
     async with connection:
         channel = await connection.channel()
         await channel.set_qos(prefetch_count=PREFETCH)
-        exchange = await channel.declare_exchange(
-            settings.mq_exchange, ExchangeType.TOPIC, durable=True
-        )
-        queue = await channel.declare_queue(queue_name, durable=True)
-        await queue.bind(exchange, routing_key=FEEDBACK_BINDING)
+        exchange = await resolve_exchange(channel, settings)
+        queue = await resolve_queue(channel, queue_name, settings)
+        # 바인딩도 인프라(Messaging Topology Operator CRD)가 건다 —
+        # `ai-inbound-feedback-binding` 이 그것이다(MQ 컨벤션 §2.1). 우리 AI 계정에
+        # 바인딩 권한이 없을 수 있으므로 운영에서는 시도하지 않는다.
+        if settings.mq_declare_topology:
+            await queue.bind(exchange, routing_key=FEEDBACK_BINDING)
         logger.info("컨슈머 시작 queue=%s binding=%s", queue_name, FEEDBACK_BINDING)
 
         async with queue.iterator() as messages:

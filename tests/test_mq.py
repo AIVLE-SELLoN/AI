@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone
 import pytest
 
 from app.core import mq
-from app.core.exceptions import MqDisabledError, MqPublishError
+from app.core.exceptions import MqConfigError, MqDisabledError, MqPublishError
 from app.core.schemas import (
     Aspect,
     CallbackStatus,
@@ -137,6 +137,7 @@ def test_envelope_keys_are_camel_case_and_payload_is_untouched():
         "occurredAt",
         "source",
         "traceId",
+        "companyId",
         "payload",
     }
     assert envelope["source"] == "ai-server"
@@ -283,6 +284,7 @@ async def test_publish_sends_envelope_on_the_right_routing_key(
         return FakeExchange()
 
     monkeypatch.setattr(mq.get_settings(), "mq_enabled", True)
+    monkeypatch.setattr(mq.get_settings(), "mq_company_id", "SLN-test")
     monkeypatch.setattr(mq, "_get_exchange", fake_get_exchange)
 
     await mq.publish_anomaly_analyzed(alert, recommendation, "trace-1")
@@ -303,6 +305,7 @@ async def test_publish_failure_is_not_swallowed(alert, monkeypatch):
         raise ConnectionError("broker down")
 
     monkeypatch.setattr(mq.get_settings(), "mq_enabled", True)
+    monkeypatch.setattr(mq.get_settings(), "mq_company_id", "SLN-test")
     monkeypatch.setattr(mq, "_get_exchange", boom)
 
     with pytest.raises(MqPublishError):
@@ -321,3 +324,81 @@ async def test_disabled_check_runs_before_broker_connection(alert, monkeypatch):
 
     with pytest.raises(MqDisabledError):
         await mq.publish_anomaly_analyzed(alert, None, "trace-1")
+
+
+# ── companyId (§3) ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_publish_refuses_without_company_id(alert, monkeypatch):
+    """⚠️ companyId 가 비면 발행하지 않는다.
+
+    빈 값으로 나가면 백엔드 DB 에 회사 미상 행이 쌓이는데, 나중에 어느 회사 것인지
+    복구할 단서가 없다(발행 시각뿐). 접속이 되는데 내용이 틀린 메시지를 보내는 건
+    안 보내는 것보다 나쁘다.
+    """
+    monkeypatch.setattr(mq.get_settings(), "mq_enabled", True)
+    monkeypatch.setattr(mq.get_settings(), "mq_company_id", "")
+
+    async def fail(*_args, **_kwargs):
+        raise AssertionError("companyId 가 없는데 브로커에 접속했습니다")
+
+    monkeypatch.setattr(mq, "_get_exchange", fail)
+
+    with pytest.raises(MqConfigError, match="MQ_COMPANY_ID"):
+        await mq.publish_anomaly_analyzed(alert, None, "trace-1")
+
+
+def test_company_id_rides_on_the_envelope_not_the_payload():
+    """companyId 는 Envelope 소속이다(§3 예시) — payload 안이 아니다."""
+    envelope = mq.build_envelope("x", {"alert_id": "ALT-1"}, "t", company_id="SLN-abc")
+
+    assert envelope["companyId"] == "SLN-abc"
+    assert "companyId" not in envelope["payload"]
+
+
+# ── 토폴로지 소유권 ──────────────────────────────────────────────
+
+
+class _FakeChannel:
+    """어떤 AMQP 호출이 나갔는지만 기록한다."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def declare_exchange(self, *_args, **_kwargs):
+        self.calls.append("declare_exchange")
+        return "exchange"
+
+    async def get_exchange(self, *_args, **_kwargs):
+        self.calls.append("get_exchange")
+        return "exchange"
+
+
+@pytest.mark.asyncio
+async def test_does_not_redeclare_someone_elses_exchange(monkeypatch):
+    """⚠️ 기본값은 **선언하지 않고 확인만** 한다.
+
+    운영 exchange 는 백엔드 인프라 소유이고 quorum·DLX·TTL 설정이 붙어 있다. 우리가
+    다른 인자로 declare 하면 PRECONDITION_FAILED 로 거부당해 발행이 통째로 죽는다.
+    로컬에선 우리가 만든 exchange 라 이 사고가 안 나서 조용히 통과한다.
+    """
+    settings = mq.get_settings()
+    monkeypatch.setattr(settings, "mq_declare_topology", False)
+    channel = _FakeChannel()
+
+    await mq.resolve_exchange(channel, settings)
+
+    assert channel.calls == ["get_exchange"]
+
+
+@pytest.mark.asyncio
+async def test_declares_topology_only_when_told_to(monkeypatch):
+    """로컬 docker-compose 처럼 아무것도 없는 환경에서만 우리가 만든다."""
+    settings = mq.get_settings()
+    monkeypatch.setattr(settings, "mq_declare_topology", True)
+    channel = _FakeChannel()
+
+    await mq.resolve_exchange(channel, settings)
+
+    assert channel.calls == ["declare_exchange"]

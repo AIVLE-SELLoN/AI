@@ -215,3 +215,50 @@ async def test_handler_records_hitl_outcome(monkeypatch):
     mq_consumer.handle_recommendation_reviewed(payload)
 
     assert recorded == {"alert_id": ALERT_ID, "status": HitlStatus.REJECTED}
+
+
+# ── 토폴로지 소유권 ──────────────────────────────────────────────
+
+
+class _FakeChannel:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def declare_queue(self, *_args, **_kwargs):
+        self.calls.append("declare_queue")
+        return "queue"
+
+    async def get_queue(self, *_args, **_kwargs):
+        self.calls.append("get_queue")
+        return "queue"
+
+
+@pytest.mark.asyncio
+async def test_does_not_redeclare_inbound_queue(monkeypatch):
+    """⚠️ `ai.inbound` 는 우리 큐가 아니다 — 바인딩만 추가하는 게 계약(§2-1)이다.
+
+    백엔드가 quorum·DLX·TTL 을 걸어 만든 큐를 우리가 맨 인자로 declare 하면
+    PRECONDITION_FAILED 로 컨슈머가 아예 못 뜬다.
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "mq_declare_topology", False)
+    channel = _FakeChannel()
+
+    await mq_consumer.resolve_queue(channel, mq_consumer.INBOUND_QUEUE, settings)
+
+    assert channel.calls == ["get_queue"]
+
+
+@pytest.mark.asyncio
+async def test_declares_queue_only_for_local_topology(monkeypatch):
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "mq_declare_topology", True)
+    channel = _FakeChannel()
+
+    await mq_consumer.resolve_queue(channel, mq_consumer.INBOUND_QUEUE, settings)
+
+    assert channel.calls == ["declare_queue"]

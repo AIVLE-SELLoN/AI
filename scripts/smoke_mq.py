@@ -115,7 +115,7 @@ async def run_feedback(args: argparse.Namespace) -> int:
     컨슈머가 그걸 실제로 꺼내 처리하는지 본다. 컬렉션2(Chroma)에 진짜로 쓰지는
     않는다 — 적재 함수를 가로채서 "여기까지 연결됐다"만 확인한다.
     """
-    from aio_pika import DeliveryMode, ExchangeType, Message, connect_robust
+    from aio_pika import DeliveryMode, Message, connect_robust
 
     import app.recommendation.pipeline as pipeline_module
     from app.config import get_settings
@@ -165,9 +165,9 @@ async def run_feedback(args: argparse.Namespace) -> int:
     )
     async with connection:
         channel = await connection.channel()
-        exchange = await channel.declare_exchange(
-            settings.mq_exchange, ExchangeType.TOPIC, durable=True
-        )
+        # 운영과 같은 함수를 탄다 — 이 스크립트만 다른 방식으로 exchange 를 잡으면
+        # 검증 대상이 실제 코드가 아니게 된다.
+        exchange = await mq.resolve_exchange(channel, settings)
         # 운영 큐 이름을 그대로 쓰되 검증용으로 auto_delete. 바인딩은 실제와 같은 feedback.#
         queue = await channel.declare_queue(
             "smoke.feedback.inbound", durable=False, auto_delete=True
@@ -211,7 +211,7 @@ async def run_feedback(args: argparse.Namespace) -> int:
 
 
 async def run(args: argparse.Namespace) -> int:
-    from aio_pika import ExchangeType, connect_robust
+    from aio_pika import connect_robust
 
     from app.config import get_settings
     from app.core import mq
@@ -229,9 +229,9 @@ async def run(args: argparse.Namespace) -> int:
     )
     async with connection:
         channel = await connection.channel()
-        exchange = await channel.declare_exchange(
-            settings.mq_exchange, ExchangeType.TOPIC, durable=True
-        )
+        # 운영과 같은 함수를 탄다 — 이 스크립트만 다른 방식으로 exchange 를 잡으면
+        # 검증 대상이 실제 코드가 아니게 된다.
+        exchange = await mq.resolve_exchange(channel, settings)
         # ⚠️ **발행 전에 바인딩한다.** 토픽 exchange 는 받는 큐가 없으면 메시지를 버리는데
         #    발행 쪽은 성공으로 찍힌다 — 순서를 바꾸면 이 스크립트가 통과해도 아무 의미가 없다.
         queue = await channel.declare_queue(
@@ -286,6 +286,7 @@ def _report(received: list, trace_id: str) -> int:
         print(f"\n  [{routing}] eventId={envelope.get('eventId')}")
         print(
             f"    occurredAt={envelope.get('occurredAt')} source={envelope.get('source')}"
+            f" companyId={envelope.get('companyId')}"
         )
         missing = {
             "eventId",
@@ -293,6 +294,7 @@ def _report(received: list, trace_id: str) -> int:
             "occurredAt",
             "source",
             "traceId",
+            "companyId",
             "payload",
         } - set(envelope)
         if missing:
@@ -301,6 +303,8 @@ def _report(received: list, trace_id: str) -> int:
             problems.append(f"{routing}: traceId 불일치")
         if envelope.get("eventType") != routing:
             problems.append(f"{routing}: eventType 과 라우팅 키가 다릅니다")
+        if not envelope.get("companyId"):
+            problems.append(f"{routing}: companyId 가 비어 있습니다")
 
         payload = envelope.get("payload", {})
         # 한글 enum 이 깨지지 않고 왕복하는지 — ensure_ascii=False 로 보내고 utf-8 로 읽는다.
@@ -351,6 +355,14 @@ def main() -> None:
     # get_settings() 는 lru_cache 라 **import 전에** 넣어야 반영된다. .env 를 고치지 않고
     # 이 스크립트만으로 검증할 수 있게 하려는 것 — 운영 기본값은 MQ_ENABLED=false 다.
     os.environ["MQ_ENABLED"] = "true"
+    # 로컬 브로커엔 exchange 가 없으니 기본은 우리가 만든다. 운영과 같은 조건(있는 걸
+    # 확인만)으로 돌려보려면 MQ_DECLARE_TOPOLOGY=false 를 주면 된다 — setdefault 라
+    # 밖에서 준 값이 이긴다.
+    os.environ.setdefault("MQ_DECLARE_TOPOLOGY", "true")
+    # 로컬 브로커는 기본 vhost 가 "/" 다. 운영은 "/app" (MQ 컨벤션 §2.1 CRD).
+    os.environ.setdefault("MQ_VHOST", "/")
+    # 발행기가 companyId 없이는 안 보낸다 — 검증용 더미. 실제 값은 백엔드 대기 중.
+    os.environ.setdefault("MQ_COMPANY_ID", "SLN-smoketest")
     os.environ["MQ_HOST"] = args.host
     os.environ["MQ_PORT"] = str(args.port)
     os.environ["MQ_USER"] = args.user
