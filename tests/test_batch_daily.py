@@ -192,13 +192,20 @@ async def test_publish_failure_is_not_cached(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_window_end_is_taken_from_data_not_clock(tmp_path):
+async def test_window_end_is_taken_from_data_not_clock(tmp_path, monkeypatch):
     """로드·탐지·저장이 같은 window_end 를 쓴다.
 
     읽기가 실행 시각이면, 데이터가 뒤처진 상태에서 방금 저장한 캐시를 통째로 버려
     매 배치가 첫 실행처럼 굴러간다. (지인님 PR 리뷰 §5)
     """
     path = tmp_path / "state.json"
+
+    # 발행을 명시적으로 막는다. 예전엔 app.core.mq 가 없어서 import 폴백(no-op)이
+    # 대신 막아줬는데, 발행기가 생기면 실물이 불려 이 테스트가 MQ 상태에 딸려간다.
+    async def _sent(alert, rec, trace_id):
+        return None
+
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", _sent)
     await daily.run_batch(state_path=path, load_inputs=_stub_inputs)
 
     saved = json.loads(path.read_text(encoding="utf-8"))

@@ -38,6 +38,7 @@ from app.core.schemas import (
     Evaluator,
     EvaluatorChecks,
     HitlStatus,
+    LinkedCSInquiry,
     Proposal,
     ProposalType,
     Recommendation,
@@ -594,6 +595,36 @@ async def run(alert: DetectionAlert) -> Recommendation | None:
         )
 
     return assemble(alert, proposal, evaluator, context)
+
+
+async def generate_for_alert(
+    alert: DetectionAlert,
+    inquiries: list[LinkedCSInquiry],
+) -> Recommendation | None:
+    """배치 진입점 — 알림 1건에 개선안 1건. `run()`을 감싸고 예외를 삼킨다.
+
+    `run()`과 달리 **예외를 던지지 않는다.** 배치가 알림 20건을 도는 중에 1건이 터져도
+    나머지가 발행돼야 하고, 개선안 실패가 알림 발행까지 막으면 안 된다 — 실패하면
+    None 을 돌려주고 payload 의 `recommendation` 이 null 로 나간다.
+
+    게이트(`recommended_action != "개선안 생성"`)면 LLM 을 부르지 않고 None 이다.
+    호출부가 `should_generate()`로 미리 걸러도 되고(dry-run 호출 수 추정), 안 걸러도
+    결과는 같다.
+
+    Args:
+        alert: 탐지 알림.
+        inquiries: `alert.evidence.inquiry_ids` 로 원본 DB(`cs`·`reviews`)에서 조인해 온
+            CS 원문. `citations` 를 채우는 유일한 재료다.
+            ⚠️ 지금은 받아만 두고 쓰지 않는다 — `ClassifiedItem.item_id` 와 두 테이블 PK
+            의 연결이 미확인(백엔드 C4)이라 인용을 못 만든다. 가짜로 채우지 않는다.
+
+    Returns:
+        개선안. 게이트가 닫혔거나 생성이 실패하면 None.
+
+    Raises:
+        NotImplementedError: 미구현. **구현 후에는 아무 예외도 던지지 않는다.**
+    """
+    raise NotImplementedError("generate_for_alert 미구현 — Agent3 배치 진입점 작업 중")
 
 
 def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -> None:
