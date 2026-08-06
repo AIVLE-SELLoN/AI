@@ -19,7 +19,10 @@ from app.core.schemas import (
     DetectionAlert,
     DetectionConfidence,
     DetectionStats,
+    Evaluator,
+    EvaluatorChecks,
     Evidence,
+    Recommendation,
     RecommendedAction,
     Source,
     SourceSignals,
@@ -227,6 +230,19 @@ async def test_cs_inquiries_are_built_once_and_shared(tmp_path, monkeypatch):
 
     async def fake_recommendation(alert, inquiries):
         seen["개선안"] = inquiries
+        # None 을 돌려주면 "생성 실패"로 잡힌다(그건 아래 별도 테스트가 본다).
+        return Recommendation(
+            recommendation_id="REC-000000000001",
+            alert_id=alert.alert_id,
+            created_at=datetime(2026, 8, 28, 9, 0),
+            evaluator=Evaluator(
+                passed=True,
+                attempts=1,
+                checks=EvaluatorChecks(
+                    grounding=True, consistency=True, actionability=True
+                ),
+            ),
+        )
 
     async def fake_guideline(alert, inquiries, *, product_name=None):
         seen["가이드라인"] = inquiries
@@ -246,6 +262,34 @@ async def test_cs_inquiries_are_built_once_and_shared(tmp_path, monkeypatch):
     assert not summary["failures"], summary["failures"]
     assert isinstance(seen["개선안"], list)
     assert seen["개선안"] is seen["가이드라인"]
+
+
+@pytest.mark.asyncio
+async def test_silent_recommendation_failure_still_shows_up(tmp_path, monkeypatch):
+    """⚠️ 개선안이 조용히 실패해도 요약·종료코드에 남는다.
+
+    `generate_for_alert` 는 계약상 예외를 안 던지고 None 을 돌려준다. except 만 믿으면
+    개선안이 하나도 안 붙은 배치가 "성공"으로 끝나서 아무도 못 알아챈다.
+    알림 자체는 그대로 발행된다 — 개선안 없는 것과 알림이 안 가는 건 다르다.
+    """
+
+    async def always_fails(alert, inquiries):
+        return None
+
+    async def sent(alert, rec, trace_id):
+        return None
+
+    monkeypatch.setattr(daily, "should_generate", lambda _alert: True)
+    monkeypatch.setattr(daily, "generate_for_alert", always_fails)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json", load_inputs=_stub_inputs
+    )
+
+    assert summary["failures"], "조용한 실패가 요약에 남아야 한다"
+    assert all(f["stage"] == "개선안" for f in summary["failures"])
+    assert summary["delivered"] >= 1, "개선안이 없어도 알림은 발행된다"
 
 
 @pytest.mark.asyncio

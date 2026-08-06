@@ -468,6 +468,18 @@ async def run_batch(
                 failures.append(
                     {"alert_id": alert.alert_id, "stage": "개선안", "error": repr(exc)}
                 )
+            # ⚠️ `generate_for_alert` 는 **계약상 예외를 안 던지고** 실패를 None 으로
+            #    돌려준다. 위 except 만 두면 실패가 요약에도 종료코드에도 안 남아서,
+            #    개선안이 하나도 안 붙은 배치가 "성공"으로 끝난다. 게이트를 통과한
+            #    알림인데 None 이면 그건 실패다 — 사유는 pipeline 이 로그로 남긴다.
+            if rec is None:
+                failures.append(
+                    {
+                        "alert_id": alert.alert_id,
+                        "stage": "개선안",
+                        "error": "생성 실패 — 사유는 app.recommendation.pipeline 로그 참고",
+                    }
+                )
 
         try:
             guideline = await generate_guideline(alert, inquiries)

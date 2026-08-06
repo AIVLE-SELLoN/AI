@@ -22,6 +22,7 @@ grounding이 MAX_RETRY번 실패했을 때 타는 별도 개념)는 다르다. �
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +53,8 @@ from app.core.vectordb import (
     query_documents,
 )
 from app.recommendation.grounding import has_evidence, verify_grounding
+
+logger = logging.getLogger(__name__)
 
 NO_DETAIL_TEXT = "정보 없음"
 """상세페이지 미등록/빈 값 표기(§4-1·§4-5) — 근거없음 경로를 유발하는 값이라 상수로 뺀다."""
@@ -601,30 +604,49 @@ async def generate_for_alert(
     alert: DetectionAlert,
     inquiries: list[LinkedCSInquiry],
 ) -> Recommendation | None:
-    """배치 진입점 — 알림 1건에 개선안 1건. `run()`을 감싸고 예외를 삼킨다.
+    """배치 진입점 — 알림 1건에 개선안 1건. `run()`을 감싸고 실패를 흡수한다.
 
-    `run()`과 달리 **예외를 던지지 않는다.** 배치가 알림 20건을 도는 중에 1건이 터져도
-    나머지가 발행돼야 하고, 개선안 실패가 알림 발행까지 막으면 안 된다 — 실패하면
-    None 을 돌려주고 payload 의 `recommendation` 이 null 로 나간다.
+    `run()`과 달리 **예외를 던지지 않는다.** 배치가 알림 20건을 도는 중이라, 개선안
+    1건의 실패가 밖으로 나가면 그 알림의 **발행까지 막힌다** — 셀러는 개선안이 아니라
+    이상 알림 자체를 못 받게 된다. 실패하면 None 을 돌려주고 payload 의
+    `recommendation` 이 null 로 나간다(조치 6종에서 이미 정상인 값이다).
 
     게이트(`recommended_action != "개선안 생성"`)면 LLM 을 부르지 않고 None 이다.
-    호출부가 `should_generate()`로 미리 걸러도 되고(dry-run 호출 수 추정), 안 걸러도
-    결과는 같다.
+    호출부가 `should_generate()`로 미리 걸러도 되고(배치 dry-run 이 그렇게 센다),
+    안 걸러도 결과는 같다.
+
+    ⚠️ **`asyncio.CancelledError` 는 삼키지 않는다.** BaseException 이라 아래 `except
+    Exception` 에 안 걸리는데, 이게 의도다 — 배치를 중단시켰는데 취소가 "개선안 실패"로
+    둔갑해 루프가 계속 돌면 안 된다.
 
     Args:
         alert: 탐지 알림.
-        inquiries: `alert.evidence.inquiry_ids` 로 원본 DB(`cs`·`reviews`)에서 조인해 온
-            CS 원문. `citations` 를 채우는 유일한 재료다.
-            ⚠️ 지금은 받아만 두고 쓰지 않는다 — `ClassifiedItem.item_id` 와 두 테이블 PK
-            의 연결이 미확인(백엔드 C4)이라 인용을 못 만든다. 가짜로 채우지 않는다.
+        inquiries: `alert.evidence.inquiry_ids` 에 해당하는 CS 원문
+            (`app/core/inquiries.py` 가 만든다). 배치가 가이드라인과 **같은 리스트**를
+            넘긴다.
+            ⚠️ 지금은 받아만 두고 쓰지 않는다. 쓸 자리가 두 곳인데 둘 다 막혀 있다:
+            ① `citations` — `ClassifiedItem.item_id` 와 `cs`·`reviews` PK 연결이
+              미확인(백엔드 C4)이라 `Citation.inquiry_id` 를 정직하게 못 만든다.
+            ② `_summarize_cs_evidence()` — 여기에 실제 원문을 넣으면 image_guide 의
+              근거가 통계 요약에서 진짜 인용으로 바뀐다. 프롬프트와 grounding 대조
+              대상이 같이 바뀌는 **동작 변경**이라 LLM 실행 검증이 필요하다.
 
     Returns:
         개선안. 게이트가 닫혔거나 생성이 실패하면 None.
-
-    Raises:
-        NotImplementedError: 미구현. **구현 후에는 아무 예외도 던지지 않는다.**
     """
-    raise NotImplementedError("generate_for_alert 미구현 — Agent3 배치 진입점 작업 중")
+    if not should_generate(alert):
+        return None
+
+    try:
+        return await run(alert)
+    except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
+        # 배치 요약에는 "개선안 없음"으로만 남으므로 사유는 여기서 남겨야 추적된다.
+        logger.warning(
+            "개선안 생성 실패 alert=%s — recommendation 없이 발행합니다: %r",
+            alert.alert_id,
+            exc,
+        )
+        return None
 
 
 def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -> None:
