@@ -35,7 +35,12 @@ import sys
 
 from app.config import get_settings
 from app.core.exceptions import AiServiceError
-from app.core.mq_consumer import consume
+from app.core.mq_consumer import (
+    HANDLERS,
+    RECOMMENDATION_REVIEWED,
+    consume,
+    register_handler,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +48,22 @@ EXIT_CONFIG_ERROR = 2
 EXIT_RUNTIME_ERROR = 1
 
 
+def _wire_handlers() -> None:
+    """처리 함수를 컨슈머에 꽂는다. **core 가 컴포넌트를 모르게 하는 배선 지점이다.**
+
+    리포팅(`feedback.report.created`)도 담당자가 함수를 만들면 여기 한 줄로 붙는다.
+    등록 안 된 이벤트는 ACK 하지 않고 DLX 로 보낸다 — 처리한 적 없는 걸 처리했다고
+    하면 그 메시지가 사라진다.
+    """
+    from app.recommendation.service import handle_recommendation_reviewed
+
+    register_handler(RECOMMENDATION_REVIEWED, handle_recommendation_reviewed)
+    logger.info("등록된 처리 함수: %s", ", ".join(sorted(HANDLERS)))
+
+
 async def _run() -> None:
     """컨슈머를 띄우고 종료 신호를 기다린다."""
+    _wire_handlers()
     task = asyncio.create_task(consume())
 
     # SIGTERM 은 컨테이너 종료 신호다. 윈도우 이벤트 루프는 이 API 가 없어서 무시한다

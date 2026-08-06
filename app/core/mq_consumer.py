@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
@@ -55,7 +56,7 @@ class RecommendationReviewed(BaseModel):
     recommendation: Recommendation | None = None
 
 
-def _load_hitl_context(
+def load_hitl_context(
     event: RecommendationReviewed,
 ) -> tuple[DetectionAlert, Recommendation]:
     """이벤트 → `record_hitl_outcome()` 이 요구하는 (alert, recommendation).
@@ -89,32 +90,20 @@ def _load_hitl_context(
     return event.alert, recommendation
 
 
-def handle_recommendation_reviewed(payload: dict) -> None:
-    """승인/반려 1건을 컬렉션2에 적재한다.
+HANDLERS: dict[str, Callable[[dict], None]] = {}
+"""eventType → 처리 함수. **비어 있는 채로 시작한다.**
 
-    Raises:
-        ValidationError: payload 가 계약과 다름.
-        HitlContextUnavailableError: 적재 재료 부족(`_load_hitl_context` 참고).
-        ValueError: `record_hitl_outcome()` 의 정합성 검사 실패(서로 다른 건 / 대기 상태).
-    """
-    # 순환 import 방지 — recommendation 이 core 를 import 하므로 반대 방향은 함수 안에서.
-    from app.recommendation.pipeline import record_hitl_outcome
+core 가 컴포넌트(`app/recommendation/` 등)를 import 하면 의존 방향이 거꾸로 뒤집힌다
+(팀 규칙: 각 컴포넌트가 core 에서 가져다 쓴다). 그래서 core 는 "무엇을 처리할지"를
+모르고, 실행 진입점(`app/consumer.py`)이 시작할 때 등록해 준다.
 
-    event = RecommendationReviewed.model_validate(payload)
-    alert, recommendation = _load_hitl_context(event)
-    record_hitl_outcome(alert, recommendation)
-    logger.info(
-        "HITL 적재 완료 recommendation_id=%s status=%s",
-        event.recommendation_id,
-        event.hitl_status.value,
-    )
+`feedback.report.created`(리포팅) 도 같은 방식으로 붙이면 된다. 등록되기 전까지 그
+이벤트는 DLX 로 간다 — 우리가 ACK 해버리면 담당자가 영영 못 받는다."""
 
 
-HANDLERS: dict[str, Any] = {
-    RECOMMENDATION_REVIEWED: handle_recommendation_reviewed,
-    # REPORT_CREATED 는 리포팅(용준) 담당이라 아직 없다. 여기 등록되기 전까지 그 이벤트는
-    # DLX 로 간다 — 우리가 ACK 해버리면 용준 쪽에서 영영 못 받는다.
-}
+def register_handler(event_type: str, handler: Callable[[dict], None]) -> None:
+    """이벤트 처리 함수를 등록한다. 같은 `event_type` 이면 덮어쓴다."""
+    HANDLERS[event_type] = handler
 
 
 async def dispatch(event_type: str, body: bytes) -> None:

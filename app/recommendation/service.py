@@ -8,6 +8,7 @@ graph.ainvoke()를 호출하도록 바뀔 예정이며, router.py는 이 함수�
 
 from __future__ import annotations
 
+from app.core.mq_consumer import RecommendationReviewed, load_hitl_context
 from app.core.schemas import DetectionAlert, Recommendation
 from app.recommendation import pipeline
 
@@ -27,4 +28,21 @@ def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -
     Raises:
         ValueError: pipeline.record_hitl_outcome 참고.
     """
+    pipeline.record_hitl_outcome(alert, recommendation)
+
+
+def handle_recommendation_reviewed(payload: dict) -> None:
+    """`feedback.recommendation.reviewed` 1건을 컬렉션2에 적재한다.
+
+    컨슈머(`app/core/mq_consumer.py`)가 부르지만 **core 가 이 함수를 알지는 않는다** —
+    실행 진입점(`app/consumer.py`)이 `register_handler()` 로 꽂아 준다. core 가
+    recommendation 을 import 하면 의존 방향이 거꾸로 뒤집히기 때문이다.
+
+    Raises:
+        ValidationError: payload 가 계약과 다름 (§8).
+        HitlContextUnavailableError: 적재 재료 부족 — `load_hitl_context()` 참고.
+        ValueError: alert/recommendation 이 서로 다른 건이거나 아직 대기 상태.
+    """
+    event = RecommendationReviewed.model_validate(payload)
+    alert, recommendation = load_hitl_context(event)
     pipeline.record_hitl_outcome(alert, recommendation)

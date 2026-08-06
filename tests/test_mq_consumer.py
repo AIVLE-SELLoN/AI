@@ -4,6 +4,7 @@
 """
 
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -136,7 +137,7 @@ def test_missing_context_is_loud_not_silent():
     event = mq_consumer.RecommendationReviewed.model_validate(_payload())
 
     with pytest.raises(HitlContextUnavailableError, match=REC_ID):
-        mq_consumer._load_hitl_context(event)
+        mq_consumer.load_hitl_context(event)
 
 
 def test_event_hitl_values_win_over_embedded_copy():
@@ -153,7 +154,7 @@ def test_event_hitl_values_win_over_embedded_copy():
 
     assert event.recommendation.hitl_status == HitlStatus.PENDING  # 사본은 대기
 
-    _alert_out, recommendation = mq_consumer._load_hitl_context(event)
+    _alert_out, recommendation = mq_consumer.load_hitl_context(event)
 
     assert recommendation.hitl_status == HitlStatus.REJECTED
     assert recommendation.hitl_feedback.processed_by == "seller_001"
@@ -197,24 +198,33 @@ async def test_unhandled_event_type_raises_instead_of_acking():
         await mq_consumer.dispatch(mq_consumer.REPORT_CREATED, body)
 
 
+def test_core_does_not_import_components():
+    """⚠️ core 는 컴포넌트를 import 하지 않는다 (팀 규칙: 컴포넌트가 core 에서 가져다 쓴다).
+
+    처리 함수는 실행 진입점이 `register_handler()` 로 꽂아 준다. 여기서 core 가
+    `app.recommendation` 을 직접 부르기 시작하면 의존 방향이 거꾸로 뒤집힌다.
+    """
+    source = Path(mq_consumer.__file__).read_text(encoding="utf-8")
+
+    assert "app.recommendation" not in source
+    assert "app.reporting" not in source
+
+
 @pytest.mark.asyncio
-async def test_handler_records_hitl_outcome(monkeypatch):
-    """전문이 실려 오면 컬렉션2 적재 함수까지 연결된다."""
-    recorded: dict = {}
+async def test_register_handler_makes_dispatch_work(monkeypatch):
+    """등록한 이벤트만 처리된다 — 배선이 실제로 먹는지 확인한다."""
+    seen: dict = {}
 
-    def fake_record(alert, recommendation):
-        recorded["alert_id"] = alert.alert_id
-        recorded["status"] = recommendation.hitl_status
+    def handler(payload: dict) -> None:
+        seen["payload"] = payload
 
-    monkeypatch.setattr("app.recommendation.pipeline.record_hitl_outcome", fake_record)
-    payload = _payload(
-        alert=_alert().model_dump(mode="json"),
-        recommendation=_recommendation().model_dump(mode="json"),
-    )
+    # 전역 등록표를 복사본으로 바꿔 다른 테스트에 새지 않게 한다.
+    monkeypatch.setattr(mq_consumer, "HANDLERS", dict(mq_consumer.HANDLERS))
+    mq_consumer.register_handler("feedback.test", handler)
 
-    mq_consumer.handle_recommendation_reviewed(payload)
+    await mq_consumer.dispatch("feedback.test", b'{"payload": {"x": 1}}')
 
-    assert recorded == {"alert_id": ALERT_ID, "status": HitlStatus.REJECTED}
+    assert seen["payload"] == {"x": 1}
 
 
 # ── 토폴로지 소유권 ──────────────────────────────────────────────
