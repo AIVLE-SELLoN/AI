@@ -19,3 +19,15 @@ class EvidenceNotFoundError(AiServiceError):
 
 class VectorDbError(AiServiceError):
     """벡터DB 조회/적재 실패."""
+
+
+class MqDisabledError(AiServiceError):
+    """MQ_ENABLED=false — 발행하지 않았다.
+
+    no-op 이 아니라 예외인 이유: 호출부가 예외 없음을 발행 성공으로 보고 그 알림을
+    prior_alerts 캐시에 넣는다. 조용히 넘기면 안 나간 알림이 7일간 억제된다.
+    """
+
+
+class MqPublishError(AiServiceError):
+    """MQ 접속·발행 실패. 재시도 대상(다음 배치가 다시 시도한다)."""

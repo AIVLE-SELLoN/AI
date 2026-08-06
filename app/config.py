@@ -32,6 +32,19 @@ class Settings(BaseSettings):
     # 값이 있으면 로컬 파일 모드(PersistentClient), 없으면 HTTP 모드(HttpClient)
     chroma_persist_dir: str = ""
 
+    # --- RabbitMQ (docs/mq_events.md) ---
+    # 접속 정보는 백엔드 대기 중(C1)이라 빈 기본값이다. mq_enabled 가 꺼져 있으면
+    # 발행 함수가 예외를 던진다 — 안 보낸 메시지를 성공으로 기록하지 않기 위해서다.
+    # 로컬 검증은 docker-compose 의 rabbitmq 로 한다(.env.example 참고).
+    mq_enabled: bool = False
+    mq_host: str = ""
+    mq_port: int = 5672
+    mq_user: str = ""
+    mq_password: str = ""
+    mq_vhost: str = "/"
+    mq_exchange: str = "app.events"
+    mq_publish_timeout_seconds: int = 10
+
     # --- 앱 ---
     log_level: str = "INFO"
 
