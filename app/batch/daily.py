@@ -18,11 +18,18 @@
     python -m app.batch.daily --dry-run          # LLM 0회, 호출 횟수만 실측
     python -m app.batch.daily --max-alerts 3     # 비용 상한
     python -m app.batch.daily --window-end 2026-08-28
+    python -m app.batch.daily --input-source golden --dry-run   # 평가·재현 (oracle)
 
 ⚠️ 인프라가 아직 없다 (RabbitMQ · `classified_item` 테이블). 그래서 입력은 **주입**
-   받는 형태로 두고 지금은 CSV 로 읽는다 — `load_inputs()` 하나만 DB 로 갈아끼우면 된다.
+   받는 형태로 뒀다 — `run_batch(load_inputs=...)`. 기본값 `load_inputs_from_db()` 는
+   rawDB 스키마 §5 확정 전까지 NotImplementedError 다.
    발행·개선안·가이드라인 함수도 아직 없어서 import 폴백으로 뒀다. 담당자가 만들면
    **이 파일 수정 없이** 자동으로 연결된다.
+
+🔴 **이 모듈은 `data/golden/` 을 읽지 않는다.** `eval/README.md` §232("`data/golden/`
+   은 `eval/` 만 읽는다 — `app/` 이 import 하면 컨닝이다")를 지키기 위해 골든 로더를
+   `scripts/golden_inputs.py` 로 뺐다(2026-08-06). 평가·재현으로 배치를 돌릴 때만
+   `--input-source golden` 으로 주입하고, 그때는 요약이 oracle 경고를 함께 낸다.
 """
 
 from __future__ import annotations
@@ -33,12 +40,13 @@ import json
 import logging
 import uuid
 from collections import Counter
+from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
-from app.core.schemas import AspectSentiment, ClassifiedItem, DetectionAlert
+from app.core.schemas import ClassifiedItem, DetectionAlert
 from app.detection.loader import check_coverage, unreliable_slots
 from app.detection.service import detect_anomaly
 
@@ -182,96 +190,27 @@ class _CountingClient:
 # ── 입력 ────────────────────────────────────────────────────────
 
 
-def _read_csv(rel: str) -> list[dict]:
-    import csv
+def load_inputs_from_db() -> tuple[list[ClassifiedItem], list[dict]]:
+    """(items, documents) 를 원본 DB 에서 읽는다. **기본 입력원.**
 
-    with (ROOT / rel).open(encoding="utf-8-sig", newline="") as f:
-        return list(csv.DictReader(f))
+    items 는 워커가 분류해 `classified_item` 에 넣은 결과, documents 는 `cs`·`reviews`
+    원문이다. 둘을 따로 읽는 이유는 **분모가 documents 에서 나와야 하기 때문**이다 —
+    리뷰는 aspect 0개면 `classified_item` 에 행이 아예 없어서(`explode_to_rows` 가
+    aspect 마다 1행), items 로 분모를 세면 그 문서가 통째로 빠지고 부정률이 부풀려진다
+    (탐지 분모 산출 방식 §1).
 
+    ⚠️ **아직 구현할 수 없다.** rawDB 스키마 §5(`item_id` 연결 방식, `mapped_data`
+       컬럼명)가 미확정이고 `classified_item` 테이블이 실재하지 않는다. 확정되면
+       여기만 채우면 되고, `run_batch(load_inputs=...)` 시그니처는 그대로다.
 
-def load_inputs() -> tuple[list[ClassifiedItem], list[dict]]:
-    """(items, documents) 를 만든다. **여기만 DB 로 갈아끼우면 된다.**
-
-    지금은 CSV 를 읽는다 — `raw_event` 도 `classified_item` 도 아직 실재하지 않는다.
-    분류를 태우지 않고 golden 라벨을 oracle 로 쓰므로 LLM 비용이 0 이고, 배치 골격을
-    인프라 없이 돌려볼 수 있다.
-
-    Returns:
-        items:     분자의 출처 (ClassifiedItem)
-        documents: **분모의 출처** (원본 문서). 리뷰는 aspect 0개면 classified_item 에
-                   행이 아예 없어서, items 로 분모를 세면 그 문서가 통째로 빠진다.
+    평가·재현으로 배치를 돌리려면 `scripts/golden_inputs.load_golden_inputs` 를
+    주입한다 — 골든을 `app/` 안에서 읽지 않기 위해 밖으로 뺐다(eval/README §232).
     """
-    variant_group = {
-        r["variant_row_id"]: r["golden_group_id"]
-        for r in _read_csv("data/golden/golden_mapping.csv")
-    }
-    product_of: dict[tuple[str, str], str] = {}
-    for r in _read_csv("data/input/input_channel_products.csv"):
-        group = variant_group.get(r["variant_row_id"])
-        if group:
-            product_of.setdefault((r["channel"], r["channel_product_id"]), group)
-
-    items: list[ClassifiedItem] = []
-    documents: list[dict] = []
-
-    # ⚠️ **CS 와 리뷰를 둘 다 읽어야 한다.** 한쪽만 넣으면 [8] 종합이 성립하지 않아
-    #    source_signals 한쪽이 영원히 null 이 되고, BH family 도 절반으로 줄어
-    #    컷오프가 달라진다(실측: CS 만 756검정 / 둘 다 1,464검정).
-    sources = [
-        (
-            "cs",
-            "data/input/input_cs_inquiries.csv",
-            "data/golden/golden_cs_labels.csv",
-            "inquiry_id",
-            "inquired_at",
-        ),
-        (
-            "review",
-            "data/input/input_reviews.csv",
-            "data/golden/golden_review_labels.csv",
-            "review_id",
-            "created_at",
-        ),
-    ]
-
-    for source, input_csv, golden_csv, id_key, time_key in sources:
-        labels = {r[id_key]: r for r in _read_csv(golden_csv)}
-        for r in _read_csv(input_csv):
-            product = product_of.get((r["channel"], r["channel_product_id"]))
-            if product is None:
-                continue
-
-            label = labels.get(r[id_key], {})
-            aspects = []
-            if label.get("true_aspect"):
-                aspects.append(
-                    AspectSentiment(
-                        aspect=label["true_aspect"],
-                        sentiment=int(label["true_sentiment"]),
-                    )
-                )
-            items.append(
-                ClassifiedItem(
-                    item_id=r[id_key],
-                    source=source,
-                    channel=r["channel"],
-                    product_group_id=product,
-                    raw_text=r["content"],
-                    aspects=aspects,
-                    created_at=r[time_key],
-                )
-            )
-            documents.append(
-                {
-                    "id": r[id_key],
-                    "product": product,
-                    "channel": r["channel"],
-                    "source": source,
-                    "created_at": r[time_key],
-                    "text": r["content"],
-                }
-            )
-    return items, documents
+    raise NotImplementedError(
+        "classified_item 테이블 미구현 (rawDB 스키마 §5 확정 대기). "
+        "평가·재현은 run_batch(load_inputs=scripts.golden_inputs.load_golden_inputs) "
+        "로 주입할 것 — 그 입력은 oracle 이라 결과가 탐지 성능이 아니다."
+    )
 
 
 # ── 발행 기록 캐시 ──────────────────────────────────────────────
@@ -325,6 +264,7 @@ async def run_batch(
     max_alerts: int | None = None,
     dry_run: bool = False,
     state_path: Path = STATE_PATH,
+    load_inputs: Callable[[], tuple[list[ClassifiedItem], list[dict]]] | None = None,
 ) -> dict:
     """탐지 → 개선안 → 가이드라인 → 발행. 배치 1회.
 
@@ -333,15 +273,20 @@ async def run_batch(
         max_alerts: Agent3·가이드라인에 태울 alert 수 상한 (비용 통제).
         dry_run: LLM 을 한 번도 부르지 않고 **몇 번 부를지만 실측**한다.
         state_path: 발행 기록 캐시 경로 (테스트 주입용).
+        load_inputs: 입력원. 기본은 원본 DB(`load_inputs_from_db`).
+            평가·재현은 `scripts.golden_inputs.load_golden_inputs` 를 주입한다.
+            **골든을 주입하면 분류 오차가 0 이라 결과가 탐지 성능이 아니다** —
+            요약에 그 경고가 함께 출력된다.
 
     Returns:
         배치 요약 dict. 실패는 모아서 담고 **중간에 던지지 않는다.**
     """
+    loader = load_inputs or load_inputs_from_db
     trace_id = new_trace_id()
     started = datetime.now()
     logger.info("배치 시작 trace_id=%s dry_run=%s", trace_id, dry_run)
 
-    items, documents = load_inputs()
+    items, documents = loader()
     gaps = unreliable_slots(check_coverage(documents, items))
     if gaps:
         logger.warning("분류 커버리지 미달 %d슬롯 — 검정에서 제외됩니다", len(gaps))
@@ -432,6 +377,10 @@ async def run_batch(
     return {
         "trace_id": trace_id,
         "dry_run": dry_run,
+        # 입력원을 결과에 박아둔다 — 골든(oracle)으로 돌린 숫자를 "탐지 성능"으로
+        # 인용하는 사고를 막는 게 목적이다. eval/README §68 이 실험① 에 붙인 경고와
+        # 같은 이유이고, 거기서는 사람이 문서에 적었지만 여기서는 코드가 매번 낸다.
+        "input_source": getattr(loader, "__name__", str(loader)),
         "elapsed_sec": round((datetime.now() - started).total_seconds(), 1),
         "items": len(items),
         "documents": len(documents),
@@ -454,7 +403,10 @@ def print_summary(summary: dict) -> None:
     print("=" * 62)
     print(
         f"  입력          items {summary['items']} / documents {summary['documents']}"
+        f"  [{summary['input_source']}]"
     )
+    if summary["input_source"] == "load_golden_inputs":
+        print("  ⚠️ 골든 라벨(oracle) 입력 — 분류 오차 0%. 이 숫자는 탐지 성능이 아니다.")
     print(f"  prior_alerts  {summary['prior_alerts']}건")
     print(f"  발행          {summary['published']}건")
     print(f"  억제          {summary['suppressed']}건  ← 발행 아님")
@@ -497,7 +449,22 @@ def main() -> None:
     ap.add_argument(
         "--dry-run", action="store_true", help="LLM 0회 — 몇 번 부를지만 실측한다"
     )
+    ap.add_argument(
+        "--input-source",
+        choices=["db", "golden"],
+        default="db",
+        help="db(기본, 운영) / golden(평가·재현 전용 — scripts/golden_inputs.py)."
+        " golden 은 분류 오차가 0 이라 결과가 탐지 성능이 아니다. 요약이 경고를 낸다.",
+    )
     args = ap.parse_args()
+
+    loader = None
+    if args.input_source == "golden":
+        # app/ 안에서 골든을 읽지 않기 위해 **여기서만** 늦게 import 한다
+        # (eval/README §232). 모듈 최상단에 두면 운영 import 경로에 골든이 딸려온다.
+        from scripts.golden_inputs import load_golden_inputs
+
+        loader = load_golden_inputs
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s"
@@ -507,6 +474,7 @@ def main() -> None:
             window_end=date.fromisoformat(args.window_end) if args.window_end else None,
             max_alerts=args.max_alerts,
             dry_run=args.dry_run,
+            load_inputs=loader,
         )
     )
     print_summary(summary)
