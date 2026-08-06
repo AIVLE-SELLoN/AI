@@ -31,3 +31,13 @@ class MqDisabledError(AiServiceError):
 
 class MqPublishError(AiServiceError):
     """MQ 접속·발행 실패. 재시도 대상(다음 배치가 다시 시도한다)."""
+
+
+class HitlContextUnavailableError(AiServiceError):
+    """HITL 이벤트에 alert·recommendation 전문이 없어 컬렉션2에 적재할 수 없다.
+
+    `record_hitl_outcome()` 은 "원인 라벨 + CS 요약 + 개선안 본문"으로 문서를 만드는데
+    (§4-2), `feedback.recommendation.reviewed` payload 에는 ID 4개뿐이라 그 재료가 없다.
+    조용히 넘기지 않는 이유: 이 이벤트가 **컬렉션2 축적의 유일한 경로**라 새면 학습
+    자료가 영영 안 쌓이는데 아무도 모른다.
+    """

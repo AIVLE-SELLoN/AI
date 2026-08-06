@@ -108,6 +108,108 @@ def _build_fixtures():
     return alert, rec, callback
 
 
+async def run_feedback(args: argparse.Namespace) -> int:
+    """메인 → AI 방향(`feedback.#` → `ai.inbound`)을 실제 브로커로 한 바퀴 돌린다.
+
+    백엔드 컨슈머가 없으므로 **우리가 메인 서버 흉내를 내서** 이벤트를 쏘고, 우리
+    컨슈머가 그걸 실제로 꺼내 처리하는지 본다. 컬렉션2(Chroma)에 진짜로 쓰지는
+    않는다 — 적재 함수를 가로채서 "여기까지 연결됐다"만 확인한다.
+    """
+    from aio_pika import DeliveryMode, ExchangeType, Message, connect_robust
+
+    import app.recommendation.pipeline as pipeline_module
+    from app.config import get_settings
+    from app.core import mq, mq_consumer
+
+    settings = get_settings()
+    alert, rec, _callback = _build_fixtures()
+
+    recorded: list = []
+    pipeline_module.record_hitl_outcome = lambda a, r: recorded.append(
+        (a.alert_id, r.hitl_status.value)
+    )
+
+    payload = {
+        "recommendation_id": rec.recommendation_id,
+        "alert_id": alert.alert_id,
+        "hitl_status": "반려",
+        "hitl_feedback": {
+            "processed_at": "2026-08-29T09:11:50Z",
+            "processed_by": "seller_smoke",
+            "rejection_reason": {
+                "reason_code": "이미조치함",
+                "reason_text": "지난주에 상세페이지 이미 수정했습니다",
+            },
+            "edited_text": None,
+        },
+        # ⚠️ 계약(§8)에 없는 확장 필드다. 없으면 컬렉션2 적재 자체가 불가능해서
+        #    백엔드에 요청 중인 상태 — `_load_hitl_context()` 주석 참고.
+        "alert": alert.model_dump(mode="json"),
+        "recommendation": rec.model_dump(mode="json"),
+    }
+    envelope = {
+        "eventId": "smoke-feedback-0001",
+        "eventType": mq_consumer.RECOMMENDATION_REVIEWED,
+        "occurredAt": "2026-08-29T09:12:00.000Z",
+        "source": "main-server",
+        "traceId": mq.new_trace_id(),
+        "payload": payload,
+    }
+
+    connection = await connect_robust(
+        host=settings.mq_host,
+        port=settings.mq_port,
+        login=settings.mq_user,
+        password=settings.mq_password,
+        virtualhost=settings.mq_vhost,
+    )
+    async with connection:
+        channel = await connection.channel()
+        exchange = await channel.declare_exchange(
+            settings.mq_exchange, ExchangeType.TOPIC, durable=True
+        )
+        # 운영 큐 이름을 그대로 쓰되 검증용으로 auto_delete. 바인딩은 실제와 같은 feedback.#
+        queue = await channel.declare_queue(
+            "smoke.feedback.inbound", durable=False, auto_delete=True
+        )
+        await queue.bind(exchange, routing_key=mq_consumer.FEEDBACK_BINDING)
+        print(
+            f"큐 smoke.feedback.inbound 준비 완료 (바인딩 {mq_consumer.FEEDBACK_BINDING})"
+        )
+
+        await exchange.publish(
+            Message(
+                json.dumps(envelope, ensure_ascii=False).encode("utf-8"),
+                content_type="application/json",
+                delivery_mode=DeliveryMode.PERSISTENT,
+                type=envelope["eventType"],
+            ),
+            routing_key=mq_consumer.RECOMMENDATION_REVIEWED,
+        )
+        print(f"  발행(메인 서버 흉내) {mq_consumer.RECOMMENDATION_REVIEWED}")
+
+        try:
+            async with asyncio.timeout(args.timeout):
+                async with queue.iterator() as messages:
+                    async for message in messages:
+                        await mq_consumer.dispatch(
+                            message.type or message.routing_key or "", message.body
+                        )
+                        await message.ack()
+                        break
+        except TimeoutError:
+            print(f"\n❌ {args.timeout}초 안에 못 받았습니다")
+            return 1
+
+    if recorded != [(alert.alert_id, "반려")]:
+        print(f"\n❌ 적재까지 도달하지 못했습니다: {recorded}")
+        return 1
+
+    print(f"\n  컬렉션2 적재 호출됨: {recorded[0]}")
+    print("\n✅ 메인 → AI 수신 → HITL 적재까지 통과했습니다.")
+    return 0
+
+
 async def run(args: argparse.Namespace) -> int:
     from aio_pika import ExchangeType, connect_robust
 
@@ -234,6 +336,11 @@ def main() -> None:
     ap.add_argument("--user", default="sellon")
     ap.add_argument("--password", default="sellon")
     ap.add_argument("--timeout", type=float, default=10.0, help="수신 대기 상한(초)")
+    ap.add_argument(
+        "--feedback",
+        action="store_true",
+        help="메인 → AI 방향(feedback.# → ai.inbound)을 검증한다. 기본은 AI → 메인.",
+    )
     args = ap.parse_args()
 
     # 윈도우 콘솔 기본 코드페이지(cp949)는 한글은 되지만 em대시 같은 문자에서 터진다.
@@ -249,7 +356,7 @@ def main() -> None:
     os.environ["MQ_USER"] = args.user
     os.environ["MQ_PASSWORD"] = args.password
 
-    sys.exit(asyncio.run(run(args)))
+    sys.exit(asyncio.run(run_feedback(args) if args.feedback else run(args)))
 
 
 if __name__ == "__main__":
