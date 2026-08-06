@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -45,12 +44,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # 서로 안 맞게 된다. 같은 폴더의 형제 모듈이라 sys.path 로 잡는다.
 from check_agent1_to_agent2 import DAY1, read
 
+# dry-run 스텁은 배치(app/batch/daily.py)와 **같은 것을 쓴다.** 복제하면 한쪽만
+# 고쳤을 때 두 도구의 실측 호출 수가 갈린다 (지인님 PR 리뷰, 2026-08-06).
+from app.batch.daily import STUB_CAUSE, CountingClient
 from app.core.schemas import (
     AspectSentiment,
     ClassifiedItem,
     DetectionAlert,
     RecommendedAction,
 )
+from app.detection.loader import check_coverage, unreliable_slots
 from app.detection.service import detect_anomaly
 from app.recommendation.pipeline import (
     NO_DETAIL_TEXT,
@@ -59,57 +62,29 @@ from app.recommendation.pipeline import (
     should_generate,
 )
 
-# 스텁이 돌려줄 원인 라벨. SCOPE_LIMIT_LABELS(실물_염색_편차·실제_원단_문제)를 피한다 —
-# 그 라벨이면 Agent3 가 라우팅·생성을 통째로 건너뛰어 호출 수 추정이 실제와 어긋난다.
-STUB_CAUSE = "사진_색감_오차"
+_ = STUB_CAUSE  # 리포트 문구가 이 값을 인용한다
 
 
-class CountingClient:
-    """LLM 을 부르지 않고 호출 횟수만 세는 스텁. --dry-run 전용.
-
-    detect_anomaly(client=...) 에 주입하면 [6] 원인분류가 **실제로 몇 번 불릴지**를
-    돈 한 푼 안 쓰고 실측할 수 있다. 후보 수를 눈으로 세는 추정이 아니라, 실제 판정
-    로직이 부르는 횟수 그대로다.
-
-    프롬프트에 박힌 cs_id 를 그대로 되돌려준다 — 개수를 맞춰야 root_cause.total 과
-    evidence.inquiry_ids 가 현실적인 크기로 나오고, 그래야 recommended_action 이
-    실제와 비슷하게 산출된다.
-    """
-
-    def __init__(self) -> None:
-        self.calls = 0
-        self.empty_extractions = 0
-
-    async def complete_json(self, prompt: str, *, trace_key: str = "-", **_: object) -> dict:
-        self.calls += 1
-        cs_ids = re.findall(r'"cs_id"\s*:\s*"([^"]+)"', prompt)
-        if not cs_ids:
-            # 프롬프트 포맷이 바뀌면 여기가 조용히 0개가 되고, root_cause 가 미특정으로
-            # 빠져 게이트 통과 수(=Agent3 호출 수)를 실제보다 적게 추정하게 된다.
-            self.empty_extractions += 1
-        return {
-            "results": [
-                {
-                    "cs_id": cs_id,
-                    "cause": STUB_CAUSE,
-                    "confidence": 0.9,
-                    "evidence": "",
-                    "aspect_match": True,
-                }
-                for cs_id in cs_ids
-            ]
-        }
-
-
-def build_items(only_products: set[str] | None) -> tuple[list[ClassifiedItem], int]:
-    """golden 라벨로 ClassifiedItem 을 만든다. LLM 을 부르지 않는다.
+def build_items(
+    only_products: set[str] | None,
+) -> tuple[list[ClassifiedItem], list[dict], int]:
+    """golden 라벨로 ClassifiedItem 과 **원본 문서 목록**을 만든다. LLM 을 부르지 않는다.
 
     (channel, channel_product_id) → golden_group_id 매핑을 태워서 상품을 붙인다.
     golden 라벨이 없는 문의는 aspects=[] 로 들어간다 — 분모에는 들고 분자에는 안 드는
     정상 케이스라 버리지 않는다.
 
+    ⚠️ documents 를 함께 내는 이유 — **운영과 같은 분모 경로를 타기 위해서다.**
+    `detect_anomaly()` 는 documents 를 받으면 `loader.build_rows()` 로 원본에서 분모를
+    세고, 안 받으면 `normalize(items)` 로 items 에서 센다. 재현 도구가 운영과 다른
+    경로를 타면 결과가 이상할 때 **로직 문제인지 경로 차이인지 구분이 안 된다.**
+    (지인님 지적, 2026-08-05)
+
+    이 스크립트는 golden oracle 이라 CS 전량에 라벨이 있어 두 경로의 분모가 지금은
+    같지만, 그건 **우연이지 보장이 아니다** — golden 에 빈 라벨이 생기면 갈린다.
+
     Returns:
-        (ClassifiedItem 목록, 상품 매핑이 없어 제외한 문의 수)
+        (ClassifiedItem 목록, 원본 문서 목록, 상품 매핑이 없어 제외한 문의 수)
     """
     variant_group = {
         r["variant_row_id"]: r["golden_group_id"] for r in read("data/golden/golden_mapping.csv")
@@ -123,6 +98,7 @@ def build_items(only_products: set[str] | None) -> tuple[list[ClassifiedItem], i
     labels = {r["inquiry_id"]: r for r in read("data/golden/golden_cs_labels.csv")}
 
     items: list[ClassifiedItem] = []
+    documents: list[dict] = []
     skipped = 0
     for r in read("data/input/input_cs_inquiries.csv"):
         product = product_of.get((r["channel"], r["channel_product_id"]))
@@ -152,8 +128,19 @@ def build_items(only_products: set[str] | None) -> tuple[list[ClassifiedItem], i
                 created_at=r["inquired_at"],
             )
         )
+        # 분모의 출처. loader.build_rows() 가 요구하는 키만 담는다.
+        documents.append(
+            {
+                "id": r["inquiry_id"],
+                "product": product,
+                "channel": r["channel"],
+                "source": "cs",
+                "created_at": r["inquired_at"],
+                "text": r["content"],
+            }
+        )
 
-    return items, skipped
+    return items, documents, skipped
 
 
 def load_case(case_id: str) -> dict:
@@ -311,9 +298,19 @@ async def main(args: argparse.Namespace) -> None:
     only = None if args.products == "all" else {case["product"]}
 
     print("입력 데이터 로딩 중... (CSV 4종, 문의 약 10만 행)")
-    items, skipped = build_items(only)
+    items, documents, skipped = build_items(only)
     if not items:
         raise SystemExit("입력 ClassifiedItem 이 0건 — 매핑/필터를 확인하세요")
+
+    # golden oracle 이라 커버리지는 100% 여야 정상이다. 아니면 golden 에 빈 라벨이
+    # 생긴 것이고, 그 슬롯은 검정 전에 BH family 에서 통째로 빠진다(로더 §unreliable).
+    # 조용히 빠지면 "왜 이 케이스가 안 뜨지?"의 원인을 못 찾으므로 여기서 알린다.
+    gaps = check_coverage(documents, items)
+    if gaps:
+        slots = unreliable_slots(gaps)
+        print(f"\n  ⚠️ 분류 커버리지 미달 {len(gaps)}일자 / {len(slots)}슬롯 — 검정에서 제외됩니다.")
+        for slot in sorted(slots)[:5]:
+            print(f"     {slot}")
 
     products = {i.product_group_id for i in items}
     print(f"\n기대 케이스 {args.case} | 상품 {case['product']} · {case['channel']} · {case['aspect']}")
@@ -325,7 +322,10 @@ async def main(args: argparse.Namespace) -> None:
     stub = CountingClient() if args.dry_run else None
     how = "스텁 클라이언트 — LLM 호출 0" if args.dry_run else "실제 LLM"
     print(f"\nAgent2 탐지 중... ({how})")
-    alerts, suppressed = await detect_anomaly(items, window_end=case["window_end"], client=stub)
+    # documents 를 함께 넘겨 **운영과 같은 분모 경로**를 탄다 (build_items docstring ⚠️ 참고).
+    alerts, suppressed = await detect_anomaly(
+        items, documents=documents, window_end=case["window_end"], client=stub
+    )
     print(f"  발행 {len(alerts)}건 / 억제 {len(suppressed)}건")
     for a in alerts:
         report_alert(a, case)

@@ -263,7 +263,9 @@ class _FallbackCounter(logging.Handler):
             self.count += 1
 
 
-async def _run_batch(todo: list[dict], cache: dict, save) -> tuple[int, int]:
+async def _run_batch(
+    todo: list[dict], cache: dict, save, concurrency: int = CONCURRENCY
+) -> tuple[int, int]:
     """청크 1개 = LLM 호출 1회. 실험③이 검증한 run_batch_chunks 를 그대로 쓴다.
 
     그 함수가 이미 막아둔 것들이라 여기서 다시 하지 않는다 — item_id 매칭(위치가 아님),
@@ -274,11 +276,11 @@ async def _run_batch(todo: list[dict], cache: dict, save) -> tuple[int, int]:
     그래서 CONCURRENCY 청크씩만 넘기고 **그 묶음마다 캐시를 저장**한다.
     """
     done = failed = 0
-    group = CHUNK_SIZE * CONCURRENCY
+    group = CHUNK_SIZE * concurrency
     for start in range(0, len(todo), group):
         part = todo[start : start + group]
         rows = [{"inquiry_id": d["id"], "raw_text": d["text"]} for d in part]
-        predictions, failed_ids = await run_batch_chunks(rows, CHUNK_SIZE, CONCURRENCY)
+        predictions, failed_ids = await run_batch_chunks(rows, CHUNK_SIZE, concurrency)
 
         for item_id, aspects in predictions.items():
             cache[item_id] = aspects or _cs_fallback_aspects(item_id)
@@ -292,14 +294,16 @@ async def _run_batch(todo: list[dict], cache: dict, save) -> tuple[int, int]:
     return done, failed
 
 
-async def _run_per_item(todo: list[dict], cache: dict, save) -> tuple[int, int]:
+async def _run_per_item(
+    todo: list[dict], cache: dict, save, concurrency: int = CONCURRENCY
+) -> tuple[int, int]:
     """문의 1건 = LLM 호출 1회. 운영(워커)과 같은 호출 방식.
 
     ⚠️ 전량을 classify_aspect() 에 한 번에 넘기지 말 것. 내부가 asyncio.gather() 라
        넘긴 만큼 동시 호출이 뜬다(11,990건이면 11,990개). 속도 제한에 걸리고, gather 가
        통째로 raise 하면 그때까지의 결과가 다 날아간다.
     """
-    semaphore = asyncio.Semaphore(CONCURRENCY)
+    semaphore = asyncio.Semaphore(concurrency)
     chunks = [todo[i : i + CHUNK_SIZE] for i in range(0, len(todo), CHUNK_SIZE)]
     done = failed = 0
 
@@ -346,7 +350,11 @@ async def _run_per_item(todo: list[dict], cache: dict, save) -> tuple[int, int]:
 
 
 async def classify_cached(
-    documents: list[dict], run: int, tag: str = "full", mode: str = MODE_BATCH
+    documents: list[dict],
+    run: int,
+    tag: str = "full",
+    mode: str = MODE_BATCH,
+    concurrency: int = CONCURRENCY,
 ) -> list[ClassifiedItem]:
     """Agent1 분류. 회차별 캐시를 먼저 보고 없는 것만 태운다.
 
@@ -385,7 +393,7 @@ async def classify_cached(
         logging.getLogger("app.classification.service").addHandler(counter)
         try:
             runner = _run_batch if mode == MODE_BATCH else _run_per_item
-            _done, failed = await runner(todo, cache, save)
+            _done, failed = await runner(todo, cache, save, concurrency)
         finally:
             logging.getLogger("app.classification.service").removeHandler(counter)
 
@@ -736,7 +744,9 @@ async def main_async(args) -> None:
 
     runs = []
     for run in range(1, args.runs + 1):
-        classified = await classify_cached(documents, run, tag, args.mode)
+        classified = await classify_cached(
+            documents, run, tag, args.mode, args.concurrency
+        )
 
         gaps = check_coverage(documents, classified)
         unreliable = unreliable_slots(gaps)
@@ -778,6 +788,16 @@ def main() -> None:
         choices=[MODE_BATCH, MODE_PER_ITEM],
         default=MODE_BATCH,
         help="batch(청크당 호출 1회, 기본) / per_item(문의당 호출 1회 — 운영과 동일)",
+    )
+    ap.add_argument(
+        "--concurrency",
+        type=int,
+        default=CONCURRENCY,
+        help=f"동시 LLM 호출 수 (기본 {CONCURRENCY}). 전량 실행이 오래 걸릴 때 올린다."
+        " ⚠️ batch 는 이 값만큼 청크가 동시에 뜨지만, per_item 은 청크마다 내부에서"
+        f" CHUNK_SIZE({CHUNK_SIZE})개를 또 gather 하므로 실제 동시 호출은 이 값의"
+        f" {CHUNK_SIZE}배다. 속도 제한(TPM)에 걸리면 무응답이 늘고, 그 건들은 캐시에"
+        " 안 들어가 다음 실행이 다시 부른다(과금은 되고 결과는 못 씀).",
     )
     args = ap.parse_args()
 

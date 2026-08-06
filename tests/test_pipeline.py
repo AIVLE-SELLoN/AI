@@ -5,10 +5,12 @@ LLM 은 목킹한다 (비용 0). 통합 테스트는 "숫자를 넣으면 몇 �
 """
 
 import itertools
-from datetime import date, datetime
+import logging
+from datetime import date, datetime, timedelta
 
 import pytest
 
+from app.core.constants import CURRENT_WINDOW_DAYS, RENOTIFY_BLOCK_DAYS
 from app.core.schemas import (
     AspectSentiment,
     Channel,
@@ -630,3 +632,112 @@ async def test_documents_auto_coverage_ignores_review():
     """
     documents, items = _review_scenario()
     assert unreliable_slots(check_coverage(documents, items)) == set()
+
+
+# ── POST /detect 의 documents 패스스루 (지인님 결선 정리 2026-08-05) ──────
+#
+# /detect 는 운영 경로가 아니라 **재현·디버깅 창구**다(운영은 app/batch/daily.py).
+# 그래서 운영과 같은 분모 경로를 타야 한다 — 다른 분모를 쓰면 결과가 이상할 때
+# 로직 문제인지 경로 차이인지 구분할 수 없다.
+#
+# ⚠️ detect_anomaly 에 documents 인자가 있어도 **라우터가 안 넘기면 소용없다.**
+#    실제로 그런 상태로 하루 넘게 있었다(2026-08-04~05). 그래서 서비스 함수가 아니라
+#    **HTTP 요청으로** 알림 발행이 갈리는지 확인한다.
+
+
+def _detect_via_http(payload: dict, monkeypatch) -> dict:
+    """POST /detect 를 실제로 태운다. [6] 만 스텁으로 막아 LLM 호출 0."""
+    from fastapi.testclient import TestClient
+
+    import app.detection.service as svc
+    from app.main import app as fastapi_app
+
+    async def _stub_cause(aspect, items, *, client=None, trace_key=""):
+        return {
+            "label": "사진_색감_오차",
+            "consistent": True,
+            "count": len(items),
+            "total": len(items),
+            "freq": {},
+            "cs_ids": [],
+        }
+
+    monkeypatch.setattr(svc, "diagnose_cause", _stub_cause)
+    response = TestClient(fastapi_app).post("/api/v1/detect", json=payload)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _review_payload() -> tuple[list[dict], list[dict]]:
+    """_review_scenario() 를 JSON 직렬화해 요청 본문으로 만든다."""
+    documents, items = _review_scenario()
+    docs = [{**d, "created_at": d["created_at"].isoformat()} for d in documents]
+    return docs, [i.model_dump(mode="json") for i in items]
+
+
+def test_detect_endpoint_passes_documents_through(monkeypatch):
+    """documents 를 실으면 라우터가 그걸 분모로 쓴다 — 오탐이 사라져야 한다."""
+    docs, items = _review_payload()
+    base = {"items": items, "window_end": "2026-07-07"}
+
+    # documents 없이 = 옛 경로. 무관 리뷰가 분모에서 빠져 오탐이 난다.
+    without = _detect_via_http(base, monkeypatch)
+    assert without["alerts"], (
+        "이 시나리오는 documents 가 없으면 오탐이 나야 한다(테스트 전제)"
+    )
+
+    # documents 를 실으면 분모가 원본 기준 → 알림 0건.
+    with_docs = _detect_via_http({**base, "documents": docs}, monkeypatch)
+    assert with_docs["alerts"] == []
+    assert with_docs["suppressed"] == []
+
+
+def test_detect_endpoint_warns_when_review_without_documents(monkeypatch, caplog):
+    """documents 없이 리뷰가 섞이면 경고를 남긴다 (조용히 틀리면 안 된다)."""
+    _docs, items = _review_payload()
+
+    with caplog.at_level(logging.WARNING, logger="app.detection.router"):
+        _detect_via_http({"items": items, "window_end": "2026-07-07"}, monkeypatch)
+    assert any("documents" in r.message for r in caplog.records)
+
+
+# ── 억제 기간 불변식 (지인님 지적 2026-08-05) ─────────────────────
+#
+# 억제된 날은 알림이 안 나가 prior_alerts 에 안 남는데도 기준선에서 빠진다.
+# 억제가 풀린 뒤 나가는 알림의 윈도우가 그 구간을 덮어주기 때문이다.
+# block > CURRENT_WINDOW_DAYS 가 되면 그 덮개가 끊기고, 틈에 남은 이상 구간이
+# 과거 기준선에 섞여 '새로운 평소'로 굳는다 → 알림이 스스로 꺼진다.
+
+
+def test_renotify_block_days_within_current_window():
+    """불변식: 억제 기간 <= 현재 윈도우. 지금 여유가 0 이다."""
+    assert RENOTIFY_BLOCK_DAYS <= CURRENT_WINDOW_DAYS, (
+        f"억제 {RENOTIFY_BLOCK_DAYS}일 > 윈도우 {CURRENT_WINDOW_DAYS}일 — "
+        "두 알림 윈도우 사이에 기준선이 덮이지 않는 틈이 생긴다"
+    )
+
+
+def _uncovered_days(block_days: int, cycles: int = 4) -> list[date]:
+    """연속 발행 시 어느 알림 윈도우에도 안 들어가는 날짜를 센다."""
+    first = date(2026, 1, 20)
+    fires = [first + timedelta(days=block_days * i) for i in range(cycles)]
+    covered: set[date] = set()
+    for fire in fires:
+        start = fire - timedelta(days=CURRENT_WINDOW_DAYS - 1)
+        covered |= {start + timedelta(days=k) for k in range((fire - start).days + 1)}
+    span_start = first - timedelta(days=CURRENT_WINDOW_DAYS - 1)
+    span = [
+        span_start + timedelta(days=k) for k in range((fires[-1] - span_start).days + 1)
+    ]
+    return [d for d in span if d not in covered]
+
+
+def test_current_block_days_leaves_no_gap():
+    """현재 설정에서는 빈틈이 없다 — 위 불변식이 실제로 성립하는지 숫자로 확인."""
+    assert _uncovered_days(RENOTIFY_BLOCK_DAYS) == []
+
+
+def test_longer_block_days_would_break_baseline():
+    """⚠️ 늘리면 실제로 깨진다 — 불변식이 형식적 assert 가 아님을 보인다."""
+    assert len(_uncovered_days(CURRENT_WINDOW_DAYS + 1)) > 0
+    assert len(_uncovered_days(14)) >= 21
