@@ -1,4 +1,4 @@
-"""담당: 서영 (Agent2) — 일 1회 탐지 배치. **운영 진입점.**
+"""담당: 지인 (2026-08-06 인수, 원작 서영) — 일 1회 탐지 배치. **운영 진입점.**
 
 왜 여기 있나
 ------------
@@ -50,6 +50,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
+from app.core.inquiries import build_linked_inquiries
 from app.core.schemas import ClassifiedItem, DetectionAlert
 from app.detection.loader import check_coverage, unreliable_slots
 from app.detection.service import detect_anomaly
@@ -142,7 +143,7 @@ except ImportError as exc:  # pragma: no cover
         raise
     RECOMMENDATION_AVAILABLE = False
 
-    async def generate_for_alert(alert: Any) -> Any:
+    async def generate_for_alert(alert: Any, inquiries: Any) -> Any:
         logger.info("[Agent3 미연결] 개선안 생성 생략 alert=%s", alert.alert_id)
         return None
 
@@ -158,7 +159,9 @@ except ImportError as exc:  # pragma: no cover
         raise
     GUIDELINE_AVAILABLE = False
 
-    async def generate_guideline(alert: Any, rec: Any) -> Any:
+    async def generate_guideline(
+        alert: Any, inquiries: Any, *, product_name: str | None = None
+    ) -> Any:
         logger.info("[가이드라인 미연결] 생성 생략 alert=%s", alert.alert_id)
         return None
 
@@ -449,12 +452,17 @@ async def run_batch(
             counts["발행:이상"] += 1
             continue
 
+        # 개선안·가이드라인이 **같은 CS 원문**을 근거로 쓴다. 여기서 한 번 만들어 둘 다
+        # 에게 넘긴다 — 각자 만들면 같은 매핑이 두 벌이 되고, C4(item_id ↔ cs/reviews PK)
+        # 가 풀려 DB 조회로 바뀔 때 고칠 곳이 두 곳이 된다.
+        inquiries = build_linked_inquiries(alert, documents)
+
         # ⚠️ alert 1건이 터져도 배치는 계속한다. 여기서 던지면 **이미 LLM 비용을 쓴
         #    앞쪽 알림들까지 발행되지 않고 날아간다.** 실패는 모아서 끝에 요약한다.
         rec = guideline = None
         if wants_recommendation:
             try:
-                rec = await generate_for_alert(alert)
+                rec = await generate_for_alert(alert, inquiries)
                 counts["개선안"] += 1
             except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
                 failures.append(
@@ -462,7 +470,7 @@ async def run_batch(
                 )
 
         try:
-            guideline = await generate_guideline(alert, rec)
+            guideline = await generate_guideline(alert, inquiries)
             counts["가이드라인"] += 1
         except Exception as exc:  # noqa: BLE001
             failures.append(

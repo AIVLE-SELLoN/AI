@@ -217,6 +217,38 @@ async def test_window_end_is_taken_from_data_not_clock(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cs_inquiries_are_built_once_and_shared(tmp_path, monkeypatch):
+    """개선안·가이드라인이 **같은** CS 원문 리스트를 받는다.
+
+    각자 만들면 같은 매핑이 두 벌이 되고, C4(item_id ↔ cs/reviews PK)가 풀려 DB 조회로
+    바뀔 때 고칠 곳이 두 곳이 된다. 예전 호출부는 가이드라인에 rec 를 넘기고 있었다.
+    """
+    seen: dict = {}
+
+    async def fake_recommendation(alert, inquiries):
+        seen["개선안"] = inquiries
+
+    async def fake_guideline(alert, inquiries, *, product_name=None):
+        seen["가이드라인"] = inquiries
+
+    async def sent(alert, rec, trace_id):
+        return None
+
+    monkeypatch.setattr(daily, "should_generate", lambda _alert: True)
+    monkeypatch.setattr(daily, "generate_for_alert", fake_recommendation)
+    monkeypatch.setattr(daily, "generate_guideline", fake_guideline)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json", load_inputs=_stub_inputs
+    )
+
+    assert not summary["failures"], summary["failures"]
+    assert isinstance(seen["개선안"], list)
+    assert seen["개선안"] is seen["가이드라인"]
+
+
+@pytest.mark.asyncio
 async def test_dry_run_skips_recommendation_when_gate_closed(tmp_path):
     """개선안 카운트는 should_generate 를 통과한 alert 만 센다.
 
