@@ -5,7 +5,7 @@
 
 ⚠️ 분모는 **원본 테이블에서 센다**(탐지 분모 산출 방식, 2026-08-03 합의).
    `classified_item` 은 "aspect 언급 목록"이라 aspect 가 0개인 리뷰가 빠져 있어
-   총 문서 수를 셀 수 없다. 여기서는 raw_event 를 분모로 쓰고 classified_item 을
+   총 문서 수를 셀 수 없다. 여기서는 원문(cs ∪ reviews)을 분모로 쓰고 classified_item 을
    LEFT JOIN 해 분자만 가져온다.
 
 ⚠️ BH-FDR 은 **배치 전체(전 상품 × 전 채널쌍)** 를 한 family 로 묶어야 한다(§4-2 ②).
@@ -21,6 +21,7 @@ import logging
 import sqlite3
 from datetime import date, datetime, timedelta
 
+from app.core import raw_schema
 from app.core.schemas import MONTHLY_ASPECTS as SCHEMA_MONTHLY_ASPECTS
 from app.core.schemas import (
     Aspect,
@@ -47,6 +48,23 @@ JSD_ASPECT_ORDER: tuple[str, ...] = (Aspect.COLOR.value, Aspect.SIZE.value, Aspe
 assert {Aspect(a) for a in JSD_ASPECT_ORDER} == set(SCHEMA_MONTHLY_ASPECTS), (
     "JSD_ASPECT_ORDER 와 schemas.MONTHLY_ASPECTS 가 어긋났습니다"
 )
+
+# 원문 통합 뷰 — 분모와 "언제·어디서 발생했는가"의 정본.
+#
+# 분류 결과(§2-6 classified_item / classified_item_aspect)에는 발생 시각·채널·상품그룹이
+# 없다. 원문 사본을 만들지 않기로 했기 때문이다(아키텍처 확정 §6). 그래서 집계는 항상
+# 원문을 기준으로 잡고 분류 결과를 조인한다.
+#
+# 「Raw DB 스키마 확정 (8/7)」에서 원문은 `cs`(§2-4)·`reviews`(§2-5) 두 테이블로 갈렸고
+# 시각 컬럼명도 다르다(cs.inquired_at / reviews.created_at). 두 테이블을 UNION 해
+# `occurred_at` 하나로 맞춘 뷰가 `voc_document` 이고, 정의는 `app/core/raw_schema.py` 다.
+# 이름을 여기 다시 적지 않고 상수를 가져다 쓴다 — 뷰 이름이 바뀌면 한 곳만 고치면 된다.
+#
+# ⚠️ 분모와 분자를 **한 쿼리로 묶지 않는다**(§4 예시 쿼리와 같은 이유). 분모는 이 뷰만
+#    보고 세고(`_fetch_total_voc`), 분자는 분류 결과를 INNER JOIN 해서 따로 센다. 한
+#    쿼리에서 GROUP BY 에 aspect 를 넣은 채로 분모까지 세면, 분류 안 된 문의가 빠져
+#    분모가 조용히 줄어든다(§2-4 가 금지한 상황).
+SOURCE_TABLE = raw_schema.VOC_DOCUMENT
 
 # 채널 분열은 채널쌍 전수를 본다. 조합 순서를 고정해 라벨이 실행마다 흔들리지 않게 한다.
 CHANNEL_PAIRS: tuple[tuple[str, str], ...] = (
@@ -80,7 +98,7 @@ def list_product_groups(conn: sqlite3.Connection, report_month: str) -> list[str
     """해당 월에 원본이 하나라도 있는 상품 그룹. 리포트 생성 대상 목록이다."""
     start, end = _window(report_month)
     rows = conn.execute(
-        "SELECT DISTINCT product_group_id FROM raw_event "
+        f"SELECT DISTINCT product_group_id FROM {SOURCE_TABLE} "
         "WHERE source IN ('cs','review') AND occurred_at >= ? AND occurred_at < ? "
         "  AND product_group_id IS NOT NULL "
         "ORDER BY product_group_id",
@@ -93,7 +111,7 @@ def _fetch_total_voc(conn: sqlite3.Connection, product_group_id: str, report_mon
     """분모 — 원본 테이블에서 센다(classified_item 에서 세지 않는다)."""
     start, end = _window(report_month)
     return conn.execute(
-        "SELECT COUNT(*) FROM raw_event "
+        f"SELECT COUNT(*) FROM {SOURCE_TABLE} "
         "WHERE source IN ('cs','review') AND product_group_id = ? "
         "  AND occurred_at >= ? AND occurred_at < ?",
         (product_group_id, start, end),
@@ -103,12 +121,19 @@ def _fetch_total_voc(conn: sqlite3.Connection, product_group_id: str, report_mon
 def _fetch_aspect_sentiments(
     conn: sqlite3.Connection, product_group_id: str, report_month: str
 ) -> dict[str, dict[int, int]]:
-    """{aspect: {sentiment: 건수}}. 분자 집계라 classified_item 을 쓴다."""
+    """{aspect: {sentiment: 건수}}. 분자 집계다.
+
+    ⚠️ 기준 시각·상품그룹은 **원문 테이블**에서 온다. 분류 결과 테이블(§2-6)에는
+       발생 시각도 상품그룹도 없다 — 원문 사본을 만들지 않기로 했기 때문이다(§6).
+       분류 시각(classified_at)으로 기간을 자르면 말일 문의를 1일 새벽에 분류했을 때
+       그 건이 다음 달로 넘어간다.
+    """
     start, end = _window(report_month)
     rows = conn.execute(
-        "SELECT aspect, sentiment, COUNT(*) FROM classified_item "
-        "WHERE product_group_id = ? AND created_at >= ? AND created_at < ? "
-        "GROUP BY aspect, sentiment",
+        f"SELECT a.aspect, a.sentiment, COUNT(*) FROM {SOURCE_TABLE} r "
+        "JOIN classified_item_aspect a ON a.item_id = r.item_id "
+        "WHERE r.product_group_id = ? AND r.occurred_at >= ? AND r.occurred_at < ? "
+        "GROUP BY a.aspect, a.sentiment",
         (product_group_id, start, end),
     ).fetchall()
 
@@ -129,10 +154,11 @@ def _fetch_negative_aspect_counts_by_channel(
     """
     start, end = _window(report_month)
     rows = conn.execute(
-        "SELECT channel, aspect, COUNT(*) FROM classified_item "
-        "WHERE product_group_id = ? AND sentiment = -1 "
-        "  AND created_at >= ? AND created_at < ? "
-        "GROUP BY channel, aspect",
+        f"SELECT r.channel_id, a.aspect, COUNT(*) FROM {SOURCE_TABLE} r "
+        "JOIN classified_item_aspect a ON a.item_id = r.item_id "
+        "WHERE r.product_group_id = ? AND a.sentiment = -1 "
+        "  AND r.occurred_at >= ? AND r.occurred_at < ? "
+        "GROUP BY r.channel_id, a.aspect",
         (product_group_id, start, end),
     ).fetchall()
 
@@ -270,8 +296,6 @@ def aggregate_monthly_inputs(
                 start_date=start,
                 end_date=end,
                 product_group_id=row["product_group_id"],
-                # 상품명은 커머스 DB 소관이라 여기서는 코드로 대체한다.
-                # 연동되면 이 한 줄만 조인으로 바꾸면 된다.
                 product_name=row["product_group_id"],
                 total_voc_count=row["total_voc_count"],
                 aspect_distributions=row["distributions"],

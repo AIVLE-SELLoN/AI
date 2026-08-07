@@ -3,17 +3,26 @@
 워크플로우 회의(2026-08-02) 반영:
   기존   : CSV → Kafka → classification_worker(Kafka consumer)
   변경후 : CSV → Kafka(발행 그대로 유지)
-              └→ **raw DB(raw_event 테이블)** ← classification_worker 가 여기를 참조
+              └→ **raw DB** ← classification_worker 가 여기를 참조
 
   즉 이 스크립트는 "발행"과 "원본 적재"를 동시에 하는 이중 기록(dual write) 구조가 된다.
   분류 워커는 더 이상 Kafka 를 구독하지 않고 raw DB 만 읽으므로, Kafka 브로커(EC2)가
   없어도 `--dry-run` 으로 raw DB 만 채워서 분류 파이프라인을 돌릴 수 있다.
 
-raw DB 는 일단 stdlib sqlite3 로 러프하게 구성한다(추가 의존성 없음).
-운영 DB(Postgres/MySQL)로 옮길 때는 `open_raw_db()` / `RAW_EVENT_DDL` 두 곳만 갈면 되도록
-DDL·INSERT 를 표준 SQL 범위로 유지했다.
-공통 메타 필드(수집 서버, 파티션 키, 스키마 버전 등)는 인프라 팀 요청이 오면 추가한다 —
-지금은 원본 CSV 행 전체를 `payload` JSON 으로 통째로 남겨 두어 나중에 컬럼만 뽑아 쓸 수 있게 했다.
+「Raw DB 스키마 확정 (8/7)」 반영:
+  기존   : 이벤트 종류를 컬럼으로 구분하는 단일 `raw_event` 테이블
+  변경후 : 확정 문서 §2 의 실테이블 — `cs` · `reviews` · `orders` (+ `channel` 마스터)
+
+  이 스크립트는 목 파이프라인에서 **main server 자리를 대신한다**(§1 소유권). 그래서
+  main server 소유 테이블만 쓰고, AI 소유 테이블(classified_*)은 건드리지 않는다.
+  DDL 은 `app/core/raw_schema.py` 한 곳에 있다 — 워커와 같은 정의를 봐야 한다.
+
+⚠️ 원본 CSV 행 전체를 담던 `payload` 컬럼은 없앴다. 스키마가 확정되기 전 "나중에 컬럼을
+   뽑아 쓰려고" 남겨 둔 보험이었는데, 이제 컬럼이 정해져서 목적이 사라졌다. Kafka 메시지는
+   그대로 전체 행을 싣는다.
+
+raw DB 는 stdlib sqlite3 로 구성한다(추가 의존성 없음). 운영 DB(Postgres)로 옮길 때는
+`open_raw_db()` 와 `raw_schema` 의 DDL 만 갈면 되도록 표준 SQL 범위를 유지했다.
 """
 
 import argparse
@@ -22,11 +31,15 @@ import logging
 import sqlite3
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+from app.core import raw_schema
 
 # Kafka 내부 재시도 로그 차단
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -64,6 +77,7 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
         "id_prefix": "ORD",
         "source": None,             # 분류 대상 아님(이상탐지 분모용 데이터)
         "text_column": None,
+        "table": "orders",          # §2-9
     },
     "inquiries": {
         "file_name": "input_cs_inquiries.csv",
@@ -74,6 +88,7 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
         "id_prefix": "INQ",
         "source": "cs",             # schemas.Source.CS
         "text_column": "content",
+        "table": "cs",              # §2-4
     },
     "reviews": {
         "file_name": "input_reviews.csv",
@@ -84,6 +99,7 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
         "id_prefix": "RVW",
         "source": "review",         # schemas.Source.REVIEW
         "text_column": "content",
+        "table": "reviews",         # §2-5
     },
     "detail_changes": {
         # ⚠️ 현재 data/input 에는 `input_detail_fields.csv`(상세페이지 스냅샷, 505행)만 있고
@@ -97,48 +113,53 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
         "id_prefix": "CHG",
         "source": None,             # 상세페이지 변경은 분류가 아니라 탐지 근거(linked_change_id)로 쓰임
         "text_column": "new_value",
+        # ⚠️ 확정 스키마 §1 테이블 목록에 상세페이지 변경 테이블이 없다. 적재할 자리가
+        #    없으므로 Kafka 발행만 하고 raw DB 는 건너뛴다 — 아무 테이블에나 밀어 넣어
+        #    스키마를 임의로 늘리지 않는다. 테이블이 정해지면 여기에 이름만 넣으면 된다.
+        "table": None,
     },
 }
 
 
 # ── raw DB (원본 적재) ────────────────────────────────────────────────────────
 #
-# raw_event: mock producer 가 발행한 원본 이벤트 1건 = 1행.
-#   occurred_at  대본상 이벤트 발생 시각. **타임라인 정렬 키** — 워커가 이 순서로 읽어간다.
-#   published_at 실제 발행된 벽시계 시각(재생 시점). 정렬에는 쓰지 않는다.
-#   payload      원본 CSV 행 전체(JSON). 컬럼 추가 요청이 오면 여기서 뽑아 승격시키면 된다.
+# 확정 스키마 §2 의 실테이블에 그대로 넣는다. 테이블별 컬럼은 `app/core/raw_schema.py` 참고.
+#
+# ⚠️ INSERT OR REPLACE 를 쓰는 이유: 같은 대본을 다시 재생해도 중복 행이 쌓이지 않게
+#    한다(PK 로 덮어쓴다). cs/reviews 는 원문 PK, orders 는 복합 PK 가 그 역할을 한다.
 
-RAW_EVENT_DDL = """
-CREATE TABLE IF NOT EXISTS raw_event (
-    event_id           TEXT PRIMARY KEY,
-    event_type         TEXT NOT NULL,
-    topic              TEXT NOT NULL,
-    source             TEXT,
-    channel            TEXT,
-    channel_product_id TEXT,
-    product_group_id   TEXT,
-    raw_text           TEXT,
-    occurred_at        TEXT NOT NULL,
-    published_at       TEXT,
-    payload            TEXT NOT NULL
-);
-"""
+TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
+    "cs": (
+        "id", "channel_product_id", "product_group_id", "channel_id",
+        "content", "inquired_at", "created_at",
+    ),
+    "reviews": (
+        "id", "channel_product_id", "product_group_id", "channel_id",
+        "content", "rating", "created_at",
+    ),
+    "orders": (
+        "channel_id", "channel_product_id", "order_date",
+        "quantity", "order_amount", "created_at",
+    ),
+}
 
-RAW_EVENT_INDEXES = [
-    # 워커의 타임라인 순차 조회용 (occurred_at, event_id) 복합 커서
-    "CREATE INDEX IF NOT EXISTS idx_raw_event_timeline ON raw_event (occurred_at, event_id);",
-    "CREATE INDEX IF NOT EXISTS idx_raw_event_source ON raw_event (source, occurred_at);",
-]
+TABLE_INSERTS: dict[str, str] = {
+    table: (
+        f"INSERT OR REPLACE INTO {table} ({', '.join(columns)}) "
+        f"VALUES ({', '.join(['?'] * len(columns))})"
+    )
+    for table, columns in TABLE_COLUMNS.items()
+}
 
-RAW_EVENT_COLUMNS = [
-    "event_id", "event_type", "topic", "source", "channel", "channel_product_id",
-    "product_group_id", "raw_text", "occurred_at", "published_at", "payload",
-]
+# §3 날짜 경계는 Asia/Seoul 로 통일한다. 대본 CSV 의 시각은 오프셋 없는 한국 벽시계라
+# 그대로 넣으면 TIMESTAMPTZ 로 옮길 때 어느 지역 시각인지 알 수 없어 하루가 밀린다.
+KST = timezone(timedelta(hours=9))
 
-RAW_EVENT_INSERT = (
-    f"INSERT OR REPLACE INTO raw_event ({', '.join(RAW_EVENT_COLUMNS)}) "
-    f"VALUES ({', '.join(['?'] * len(RAW_EVENT_COLUMNS))})"
-)
+
+def to_kst_iso(value: datetime) -> str:
+    """이벤트 시각 → 오프셋이 붙은 ISO 문자열. naive 면 KST 로 간주한다."""
+    aware = value.replace(tzinfo=KST) if value.tzinfo is None else value.astimezone(KST)
+    return aware.isoformat()
 
 
 def open_raw_db(db_path_str: str) -> sqlite3.Connection:
@@ -151,17 +172,74 @@ def open_raw_db(db_path_str: str) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA busy_timeout=30000;")
-    conn.execute(RAW_EVENT_DDL)
-    for stmt in RAW_EVENT_INDEXES:
-        conn.execute(stmt)
+    raw_schema.create_source_tables(conn)
     conn.commit()
 
     logger.info(f"[RAW DB] 연결 완료: {db_path}")
     return conn
 
 
-class RawEventSink:
-    """raw_event 적재 버퍼. 일정 건수/시간마다 모아서 commit 한다.
+def seed_channels(conn: sqlite3.Connection, channel_ids: set[str]) -> None:
+    """§2-1 channel 마스터를 대본에 실제로 등장한 채널로 채운다.
+
+    cs·reviews·orders 의 channel_id 가 이 테이블을 참조하므로 비어 있으면 FK 가 뜬다.
+    실서비스에서는 main server 가 연동 시점에 넣는 값이라, 목에서는 대본에서 관측된
+    채널만 넣는다 — 쓰이지도 않는 채널을 미리 지어내지 않는다.
+    """
+    now = datetime.now(KST).isoformat()
+    for channel_id in sorted(channel_ids):
+        conn.execute(
+            "INSERT OR IGNORE INTO channel (channel_id, display_name, connected_at, status) "
+            "VALUES (?, ?, ?, 'active')",
+            (channel_id, channel_id, now),
+        )
+    conn.commit()
+    logger.info(f"[RAW DB] channel 마스터 {len(channel_ids)}건 보장: {sorted(channel_ids)}")
+
+
+def build_db_row(event: dict[str, Any]) -> tuple | None:
+    """이벤트 1건 → 대상 테이블의 INSERT 파라미터. 적재 대상이 아니면 None.
+
+    `created_at`(레코드 적재 시각)은 재생 시점의 벽시계다 — 대본상 발생 시각
+    (`inquired_at` / `reviews.created_at`)과 다르며, §2-4 가 둘을 구분해 두었다.
+    """
+    table = event["table"]
+    if table is None:
+        return None
+
+    payload = event["payload"]
+    occurred_at = to_kst_iso(event["time"])
+    loaded_at = datetime.now(KST).isoformat()
+
+    if table == "cs":
+        return (
+            event["event_id"], event["channel_product_id"], event["product_group_id"],
+            event["channel"], event["raw_text"], occurred_at, loaded_at,
+        )
+    if table == "reviews":
+        rating = payload.get("rating")
+        return (
+            event["event_id"], event["channel_product_id"], event["product_group_id"],
+            event["channel"], event["raw_text"], None if rating is None else int(rating),
+            occurred_at,
+        )
+    if table == "orders":
+        # §2-9 order_date 는 DATE 다 — 하루 합산 행이라 시각·오프셋이 없다.
+        order_date = event["time"].date() if isinstance(event["time"], datetime) else event["time"]
+        return (
+            event["channel"], event["channel_product_id"],
+            order_date.isoformat() if isinstance(order_date, date) else str(order_date),
+            int(payload.get("quantity") or 0), int(payload.get("order_amount") or 0),
+            loaded_at,
+        )
+    raise ValueError(f"적재 대상 테이블을 모릅니다: {table}")
+
+
+class RawDbSink:
+    """확정 스키마 테이블 적재 버퍼. 일정 건수/시간마다 모아서 commit 한다.
+
+    테이블마다 컬럼 수가 달라 버퍼를 테이블별로 나눈다. flush 는 한꺼번에 돈다 —
+    한 번의 commit 안에 세 테이블이 함께 들어가야 워커가 보는 시점이 갈리지 않는다.
 
     ⚠️ 적재 실패는 **여기서 흡수하고 집계만** 한다. 밖으로 던지지 않는 이유:
        한 행이 잘못됐다고 나머지 재생(특히 Kafka 발행)까지 멈추면 안 되기 때문이다.
@@ -170,61 +248,59 @@ class RawEventSink:
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
-        self.buffer: list[tuple] = []
+        self.buffers: dict[str, list[tuple]] = {table: [] for table in TABLE_INSERTS}
         self.last_flush = time.monotonic()
         self.written = 0
         self.failed = 0
 
-    def add(self, event: dict[str, Any]) -> None:
-        payload = event["payload"]
-        self.buffer.append((
-            event["event_id"],
-            payload.get("event_type"),
-            event["topic"],
-            event["source"],
-            event["channel"],
-            event["channel_product_id"],
-            event["product_group_id"],
-            event["raw_text"],
-            event["time"].isoformat(),
-            payload.get("published_at"),
-            json.dumps(payload, ensure_ascii=False),
-        ))
+    @property
+    def buffered(self) -> int:
+        return sum(len(rows) for rows in self.buffers.values())
 
-        if len(self.buffer) >= DB_FLUSH_ROWS or (time.monotonic() - self.last_flush) >= DB_FLUSH_SECONDS:
+    def add(self, event: dict[str, Any]) -> None:
+        row = build_db_row(event)
+        if row is None:  # 확정 스키마에 대응 테이블이 없는 종류(상세페이지 변경 등)
+            return
+        self.buffers[event["table"]].append(row)
+
+        if self.buffered >= DB_FLUSH_ROWS or (time.monotonic() - self.last_flush) >= DB_FLUSH_SECONDS:
             self.flush()
 
     def flush(self) -> None:
         """버퍼를 비운다. 실패해도 버퍼는 반드시 비워지고, 불량 행만 떨어져 나간다."""
-        if not self.buffer:
+        if not self.buffered:
             self.last_flush = time.monotonic()
             return
 
         # 버퍼를 먼저 떼어낸다 — 실패해도 같은 행이 버퍼에 남아 다음 flush 를 계속 터뜨리는
         # 것을 원천 차단한다(그 상태가 되면 재생 전체가 조용히 멈춘다).
-        rows, self.buffer = self.buffer, []
+        pending = {table: rows for table, rows in self.buffers.items() if rows}
+        self.buffers = {table: [] for table in TABLE_INSERTS}
         try:
-            self.conn.executemany(RAW_EVENT_INSERT, rows)
+            for table, rows in pending.items():
+                self.conn.executemany(TABLE_INSERTS[table], rows)
             self.conn.commit()
-            self.written += len(rows)
+            self.written += sum(len(rows) for rows in pending.values())
         except sqlite3.Error as err:
             self.conn.rollback()
-            logger.warning(f"[RAW DB] 배치 적재 실패({len(rows)}행) — 행 단위로 재시도합니다: {err}")
-            self._flush_row_by_row(rows)
+            total = sum(len(rows) for rows in pending.values())
+            logger.warning(f"[RAW DB] 배치 적재 실패({total}행) — 행 단위로 재시도합니다: {err}")
+            for table, rows in pending.items():
+                self._flush_row_by_row(table, rows)
         finally:
             self.last_flush = time.monotonic()
 
-    def _flush_row_by_row(self, rows: list[tuple]) -> None:
-        """불량 행을 골라내려고 한 줄씩 넣는다. 실패한 행의 event_id 만 정확히 로그로 남는다."""
+    def _flush_row_by_row(self, table: str, rows: list[tuple]) -> None:
+        """불량 행을 골라내려고 한 줄씩 넣는다. 실패한 행의 PK 만 정확히 로그로 남는다."""
         for row in rows:
             try:
-                self.conn.execute(RAW_EVENT_INSERT, row)
+                self.conn.execute(TABLE_INSERTS[table], row)
                 self.conn.commit()
                 self.written += 1
             except sqlite3.Error as err:
                 self.conn.rollback()
                 self.failed += 1
-                logger.error(f"[RAW DB] 행 적재 실패 (event_id={row[0]}): {err}")
+                logger.error(f"[RAW DB] 행 적재 실패 ({table}, key={row[0]}): {err}")
 
     def close(self) -> None:
         self.flush()
@@ -318,8 +394,9 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
             message_key = f"{channel}:{channel_product_id}" if channel and channel_product_id else None
 
             # 이벤트 고유 ID: CSV 의 자연키(inquiry_id/review_id/...)를 그대로 쓰고,
-            # 없는 파일(주문)은 파일 내 행 순번으로 만든다. raw_event 의 PK 이므로
-            # 같은 대본을 다시 재생해도 중복 행이 쌓이지 않고 덮어써진다.
+            # 없는 파일(주문)은 파일 내 행 순번으로 만든다. cs/reviews 에서는 이 값이
+            # 그대로 PK(§5-1 A안: item_id = cs.id / reviews.id)라, 같은 대본을 다시
+            # 재생해도 중복 행이 쌓이지 않고 덮어써진다. orders 는 복합 PK 라 안 쓴다.
             id_column = config["id_column"]
             natural_id = sanitized_payload.get(id_column) if id_column else None
             event_id = str(natural_id) if natural_id else f"{config['id_prefix']}-{row_idx:06d}"
@@ -330,6 +407,7 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
             merged_events.append({
                 "time": event_time,
                 "topic": config["topic"],
+                "table": config["table"],
                 "event_id": event_id,
                 "source": config["source"],
                 "channel": channel or None,
@@ -361,7 +439,7 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
 
 def sort_by_timestamp(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     # event_id 를 2차 키로 둬서 같은 시각 이벤트의 순서도 재생마다 동일하게 고정한다
-    # (워커의 (occurred_at, event_id) 커서와 같은 정렬 기준).
+    # (워커의 (occurred_at, item_id) 커서와 같은 정렬 기준).
     events.sort(key=lambda x: (x["time"], x["event_id"]))
     return events
 
@@ -382,7 +460,7 @@ def filter_by_time_range(
     return filtered
 
 
-def publish(event: dict[str, Any], producer: Any | None, sink: RawEventSink | None, dry_run: bool) -> bool:
+def publish(event: dict[str, Any], producer: Any | None, sink: RawDbSink | None, dry_run: bool) -> bool:
     payload = event["payload"]
     payload["published_at"] = datetime.now(timezone.utc).astimezone().isoformat()
 
@@ -427,7 +505,7 @@ def print_summary(
         print(f" raw DB 적재 행 수: {db_written} 행")
         if db_failed:
             # 조용히 넘어가면 워커가 처리할 원본이 비는 것을 눈치채지 못한다
-            print(f" ⚠️ raw DB 적재 실패: {db_failed} 행 (ERROR 로그의 event_id 확인)")
+            print(f" ⚠️ raw DB 적재 실패: {db_failed} 행 (ERROR 로그의 테이블·키 확인)")
     print("==============================================")
 
 
@@ -451,7 +529,12 @@ def main() -> None:
             key_serializer=lambda k: k.encode("utf-8") if k else None,
         )
 
-    sink = None if args.no_db else RawEventSink(open_raw_db(args.raw_db))
+    sink = None
+    if not args.no_db:
+        conn = open_raw_db(args.raw_db)
+        # channel 마스터를 먼저 채운다 — cs·reviews·orders 의 channel_id 가 참조한다.
+        seed_channels(conn, {e["channel"] for e in events if e["channel"]})
+        sink = RawDbSink(conn)
 
     summary_counts: dict[str, int] = {config["topic"]: 0 for config in STREAMING_FILE_CONFIGS.values()}
     prev_time: datetime | None = None

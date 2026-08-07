@@ -1,27 +1,35 @@
-"""분류 워커 — raw DB 의 원본 텍스트를 읽어 분류하고 classified_item 에 적재한다.
+"""분류 워커 — raw DB 의 원문을 읽어 분류하고 classified_item 에 적재한다.
 
 워크플로우 회의(2026-08-02) 반영:
   기존   : Kafka consumer 로 raw.* 토픽 구독 → 분류 → 로그 출력 (docker 컨테이너로 상주)
-  변경후 : **raw DB(raw_event) 조회** → 분류 → **classified_item 테이블 적재(타임라인 순)**
+  변경후 : **raw DB 조회** → 분류 → **classified_item 테이블 적재(타임라인 순)**
 
   Kafka 구독을 걷어냈으므로 이 워커는 더 이상 docker compose 에 올라가지 않는다.
-  브로커/컨슈머그룹/오프셋 커밋 대신, raw_event 를 (occurred_at, event_id) 순으로 훑는
+  브로커/컨슈머그룹/오프셋 커밋 대신, 원문을 (occurred_at, item_id) 순으로 훑는
   커서(classification_cursor)로 진행 상황을 관리한다.
 
-분류 실패 건은 버리지 않고 dead-letter(classification_failure)에 남긴다.
+「Raw DB 스키마 확정 (8/7)」 반영:
+  기존   : 단일 `raw_event` 테이블을 source 컬럼으로 걸러 읽음
+  변경후 : 확정 문서 §2-4 `cs` · §2-5 `reviews` — 두 테이블을 합친 `voc_document` 뷰를 읽음
+
+  §5-1 A안 확정으로 `item_id` 는 `cs.id` / `reviews.id` 를 그대로 재사용한다. 접두사가
+  INQ-/RVW- 로 갈려 두 테이블을 합쳐도 충돌하지 않는다. 스키마 정의는 `app/core/raw_schema.py`.
+
+분류 실패 건은 버리지 않고 dead-letter(classification_failure, §2-7)에 남긴다.
 탐지의 분모를 원본 테이블에서 세고 classified_item 을 LEFT JOIN 하기로 한 합의
-(탐지 분모 산출 방식, 2026-08-03) 아래에서는 **분류 커버리지가 곧 분자의 정확도**다.
-실패 건이 조용히 사라지면 분모는 그대로인데 분자만 비어 부정률이 과소추정된다.
+(탐지 분모 산출 방식, 2026-08-03 · 확정 문서 §4) 아래에서는 **분류 커버리지가 곧 분자의
+정확도**다. 실패 건이 조용히 사라지면 분모는 그대로인데 분자만 비어 부정률이 과소추정된다.
 
 실행:
-  python scripts/classification_worker.py                 # 밀린 원본 전부 처리하고 종료
+  python scripts/classification_worker.py                 # 밀린 원문 전부 처리하고 종료
   python scripts/classification_worker.py --limit 50      # 시험 실행(과금 상한)
   python scripts/classification_worker.py --follow        # 프로듀서 재생을 준실시간 추종
   python scripts/classification_worker.py --retry-failed  # dead-letter 재처리(회수)
   python scripts/classification_worker.py --dry-run       # DB 없이 샘플 2건으로 추론만 확인
 
 DB 는 mock_producer 와 같은 sqlite 파일을 기본으로 본다(추가 의존성 없음).
-운영 DB 로 옮길 때는 open_db() 와 DDL 상수만 교체하면 되도록 표준 SQL 범위로 유지했다.
+운영 DB 로 옮길 때는 open_db() 와 raw_schema 의 DDL 만 교체하면 되도록 표준 SQL 범위로
+유지했다.
 """
 
 from __future__ import annotations
@@ -47,7 +55,7 @@ from app.classification.service import (
     classify_aspect,
     explode_to_rows,
 )
-from app.core import constants
+from app.core import constants, raw_schema
 from app.core.exceptions import LlmParseError
 from app.core.schemas import Aspect, AspectSentiment, ClassifiedItem, Sentiment, Source
 
@@ -160,131 +168,84 @@ DB_MAX_RETRY = 3
 # 집계에서는 계속 보인다.
 DEAD_LETTER_MAX_ATTEMPTS = int(os.getenv("DEAD_LETTER_MAX_ATTEMPTS", "3"))
 
-# 분류 대상 source. 주문(ORDER)·상세변경(DETAIL_CHANGE)은 원문 텍스트 분류 대상이 아니라
-# raw_event 에 source=NULL 로 들어오므로 자연히 제외된다.
+# 분류 대상 source. `voc_document` 뷰는 cs·reviews 만 합치므로 주문(§2-9)은 애초에
+# 들어오지 않지만, 뷰 정의가 늘어나도 여기서 한 번 더 걸러 낸다.
 CLASSIFY_SOURCES = (Source.CS.value, Source.REVIEW.value)
 
-# classified_item: explode 규약(분류 워커 명세 §2)대로 aspect 1개당 1행.
-#   created_at             원문 발생 시각 = raw_event.occurred_at (타임라인 정렬 키)
-#   classified_item_id     적재 순번. 타임라인 순으로 INSERT 하므로 이 값의 순서 = 타임라인 순서
-#   UNIQUE(item_id, aspect) 재실행/재시도 시 같은 행이 중복 적재되지 않게 하는 멱등 키
-#
-# ⚠️ 이 테이블로 **분모를 세면 안 된다** (탐지 분모 산출 방식 논의, 2026-08-03 확정).
-#    자세한 내용은 아래 DDL 주석 참고.
-CLASSIFIED_ITEM_DDL = """
--- ⚠️ 이 테이블은 "aspect 언급 목록"이지 "문서 목록"이 아니다.
---    언급된 aspect 가 하나도 없는 리뷰는 explode 결과가 0행이라 여기에 아예 안 남는다
---    (리뷰 프롬프트가 대상 속성이 없으면 빈 배열을 내도록 지시하고 있다).
---    따라서 COUNT(DISTINCT item_id) 로 총 리뷰 수(= 탐지의 분모)를 셀 수 없다 — 과대추정된다.
---    분모는 원본 테이블(raw_event → 실서비스 cs/reviews)에서 세고, 이 테이블을 LEFT JOIN 해서
---    분자(부정 언급)만 가져올 것.
-CREATE TABLE IF NOT EXISTS classified_item (
-    classified_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id            TEXT NOT NULL,
-    source             TEXT NOT NULL,
-    channel            TEXT NOT NULL,
-    product_group_id   TEXT NOT NULL,
-    aspect             TEXT NOT NULL,
-    sentiment          INTEGER NOT NULL,
-    mixed_signal       INTEGER,
-    raw_text           TEXT,
-    created_at         TEXT NOT NULL,
-    classified_at      TEXT NOT NULL,
-    UNIQUE (item_id, aspect)
-);
-"""
+# 원문 통합 뷰(cs ∪ reviews). 정의는 raw_schema.VOC_DOCUMENT_VIEW.
+# 두 테이블의 시각 컬럼명이 달라(inquired_at / created_at) 뷰가 occurred_at 으로 맞춰 준다.
+SOURCE_VIEW = raw_schema.VOC_DOCUMENT
 
-# classification_failure: 분류에 실패한 원문의 dead-letter 기록.
-#
-# 이게 없으면 실패 건이 로그로만 남고 커서가 지나가 버려 **영구 유실**된다. 그러면
-# "원본 테이블에서 분모를 세고 classified_item 을 LEFT JOIN 한다"는 합의의 전제인
-# 분류 커버리지 100% 가 조용히 깨진다(분자만 빠져 부정률이 과소추정된다).
-# 실패를 여기 남겨야 ①얼마나 빠졌는지 셀 수 있고 ②나중에 재처리할 수 있다.
-#   stage    parse(스키마 변환 실패) / classify(LLM 호출·파싱 실패)
-#   attempts 재처리 시도 횟수. 결정적 실패를 무한 재과금하지 않도록 상한을 건다.
-FAILURE_DDL = """
-CREATE TABLE IF NOT EXISTS classification_failure (
-    event_id        TEXT PRIMARY KEY,
-    occurred_at     TEXT NOT NULL,
-    stage           TEXT NOT NULL,
-    error           TEXT NOT NULL,
-    attempts        INTEGER NOT NULL DEFAULT 1,
-    first_failed_at TEXT NOT NULL,
-    last_failed_at  TEXT NOT NULL
-);
-"""
+# ⚠️ 테이블 DDL 은 여기 두지 않는다 — `app/core/raw_schema.py` 가 정본이다. 프로듀서와
+#    정의가 갈리면 한쪽만 고쳐지는 사고가 난다. 여기에는 이 워커만 쓰는 **쿼리**만 둔다.
 
 FAILURE_UPSERT = """
 INSERT INTO classification_failure
-    (event_id, occurred_at, stage, error, attempts, first_failed_at, last_failed_at)
+    (item_id, occurred_at, stage, error, attempts, first_failed_at, last_failed_at)
 VALUES (?, ?, ?, ?, 1, ?, ?)
-ON CONFLICT(event_id) DO UPDATE SET
+ON CONFLICT(item_id) DO UPDATE SET
     stage          = excluded.stage,
     error          = excluded.error,
     attempts       = classification_failure.attempts + 1,
     last_failed_at = excluded.last_failed_at
 """
 
-FAILURE_DELETE = "DELETE FROM classification_failure WHERE event_id = ?"
+FAILURE_DELETE = "DELETE FROM classification_failure WHERE item_id = ?"
 
 # 재처리 대상 조회. 시도 횟수가 상한 미만인 것만 — 결정적 실패(예: 리뷰에 허용되지 않는
 # aspect)를 매번 다시 LLM 에 태우면 돈만 쓰고 결과는 같다.
 #
-# ⚠️ (occurred_at, event_id) 페이지 커서가 꼭 필요하다. 이게 없으면 재처리에 또 실패한
+# ⚠️ (occurred_at, item_id) 페이지 커서가 꼭 필요하다. 이게 없으면 재처리에 또 실패한
 #    건이 다음 조회에 **다시 잡혀서**, 한 번 실행하는 동안 같은 건을 상한까지 반복
 #    호출한다(1회 실행 = 건당 max_attempts 회 과금). 한 실행에서는 건당 1회만 시도한다.
-FETCH_FAILED_SQL = """
-SELECT r.event_id, r.source, r.channel, r.channel_product_id, r.product_group_id,
-       r.raw_text, r.occurred_at
+FETCH_FAILED_SQL = f"""
+SELECT r.item_id, r.source, r.channel_id, r.channel_product_id, r.product_group_id,
+       r.content, r.occurred_at
 FROM classification_failure f
-JOIN raw_event r ON r.event_id = f.event_id
+JOIN {SOURCE_VIEW} r ON r.item_id = f.item_id
 WHERE f.attempts < ?
-  AND (f.occurred_at > ? OR (f.occurred_at = ? AND f.event_id > ?))
-ORDER BY f.occurred_at, f.event_id
+  AND (f.occurred_at > ? OR (f.occurred_at = ? AND f.item_id > ?))
+ORDER BY f.occurred_at, f.item_id
 LIMIT ?
 """
-
-# 커서: Kafka 컨슈머 오프셋을 대체한다. 어디까지 읽었는지만 기록하고,
-# classified_item INSERT 와 같은 트랜잭션에서 갱신해 원자성을 보장한다.
-CURSOR_DDL = """
-CREATE TABLE IF NOT EXISTS classification_cursor (
-    worker_id        TEXT PRIMARY KEY,
-    last_occurred_at TEXT,
-    last_event_id    TEXT,
-    updated_at       TEXT NOT NULL
-);
-"""
-
-CLASSIFIED_ITEM_INDEXES = [
-    "CREATE INDEX IF NOT EXISTS idx_classified_item_timeline ON classified_item (created_at, classified_item_id);",
-    "CREATE INDEX IF NOT EXISTS idx_classified_item_group ON classified_item (product_group_id, aspect, created_at);",
-]
 
 CLASSIFIED_ITEM_INSERT = """
-INSERT OR IGNORE INTO classified_item
-    (item_id, source, channel, product_group_id, aspect, sentiment, mixed_signal,
-     raw_text, created_at, classified_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT OR IGNORE INTO classified_item (item_id, source, classified_at, prompt_version)
+VALUES (?, ?, ?, ?)
 """
 
-# (occurred_at, event_id) 복합 커서보다 큰 행만 타임라인 순으로 가져온다.
+CLASSIFIED_ITEM_ASPECT_INSERT = """
+INSERT OR IGNORE INTO classified_item_aspect (item_id, aspect, sentiment, mixed_signal)
+VALUES (?, ?, ?, ?)
+"""
+
+# (occurred_at, item_id) 복합 커서보다 큰 행만 타임라인 순으로 가져온다.
 # 튜플 비교 대신 풀어 쓴 이유는 구버전 sqlite 호환(row value 는 3.15+).
 FETCH_BATCH_SQL = f"""
-SELECT event_id, source, channel, channel_product_id, product_group_id, raw_text, occurred_at
-FROM raw_event
+SELECT item_id, source, channel_id, channel_product_id, product_group_id, content, occurred_at
+FROM {SOURCE_VIEW}
 WHERE source IN ({', '.join(['?'] * len(CLASSIFY_SOURCES))})
-  AND raw_text IS NOT NULL AND TRIM(raw_text) <> ''
-  AND (occurred_at > ? OR (occurred_at = ? AND event_id > ?))
-ORDER BY occurred_at, event_id
+  AND content IS NOT NULL AND TRIM(content) <> ''
+  AND (occurred_at > ? OR (occurred_at = ? AND item_id > ?))
+ORDER BY occurred_at, item_id
 LIMIT ?
+"""
+
+# 분류 커버리지 확인용 분모. §2-4 가 "분류 안 된 문의도 반드시 남는다"고 못박은 대로
+# 원문 테이블에서 센다 — classified_item 에서 세면 세는 대상과 확인하려는 대상이 같아진다.
+COUNT_SOURCE_SQL = f"""
+SELECT COUNT(*) FROM {SOURCE_VIEW}
+WHERE source IN ({', '.join(['?'] * len(CLASSIFY_SOURCES))})
+  AND content IS NOT NULL AND TRIM(content) <> ''
 """
 
 
 def open_db(db_path_str: str) -> sqlite3.Connection:
-    """raw DB 연결 + 분류 결과 테이블 보장.
+    """raw DB 연결 + AI 소유 테이블 보장.
 
-    raw_event 는 mock_producer 가 만든다. 없으면 아직 원본이 한 건도 적재되지 않은
-    상태이므로, 잘못된 경로를 조용히 새 빈 파일로 만들어 버리지 않도록 여기서 멈춘다.
+    원문 테이블(cs·reviews)은 main server 소유라 여기서 만들지 않는다(§1). 목
+    파이프라인에서는 mock_producer 가 그 역할이다. 없으면 아직 원문이 한 건도 적재되지
+    않은 상태이므로, 잘못된 경로를 조용히 새 빈 파일로 만들어 버리지 않도록 여기서 멈춘다.
     """
     db_path = Path(db_path_str).resolve()
     if not db_path.exists():
@@ -296,18 +257,23 @@ def open_db(db_path_str: str) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA busy_timeout=30000;")
 
-    exists = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='raw_event'"
-    ).fetchone()
-    if not exists:
-        logger.error(f"[DB ERROR] raw_event 테이블이 없습니다: {db_path} (mock_producer 를 먼저 실행하세요)")
+    placeholders = ", ".join(["?"] * len(raw_schema.SOURCE_TABLES))
+    found = {
+        row[0]
+        for row in conn.execute(
+            f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})",
+            raw_schema.SOURCE_TABLES,
+        )
+    }
+    missing = [t for t in raw_schema.SOURCE_TABLES if t not in found]
+    if missing:
+        logger.error(
+            f"[DB ERROR] 원문 테이블이 없습니다: {', '.join(missing)} — {db_path} "
+            "(mock_producer 를 먼저 실행하세요)"
+        )
         sys.exit(1)
 
-    conn.execute(CLASSIFIED_ITEM_DDL)
-    conn.execute(CURSOR_DDL)
-    conn.execute(FAILURE_DDL)
-    for stmt in CLASSIFIED_ITEM_INDEXES:
-        conn.execute(stmt)
+    raw_schema.create_classified_tables(conn)
     conn.commit()
 
     logger.info(f"[DB] 연결 완료: {db_path}")
@@ -315,19 +281,30 @@ def open_db(db_path_str: str) -> sqlite3.Connection:
 
 
 def _to_request_item(row: sqlite3.Row) -> ClassifyRequestItem:
-    """raw_event 1행 → 분류 입력 1건.
+    """`voc_document` 1행 → 분류 입력 1건.
 
-    raw_event 는 CSV 원본을 거의 그대로 담고 있어서 스키마 enum 과 표기가 어긋날 수 있다
+    원문은 CSV 를 거의 그대로 담고 있어서 스키마 enum 과 표기가 어긋날 수 있다
     (채널 대소문자 등). 여기서만 맞춰 주고 분류 로직 자체는 건드리지 않는다.
+
+    ⚠️ **분류 결과의 item_id 가 원문 PK 와 같은 값이어야 한다.** dead-letter 기록이
+       `occurred_at_by_id[item_id]` 로 발생 시각을 찾는데 그 키를 채우는 것은
+       분류 결과의 item_id 다. 둘이 갈라지면 occurred_at 이 "" 로 들어가고
+       `FETCH_FAILED_SQL` 의 페이지 커서 정렬(f.occurred_at, f.item_id)이 깨져
+       `--retry-failed` 회수가 조용히 망가진다. §5-1 A안(item_id = cs.id / reviews.id)이
+       이 등식의 근거다.
+       (tests/test_classification_worker.py::test_dead_letter_records_occurred_at 이 고정)
     """
     return ClassifyRequestItem.model_validate({
-        "item_id": row["event_id"],
+        "item_id": row["item_id"],
         "source": str(row["source"]).lower(),
-        "channel": str(row["channel"] or "").upper(),
+        "channel": str(row["channel_id"] or "").upper(),
+        # ⚠️ product_group_id 는 §2-4 대로 원문에 비정규화돼 있어야 한다. 목 대본에는
+        #    답 노출 방지 설계상 그 컬럼이 없어 채널 상품 ID 로 대신한다 — 실서비스에서는
+        #    적재 시점에 이미 매핑이 끝나 있으므로(§4-①) 이 폴백이 걸릴 일이 없다.
         "product_group_id": str(
             row["product_group_id"] or row["channel_product_id"] or "PG-UNKNOWN"
         ),
-        "raw_text": row["raw_text"],
+        "raw_text": row["content"],
         "created_at": row["occurred_at"],
     })
 
@@ -382,10 +359,10 @@ class ClassificationWorker:
             return
 
         self.conn = open_db(self.db_path)
-        last_occurred_at, last_event_id = self.load_cursor()
+        last_occurred_at, last_item_id = self.load_cursor()
         logger.info(
             f"[WORKER STARTED] db={self.db_path}, batch={self.batch_size}, follow={self.follow}, "
-            f"retry_failed={self.retry_failed}, cursor=({last_occurred_at}, {last_event_id})"
+            f"retry_failed={self.retry_failed}, cursor=({last_occurred_at}, {last_item_id})"
         )
 
         try:
@@ -440,44 +417,49 @@ class ClassificationWorker:
 
             self.processed += len(rows)
             # 이번 실행에서 이미 시도한 구간은 다시 잡지 않는다(건당 1회 시도 보장)
-            self.retry_page_cursor = (rows[-1]["occurred_at"], rows[-1]["event_id"])
+            self.retry_page_cursor = (rows[-1]["occurred_at"], rows[-1]["item_id"])
             self.process_batch(rows, advance_cursor=False)
 
     # ── 커서 ────────────────────────────────────────────────────────────────
 
     def load_cursor(self) -> tuple[str, str]:
+        """(마지막으로 처리한 발생 시각, item_id).
+
+        컬럼명이 `last_inquired_at` 인데 리뷰는 시각 컬럼이 `created_at` 이다 —
+        확정 문서 §2-8 의 이름을 그대로 따랐고, 값은 뷰의 `occurred_at` 이다.
+        """
         row = self.conn.execute(
-            "SELECT last_occurred_at, last_event_id FROM classification_cursor WHERE worker_id = ?",
+            "SELECT last_inquired_at, last_item_id FROM classification_cursor WHERE worker_id = ?",
             (WORKER_ID,),
         ).fetchone()
-        if row and row["last_occurred_at"] is not None:
-            return row["last_occurred_at"], row["last_event_id"] or ""
+        if row and row["last_inquired_at"] is not None:
+            return row["last_inquired_at"], row["last_item_id"] or ""
         return "", ""  # 빈 문자열은 모든 ISO 시각 문자열보다 작다 → 처음부터
 
-    def save_cursor(self, occurred_at: str, event_id: str) -> None:
+    def save_cursor(self, occurred_at: str, item_id: str) -> None:
         self.conn.execute(
             """
-            INSERT INTO classification_cursor (worker_id, last_occurred_at, last_event_id, updated_at)
+            INSERT INTO classification_cursor (worker_id, last_inquired_at, last_item_id, updated_at)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(worker_id) DO UPDATE SET
-                last_occurred_at = excluded.last_occurred_at,
-                last_event_id    = excluded.last_event_id,
+                last_inquired_at = excluded.last_inquired_at,
+                last_item_id     = excluded.last_item_id,
                 updated_at       = excluded.updated_at
             """,
-            (WORKER_ID, occurred_at, event_id, datetime.now(timezone.utc).astimezone().isoformat()),
+            (WORKER_ID, occurred_at, item_id, datetime.now(timezone.utc).astimezone().isoformat()),
         )
 
     # ── 조회 ────────────────────────────────────────────────────────────────
 
     def fetch_next_batch(self) -> list[sqlite3.Row]:
-        last_occurred_at, last_event_id = self.load_cursor()
+        last_occurred_at, last_item_id = self.load_cursor()
         batch_size = self.batch_size
         if self.limit is not None:
             # 상한을 넘겨서 가져오면 그만큼 LLM 을 더 부른다 — 남은 만큼만 조회한다
             batch_size = min(batch_size, self.limit - self.processed)
         params = (
             *CLASSIFY_SOURCES,
-            last_occurred_at, last_occurred_at, last_event_id,
+            last_occurred_at, last_occurred_at, last_item_id,
             batch_size,
         )
         return self.conn.execute(FETCH_BATCH_SQL, params).fetchall()
@@ -486,9 +468,9 @@ class ClassificationWorker:
         batch_size = self.batch_size
         if self.limit is not None:
             batch_size = min(batch_size, self.limit - self.processed)
-        occurred_at, event_id = self.retry_page_cursor
+        occurred_at, item_id = self.retry_page_cursor
         return self.conn.execute(
-            FETCH_FAILED_SQL, (self.max_attempts, occurred_at, occurred_at, event_id, batch_size)
+            FETCH_FAILED_SQL, (self.max_attempts, occurred_at, occurred_at, item_id, batch_size)
         ).fetchall()
 
     # ── 처리 ────────────────────────────────────────────────────────────────
@@ -496,7 +478,7 @@ class ClassificationWorker:
     def process_batch(self, rows: list[sqlite3.Row], *, advance_cursor: bool = True) -> None:
         """배치 1개(원문 N건)를 분류해 적재하고 커서를 전진시킨다.
 
-        rows 는 이미 (occurred_at, event_id) 오름차순이라, 이 순서대로 INSERT 하면
+        rows 는 이미 (occurred_at, item_id) 오름차순이라, 이 순서대로 INSERT 하면
         classified_item 이 타임라인 순으로 쌓인다.
 
         실패한 건은 **버리지 않고** dead-letter(classification_failure)에 남긴다 —
@@ -508,19 +490,17 @@ class ClassificationWorker:
         """
         logger.info(f"[BATCH] {len(rows)}건 처리 시작 (~{rows[-1]['occurred_at']})")
 
-        occurred_at_by_id = {row["event_id"]: row["occurred_at"] for row in rows}
-        failures: list[tuple[str, str, str]] = []  # (event_id, stage, error)
+        occurred_at_by_id = {row["item_id"]: row["occurred_at"] for row in rows}
+        failures: list[tuple[str, str, str]] = []  # (item_id, stage, error)
 
         request_items: list[ClassifyRequestItem] = []
-        raw_text_by_id: dict[str, str] = {}
         for row in rows:
             try:
                 item = _to_request_item(row)
                 request_items.append(item)
-                raw_text_by_id[item.item_id] = item.raw_text
             except Exception as exc:
-                failures.append((row["event_id"], "parse", str(exc)))
-                logger.error(f"[PARSE ERROR] event_id={row['event_id']}: {exc}")
+                failures.append((row["item_id"], "parse", str(exc)))
+                logger.error(f"[PARSE ERROR] item_id={row['item_id']}: {exc}")
 
         classified_items, classify_failures = self.classify_items(request_items)
         failures.extend(classify_failures)
@@ -535,7 +515,6 @@ class ClassificationWorker:
         # 적재 + 실패 기록 + 커서 전진은 한 트랜잭션이다. 실패하면 워커를 세운다(아래 참고).
         inserted = self.persist_batch(
             classified_items,
-            raw_text_by_id,
             rows[-1],
             failures=failures,
             occurred_at_by_id=occurred_at_by_id,
@@ -553,7 +532,7 @@ class ClassificationWorker:
         logger.info(
             f"[BATCH COMPLETE] 원문 {len(classified_items)}건 → classified_item {inserted}행 적재"
             f"{f', 실패 {len(failures)}건 dead-letter 기록' if failures else ''}"
-            f"{f' (커서: {rows[-1]["occurred_at"]} / {rows[-1]["event_id"]})' if advance_cursor else ''}"
+            f"{f' (커서: {rows[-1]["occurred_at"]} / {rows[-1]["item_id"]})' if advance_cursor else ''}"
         )
 
     def classify_items(
@@ -581,7 +560,7 @@ class ClassificationWorker:
            남지 않고 영구 유실). 조용히 깨지는 형태라 주석으로 못 박아 둔다.
 
         Returns:
-            (분류 성공 목록, [(event_id, "classify", 오류메시지)]) — 실패는 호출부가
+            (분류 성공 목록, [(item_id, "classify", 오류메시지)]) — 실패는 호출부가
             dead-letter 에 기록한다.
         """
         if not items:
@@ -591,14 +570,52 @@ class ClassificationWorker:
 
         results: list[ClassifiedItem] = []
         failures: list[tuple[str, str, str]] = []
+        call_level_failures = 0
         for item, outcome in zip(items, outcomes):
             if isinstance(outcome, BaseException):
                 failures.append((item.item_id, "classify", f"{type(outcome).__name__}: {outcome}"))
                 logger.error(f"[ITEM FAILED] item_id={item.item_id} 분류 실패: {outcome!s}")
+                # 파싱·검증 실패는 그 원문 고유의 문제지만, 호출 자체가 실패한 것은
+                # 프로세스 전역 원인(키 만료·레이트리밋 소진·네트워크)일 수 있다.
+                if not isinstance(outcome, LlmParseError):
+                    call_level_failures += 1
                 continue
             # outcome 은 item 1건에 대응하는 ClassifiedItem 이다(리스트가 아니다)
             results.append(outcome)
+
+        self._halt_if_batch_wide_failure(items, failures, call_level_failures)
         return results, failures
+
+    def _halt_if_batch_wide_failure(
+        self,
+        items: list[ClassifyRequestItem],
+        failures: list[tuple[str, str, str]],
+        call_level_failures: int,
+    ) -> None:
+        """배치가 통째로, 그것도 호출 단계에서 죽었으면 워커를 세운다.
+
+        ⚠️ 이게 없으면 **시스템 장애가 "N건 개별 실패"로 위장**된다. 401 이나 레이트리밋
+           소진처럼 배치 전체가 같은 이유로 죽는 상황에서, 워커는 그것을 건별 실패로
+           dead-letter 에 적고 커서를 밀고 다음 배치로 간다. 96,531건이면 배치가 9,654개라
+           원본 전량이 dead-letter 로 넘어간 채 **정상 종료**한다. 게다가 장애가 길어져
+           재처리가 DEAD_LETTER_MAX_ATTEMPTS 를 넘기면 회수 대상에서도 빠진다.
+
+        판정에 오류 **종류**를 같이 보는 이유: `--retry-failed` 는 이미 실패한 건만 모아
+        돌리는 모드라 전량 실패가 정상이다. 거기서 건수만 보고 세우면 회수 작업이
+        첫 배치에서 멈춘다. 파싱·검증 실패(LlmParseError)는 원문 고유의 결정적 실패이므로
+        아무리 많아도 장애 신호가 아니다. 호출 단계 실패가 섞여 있을 때만 세운다.
+        (분류 서비스 계약 docstring 이 호출부 몫으로 남겨 둔 판정이다.)
+        """
+        if not items or len(failures) != len(items) or not call_level_failures:
+            return
+
+        logger.error(
+            f"[WORKER HALT] 배치 {len(items)}건이 전부 실패했고 그중 {call_level_failures}건이 "
+            "호출 단계 실패입니다 — 개별 원문 문제가 아니라 시스템 장애로 봅니다"
+            "(키 만료·레이트리밋 소진·네트워크 등). 원인을 해결한 뒤 --retry-failed 로 "
+            "dead-letter 를 회수하세요. 그대로 두면 남은 배치가 전부 dead-letter 로 넘어갑니다."
+        )
+        self.is_running = False
 
     async def _classify_all(
         self, items: list[ClassifyRequestItem]
@@ -612,7 +629,6 @@ class ClassificationWorker:
     def persist_batch(
         self,
         classified_items: list[ClassifiedItem],
-        raw_text_by_id: dict[str, str],
         last_row: sqlite3.Row,
         *,
         failures: list[tuple[str, str, str]] | None = None,
@@ -636,11 +652,11 @@ class ClassificationWorker:
         """
         for attempt in range(1, DB_MAX_RETRY + 1):
             try:
-                inserted = self.save_classified_items(classified_items, raw_text_by_id)
+                inserted = self.save_classified_items(classified_items)
                 self.record_failures(failures or [], occurred_at_by_id or {})
                 self.clear_failures(resolved_ids or [])
                 if advance_cursor:
-                    self.save_cursor(last_row["occurred_at"], last_row["event_id"])
+                    self.save_cursor(last_row["occurred_at"], last_row["item_id"])
                 self.conn.commit()
                 return inserted
             except sqlite3.OperationalError as exc:
@@ -656,7 +672,7 @@ class ClassificationWorker:
 
         logger.error(
             "[WORKER HALT] classified_item 적재에 실패해 워커를 정지합니다. "
-            f"커서는 전진하지 않았으므로 재시작하면 이 배치(~{last_row['event_id']})부터 "
+            f"커서는 전진하지 않았으므로 재시작하면 이 배치(~{last_row['item_id']})부터 "
             "다시 처리합니다 — LLM 이 다시 호출되니 DB 문제를 먼저 해결하세요."
         )
         self.is_running = False
@@ -669,33 +685,29 @@ class ClassificationWorker:
         if not failures:
             return
         now = datetime.now(timezone.utc).astimezone().isoformat()
-        for event_id, stage, error in failures:
+        for item_id, stage, error in failures:
             self.conn.execute(
                 FAILURE_UPSERT,
-                (event_id, occurred_at_by_id.get(event_id, ""), stage, error[:500], now, now),
+                (item_id, occurred_at_by_id.get(item_id, ""), stage, error[:500], now, now),
             )
 
-    def clear_failures(self, event_ids: list[str]) -> None:
+    def clear_failures(self, item_ids: list[str]) -> None:
         """분류에 성공한 건을 dead-letter 에서 제거한다(재처리 회수 경로)."""
-        for event_id in event_ids:
-            self.conn.execute(FAILURE_DELETE, (event_id,))
+        for item_id in item_ids:
+            self.conn.execute(FAILURE_DELETE, (item_id,))
 
     def log_coverage(self) -> None:
         """분류 커버리지를 남긴다 — 분모를 원본에서 세는 합의의 전제 확인용.
 
-        원본(raw_event 의 분류 대상) 대비 classified_item 에 실제로 남은 문서 수를 비교한다.
-        차이는 곧 "분자에서 빠진 문서"이고, aspect 0개 정상 분류와 구분하려고 dead-letter
-        대기 건수를 함께 찍는다. 미달이면 경고로 올려 로더가 집계하기 전에 눈에 띄게 한다.
+        원문(cs ∪ reviews 의 분류 대상) 대비 classified_item 에 실제로 남은 문서 수를
+        비교한다. 차이는 곧 "분자에서 빠진 문서"이고, aspect 0개 정상 분류와 구분하려고
+        dead-letter 대기 건수를 함께 찍는다. 미달이면 경고로 올려 로더가 집계하기 전에
+        눈에 띄게 한다.
         """
         if self.conn is None:
             return
         try:
-            placeholders = ", ".join(["?"] * len(CLASSIFY_SOURCES))
-            total = self.conn.execute(
-                f"SELECT COUNT(*) FROM raw_event WHERE source IN ({placeholders}) "
-                "AND raw_text IS NOT NULL AND TRIM(raw_text) <> ''",
-                CLASSIFY_SOURCES,
-            ).fetchone()[0]
+            total = self.conn.execute(COUNT_SOURCE_SQL, CLASSIFY_SOURCES).fetchone()[0]
             pending = self.conn.execute("SELECT COUNT(*) FROM classification_failure").fetchone()[0]
             exhausted = self.conn.execute(
                 "SELECT COUNT(*) FROM classification_failure WHERE attempts >= ?",
@@ -718,29 +730,36 @@ class ClassificationWorker:
         else:
             logger.info(message)
 
-    def save_classified_items(
-        self, items: list[ClassifiedItem], raw_text_by_id: dict[str, str]
-    ) -> int:
-        """ClassifiedItem 을 explode 해서 classified_item 에 적재. 반환값은 실제 INSERT 행 수."""
+    def save_classified_items(self, items: list[ClassifiedItem]) -> int:
+        """분류 결과를 §2-6 두 테이블에 적재. 반환값은 실제 INSERT 된 aspect 행 수.
+
+        ⚠️ 원문(raw_text)·채널·상품그룹·발생 시각을 **복사하지 않는다** (아키텍처 확정 §6).
+           전부 원문 테이블에 있으므로 집계는 그쪽을 기준으로 잡고 여기를 조인한다.
+
+        ⚠️ aspect 가 0개인 문의도 **부모 행은 남긴다.** 안 남기면 "분류를 시도했으나 언급된
+           속성이 없었다"와 "아직 분류하지 않았다"가 구분되지 않아, 커버리지 확인이 깨진다.
+        """
         classified_at = datetime.now(timezone.utc).astimezone().isoformat()
         inserted = 0
 
         for item in items:
+            prompt_version = (
+                service_module.PROMPT_ASPECT_VERSION
+                if item.source == Source.CS
+                else service_module.PROMPT_SENTIMENT_VERSION
+            )
+            self.conn.execute(
+                CLASSIFIED_ITEM_INSERT,
+                (item.item_id, item.source.value, classified_at, prompt_version),
+            )
             for row in explode_to_rows(item):
-                created_at = row["created_at"]
                 cur = self.conn.execute(
-                    CLASSIFIED_ITEM_INSERT,
+                    CLASSIFIED_ITEM_ASPECT_INSERT,
                     (
                         row["item_id"],
-                        row["source"],
-                        row["channel"],
-                        row["product_group_id"],
                         row["aspect"],
                         row["sentiment"],
                         None if row["mixed_signal"] is None else int(row["mixed_signal"]),
-                        raw_text_by_id.get(row["item_id"]),
-                        created_at.isoformat() if isinstance(created_at, datetime) else str(created_at),
-                        classified_at,
                     ),
                 )
                 inserted += cur.rowcount  # INSERT OR IGNORE 로 중복 무시된 행은 0
