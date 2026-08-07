@@ -70,6 +70,40 @@ class TestNegativeDetectionFPR:
         assert nd["fpr"] is None
         assert nd["recall"] == 1.0, "recall은 fp+tn과 무관하니 정상 계산돼야 함"
 
+    def test_precision_operational_reproduces_jiin_example(self):
+        """운영비율 환산 precision — 지인님 PR리뷰 예시(recall95%·FPR5%→~61%) 재현
+        (Notion A안, 2026-08-06 반영). 균형표본(50:50) precision은 95%로 높게 나오지만,
+        실제 운영 부정비율(7.4%)로 환산하면 60%대로 뚝 떨어진다는 게 이 지표의 핵심.
+        """
+        rows = [_row(f"N{i}", "색상", -1) for i in range(20)] + [_row(f"P{i}", "색상", 0) for i in range(20)]
+        predictions = {}
+        for i in range(19):
+            predictions[f"N{i}"] = _pred("색상", -1)  # 부정 19/20 정답 → recall 95%
+        predictions["N19"] = _pred("색상", 0)
+        predictions["P0"] = _pred("색상", -1)  # 비부정 1/20 오탐 → FPR 5%
+        for i in range(1, 20):
+            predictions[f"P{i}"] = _pred("색상", 0)
+
+        nd = score(rows, predictions)["negative_detection"]
+
+        assert nd["recall"] == 0.95
+        assert nd["fpr"] == 0.05
+        assert nd["precision"] == 0.95, "표본기준 precision은 균형표본이라 95%로 높게 나옴"
+        assert abs(nd["precision_operational"] - 0.603) < 0.005, (
+            f"운영환산 precision은 60%대여야 하는데 {nd['precision_operational']}"
+        )
+        assert nd["precision"] != nd["precision_operational"], "표본기준과 운영환산은 반드시 달라야 함(그게 이 지표의 존재 이유)"
+
+    def test_precision_operational_is_null_when_fpr_is_null(self):
+        """fpr이 None이면(비부정 표본 0건) precision_operational도 연쇄적으로 None이어야 한다
+        — 베이즈 환산 자체가 FPR값을 입력으로 쓰니, FPR을 모르면 환산도 불가능."""
+        rows = [_row(f"N{i}", "색상", -1) for i in range(4)]
+        predictions = {r["inquiry_id"]: _pred("색상", -1) for r in rows}
+
+        nd = score(rows, predictions)["negative_detection"]
+        assert nd["fpr"] is None
+        assert nd["precision_operational"] is None, "fpr이 None인데 환산값만 계산되면 안 됨"
+
     def test_perfect_model_has_zero_fpr_and_full_recall(self):
         """정상 모델(전부 정답)은 FPR 0%, recall 100%가 나와야 한다 — 지표 자체의 정상 동작 확인."""
         rows = [_row(f"N{i}", "색상", -1) for i in range(3)] + [_row(f"P{i}", "색상", 0) for i in range(3)]

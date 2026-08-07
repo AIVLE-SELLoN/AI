@@ -201,9 +201,6 @@ def sample_rows(rows: list[dict], limit: int, seed: int, only_negative: bool = F
     return picked
 
 
-    return picked[:limit]
-
-
 async def run_chunks(
     rows: list[dict], chunk_size: int, concurrency: int
 ) -> tuple[dict[str, list[dict]], list[str]]:
@@ -513,7 +510,22 @@ def score(rows: list[dict], predictions: dict[str, list[dict]], leak_threshold: 
     neg_fpr = round(neg_fp / (neg_fp + neg_tn), 4) if has_nonneg_sample else None
     neg_precision_reported = neg_precision if has_nonneg_sample else None
     neg_f1_reported = neg_f1 if has_nonneg_sample else None
-    neg_asp_precision, neg_asp_recall, neg_asp_f1 = _prf1(neg_aspect_tp, neg_aspect_fp, neg_aspect_fn)
+
+    # 🆕 운영 비율 환산 precision (Notion A안, 지인님 PR리뷰 2026-08-06 재요청)
+    # 균형표본(50:50)의 precision은 실제 운영 트래픽 비율(부정 7.4%)의 값이 아니다.
+    # recall·FPR은 각자 자기 클래스 안에서만 계산돼 표본비율과 무관하지만, precision은
+    # 두 클래스의 상대적 비중에 직접 좌우된다 — 베이즈 정리로 표본비율 의존성을 제거해
+    # "실제 운영 트래픽에 이 모델을 붙이면 나올 precision"으로 환산한다.
+    #   P(true=부정|pred=부정) = P(pred=부정|true=부정)*P(true=부정) / P(pred=부정)
+    #                          = recall*p / (recall*p + FPR*(1-p))
+    # P_OPERATIONAL=0.074는 golden_cs_labels.csv 실측값(7,117/96,531=7.37%, 2026-08-06
+    # 재확인)과 Notion 원문의 0.073 사이 반올림 차이 — 최신 실측값 쪽으로 확정.
+    P_OPERATIONAL = 0.074
+    neg_precision_operational = round(
+        (P_OPERATIONAL * neg_recall) / (P_OPERATIONAL * neg_recall + (1 - P_OPERATIONAL) * neg_fpr), 4
+    ) if neg_fpr is not None else None  # neg_fpr가 None이면(비부정표본 0건) 이것도 계산 불가 → None
+
+    neg_asp_precision, _, _ = _prf1(neg_aspect_tp, neg_aspect_fp, neg_aspect_fn)
     n_true_negative = neg_tp + neg_fn  # 골든상 부정인 문항 수(표본 크기 확인용)
     n_true_nonnegative = neg_fp + neg_tn  # 골든상 비부정인 문항 수(FPR 측정 가능 여부 확인용)
 
@@ -542,6 +554,13 @@ def score(rows: list[dict], predictions: dict[str, list[dict]], leak_threshold: 
                     "precision·f1은 비부정 표본(fp+tn)이 0건이면 null(측정불가, 100%로 착각 금지)",
             "precision": neg_precision_reported, "recall": neg_recall, "f1": neg_f1_reported,
             "fpr": neg_fpr,
+            "precision_operational": neg_precision_operational,
+            "precision_operational_note": (
+                "⚠️ 환산값입니다 — 직접 측정한 게 아니라, 균형표본(50:50)의 recall·FPR을 "
+                f"베이즈 정리로 실제 운영 부정비율(p={P_OPERATIONAL})에 맞춰 재계산한 것. "
+                "위 'precision'(표본기준)과 절대 혼동하지 말 것 — FPR이 0%에 가까울 땐 둘이 "
+                "비슷해 보이지만, FPR이 조금만 올라도 크게 벌어짐(예: FPR5%→표본95% vs 운영60%)."
+            ),
             "tp": neg_tp, "fp": neg_fp, "fn": neg_fn, "tn": neg_tn,
             "n_true_negative": n_true_negative, "n_true_nonnegative": n_true_nonnegative,
         },
@@ -634,8 +653,10 @@ def report(result: dict) -> None:
     p_str = f"{nd['precision']:.1%}" if nd["precision"] is not None else "측정불가(비부정 표본 0건)"
     f1_str = f"{nd['f1']:.1%}" if nd["f1"] is not None else "측정불가"
     fpr_str = f"{nd['fpr']:.1%}" if nd["fpr"] is not None else "측정불가(비부정 표본 0건)"
-    print(f"\n★★★ [대표지표] ① 부정 판별 정확도(탐지 분자 결정)  P={p_str} R={nd['recall']:.1%} F1={f1_str}")
+    p_op_str = f"{nd['precision_operational']:.1%}" if nd["precision_operational"] is not None else "측정불가"
+    print(f"\n★★★ [대표지표] ① 부정 판별 정확도(탐지 분자 결정)  P(표본기준)={p_str} R={nd['recall']:.1%} F1={f1_str}")
     print(f"    🆕 FPR(오탐률) = {fpr_str}  — eval/README.md가 경고한 '부정 강화하면 FPR 상승' 여부를 실제로 보는 값")
+    print(f"    🆕 P(운영환산, p=7.4%) = {p_op_str}  — ⚠️ 위 P(표본기준)와 다른 값, 실제 트래픽에 붙였을 때 기대되는 precision")
     print(f"    tp={nd['tp']} fp={nd['fp']} fn={nd['fn']} tn={nd['tn']}  (골든 부정 n={nd['n_true_negative']}, 비부정 n={nd['n_true_nonnegative']})")
     print(f"★★★ [대표지표] ② 부정 한정 aspect 정확도(탐지 분자 위치 결정)  accuracy={na['accuracy']:.1%}  (tp={na['tp']} fp={na['fp']} fn={na['fn']})")
     print(f"    골든 부정 표본 n={na['n_true_negative']}" + (f"  ⚠️ {na['n_true_negative_warning']}" if na["n_true_negative_warning"] else ""))
@@ -691,8 +712,9 @@ async def main_async(args: argparse.Namespace) -> None:
     if failed_ids:
         print(f"\n⚠️ 청크 실패로 무응답 처리된 건: {len(failed_ids)}건")
 
-    from app.config import get_settings
     import hashlib
+
+    from app.config import get_settings
 
     prompt_path = ROOT / "app" / "classification" / "prompts" / f"{classification_service.PROMPT_ASPECT_VERSION}.md"
     prompt_hash = hashlib.md5(prompt_path.read_bytes()).hexdigest()[:12] if prompt_path.exists() else None
