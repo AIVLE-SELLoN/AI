@@ -55,6 +55,9 @@ kafka-python-ng==2.2.3
 # app/core/mq.py 가 **함수 안에서** import 한다 — payload 조립 테스트가 이 패키지 없이
 # 돌아야 하기 때문(브로커 접속 정보가 아직 없다). 발행을 실제로 하려면 필요하다.
 aio-pika==9.5.7
+# aio-pika 가 aiormq 를 거쳐 끌어오지만, `_require_ack()` 가 Basic.Ack/Return 을 직접
+# 판별하느라 우리 코드가 직접 import 한다 — 직접 쓰는 건 직접 적는다.
+pamqp==3.3.0
 
 # --- 개발/테스트 ---
 pytest==9.1.1

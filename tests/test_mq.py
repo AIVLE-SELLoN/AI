@@ -336,7 +336,13 @@ async def test_unroutable_message_is_a_failure_not_a_success(alert, monkeypatch)
 
 @pytest.mark.asyncio
 async def test_unconfirmed_publish_is_a_failure(alert, monkeypatch):
-    """Ack 이 아닌 응답(Nack·None 등)도 성공으로 넘기지 않는다."""
+    """Ack 도 Return 도 아닌 응답을 성공으로 넘기지 않는다.
+
+    ⚠️ **Nack 은 여기 안 온다** — aiormq 가 `DeliveryError` 예외로 던져서
+    (`aiormq/channel.py` `_confirm_delivery`) 위쪽 try/except 가 먼저 `MqPublishError` 로
+    감싼다. 즉 세 갈래(Ack / Return / 그 외)가 전부 막히되 경로가 다르다. 이 분기는
+    라이브러리가 계약을 바꿔도 조용히 새지 않게 두는 방어다.
+    """
 
     class SilentExchange:
         async def publish(self, message, routing_key, timeout=None):

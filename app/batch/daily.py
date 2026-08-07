@@ -672,7 +672,9 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    # 로깅 설정보다 먼저 — 로그도 같은 스트림으로 나간다.
+    # 출력이 나가기 전에. (로깅과의 순서는 무관하다 — reconfigure 는 스트림 객체를
+    # 교체하지 않고 제자리에서 바꾸므로, basicConfig 가 먼저 핸들러를 만들어도 같은
+    # 객체를 들고 있어서 결과가 같다.)
     _force_utf8_output()
 
     loader = None
