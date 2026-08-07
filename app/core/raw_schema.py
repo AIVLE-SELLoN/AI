@@ -238,6 +238,10 @@ def create_classified_tables(conn) -> None:
 
     뷰도 함께 보장한다 — 워커가 자기가 만들지 않은 DB 에 붙는 경우가 있고
     (프로듀서 없이 덤프만 받은 상태), 뷰가 없으면 조회가 통째로 실패한다.
+
+    ⚠️ `IF NOT EXISTS` 라 **이미 있는 테이블은 손대지 않는다.** 8/7 확정 이전 구조로
+       남아 있는 DB 에 대고 부르면 조용히 통과하므로, 호출 전에 `find_legacy_tables()`
+       로 먼저 걸러야 한다.
     """
     for ddl in (
         CLASSIFIED_ITEM_DDL,
@@ -249,3 +253,30 @@ def create_classified_tables(conn) -> None:
     for stmt in CLASSIFIED_INDEXES:
         conn.execute(stmt)
     conn.execute(VOC_DOCUMENT_VIEW)
+
+
+# 구버전 raw DB 판별용 — 테이블마다 "8/7 확정 이후에만 있는" 컬럼 하나.
+#
+# 확정 전 구조로 만들어진 DB 가 팀원 로컬에 남아 있다(`data/` 는 gitignore 라 각자 다르다).
+# 거기에 대고 create_classified_tables() 를 불러도 `IF NOT EXISTS` 가 옛 테이블을 그대로
+# 두기 때문에, 실패가 스키마 생성이 아니라 **한참 뒤 조회 단계**에서 `no such column` 으로
+# 터진다 — 원인이 메시지에 안 드러난다. 그 전에 잡으려고 둔다.
+LEGACY_MARKERS: dict[str, str] = {
+    "classified_item": "prompt_version",      # 구: raw_text·channel·aspect 를 들고 있던 단일 테이블
+    "classification_failure": "item_id",      # 구: event_id PK (§2-7 이전)
+    "classification_cursor": "last_inquired_at",  # 구: last_occurred_at / last_event_id (§2-8 이전)
+}
+
+
+def find_legacy_tables(conn) -> list[str]:
+    """확정 스키마 이전 구조로 남아 있는 AI 소유 테이블 이름. 없으면 빈 리스트.
+
+    없는 테이블은 대상이 아니다 — `PRAGMA table_info` 가 빈 결과를 주고, 그건 새로
+    만들면 되는 정상 상태다. "있는데 컬럼이 옛것"인 경우만 골라낸다.
+    """
+    stale = []
+    for table, marker in LEGACY_MARKERS.items():
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if columns and marker not in columns:
+            stale.append(table)
+    return stale

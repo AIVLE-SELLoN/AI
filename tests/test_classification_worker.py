@@ -398,3 +398,53 @@ def test_view_merges_cs_and_reviews_on_one_time_axis() -> None:
 
     assert [(r["item_id"], r["source"]) for r in rows] == [("INQ-1", "cs"), ("RVW-1", "review")]
     assert rows[0]["occurred_at"] == "2026-05-01T10:00:00+09:00"  # inquired_at, created_at 아님
+
+
+# ── 구버전 raw DB 감지 ───────────────────────────────────────────────────
+
+# 8/7 확정 이전 커서 테이블. 컬럼명이 last_occurred_at / last_event_id 였다(§2-8 이전).
+LEGACY_CURSOR_DDL = """
+CREATE TABLE classification_cursor (
+    worker_id        TEXT PRIMARY KEY,
+    last_occurred_at TEXT,
+    last_event_id    TEXT,
+    updated_at       TEXT NOT NULL
+);
+"""
+
+
+def test_fresh_db_is_not_flagged_as_legacy() -> None:
+    """확정 스키마로 만든 DB·AI 테이블이 아직 없는 DB 는 구버전이 아니다.
+
+    여기서 오탐이 나면 정상적인 팀원 전원이 워커를 못 돌린다 — 감지 로직 자체보다
+    이쪽이 더 위험해서 같이 고정한다.
+    """
+    empty = sqlite3.connect(":memory:")
+    raw_schema.create_source_tables(empty)
+    assert raw_schema.find_legacy_tables(empty) == []
+
+    raw_schema.create_classified_tables(empty)
+    assert raw_schema.find_legacy_tables(empty) == []
+
+
+def test_legacy_raw_db_is_rejected_with_guidance(tmp_path, caplog) -> None:
+    """확정 이전 구조가 남아 있으면 안내하고 멈춘다.
+
+    ⚠️ `CREATE TABLE IF NOT EXISTS` 는 옛 테이블을 그대로 둔다. 이걸 안 잡으면 스키마
+       생성은 조용히 통과하고 `load_cursor()` 가 `no such column: last_inquired_at` 로
+       터진다 — 스택트레이스만 보고는 "DB 를 다시 만들어야 한다"를 알 수 없다.
+    """
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    raw_schema.create_source_tables(conn)  # 원문 테이블은 정상이라 기존 가드는 통과한다
+    conn.execute(LEGACY_CURSOR_DDL)
+    conn.commit()
+    conn.close()
+
+    with caplog.at_level("ERROR"), pytest.raises(SystemExit):
+        worker.open_db(str(db_path))
+
+    assert "classification_cursor" in caplog.text
+    # 원문까지 지우라고 하면 12.8만 행을 다시 재생해야 한다 — AI 소유 테이블만 지운다
+    assert "DROP TABLE classification_cursor;" in caplog.text
+    assert "DROP TABLE cs" not in caplog.text

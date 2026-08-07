@@ -273,6 +273,23 @@ def open_db(db_path_str: str) -> sqlite3.Connection:
         )
         sys.exit(1)
 
+    legacy = raw_schema.find_legacy_tables(conn)
+    if legacy:
+        drops = " ".join(f"DROP TABLE {t};" for t in legacy)
+        logger.error(
+            # 이 메시지는 cp949 로 나가도 읽혀야 한다. 윈도우 stderr 는 errors=backslashreplace
+            # 라 크래시까지는 안 가지만, em dash 처럼 cp949 에 없는 문자는 "\\u2014" 로 뭉개져
+            # 정작 복구 안내가 안 읽힌다. 여기서는 cp949 에 있는 문자만 쓴다.
+            f"[DB ERROR] 구버전 raw DB 입니다: {db_path}\n"
+            f"  {', '.join(legacy)} 가 8/7 확정 이전 구조입니다.\n"
+            "  스키마 생성은 IF NOT EXISTS 라 그냥 통과하고, 조회 단계에서 "
+            "'no such column' 으로 터집니다.\n"
+            "  원문(cs·reviews)은 그대로 두고 아래처럼 AI 소유 테이블만 지운 뒤 다시 실행하세요 "
+            "(분류 결과는 다시 만들어야 합니다):\n"
+            f'    sqlite3 "{db_path}" "{drops}"'
+        )
+        sys.exit(1)
+
     raw_schema.create_classified_tables(conn)
     conn.commit()
 
