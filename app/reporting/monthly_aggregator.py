@@ -144,6 +144,10 @@ CHANNEL_PAIRS: tuple[tuple[str, str], ...] = (
     ("NAVER", "ZIGZAG"),
 )
 
+# 위 쌍이 짝지을 수 있는 채널 전부. 조회 결과가 여기 없는 값이면 그 채널의 분포는 어느
+# 쌍에도 안 들어간다 — 아래 경고의 판정 기준이다.
+KNOWN_CHANNELS: frozenset[str] = frozenset(c for pair in CHANNEL_PAIRS for c in pair)
+
 
 def month_bounds(report_month: str) -> tuple[date, date]:
     """'YYYY-MM' → (1일, 말일)."""
@@ -222,23 +226,47 @@ def _fetch_negative_aspect_counts_by_channel(
 
     "두 채널의 여론이 얼마나 다른가"를 **부정 의견이 어느 속성에 쏠렸는지**로 본다.
     전체 문서로 재면 채널별 판매량 차이가 그대로 신호로 잡힌다.
+
+    ⚠️ 채널값을 **여기서 대문자로 맞춘다.** 예전에는 `classified_item.channel` 을 읽었고
+       그 값은 `ClassifiedItem` 을 거치면서 `Channel` enum 이 표기를 보장해 줬다. 지금은
+       원문 테이블(§2-4·§2-5)의 `channel_id` 가 그대로 나오는데, 그 표기는 메인 서버가
+       채우는 값이라 우리가 보장할 수 없다.
+
+       맞추지 않으면 **에러 없이 결과만 조용히 틀어진다**: 호출부가
+       `channel_counts.get(left, [0,0,0])` 로 꺼내므로, 'coupang' 이 들어오면 'COUPANG'
+       조회가 빗나가 그 채널이 **빈 분포로 취급**되고 그 쌍의 판정이 통째로 어긋난다.
+       대소문자만 다른 경우는 UPPER 로 흡수하고, 아예 모르는 채널은 아래에서 경고한다.
     """
     start, end = _window(report_month)
     rows = conn.execute(
-        f"SELECT r.channel_id, a.aspect, COUNT(*) FROM {SOURCE_TABLE} r "
+        f"SELECT UPPER(r.channel_id), a.aspect, COUNT(*) FROM {SOURCE_TABLE} r "
         "JOIN classified_item_aspect a ON a.item_id = r.item_id "
         "WHERE r.product_group_id = ? AND a.sentiment = -1 "
         "  AND r.occurred_at >= ? AND r.occurred_at < ? "
-        "GROUP BY r.channel_id, a.aspect",
+        "GROUP BY UPPER(r.channel_id), a.aspect",
         (product_group_id, start, end),
     ).fetchall()
 
     counts: dict[str, list[int]] = {}
     index = {a: i for i, a in enumerate(JSD_ASPECT_ORDER)}
+    unknown: dict[str | None, int] = {}
     for channel, aspect, count in rows:
         if aspect not in index:
             continue
+        if channel not in KNOWN_CHANNELS:
+            # 대문자로 맞춰도 못 알아본 값 — 조용히 버리면 그 채널의 부정 의견이
+            # 어느 쌍에도 안 들어간 채 리포트가 정상처럼 나간다.
+            unknown[channel] = unknown.get(channel, 0) + count
+            continue
         counts.setdefault(channel, [0] * len(JSD_ASPECT_ORDER))[index[aspect]] = count
+
+    if unknown:
+        detail = ", ".join(f"{c!r}({n}건)" for c, n in sorted(unknown.items(), key=lambda x: str(x[0])))
+        logger.warning(
+            f"[{product_group_id}/{report_month}] 채널 분열 집계에서 제외된 채널: {detail} "
+            f"— CHANNEL_PAIRS({sorted(KNOWN_CHANNELS)}) 에 없는 값이라 어느 쌍에도 "
+            "들어가지 않습니다. 원문의 channel_id 표기를 확인하세요."
+        )
     return counts
 
 

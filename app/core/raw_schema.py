@@ -33,6 +33,12 @@
 from __future__ import annotations
 
 # ── main server 소유 (§2-1 · §2-4 · §2-5 · §2-9) ─────────────────────────────
+#
+# ⚠️ 아래 `REFERENCES` 는 **sqlite 에서 기본으로 안 걸린다.** FK 는 연결마다
+#    `PRAGMA foreign_keys=ON` 을 해야 켜진다(기본 OFF). 이 DDL 로 DB 를 만드는 쪽은
+#    반드시 켤 것 — 안 켜면 채널 오타가 조용히 통과해서, 운영 Postgres 에 올라가서야
+#    처음 터진다. 목 파이프라인에서는 `mock_producer.open_raw_db()` 와
+#    `classification_worker.open_db()` 가 켠다.
 
 # §2-1 channel — 연동 채널 마스터.
 # channel_id 는 문자열 자체가 PK 이고 우리 `Channel` enum 값과 그대로 일치한다.
