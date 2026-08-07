@@ -5,7 +5,7 @@ LLM 은 부르지 않는다 — 발행·개선안·가이드라인을 전부 주
 """
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -234,7 +234,7 @@ async def test_cs_inquiries_are_built_once_and_shared(tmp_path, monkeypatch):
         return Recommendation(
             recommendation_id="REC-000000000001",
             alert_id=alert.alert_id,
-            created_at=datetime(2026, 8, 28, 9, 0),
+            created_at=datetime(2026, 8, 28, 9, 0, tzinfo=timezone.utc),
             evaluator=Evaluator(
                 passed=True,
                 attempts=1,
@@ -309,3 +309,49 @@ async def test_dry_run_skips_recommendation_when_gate_closed(tmp_path):
     )
     assert summary["llm_calls"].get("가이드라인", 0) == summary["processed"]
     assert summary["state_cached"] == 0, "dry-run 은 캐시를 건드리지 않는다"
+
+
+@pytest.mark.asyncio
+async def test_mq_connection_is_closed_even_when_batch_blows_up(tmp_path, monkeypatch):
+    """⚠️ 루프 도중 터져도 MQ 연결을 닫는다.
+
+    app/core/mq.py 가 프로세스당 연결을 재사용하는데, 안 닫고 이벤트 루프가 내려가면
+    connect_robust 의 재연결 태스크가 남아 "Task was destroyed but it is pending" 이
+    뜬다. 나중에 배치가 장수 프로세스에 얹히면 연결이 샌다. (서영님 PR 리뷰 §1)
+    """
+    closed: list[bool] = []
+
+    async def spy_close():
+        closed.append(True)
+
+    async def boom(alert, rec, trace_id):
+        raise KeyboardInterrupt  # 배치 격리 except 를 통과해 밖으로 나가는 예외
+
+    monkeypatch.setattr(daily, "close_mq", spy_close)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", boom)
+
+    with pytest.raises(KeyboardInterrupt):
+        await daily.run_batch(
+            state_path=tmp_path / "state.json", load_inputs=_stub_inputs
+        )
+
+    assert closed, "예외가 나가도 close_mq() 가 불려야 한다"
+
+
+@pytest.mark.asyncio
+async def test_mq_connection_is_closed_on_the_normal_path(tmp_path, monkeypatch):
+    """정상 종료에서도 닫는다."""
+    closed: list[bool] = []
+
+    async def spy_close():
+        closed.append(True)
+
+    async def sent(alert, rec, trace_id):
+        return None
+
+    monkeypatch.setattr(daily, "close_mq", spy_close)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+
+    await daily.run_batch(state_path=tmp_path / "state.json", load_inputs=_stub_inputs)
+
+    assert closed

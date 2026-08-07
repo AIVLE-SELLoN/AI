@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Callable
@@ -109,12 +110,17 @@ def register_handler(event_type: str, handler: Callable[[dict], None]) -> None:
 async def dispatch(event_type: str, body: bytes) -> None:
     """메시지 1건 처리. 예외를 던지면 호출부가 nack 한다.
 
+    핸들러는 **워커 스레드에서 돌린다.** 등록된 처리 함수가 동기 함수인데 안에서
+    블로킹 I/O(컬렉션2 Chroma 쓰기)를 하기 때문이다 — 이벤트 루프에서 직접 부르면
+    그동안 하트비트를 못 보내 브로커가 커넥션을 끊을 수 있다. 순서는 그대로 유지된다
+    (여기서 await 하므로 한 번에 한 건). (서영님 PR 리뷰 §3, 2026-08-07)
+
     Raises:
         KeyError: 등록된 핸들러가 없는 `eventType`.
     """
     envelope = json.loads(body.decode("utf-8"))
     handler = HANDLERS[event_type]
-    handler(envelope.get("payload", {}))
+    await asyncio.to_thread(handler, envelope.get("payload", {}))
 
 
 async def resolve_queue(channel: Any, queue_name: str, settings: Any) -> Any:
