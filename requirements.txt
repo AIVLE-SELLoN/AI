@@ -46,6 +46,14 @@ jinja2==3.1.6
 #    로컬 설치 — Windows: GTK3-Runtime Win64(환경변수 추가 옵션 필수)
 #                macOS:   brew install cairo pango gdk-pixbuf libffi
 
+# --- 리포팅: S3 적재 + Pre-signed URL 서명 ---
+# app/reporting/s3_uploader.py 가 **함수 안에서** import 한다(S3 경로를 안 타는 실행에는
+# 불필요한 로딩을 피한다). 순수 파이썬이라 네이티브 의존성이 없다.
+#
+# ⚠️ Pre-signed URL 7일은 SigV4 서명의 상한이라, 클라이언트를 만들 때
+#    signature_version="s3v4" 를 명시해야 한다. 구버전 서명은 그만큼 못 버틴다.
+boto3==1.43.65
+
 # --- docker kafka 컨테이너 환경 ---
 # ⚠️ kafka-python 과 **같은 `kafka` 모듈**을 설치한다. 둘 다 깔면 충돌하므로,
 #    기존에 kafka-python 이 있으면 먼저 `pip uninstall kafka-python` 할 것.

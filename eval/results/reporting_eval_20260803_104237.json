@@ -1,0 +1,303 @@
+{
+  "meta": {
+    "실행일": "2026-08-03T10:42:37.967982+09:00",
+    "모델": "gpt-4o-mini",
+    "프롬프트_버전": {
+      "monthly": "monthly_report_v3",
+      "cs": "cs_reply_v2"
+    },
+    "시드": "해당없음(합성 케이스 고정)",
+    "표본수": {
+      "monthly_cases": 3,
+      "cs_cases": 2
+    },
+    "live": false
+  },
+  "validator_sensitivity": {
+    "monthly": {
+      "MR-CRISIS/수치_환각": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "수치 팩트체크 실패(aspect_summaries[색상].summary_text): '33%p' 는 입력 데이터에 없는 수치입니다."
+        ]
+      },
+      "MR-CRISIS/p값_노출": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "수치 팩트체크 실패(channel_divergence_cause.cause_description): '0.002' 는 입력 데이터에 없는 수치입니다.",
+          "금지 표현 노출(channel_divergence_cause.cause_description): p값 수치 표기"
+        ]
+      },
+      "MR-CRISIS/FDR_노출": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "금지 표현 노출(cause_analysis_results[0]): 'FDR'"
+        ]
+      },
+      "MR-CRISIS/단계라벨_누락": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "단계 라벨 누락: cause_title 에 '위험 단계' 가 그대로 포함돼야 합니다 (현재: '쿠팡-네이버 채널 평판 격차 발생')"
+        ]
+      },
+      "MR-CRISIS/단계라벨_혼입": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "단계 라벨 혼입: cause_title 에 다른 단계 '안정 단계' 가 섞였습니다 (기대: '위험 단계')"
+        ]
+      },
+      "MR-CRISIS/식별자_불일치": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "master_product_code 불일치: 입력(P001) != 출력(P999)"
+        ]
+      },
+      "MR-CRISIS/속성_누락": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "속성 요약 누락: [소재] 가 aspect_summaries 에 없습니다."
+        ]
+      },
+      "MR-CRISIS/반올림_표기(정상)": {
+        "should_reject": false,
+        "rejected": false,
+        "correct": true,
+        "errors": []
+      },
+      "MR-CAUTION/수치_환각": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "수치 팩트체크 실패(aspect_summaries[색상].summary_text): '33%p' 는 입력 데이터에 없는 수치입니다."
+        ]
+      },
+      "MR-CAUTION/p값_노출": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "수치 팩트체크 실패(channel_divergence_cause.cause_description): '0.002' 는 입력 데이터에 없는 수치입니다.",
+          "금지 표현 노출(channel_divergence_cause.cause_description): p값 수치 표기"
+        ]
+      },
+      "MR-CAUTION/FDR_노출": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "금지 표현 노출(cause_analysis_results[0]): 'FDR'"
+        ]
+      },
+      "MR-CAUTION/단계라벨_누락": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "단계 라벨 누락: cause_title 에 '주의 단계' 가 그대로 포함돼야 합니다 (현재: '쿠팡-네이버 채널 평판 격차 발생')"
+        ]
+      },
+      "MR-CAUTION/단계라벨_혼입": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "단계 라벨 혼입: cause_title 에 다른 단계 '안정 단계' 가 섞였습니다 (기대: '주의 단계')"
+        ]
+      },
+      "MR-CAUTION/식별자_불일치": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "master_product_code 불일치: 입력(P001) != 출력(P999)"
+        ]
+      },
+      "MR-CAUTION/속성_누락": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "속성 요약 누락: [소재] 가 aspect_summaries 에 없습니다."
+        ]
+      },
+      "MR-CAUTION/반올림_표기(정상)": {
+        "should_reject": false,
+        "rejected": false,
+        "correct": true,
+        "errors": []
+      },
+      "MR-HOLD/수치_환각": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "수치 팩트체크 실패(aspect_summaries[색상].summary_text): '33%p' 는 입력 데이터에 없는 수치입니다."
+        ]
+      },
+      "MR-HOLD/p값_노출": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "수치 팩트체크 실패(channel_divergence_cause.cause_description): '0.002' 는 입력 데이터에 없는 수치입니다.",
+          "금지 표현 노출(channel_divergence_cause.cause_description): p값 수치 표기"
+        ]
+      },
+      "MR-HOLD/FDR_노출": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "금지 표현 노출(cause_analysis_results[0]): 'FDR'"
+        ]
+      },
+      "MR-HOLD/식별자_불일치": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "master_product_code 불일치: 입력(P001) != 출력(P999)"
+        ]
+      },
+      "MR-HOLD/속성_누락": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "속성 요약 누락: [소재] 가 aspect_summaries 에 없습니다."
+        ]
+      },
+      "MR-HOLD/반올림_표기(정상)": {
+        "should_reject": false,
+        "rejected": false,
+        "correct": true,
+        "errors": []
+      }
+    },
+    "cs": {
+      "CS-ROOTCAUSE/미존재_문의ID": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "Grounding 오류: 인용된 item_id 'INQ-999999' 가 입력 CS 문의 목록에 없습니다."
+        ]
+      },
+      "CS-ROOTCAUSE/수치_환각": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "수치 팩트체크 실패(summary.key_metric_text): '27%' 는 입력 데이터에 없는 수치입니다."
+        ]
+      },
+      "CS-ROOTCAUSE/p값_노출": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "수치 팩트체크 실패(summary.key_metric_text): '0.002' 는 입력 데이터에 없는 수치입니다.",
+          "금지 표현 노출(summary.key_metric_text): p값 수치 표기"
+        ]
+      },
+      "CS-ROOTCAUSE/통계용어_노출": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "금지 표현 노출(ops_action_guide): '유의확률'"
+        ]
+      },
+      "CS-ROOTCAUSE/alert_id_불일치": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "alert_id 불일치: 입력(ALT-20260528-P001-COUPANG) != 출력(ALT-99999999-P999-NAVER)"
+        ]
+      },
+      "CS-ROOTCAUSE/원인라벨_누락": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "root_cause_summary 에 최다 원인 라벨 '사진_색감_오차' 이 없습니다."
+        ]
+      },
+      "CS-ROOTCAUSE/정책수치(정상)": {
+        "should_reject": false,
+        "rejected": false,
+        "correct": true,
+        "errors": []
+      },
+      "CS-NO-ROOTCAUSE/미존재_문의ID": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "Grounding 오류: 인용된 item_id 'INQ-999999' 가 입력 CS 문의 목록에 없습니다."
+        ]
+      },
+      "CS-NO-ROOTCAUSE/수치_환각": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "수치 팩트체크 실패(summary.key_metric_text): '27%' 는 입력 데이터에 없는 수치입니다."
+        ]
+      },
+      "CS-NO-ROOTCAUSE/p값_노출": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "수치 팩트체크 실패(summary.key_metric_text): '0.002' 는 입력 데이터에 없는 수치입니다.",
+          "금지 표현 노출(summary.key_metric_text): p값 수치 표기"
+        ]
+      },
+      "CS-NO-ROOTCAUSE/통계용어_노출": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "금지 표현 노출(ops_action_guide): '유의확률'"
+        ]
+      },
+      "CS-NO-ROOTCAUSE/alert_id_불일치": {
+        "should_reject": true,
+        "rejected": true,
+        "correct": true,
+        "errors": [
+          "alert_id 불일치: 입력(ALT-20260528-P001-COUPANG) != 출력(ALT-99999999-P999-NAVER)"
+        ]
+      },
+      "CS-NO-ROOTCAUSE/정책수치(정상)": {
+        "should_reject": false,
+        "rejected": false,
+        "correct": true,
+        "errors": []
+      }
+    },
+    "summary": {
+      "오염_탐지": "30/30",
+      "오염_탐지율": 1.0,
+      "정상_통과": "5/5",
+      "오탐률": 0.0
+    }
+  }
+}

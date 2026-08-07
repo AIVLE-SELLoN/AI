@@ -352,8 +352,8 @@ def run_storage_policy_check() -> dict[str, Any]:
 
     검사 항목:
       - 문서 종류별 **프리픽스**가 분리돼 있는가 (버킷은 하나, Lifecycle 은 프리픽스 단위)
-      - 보존 기간이 확정값(월간 6개월 / CS 1일)과 같은가
-      - 링크 수명이 문서 종류 무관 24시간 고정인가 (인프라 §5)
+      - 보존 기간이 확정값(월간 6개월 / CS 7일)과 같은가
+      - 링크 수명이 문서 종류 무관 7일 고정인가 (인프라 §5)
       - 링크 만료가 객체 만료를 넘지 않는가 (넘으면 스키마가 거부한다)
       - 재컴파일 불가 문서(월간)의 보존이 충분히 긴가
     """
@@ -367,8 +367,8 @@ def run_storage_policy_check() -> dict[str, Any]:
         "프리픽스 분리": monthly.prefix != guideline.prefix,
         "버킷 단일": monthly.bucket_name == guideline.bucket_name,
         "월간 보존 = 6개월": monthly.retention_hours == constants.MONTHLY_RETENTION_DAYS * 24,
-        "CS 보존 = 1일": guideline.retention_hours == constants.GUIDELINE_RETENTION_HOURS,
-        "링크 수명 24h 고정": (
+        "CS 보존 = 7일": guideline.retention_hours == constants.GUIDELINE_RETENTION_HOURS,
+        "링크 수명 7일 고정": (
             monthly.presigned_ttl_hours
             == guideline.presigned_ttl_hours
             == constants.PRESIGNED_URL_TTL_HOURS

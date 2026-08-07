@@ -12,9 +12,12 @@
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 from collections.abc import Generator
 from datetime import UTC, date, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jinja2 import BaseLoader, Environment, StrictUndefined, select_autoescape
@@ -28,8 +31,10 @@ from app.core.schemas import (
     CSGuidelineInput,
     CSGuidelineOutput,
     DetectionConfidence,
+    Evidence,
     GenerationCallback,
     HoldReason,
+    LinkedCSInquiry,
     MonthlyReportInput,
     MonthlyReportOutput,
     PdfS3Meta,
@@ -37,9 +42,14 @@ from app.core.schemas import (
     Severity,
     Verdict,
 )
-from app.reporting import cs_reply_service, monthly_report_service
+from app.reporting import cs_reply_service, monthly_report_service, s3_uploader
 from app.reporting.callback import build_monthly_callback
-from app.reporting.cs_reply_service import generate_cs_reply_pipeline
+from app.reporting.cs_reply_service import (
+    build_guideline_input,
+    generate_cs_reply_pipeline,
+    generate_guideline,
+    is_guideline_target,
+)
 from app.reporting.cs_reply_validator import validate_cs_guideline
 from app.reporting.metrics_calculator import (
     build_channel_divergence_pair,
@@ -62,11 +72,48 @@ from app.reporting.s3_uploader import (
     REPORT_TYPE_GUIDELINE,
     REPORT_TYPE_MONTHLY,
     S3NotConfiguredError,
+    S3UploadError,
     _build_original_file_name,
     build_object_path,
     resolve_storage_policy,
     upload_pdf_to_s3,
 )
+
+
+@pytest.fixture
+def short_mirror_dir():
+    """MAX_PATH 여유가 있는 짧은 임시 폴더.
+
+    pytest 의 `tmp_path` 는 경로가 깊어, 실제 버킷명(48자) + S3 키(약 110자)를 얹으면
+    Windows MAX_PATH(260자)를 넘긴다. 미러는 개발 편의 장치라 그때 경고만 남기고
+    넘어가므로(생성 자체는 보호된다), 레이아웃 검증에는 짧은 뿌리를 쓴다.
+    """
+    directory = Path(tempfile.mkdtemp(prefix="m", dir=tempfile.gettempdir()))
+    try:
+        yield directory
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def block_real_s3():
+    """테스트가 **실제 AWS 를 호출하지 않게** 막는다.
+
+    `upload_pdf_to_s3` 는 이제 boto3 로 진짜 올린다. 막지 않으면 테스트가 네트워크를 타고,
+    자격증명이 있으면 개발 버킷에 쓰레기 객체를 쌓는다.
+    """
+    client = MagicMock()
+    client.generate_presigned_url.return_value = "https://example.test/signed"
+    real_factory = s3_uploader._get_s3_client  # 클라이언트 생성 규칙 자체를 검증할 때 쓴다
+    with patch("app.reporting.s3_uploader._get_s3_client", return_value=client) as factory:
+        factory.client = client
+        factory.real = real_factory
+        yield factory
+
+
+# 인프라 문서의 {company_id} 자리 — 실제 값은 고객사 PK/UUID 다.
+_COMPANY_ID = "c0ffee00-0000-4000-8000-000000000000"
+
 
 # ── 1. 픽스처 ────────────────────────────────────────────────────────────
 
@@ -75,11 +122,13 @@ from app.reporting.s3_uploader import (
 def mock_infrastructure() -> Generator[None, None, None]:
     """PDF 컴파일(weasyprint)과 S3 업로드를 자동 mock. 테스트는 네트워크·GTK 를 타지 않는다."""
     dummy_s3_meta = PdfS3Meta(
+        company_id=_COMPANY_ID,
+        company_name="주식회사 셀론",
         s3_bucket_name="mock-bucket",
-        s3_file_path="reports/mock/",
+        s3_file_path="reports/monthly-report/c0ffee00-0000-4000-8000-000000000000/2026/08/",
         original_file_name="mock_report.pdf",
         new_file_name="mock_report_123.pdf",
-        s3_full_key="reports/mock/mock_report_123.pdf",
+        s3_full_key="reports/monthly-report/c0ffee00-0000-4000-8000-000000000000/2026/08/mock_report_123.pdf",
         created_at=datetime.now(UTC),
         file_size_bytes=2048,
         presigned_url="https://mock-s3.amazonaws.com/mock_report_123.pdf",
@@ -554,11 +603,12 @@ async def test_monthly_book_is_one_object_per_month(monthly_input, monthly_outpu
         ) as mock_upload,
     ):
         mock_upload.return_value = PdfS3Meta(
-            s3_bucket_name="sellon-reports",
-            s3_file_path="reports/monthly/2026/08/",
+            company_id=_COMPANY_ID,
+        s3_bucket_name="sellon-reports",
+            s3_file_path="reports/monthly-report/c0ffee00-0000-4000-8000-000000000000/2026/08/",
             original_file_name="monthly_2026-07.pdf",
             new_file_name="monthly_ALL_2026-07_20260801_a1b2.pdf",
-            s3_full_key="reports/monthly/2026/08/monthly_ALL_2026-07_20260801_a1b2.pdf",
+            s3_full_key="reports/monthly-report/c0ffee00-0000-4000-8000-000000000000/2026/08/monthly_ALL_2026-07_20260801_a1b2.pdf",
             created_at=datetime.now(UTC),
             file_size_bytes=497000,
         )
@@ -603,18 +653,15 @@ async def test_cs_pipeline_success(cs_input, cs_output) -> None:
     assert result.callback.source_payload["output"]["guideline_id"] == "GD-20260528-P001-COUPANG"
 
 
-# 인프라 문서의 {company_id} 자리 — 실제 값은 고객사 PK/UUID 다.
-_COMPANY_ID = "c0ffee00-0000-4000-8000-000000000000"
-
 
 def test_object_path_follows_infra_rule() -> None:
     """인프라 「S3 파일 구조 규칙 정의」 경로·파일명 규칙 (2026-08-05 확정).
 
-        reports/companies/{company_id}/{report_type}/{yyyy}/{mm}/
+        reports/{report_type}/{company_id}/{yyyy}/{mm}/
         {report_type}_{yyyyMM}_{uuid4}.pdf
     """
     path, name = build_object_path(REPORT_TYPE_MONTHLY, "2026-07", _COMPANY_ID)
-    assert path == f"reports/companies/{_COMPANY_ID}/monthly-report/2026/07/"
+    assert path == f"reports/monthly-report/{_COMPANY_ID}/2026/07/"
     assert name.startswith("monthly-report_202607_")
     assert name.endswith(".pdf")
     # uuid4 가 붙어 같은 달을 다시 올려도 이전 객체를 덮어쓰지 않는다
@@ -622,7 +669,7 @@ def test_object_path_follows_infra_rule() -> None:
     assert name != name2
 
     cs_path, cs_name = build_object_path(REPORT_TYPE_GUIDELINE, "2026-05", _COMPANY_ID)
-    assert cs_path == f"reports/companies/{_COMPANY_ID}/cs-guideline/2026/05/"
+    assert cs_path == f"reports/cs-guideline/{_COMPANY_ID}/2026/05/"
     assert cs_name.startswith("cs-guideline_202605_")
 
 
@@ -715,8 +762,195 @@ def test_monthly_original_file_name_has_no_source_id() -> None:
     )
 
 
+@pytest.mark.asyncio
+async def test_upload_carries_company_metadata() -> None:
+    """회사 구분을 **메타데이터로** 실어 보낸다 (2026-08-06 확정).
+
+    경로가 `reports/{report_type}/{company_id}/…` 로 회사 단위로 갈리는데 그 값이 어느 입력
+    스키마에도 없어, 산출물만 보고는 어느 회사 것인지 알 수 없었다. `company_id` 를 실어
+    메인이 **S3 키를 파싱하지 않고** 바로 알 수 있게 한다.
+    """
+    with (
+        patch("app.reporting.s3_uploader.S3_ENABLED", True),
+        patch("app.reporting.s3_uploader.S3_DEFAULT_COMPANY_NAME", "주식회사 셀론"),
+    ):
+        meta = await upload_pdf_to_s3(
+            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_MONTHLY, period="2026-07",
+            company_id=_COMPANY_ID,
+        )
+
+    assert meta.company_id == _COMPANY_ID
+    assert meta.company_name == "주식회사 셀론"
+    # 경로에 박힌 회사 구간과 같은 값이어야 한다
+    assert f"/{_COMPANY_ID}/" in meta.s3_file_path
+
+
+def test_company_name_is_not_used_in_path() -> None:
+    """회사명은 **경로에 쓰지 않는다** — 이름이 바뀌면 경로가 갈라져 이전 산출물을 못 찾는다."""
+    path, _ = build_object_path(REPORT_TYPE_MONTHLY, "2026-07", _COMPANY_ID)
+
+    assert "주식회사" not in path
+    assert path == f"reports/monthly-report/{_COMPANY_ID}/2026/07/"
+
+
+def test_schema_rejects_company_id_mismatched_with_path() -> None:
+    """메타의 company_id 와 경로의 회사 구간이 다르면 거부한다.
+
+    둘이 어긋나면 메인이 무엇을 믿어야 할지 알 수 없다 — 조용히 남의 회사 것으로 분류된다.
+    """
+    with pytest.raises(ValueError, match="company_id"):
+        PdfS3Meta(
+            company_id="other-company",
+            s3_bucket_name="sellon-reports",
+            s3_file_path=f"reports/monthly-report/{_COMPANY_ID}/2026/07/",
+            original_file_name="monthly-report_202607.pdf",
+            new_file_name="a.pdf",
+            s3_full_key=f"reports/monthly-report/{_COMPANY_ID}/2026/07/a.pdf",
+            created_at=datetime.now(UTC),
+            file_size_bytes=1024,
+        )
+
+
+@pytest.mark.asyncio
+async def test_local_mirror_reproduces_bucket_layout(short_mirror_dir) -> None:
+    """로컬 미러는 **버킷 키와 똑같은 경로**로 떨어진다.
+
+    스텁은 원래 바이트를 버려서 경로 규칙이 맞는지 산출물로 확인할 방법이 없다. 미러가
+    있으면 boto3 연동 전에 리허설이 된다 — 규칙이 깨지면 트리 모양으로 바로 드러난다.
+    """
+    with (
+        patch("app.reporting.s3_uploader.S3_ENABLED", True),
+        patch("app.reporting.s3_uploader.S3_LOCAL_MIRROR_DIR", str(short_mirror_dir)),
+    ):
+        meta = await upload_pdf_to_s3(
+            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_MONTHLY, period="2026-07",
+            company_id=_COMPANY_ID,
+        )
+
+    mirrored = short_mirror_dir / meta.s3_bucket_name / meta.s3_full_key
+    assert mirrored.is_file()
+    assert mirrored.read_bytes() == b"%PDF-MOCK"
+    # 인프라 규칙 그대로 — 회사/문서종류/연/월 순으로 갈린다
+    parts = mirrored.relative_to(short_mirror_dir).parts
+    # ⚠️ report_type 이 company_id 보다 **위**다 — Lifecycle 이 리터럴 prefix 완전 일치만
+    #    지원해서, 회사가 위면 문서 종류별로 규칙을 걸 수 없다.
+    assert parts[1:6] == ("reports", "monthly-report", _COMPANY_ID, "2026", "07")
+
+
+@pytest.mark.asyncio
+async def test_local_mirror_is_off_by_default() -> None:
+    """미러가 꺼져 있으면 파일을 쓰지 않는다 — 운영 기본 동작은 그대로다."""
+    with (
+        patch("app.reporting.s3_uploader.S3_ENABLED", True),
+        patch("app.reporting.s3_uploader.S3_LOCAL_MIRROR_DIR", ""),
+        patch("app.reporting.s3_uploader.Path") as mock_path,
+    ):
+        await upload_pdf_to_s3(
+            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_MONTHLY, period="2026-07",
+            company_id=_COMPANY_ID,
+        )
+
+    mock_path.assert_not_called()
+
+
+def test_extension_is_not_a_separate_field() -> None:
+    """확장자는 파일명에만 있고 별도 컬럼으로 두지 않는다 (인프라 §4).
+
+    "확장자는 파일명에 `.pdf` 로 고정 포함(이미지와 다르게 DB 별도 컬럼에 저장하지 않음)"
+    이 규칙이다. 같은 값을 두 군데 들고 다니면 둘이 어긋날 수 있다.
+    """
+    assert "file_extension" not in PdfS3Meta.model_fields
+
+    _, new_file_name = build_object_path(REPORT_TYPE_MONTHLY, "2026-07", _COMPANY_ID)
+    assert new_file_name.endswith(".pdf")
+
+
+@pytest.mark.asyncio
+async def test_presigned_link_never_outlives_object() -> None:
+    """링크(7일)가 객체보다 오래 살지 않는다.
+
+    CS 는 객체도 7일이라 두 시각이 같고, 월간은 객체 6개월이라 링크가 먼저 만료된다.
+    링크가 더 길면 "받을 수 있다"고 안내해 놓고 실제로는 사라진 파일을 가리키게 된다.
+    """
+    with patch("app.reporting.s3_uploader.S3_ENABLED", True):
+        monthly = await upload_pdf_to_s3(
+            pdf_bytes=b"%PDF", report_type=REPORT_TYPE_MONTHLY, period="2026-07",
+            company_id=_COMPANY_ID,
+        )
+        guideline = await upload_pdf_to_s3(
+            pdf_bytes=b"%PDF", report_type=REPORT_TYPE_GUIDELINE, period="2026-07",
+            company_id=_COMPANY_ID, source_id="ALT-1",
+        )
+
+    assert monthly.presigned_expires_at < monthly.object_expires_at
+    assert guideline.presigned_expires_at == guideline.object_expires_at
+
+
+@pytest.mark.asyncio
+async def test_upload_puts_object_then_signs(block_real_s3) -> None:
+    """올린 **뒤에** 서명한다. 반대면 업로드 실패인데 링크만 나가 셀러가 404 를 본다."""
+    client = block_real_s3.client
+    with patch("app.reporting.s3_uploader.S3_ENABLED", True):
+        meta = await upload_pdf_to_s3(
+            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_MONTHLY, period="2026-07",
+            company_id=_COMPANY_ID,
+        )
+
+    put = client.put_object.call_args.kwargs
+    assert put["Bucket"] == meta.s3_bucket_name
+    assert put["Key"] == meta.s3_full_key
+    assert put["Body"] == b"%PDF-MOCK"
+    # 없으면 S3 가 binary/octet-stream 으로 저장해 브라우저가 뷰어 대신 다운로드를 띄운다
+    assert put["ContentType"] == "application/pdf"
+
+    sign = client.generate_presigned_url.call_args
+    assert sign.args[0] == "get_object"
+    assert sign.kwargs["Params"] == {"Bucket": meta.s3_bucket_name, "Key": meta.s3_full_key}
+    # 7일 = SigV4 상한
+    assert sign.kwargs["ExpiresIn"] == 7 * 24 * 3600
+    assert meta.presigned_url == "https://example.test/signed"
+
+
+@pytest.mark.asyncio
+async def test_upload_failure_raises_instead_of_reporting_success(block_real_s3) -> None:
+    """업로드가 실패하면 예외다 — 올리지 못한 파일을 성공으로 보고하지 않는다."""
+    from botocore.exceptions import ClientError
+
+    block_real_s3.client.put_object.side_effect = ClientError(
+        {"Error": {"Code": "AccessDenied", "Message": "denied"}}, "PutObject"
+    )
+    with (
+        patch("app.reporting.s3_uploader.S3_ENABLED", True),
+        pytest.raises(S3UploadError, match="업로드·서명 실패"),
+    ):
+        await upload_pdf_to_s3(
+            pdf_bytes=b"%PDF-MOCK", report_type=REPORT_TYPE_MONTHLY, period="2026-07",
+            company_id=_COMPANY_ID,
+        )
+
+
+def test_s3_client_signs_with_static_keys_and_sigv4(block_real_s3) -> None:
+    """정적 키 + SigV4 로 클라이언트를 만든다.
+
+    ⚠️ 기본 자격증명 체인(IAM Role)을 쓰면 임시 크리덴셜 만료 시 URL 도 같이 죽어 7일이
+       유지되지 않는다. SigV4 도 못 박아야 한다 — 구버전 서명은 7일을 못 버틴다.
+    """
+    with (
+        patch("app.reporting.s3_uploader.AWS_ACCESS_KEY_ID", "AKIATEST"),
+        patch("app.reporting.s3_uploader.AWS_SECRET_ACCESS_KEY", "secret"),
+        patch("boto3.client") as mock_client,
+    ):
+        block_real_s3.real()
+
+    kwargs = mock_client.call_args.kwargs
+    assert kwargs["aws_access_key_id"] == "AKIATEST"
+    assert kwargs["aws_secret_access_key"] == "secret"
+    assert kwargs["region_name"] == s3_uploader.S3_REGION
+    assert kwargs["config"].signature_version == "s3v4"
+
+
 def test_storage_policy_differs_by_document_type() -> None:
-    """월간 6개월 / CS 1일 자동 삭제 (S3 Lifecycle).
+    """월간 6개월 / CS 7일 자동 삭제 (S3 Lifecycle).
 
     버킷은 **하나**이고 문서 종류는 프리픽스로 가른다(인프라 2026-08-05) — Lifecycle
     규칙이 프리픽스 단위로 걸리기 때문이다.
@@ -734,9 +968,13 @@ def test_storage_policy_differs_by_document_type() -> None:
     # 링크가 객체보다 오래 살면 "받을 수 있다"는 잘못된 안내가 된다
     assert monthly.presigned_ttl_hours <= monthly.retention_hours
     assert guideline.presigned_ttl_hours <= guideline.retention_hours
-    # 링크 수명은 문서 종류와 무관하게 24시간 고정 (인프라 §5)
+    # 링크 수명은 문서 종류와 무관하게 **7일 고정** (인프라 §5) — SigV4 상한이기도 하다
     assert monthly.presigned_ttl_hours == constants.PRESIGNED_URL_TTL_HOURS
     assert guideline.presigned_ttl_hours == constants.PRESIGNED_URL_TTL_HOURS
+    assert constants.PRESIGNED_URL_TTL_HOURS == 7 * 24
+    # CS 는 운영 MD 승인(사람 단계) 뒤에 메일이 나가므로 하루로는 부족하다 —
+    # 승인 대기 중에 객체가 사라지면 발송할 것이 없어진다.
+    assert guideline.retention_hours == 7 * 24
     # 등록되지 않은 종류는 6개월 프리픽스에 쌓지 않는다
     assert resolve_storage_policy("unknown").retention_hours == guideline.retention_hours
 
@@ -778,11 +1016,12 @@ def test_schema_rejects_link_outliving_object() -> None:
     now = datetime.now(UTC)
     with pytest.raises(ValueError, match="presigned_expires_at"):
         PdfS3Meta(
-            s3_bucket_name="sellon-temp-reports",
-            s3_file_path="reports/cs_guidelines/2026/05/",
+            company_id=_COMPANY_ID,
+        s3_bucket_name="sellon-temp-reports",
+            s3_file_path="reports/cs-guideline/c0ffee00-0000-4000-8000-000000000000/2026/05/",
             original_file_name="a.pdf",
             new_file_name="b.pdf",
-            s3_full_key="reports/cs_guidelines/2026/05/b.pdf",
+            s3_full_key="reports/cs-guideline/c0ffee00-0000-4000-8000-000000000000/2026/05/b.pdf",
             created_at=now,
             file_size_bytes=1024,
             presigned_expires_at=now + timedelta(days=7),
@@ -794,11 +1033,12 @@ def test_schema_rejects_link_outliving_object() -> None:
 async def test_monthly_callback_rejects_source_payload_requirement(monthly_input, monthly_output) -> None:
     """스키마가 월간 SUCCESS 콜백에 source_payload 를 요구하지 않아야 한다."""
     meta = PdfS3Meta(
+        company_id=_COMPANY_ID,
         s3_bucket_name="sellon-reports",
-        s3_file_path="reports/monthly/2026/07/",
+        s3_file_path="reports/monthly-report/c0ffee00-0000-4000-8000-000000000000/2026/07/",
         original_file_name="monthly.pdf",
         new_file_name="monthly_1.pdf",
-        s3_full_key="reports/monthly/2026/07/monthly_1.pdf",
+        s3_full_key="reports/monthly-report/c0ffee00-0000-4000-8000-000000000000/2026/07/monthly_1.pdf",
         created_at=datetime.now(UTC),
         file_size_bytes=482913,
     )
@@ -861,11 +1101,12 @@ async def test_book_notice_separates_held_and_failed(monthly_input, monthly_outp
         ) as mock_upload,
     ):
         mock_upload.return_value = PdfS3Meta(
-            s3_bucket_name="sellon-reports",
-            s3_file_path="reports/monthly/2026/08/",
+            company_id=_COMPANY_ID,
+        s3_bucket_name="sellon-reports",
+            s3_file_path="reports/monthly-report/c0ffee00-0000-4000-8000-000000000000/2026/08/",
             original_file_name="monthly_2026-07.pdf",
             new_file_name="monthly_ALL_2026-07_20260801_a1b2.pdf",
-            s3_full_key="reports/monthly/2026/08/monthly_ALL_2026-07_20260801_a1b2.pdf",
+            s3_full_key="reports/monthly-report/c0ffee00-0000-4000-8000-000000000000/2026/08/monthly_ALL_2026-07_20260801_a1b2.pdf",
             created_at=datetime.now(UTC),
             file_size_bytes=497000,
         )
@@ -1020,3 +1261,114 @@ async def test_cs_pipeline_fails_validation_on_ungrounded_id(cs_input, cs_output
     assert result.output is None
     assert result.callback.status == CallbackStatus.FAILED_VALIDATION
     assert result.callback.source_payload is None
+
+
+# ── 배치 진입점 (app/batch/daily.py ↔ generate_guideline) ────────────────
+
+
+def _inquiries(*ids: str) -> list[LinkedCSInquiry]:
+    return [
+        LinkedCSInquiry(item_id=i, raw_text="색이 사진과 달라요", created_at=datetime(2026, 5, 20, tzinfo=UTC))
+        for i in ids
+    ]
+
+
+def test_guideline_input_narrows_detection_models(biased_alert) -> None:
+    """DetectionAlert → CSGuidelineInput 매핑에서 두 필드가 떨어져 나간다.
+
+    `DetectionStats.source` 와 `RootCause.consistent` 는 가이드라인 입력에 없다. 탐지가
+    판정에 쓰는 값이지 상담원에게 보여 줄 내용이 아니다(§4-4). 나머지는 그대로 옮긴다.
+    """
+    result = build_guideline_input(
+        biased_alert, _inquiries("INQ-000412", "INQ-000415"), product_name="미디 원피스"
+    )
+
+    assert result.alert_id == biased_alert.alert_id
+    assert result.product_group_id == biased_alert.product_group_id
+    assert result.product_name == "미디 원피스"
+    assert result.stats.cur_rate == biased_alert.stats.cur_rate
+    assert result.stats.cur_total == biased_alert.stats.cur_total
+    assert not hasattr(result.stats, "source")
+    assert result.root_cause is not None
+    assert result.root_cause.label == biased_alert.root_cause.label
+    assert not hasattr(result.root_cause, "consistent")
+    assert [i.item_id for i in result.linked_inquiries] == ["INQ-000412", "INQ-000415"]
+
+
+def test_out_of_scope_alert_is_not_a_guideline_target(biased_alert) -> None:
+    """가리키는 문의가 없는 알림은 **대상이 아니다** — 실패가 아니다.
+
+    ⚠️ 원인 분류([6])는 스코프 안(색상·사이즈·소재) 알림만 타므로 파손·오배송 알림은
+       `evidence.inquiry_ids` 가 언제나 비어 있다. 이걸 실패로 처리하면 스코프 밖 알림이
+       뜰 때마다 배치 요약에 실패가 쌓이고, 정상 동작에 묻혀 진짜 실패를 놓친다.
+    """
+    out_of_scope = biased_alert.model_copy(
+        update={"evidence": Evidence(inquiry_ids=[]), "scope_in": False}
+    )
+
+    assert is_guideline_target(biased_alert) is True
+    assert is_guideline_target(out_of_scope) is False
+
+
+@pytest.mark.asyncio
+async def test_generate_guideline_skips_non_target_without_llm(biased_alert) -> None:
+    """대상이 아니면 None 을 돌려주고 **LLM 을 부르지 않는다**(비용)."""
+    out_of_scope = biased_alert.model_copy(update={"evidence": Evidence(inquiry_ids=[])})
+
+    with patch.object(cs_reply_service, "get_llm_client") as client:
+        result = await generate_guideline(out_of_scope, [])
+
+    assert result is None
+    client.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_guideline_raises_when_source_texts_are_missing(biased_alert) -> None:
+    """대상인데 원문 조회가 전부 실패하면 예외 — 근거 없는 가이드라인을 만들지 않는다.
+
+    `build_linked_inquiries`(지인)가 원문 없는 ID 를 버리고 경고만 남기므로, 여기까지
+    빈 리스트로 오면 조회가 통째로 실패했다는 뜻이다. 조용히 넘어가면 배치 요약에
+    안 남는다.
+    """
+    with pytest.raises(ValueError, match="CS 원문을 하나도 찾지 못해"):
+        await generate_guideline(biased_alert, [])
+
+
+@pytest.mark.asyncio
+async def test_generate_guideline_returns_publishable_callback(biased_alert) -> None:
+    """성공 콜백이 `publish_guideline_generated` 가 요구하는 모양이다.
+
+    발행기(`app/core/mq.py`)는 ①`guideline_id` 가 채워져 있어야 하고(없으면 월간 리포트로
+    보고 ValueError) ②`alert_id` 를 `source_payload["input"]["alert_id"]` 에서 읽는다.
+    둘 중 하나라도 빠지면 배치가 발행 단계에서 터진다.
+    """
+    key = f"reports/cs-guideline/{_COMPANY_ID}/2026/05/cs-guideline_202605_a1b2.pdf"
+    callback = GenerationCallback(
+        report_id=None,
+        guideline_id=build_guideline_id(biased_alert.alert_id),
+        status=CallbackStatus.SUCCESS,
+        pdf_s3_meta=PdfS3Meta(
+            company_id=_COMPANY_ID,
+            s3_bucket_name="mock-bucket",
+            s3_file_path=f"reports/cs-guideline/{_COMPANY_ID}/2026/05/",
+            original_file_name=f"cs-guideline_202605_{biased_alert.alert_id}.pdf",
+            new_file_name="cs-guideline_202605_a1b2.pdf",
+            s3_full_key=key,
+            created_at=datetime.now(UTC),
+            file_size_bytes=2048,
+            presigned_url="https://mock-s3.amazonaws.com/cs-guideline.pdf",
+        ),
+        source_payload={"input": {"alert_id": biased_alert.alert_id}, "output": {}},
+    )
+
+    async def _pipeline(input_data):
+        assert input_data.alert_id == biased_alert.alert_id
+        return type("R", (), {"output": None, "callback": callback})()
+
+    with patch.object(cs_reply_service, "generate_cs_reply_pipeline", _pipeline):
+        result = await generate_guideline(biased_alert, _inquiries("INQ-000412"))
+
+    assert result is callback
+    assert result.guideline_id is not None
+    assert result.report_id is None
+    assert result.source_payload["input"]["alert_id"] == biased_alert.alert_id
