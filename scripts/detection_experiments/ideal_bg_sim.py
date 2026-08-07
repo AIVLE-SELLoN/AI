@@ -33,7 +33,7 @@ from demo_sim import (
     ANCHOR,
     CACHE,
     FAMILIES,
-    load_truth,
+    load_truth_sets,
     run_family,
     swap_real,
 )
@@ -78,8 +78,12 @@ def case_regions() -> dict:
     return out
 
 
-def idealize(gold_items, real_items, regions, rng):
-    """케이스 구간은 실제 분류 유지, 나머지는 배경률로 재추첨."""
+def idealize(gold_items, real_items, regions, rng, labels: str = "real"):
+    """케이스 구간의 라벨은 그대로 두고, 나머지는 배경률로 재추첨.
+
+    labels: "real" = 케이스 구간에 실제 분류 결과 / "oracle" = 골든 라벨.
+        두 조건을 같은 시드로 돌리면 배경이 동일하므로 차이가 분류 오차뿐이다.
+    """
     out, kept, redrawn = [], 0, 0
     for gold, real in zip(gold_items, real_items):
         n = day_number(gold.created_at)
@@ -93,7 +97,10 @@ def idealize(gold_items, real_items, regions, rng):
 
         if in_case:
             kept += 1
-            out.append(real)
+            # 케이스 구간의 라벨만 골라 끼운다. oracle 이면 골든, 아니면 실제 분류.
+            # 배경은 어느 쪽이든 아래에서 설계값으로 재생성되므로, 두 조건의 차이가
+            # **분류 오차 하나**로 고정된다(실험②의 계약과 같은 구조).
+            out.append(gold if labels == "oracle" else real)
             continue
 
         redrawn += 1
@@ -119,43 +126,51 @@ def idealize(gold_items, real_items, regions, rng):
 async def main() -> None:
     gold_items, documents = load_inputs()
     cache = json.loads(CACHE.read_text(encoding="utf-8"))
-    truth = load_truth()
+    truth, ignored = load_truth_sets()
     real_items, _ = swap_real(gold_items, cache)
     regions = case_regions()
 
-    acc: dict = {name: [] for name in FAMILIES}
+    acc: dict = {(name, lab): [] for name in FAMILIES for lab in ("oracle", "real")}
     for seed in SEEDS:
-        rng = random.Random(seed)
-        ideal, kept, redrawn = idealize(gold_items, real_items, regions, rng)
-        if seed == SEEDS[0]:
-            print(f"케이스 구간 유지 {kept:,}건 / 배경 재추첨 {redrawn:,}건")
-        for name, keyfn in FAMILIES.items():
-            r = await run_family(name, keyfn, ideal, documents, truth, "ideal")
-            acc[name].append(r)
-            print(f"  seed={seed} {name}  발행 {r['published']}건")
+        for labels in ("oracle", "real"):
+            # 같은 시드 → 배경 재추첨이 동일 → 두 조건 차이가 분류 오차뿐이다.
+            rng = random.Random(seed)
+            ideal, kept, redrawn = idealize(
+                gold_items, real_items, regions, rng, labels
+            )
+            if seed == SEEDS[0] and labels == "oracle":
+                print(f"케이스 구간 유지 {kept:,}건 / 배경 재추첨 {redrawn:,}건")
+            for name, keyfn in FAMILIES.items():
+                r = await run_family(name, keyfn, ideal, documents, truth, ignored, labels)
+                acc[(name, labels)].append(r)
+                print(f"  seed={seed} [{labels:6s}] {name}  발행 {r['published']}건")
 
-    print("\n" + "=" * 100)
-    print("이상적 배경 (배경만 config BASELINE_RATE 로 재생성) + 실제 분류")
+    print("\n" + "=" * 104)
+    print("이상적 배경 (배경만 config BASELINE_RATE 로 재생성)")
     print(f"시드 {SEEDS} 평균 · 32일 · 억제·combine_sources 포함")
-    print("=" * 100)
+    print("=" * 104)
     print(
-        f"{'family':14s} {'발행':>7s} {'참':>7s} {'헛알림':>8s} "
+        f"{'family':14s} {'라벨':8s} {'발행':>7s} {'참':>7s} {'헛알림':>8s} "
         f"{'헛알림비율':>11s} {'알림/일':>9s} {'케이스도달':>11s}"
     )
-    print("-" * 100)
+    print("-" * 104)
     for name in FAMILIES:
-        rs = acc[name]
-        pub = statistics.mean(r["published"] for r in rs)
-        tru = statistics.mean(r["true"] for r in rs)
-        fal = statistics.mean(r["false"] for r in rs)
-        ratio = statistics.mean(r["fa_ratio"] for r in rs)
-        hit = statistics.mean(r["cases_hit"] for r in rs)
-        total_cases = rs[0]["cases_total"]
-        print(
-            f"{name:14s} {pub:6.1f}건 {tru:6.1f}건 {fal:7.1f}건 "
-            f"{ratio:10.1%} {pub / 32:8.2f}건 {hit:6.1f}/{total_cases:<4d}"
-        )
-    print("\n  ⚠️ 가상 조건이다 — mock 배경 결함을 제거했을 때의 값이지 실서비스 예측이 아니다.")
+        for labels in ("oracle", "real"):
+            rs = acc[(name, labels)]
+            pub = statistics.mean(r["published"] for r in rs)
+            tru = statistics.mean(r["true"] for r in rs)
+            fal = statistics.mean(r["false"] for r in rs)
+            ratio = statistics.mean(r["fa_ratio"] for r in rs)
+            hit = statistics.mean(r["cases_hit"] for r in rs)
+            total_cases = rs[0]["cases_total"]
+            print(
+                f"{name:14s} {labels:8s} {pub:6.1f}건 {tru:6.1f}건 {fal:7.1f}건 "
+                f"{ratio:10.1%} {pub / 32:8.2f}건 {hit:6.1f}/{total_cases:<4d}"
+            )
+        print()
+    print("  oracle = 케이스 구간에 골든 라벨(분류 오차 0). real = 실제 분류 결과.")
+    print("  같은 시드에서 배경이 동일하므로 두 행의 차이는 **분류 오차뿐**이다.")
+    print("  ⚠️ 가상 조건이다 — mock 배경 결함을 제거했을 때의 값이지 실서비스 예측이 아니다.")
 
 
 if __name__ == "__main__":
