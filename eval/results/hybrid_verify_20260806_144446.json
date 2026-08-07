@@ -1,0 +1,4934 @@
+{
+  "relabel_300": {
+    "single": {
+      "n_sampled": 291,
+      "n_scored": 291,
+      "n_unanswered": 0,
+      "aspect_f1": 0.7156,
+      "aspect_f1_note": "대시보드·채널비교분석·개선리포트 소비 지표(중립 포함) — 탐지는 안 씀",
+      "aspect_precision": 0.6562,
+      "aspect_recall": 0.7869,
+      "sentiment_accuracy": 0.8865,
+      "exact_match_rate": 0.543,
+      "per_aspect": {
+        "기타": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "n_true": 0
+        },
+        "사이즈": {
+          "precision": 0.9054,
+          "recall": 0.6907,
+          "n_true": 97
+        },
+        "색상": {
+          "precision": 0.9176,
+          "recall": 0.8764,
+          "n_true": 89
+        },
+        "소재": {
+          "precision": 0.7,
+          "recall": 0.8,
+          "n_true": 105
+        },
+        "파손": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "n_true": 0
+        }
+      },
+      "negative_detection": {
+        "note": "탐지 분자를 결정하는 값 — 문의 단위 부정/비부정 2분류. precision·f1은 비부정 표본(fp+tn)이 0건이면 null(측정불가, 100%로 착각 금지)",
+        "precision": 0.7766,
+        "recall": 0.8902,
+        "f1": 0.8295,
+        "fpr": 0.1005,
+        "tp": 73,
+        "fp": 21,
+        "fn": 9,
+        "tn": 188,
+        "n_true_negative": 82,
+        "n_true_nonnegative": 209
+      },
+      "negative_scoped_aspect": {
+        "note": "골든이 부정인 문항만 대상 — aspect까지 맞아야 올바른 분자에 잡힘. PR 리뷰 반영: 단일 aspect 출력에서는 fp==fn이 구조적으로 성립해 precision=recall=F1이 항상 같은 값이라 accuracy 하나로 통합함 (multi_output_diagnostic.rate가 0%보다 커지면 이 등식이 깨지므로 그때 재분리)",
+        "accuracy": 0.7172,
+        "tp": 71,
+        "fp": 28,
+        "fn": 11,
+        "n_true_negative": 82,
+        "n_true_negative_warning": "부정 표본이 82건뿐 — 신뢰구간이 넓을 수 있음. --only-negative 권장"
+      },
+      "multi_output_diagnostic": {
+        "note": "예측 측 다중 aspect 출력 건수 — explode 계약 근거 진단(정답 없어 recall 계산 불가)",
+        "rate": 0.189,
+        "count": 55
+      },
+      "mismatches": [
+        {
+          "inquiry_id": "RELABEL-0001",
+          "raw_text": "배송도 빠르고 옷 입어보구 집사람이 좋아하네요~~가벼워서 입구다니기 좋구 그라데이션이라 색도 예쁘네요~~감사합니다~~^^",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0002",
+          "raw_text": "색상이 이쁘고 배송도 빨라서 좋아요. 신축성도 좋아서 운동할때 입기 좋을것 같아요^^",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0003",
+          "raw_text": "신축성 좋고 입기 편하네요 다만 사이즈 좀 넉넉해 보일수는 있어요 한치수작게 입어도 충분할듯 해요",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0004",
+          "raw_text": "오래 걸려 받았어요  162, 62 체형 길이도 허리도 잘 맛고 디자인도 예뻐요  주름이 펴지는 일은 없기를 바라요",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0009",
+          "raw_text": "큰 기대 없이 주문했는데 전부 다 색상도 예쁘고 도톰해서 겨울에도 입을 수 있겠습니다. 배둘레햄인 분들도 티안나고 편하게 입을 수 있어요^^",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0010",
+          "raw_text": "색상및 촉감이아주좋아요.두벌구매했어요",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0012",
+          "raw_text": "집에서 입기 가볍워서 그냥 입기로 했는대,가격대비 좀 싸구려느낌 입니다. 색상도 화면과는 좀 다르게 허접힌? 그런느낌입니다.  외출복으로는 적당하지 안은듯 합니다.",
+          "true_aspect": "색상",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0013",
+          "raw_text": "배송도빠르고 색감도좋네요 피부닿는촉감이좋아요",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0014",
+          "raw_text": "색 별로 맞춰입기 좋아요 감촉좋고 비침없으면서 시원함",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0017",
+          "raw_text": "가격도 너무 착하고 핏도 예뻐요 올겨울 따뜻하게 지낼것같내요 많이 파세요~",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0018",
+          "raw_text": "넘가볍고 핏도 좋아요 원피스 한벌값으로 네벌을  살수있다니 넘좋네요",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0019",
+          "raw_text": "바지 봉제가 이상하게 된건지 핏이 정말 어정쩡하고 밑단처리가 실밥도 풀려있어요 입으면 와이존부분이 좁아서 이상해요;; 잘 선택하세요",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0020",
+          "raw_text": "싸고 좋아요....막입으려고 삿는데 가성비 짱입니다...치수가 약간 큰것 같기도하고....",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0021",
+          "raw_text": "셔츠 4장에 이가격  정말 착하네요 배송도  빠르구요 받자마자  입어보구  세탁기 돌렸는데  빨리  건조되구 좋은데요",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0024",
+          "raw_text": "착한가격에 옷감도 괜찮은듯 하네요. 편안하게 입을수 있을것 같아요~",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0026",
+          "raw_text": "촌스러울까봐 걱정했는데 색상이 화사하니 예쁘네요 얇아서 시원해요",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0027",
+          "raw_text": "색상도 이쁘고 너무 길지 않아서 좋아요 잘 입을게요 감사합니다  ^~*",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0030",
+          "raw_text": "구김은 있으나  바지는 디자인 예뻐요 ~",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0035",
+          "raw_text": "신축성과 색상까지 좋고 편하게 잘 입을것같아 맘에들어요",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0039",
+          "raw_text": "이상품은 믿고사셔도 됩니다 저논 계절마다 사는데요  입으면 핏이 예뻐보이고  항상 입기 편하고 디자인이 고급져보여 추천할수있는   상품이라 적극적으로 추천드립니다",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0045",
+          "raw_text": "바지는 입으니 편해요~다만 흰백바지 밑단에 얼룩이 있어서 별하나 빼요~세가지다 신축성도 좋고 편해요~ 색상 디자인 다 맘에 들어요~ 이번 여름에 요걸로 지내면 되겠어요~",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": -1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0047",
+          "raw_text": "딱.원하던바지네요.일자핏에.허리까지길이도.착용후.맞춤같이.움직임도편하네요.겨울용나오면구매하고싶네요^^",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0051",
+          "raw_text": "가격도 저렴하고 핏도 이쁘게 빠져서 아주 만족합니다",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0052",
+          "raw_text": "봄ㆍ가을 편하게잘빕을수있겠네요 소제가차가운소제라 쌀쌀한날씨에인어로",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0056",
+          "raw_text": "심플한 디자인, 부드러운 가죽 질감 넘 마음에 들어요. 색상도 예쁩니다 ",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0058",
+          "raw_text": "배송빨라서 좋네요 기사님도 친철하시구요~^^ 66사이즈 했는데 키가작아서 그런가 기장이 좀길어요~ 바지은 핏이 괜찮아요~ 예쁜게 잘입을께요~~ 수고하세요~^^",
+          "true_aspect": "사이즈",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0059",
+          "raw_text": "제가 홈쇼핑에서 산것중에 두번째로 잘 산갓같아요 탄력이 뛰어나고 색상도 이쁘고 특히 체크는 어디에나 어울려요  허리밴드또한 폭이 넓어서 거들효과가 나네요. 강추입니다!.",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0061",
+          "raw_text": "한철입을거 생각하고 샀어요..품질이 생각보다 괜찮네요..제일 큰 사이즈 구매했는데 사이즈가 크게 나오진 않았습니다..",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0062",
+          "raw_text": "충전재가 보기 안좋을 정도로 빠져 나와요ㅜ 카라,소매 부분에 먼지가 많이 붙네요  !!!!!",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0064",
+          "raw_text": "얇아서 좋고 스판이 짱짱하고 핏도 예쁘고 무더운 올여름 잘입고 다닐것같아요. ",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0067",
+          "raw_text": "기대이상이에요 핏도이쁘고 세일해서 이가격에 만족합니다",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0069",
+          "raw_text": "밝은 청은 사이즈가 내몸에 딱 맞춘듯 잘 맞습니다 그러다 진청 흰색바지는 한치수 큰것같고 .. 바지 하나 사면서 육만 얼마 쓴 기분입니다 ..",
+          "true_aspect": "사이즈",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0072",
+          "raw_text": "핏도 너무 이쁘고.  품질이 넘 좋아요",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0073",
+          "raw_text": "가격대비  아주 질 좋은  코트네요ㆍ칼라도  맘에들구요ㆍ잘입을께요",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0075",
+          "raw_text": "가볍고 핏이 이뻐요 가성비 좋네요 핑크도 구매하려는데 매진이네요 ㅠ 남성용도 구매하려구요 ",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0077",
+          "raw_text": "바지 편하고 따뜻하네여.. 색상두 이쁘구여.. 세탁하면 기장이 줄어든다고 어떤분이 하길래 설마? 했는데 세탁하니 기장이 약간은 줄었네여..",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0078",
+          "raw_text": "다 맘에 안드네요 칼라가 네이비가 좀 탁하네여 곤색에  녹색 섞인 느낌? 디자인도 안예뻐요",
+          "true_aspect": "색상",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0081",
+          "raw_text": "디자인 색상 넘 이쁜데 반짝이 가루가  눈에 보이게 떨어져 있네요",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0086",
+          "raw_text": "163에 55키로라 20년째 66을 입고 있는데 너무 작아서 꽉 끼네요 품질도 별루요",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0087",
+          "raw_text": "걷기운동할때 입으싴다해서 한치수큰걸로 구입해드렸는데 시원하고 디자인이 좋으시다고 하네요  다른분들ㄷㅎ 구입하신다고 했데요  색도 마음에 들어서 다음에 아빠도 구입해달라고 하셨옹ㅅ ",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0088",
+          "raw_text": "구김이 잘가는 재질은 않은데..마니 구겨져서 왔네요..싼맛에 그냥 집에서나 입어야겠어요",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0091",
+          "raw_text": "6벌대비 가격도저렴하고 핏감도 좋습니다",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0092",
+          "raw_text": "배송 받자마자 세탁 후 입었는데 매우 가볍고 시원함.  색상도 골고루 여서  다른 옷과  잘 어울림.",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0094",
+          "raw_text": "가격대비저렴하지만 좀더양모가 도톰했으면좋겠어요",
+          "true_aspect": "소재",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0095",
+          "raw_text": "너무 예쁘고 고급스럽우며 우아함을 지닌 색상의 양모 코트를 저렴하게 구매할 수 있어 감사해요.멋지고 기품있게 잘 입을께요. 다가올 겨울을잘 기대해 봅니다.",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0096",
+          "raw_text": "옷이 색상이 너무예쁘구 디자인이 고급스럽습니다  너무 좋다고 난리에요 예쁘게잘입을께요",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0097",
+          "raw_text": "사이즈도  만족하고 디자인이 멋스러움 까지... 모두 만족해서 지인한테도 추천했습니다. 넘~~ 넘~~~좋아요.",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0098",
+          "raw_text": "넘 편하고 색상이 예뻐요 가격도 착하구요 씻어봤는데 옷 트러짐  전혀없구요 감사합니다^^",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0100",
+          "raw_text": "색상다양하고 촉감좋고 길이도길어서 따듯하게 나눠입어요",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0101",
+          "raw_text": "브라운.블랙 두개 주문. 충전재 약간 빈약. 가볍고  디자인 맘에 들어요",
+          "true_aspect": "소재",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0102",
+          "raw_text": "시원한 두께감 색상도 모두무 난해서 마음에들어요",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0105",
+          "raw_text": "색상은 맘에 들어요. 길이가 좀 짧은듯~",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0106",
+          "raw_text": "무거워서 부담가는것도많은데 가벼우면서도 부피도 작은게 좋아요",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0109",
+          "raw_text": "일단 이 가격에 리얼 휘메일밍크를 사서 좋구요 색상과 디자인도 다좋아요 다만 컬러때문인지 약간 나이있어 보이긴해요ㅎㅎ",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0110",
+          "raw_text": "너무 맘에 들어요. 디자인이 몸매도 가려주고 편하네요 린넨 특유에 칼라도 은은하고 한여름 잘 입을 거 같아요. 아주 맘에 듭니다",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0115",
+          "raw_text": "다양하게 색깔별로3가지 의 청바지를받아 좋으네요~ 라이크라로 입어보니 편하네요 잘입겠어요~",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0116",
+          "raw_text": "초딩  딸래미 키가커서 청바지  기대없이 샀는데..너무 좋아라 해서 제것도 샀어요^^ 정말 괜찮아요. 스판력좋고 허리 고무처리되있고..색상 잘입어지는 3가지라 더 좋아요~",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0120",
+          "raw_text": "핏이 예뻐요. 따뜻하구여^^ 가격두 착하구 디자인두 영햐보여서 좋네요",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0125",
+          "raw_text": "그동안 홈쇼핑 구입 청바지를 실패해서 이번에도 실패하면 어쩌나 고민이 많이 됐는데 요번건 대만족 이네요 날씬해보이고 편해서 좋아요",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0128",
+          "raw_text": "사이즈도 딱 맞구 가성비 정말 좋네요 가격도 착한데 5종이라니 너무 좋아요",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0130",
+          "raw_text": "가격대비 품질 좋고 가볍고 구김이 적어 좋았고 빠른배송 최곱니다",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0131",
+          "raw_text": "너무. 맘에들고 편해요  색상이 맘에 들어 구입했는데   디자인이 너무 이쁘다고들하네요  가볍고. 부드러워. 입으니 느낌 좋아요  신축성도. 있어서. 편해요",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0132",
+          "raw_text": "너무 너무 좋아요 부드럽고 착용감 재질 다 맘에 듭니다",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0133",
+          "raw_text": "몸에 딱맞고 착용감이 좋아요. 갯수가 많아서 선물할수있어 좋아요",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0134",
+          "raw_text": "면 니트라 가볍고 보플이 잘 안생길듯 해서 좋고  색상이 좀 진했음 좋겟습니다",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0135",
+          "raw_text": "따뜻하고 촉감이 부드럽고 색상이 예쁘네요.",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0136",
+          "raw_text": "친정 엄마 사 드렸는데 색상도 맘에 들고 편하고 디자인 예쁘다고 하십니다 ",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0137",
+          "raw_text": "배송이 다음날 바로 왔어요! 주문하자마자 품절되서 늦게 했으면 못 살뻔 했네용 지블링된 원단도 예쁘고 코디하기 쉬울거 같아요 :)",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0139",
+          "raw_text": "다 좋은데 허리 밴드가 너무 타이트해서 수선해서 입어야 겠어요 그리고 밑단 바는질이 너무 허술해요.",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0140",
+          "raw_text": "색상광디자인은예쁜데소매기장이조금기네요",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0143",
+          "raw_text": "맘에드는상품였는데 가격이 비싸서 못 사고 있다가 세일해서 구입했습니다. 원하던 베이지는 아니었는데 그래도 너무 따뜻하고 가볍고 디자인도 예쁩니다 계속 좋은 상품 소개해 주세요",
+          "true_aspect": "색상",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0146",
+          "raw_text": "몸에 닿는부분들이 까슬거리지않아 좋아요 단지 아쉬운점을 찿는다면 색상 배합이  조금 아쉬워요",
+          "true_aspect": "색상",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0148",
+          "raw_text": "나에게 주는 생일선물로 구매했습니다. 가격도 좋은데 적립금도 주고, 작년부터 사고싶었는데 너무 잘산거 같아요~ 가볍고 길이도 딱좋고 몸에 잘맞네요~ 겨울 금방 오겠죠~ㅋㅋ",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0149",
+          "raw_text": "사진같은 핏 안나오고요, 발목부분이 디자인 싼티나요. 방송과 다른 상품 인가요? 반품할려다 귀찮아 동네복으로 입을려고요.",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0150",
+          "raw_text": "색상디자인예뻐요 뒷모습은셔링으로 아무옷이나 잘어울립니다 부드러워요 조금무거운느낌 젊은분들이 입으면더욱더 멋있을것같아요~ 가격대비 좋아요!",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0151",
+          "raw_text": "많이 두껍진 않지만 색이 예쁘고 느낌도 부드럽네요",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0154",
+          "raw_text": "블랙이 다른 유색 레깅스 두가지에 비해 좀 타이트 한편이나 착용시 편하고 좋은거같아 구매확정합니다",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0156",
+          "raw_text": "디자인 예쁘고 시원해서 좋은데 다림질이 필요한게  종 아쉽네요",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0161",
+          "raw_text": "정사이즈 하나작게사두 될거같아요 나 170이라 그런지  길이감 아주 조타",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0165",
+          "raw_text": "디자인 안예뻐요 색상도 별로고요 주말빼고 배송이 너무 느리고 입어보니 디자인 너무 촌스럽고 맘에 안들어요. 올겨울 외출복으로는 빵점",
+          "true_aspect": "색상",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0166",
+          "raw_text": "품질은 좋은데 허리가 좀 커서 내려갑니다 25사이즈도 판매해주시면 하는 바램이 있습니다",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0168",
+          "raw_text": "생각 했던 것 보다 별로네요 그냥  막 입는.. 평소 55입는데 사이즈도 안 맞네요 봄에 입지도 못할 것 같아요",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0172",
+          "raw_text": "세가지 스커트 모두 활용도가 좋아서 만족합니다 색상도 예쁩니다 다만 파랑색 스터트 너무 구겨져와서 세탁소가서 다림질 해 왔어요",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0174",
+          "raw_text": "타이트할까 싶어 고민하다가  한사이즈 워로 주문했는데 여유있네요.가성비 좋으나 구성품 무두 구김이 너무 심하네요.세탁을 했는데도 그대로네요...",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0175",
+          "raw_text": "입으면 촉감도 매끄럽고 찰랑이는 느낌도 있어 좋아요. 그리고 구김은 생기네요.",
+          "true_aspect": "소재",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0178",
+          "raw_text": "두께도 적당하고 부드럽고 통도 너무 넓지 않아서 좋아요. 가격대비 아주 좋아요.",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0181",
+          "raw_text": "가격대비 재질도 좋고 색감도 예쁘네요. 편하게 잘 입을 것 같아요.",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0186",
+          "raw_text": "착용감이 편안하고 가볍고 다림질 할 필요가 없네요",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0187",
+          "raw_text": "색상 질감 다 맘에듭니다 신축성도 좋아 입고 벗기 편합니다",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0188",
+          "raw_text": "여유있게 입을려고 한사이즈 업해서 주문. 따뜻해 보이고 색상이 깨끗하게 보여서 좋아요. 밝은색이라 조금 뚱뚱해 보이지만 디자인이 예쁘서 구매확정합니다.  ",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0190",
+          "raw_text": "옷은편하고사이즈는크게나왔어요구입하실분참고스타일은구식복고풍이라고하기에는역부족싼게비지떡~",
+          "true_aspect": "사이즈",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0191",
+          "raw_text": "생각보다 품질이 좋았어요 핏도 괜찮았고, 가격대비 만족합니다",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0195",
+          "raw_text": "색상 너무 맘에 들어요 입기에 편리하고 착용감이 좋음",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0197",
+          "raw_text": "디자인이 무난하게 잘 입겠어요. 디자인이 각각 달라서  좋군요. 그중에 브릭핑크가 원픽^^*",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0198",
+          "raw_text": "허리라인까지 올라가는 길이라 뱃살도 감춰주고 핏도 예쁨니다 홈쇼핑서 바지 구매후 처음으로  만족한 상품입니다",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0199",
+          "raw_text": "가격이 엄청 저렴해서 혹시나 했는데 디자인도 엄청 깔끔하고 실밥처리도 완벽 옷감에 구겨짐은 있지만 스팀다리미로 살짝만 다려도 쫙 펴지네요. 득템^^~잘입을께요.",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0201",
+          "raw_text": "저렴한 가격에 네벌이나 ㅋㅋ 적절하게 코디해서 멋좀 내야겠어요.  네이비가 화면이랑 약간 다르지만 괜찮을거 같아요  화이트도 사고싶지만소화하기가 힘들것 같네요        ",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0202",
+          "raw_text": "제가 살이있어서인지 아주어울리지는않네요.그래도 저렴한가격에 구입했으니잘입을께요",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0203",
+          "raw_text": "작년에 남편꺼 구입했는데 너무편하고 좋다고 잘입더라구요.올해는 저도 구입했습니다..역시 입기 편하고가볍고 핏도살고,좋네요^^",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0206",
+          "raw_text": "추천하고 싶어요. 가성비 굿 이구요. 따뜻하고 색상도 예뻐요.",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0208",
+          "raw_text": "아직 입어보진 않았지만 저렴한 가격에 잘 구입한거 같아요. 바지 핏도 맘에 들구요^^~",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0210",
+          "raw_text": "색상도예쁘고 시원하고 부드러워서 좋아요",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0211",
+          "raw_text": "재구매입니다~가볍고 구김도 없고..가격대비 완전 만족입니다..잘입을게요^^",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0214",
+          "raw_text": "가성비 짱입니다  사이즈도 딱맞고 품질 도 좋고 너무너무 디자인이 맘에들어요",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0219",
+          "raw_text": "배송은 좀늦었지만  가격대비   티는 부드럽고  시원한 재질이 좋아 만족하나  집업은  앞짚퍼  스테이치바느질이   좀지저분해   아쉬움",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0221",
+          "raw_text": "간절기  입기  좋을것같아 구매했는데‥ 바느질엉망   쭈글쭈글  다링질도안된다고 하고  저렴한 이유가 있었네요 걍 집에서 입어야 할듯해요",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0226",
+          "raw_text": "받은지 꽤 됐는데 지금 작성합니다. 세 컬러 모구 디자인이 무난하도 핏도 무난합니다. 가격대비 좋습니다.",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0228",
+          "raw_text": "7장 중 2장은 누가 입어본 옷을 보냈는지 구김이 있었지만 나머진 디자인이 괜찮아서 걍 입으려고요 그것만 빼면 착용감도 좋고 가성비도 좋네요.",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0230",
+          "raw_text": "유행하는 스타일인 롱기장이라서 좋아묘 구김가지만 좋아요",
+          "true_aspect": "소재",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0231",
+          "raw_text": "여행가시는 엄마 사드렸는데 사이즈가 잘 맞았고 편하시다고 하시네요 77이었는데 바지길이가 약간 짤뚱한 느낌이라 그게 약간 아쉬웠다는... 가성비는 훌륭한 상품이에요",
+          "true_aspect": "사이즈",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0236",
+          "raw_text": "겉감이 좀 뻣뻣하긴하지만 가격대비 괜찬아여",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0240",
+          "raw_text": "구입시기는 겨울인데 입기엔 좀 얇은것같아   시기를 기다렸다 입어야할듯 색상은 예뻐요.",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0241",
+          "raw_text": "정사이즈구요 바느질은 그럭저럭 괜찮아요. 화면에서는 길이가 짧아보였는데 키161인 저한테는 복숭아뼈 반 덮는 길이에요. 핏도 이쁘구요. 5종에 이가격이면 잘샀다고 봅니다.",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0243",
+          "raw_text": "가성비 짱입니다  부드럽고 핏도 좋아용 감사합니다",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0245",
+          "raw_text": "폭이 좁아서 방송보다 예쁘진 않네요 옆선이 울어서 스팀 다리미로 눌러봐야겠어요",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0252",
+          "raw_text": "기지도 괜찮아요 까슬까슬한원단이여서 몸에붙지않으니 좋은것같아요 가격이 저렴해서 구매했어요 올여릉 시원하게 보내겠네요",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0253",
+          "raw_text": "갈색이 멋스러워요. 회색은 테일러드 카라의 아랫부분이 뭔지 모르게 어색하고 가격이 저렴해보입니다  ",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0255",
+          "raw_text": "천이 좀 두툼한게 좋은 듯 하구요~ 천이 구김 없는 천이었으면 더 좋았을텐데ᆢ 다림질 해서 잘~입겠습니다. 감사하니다 ^^",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0257",
+          "raw_text": "편안하고 핏도 좋고 만족합니다..청바지 불편해서 잘 안입었는데 얘네들은 즐뎌 입을것 같네요..",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0259",
+          "raw_text": "생각보다 편하고 큼직해서 여유있게 입을 수 있어 좋았어요 얊고 시원하네요 착한가격에 구매했어요",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0260",
+          "raw_text": "배송도 빠르고 가격도 착하고 옷의 질감도 좋습니다. 딸아이와 두 장씩 입을 수 있어서 좋아요",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0266",
+          "raw_text": "바지 색깔만 다르고 모양은 똑같은 줄 일았는데 모양도 다 다르네요.^^ 그래서 스타일이 더 예쁘고  스판 많이 들어가 있어서 착용시 정말 편해요 잘 입을게요^^",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0267",
+          "raw_text": "비치지 않아 좋습니다.  한여름보다는 지금 입기 좋은듯~",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0272",
+          "raw_text": "슬럼하면서 시원하네요 디자인도 심플하고 아주 편합니다",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0278",
+          "raw_text": "배송이 빨라요 오자 바로 입었는데 생각보다 많이 비쳐서 이너를 꼭 입어야 할듯 시원하게 입을수 있을것 같아요 ",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0279",
+          "raw_text": "재질도 맘에들고  디자인도 예쁘요 한가지 아쉬은점이 있다면  허리밴드가 짱짱했으면 좋겠어요 입고있으면 줄줄내려가서  수선집가서  3개  전부 수선했네요 수선비가 만오천원들었어요",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0287",
+          "raw_text": "얇고 가벼워서 좋다고 하시네요 기장도 키작녀들한테는 좋아요 다만 구김은 있는 스타일이네요",
+          "true_aspect": "소재",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0290",
+          "raw_text": "검은색 말고는 살짝 안이 비쳐서 슬립을 입어야 하네요. 거격대비 재질은 좋습니다.",
+          "true_aspect": "소재",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0291",
+          "raw_text": "부라우스3점  모두색상도  무난하고 디자인도  세련되어  너무잘입고  다녔어요.",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0295",
+          "raw_text": "너무 가볍고 따뜻하고 가격 착하고. 조아조아요. 버건디 적당히 어두운 컬러도 좋고.",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0297",
+          "raw_text": "키가 커서 길이가 어중간하게 짧아요. 소재는 좋아요",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0298",
+          "raw_text": "간절기에 입기  좋을것 같네요 정사이즈  로~~  다른색도  구매하고  싶네요",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0299",
+          "raw_text": "디자인도 예쁜 정말 나무랄때 없는 좋은 상품 이예요~ 살짝 아쉬움이 있다면 색상 밝은 컬러를 하나쯤 더 있었으면 좋았을것 같아요~",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        }
+      ],
+      "leak_filter": {
+        "note": "유출 태깅 안 됨(tag_leaked_rows 미호출) — leak_filter 정보 없음",
+        "applied": false
+      }
+    },
+    "multi": {
+      "n": 9,
+      "n_scored": 9,
+      "n_unanswered": 0,
+      "full_row_accuracy": 0.3333,
+      "aspect_level_accuracy": 0.4737,
+      "note": "full_row_accuracy=모든 aspect 다 맞은 행 비율(explode 계약 핵심 지표), aspect_level_accuracy=개별 aspect+감성 조합 단위 정확도"
+    },
+    "n_total": 300,
+    "n_failed": 0
+  },
+  "llm_generated_700": {
+    "single": {
+      "n_sampled": 600,
+      "n_scored": 600,
+      "n_unanswered": 0,
+      "aspect_f1": 0.9614,
+      "aspect_f1_note": "대시보드·채널비교분석·개선리포트 소비 지표(중립 포함) — 탐지는 안 씀",
+      "aspect_precision": 0.9286,
+      "aspect_recall": 0.9967,
+      "sentiment_accuracy": 0.6605,
+      "exact_match_rate": 0.6183,
+      "per_aspect": {
+        "기타": {
+          "precision": 0.8571,
+          "recall": 1.0,
+          "n_true": 150
+        },
+        "사이즈": {
+          "precision": 0.9259,
+          "recall": 1.0,
+          "n_true": 50
+        },
+        "색상": {
+          "precision": 0.7463,
+          "recall": 1.0,
+          "n_true": 50
+        },
+        "소재": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "n_true": 50
+        },
+        "오배송": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "n_true": 150
+        },
+        "파손": {
+          "precision": 1.0,
+          "recall": 0.9867,
+          "n_true": 150
+        }
+      },
+      "negative_detection": {
+        "note": "탐지 분자를 결정하는 값 — 문의 단위 부정/비부정 2분류. precision·f1은 비부정 표본(fp+tn)이 0건이면 null(측정불가, 100%로 착각 금지)",
+        "precision": 0.7262,
+        "recall": 0.8319,
+        "f1": 0.7755,
+        "fpr": 0.4609,
+        "tp": 297,
+        "fp": 112,
+        "fn": 60,
+        "tn": 131,
+        "n_true_negative": 357,
+        "n_true_nonnegative": 243
+      },
+      "negative_scoped_aspect": {
+        "note": "골든이 부정인 문항만 대상 — aspect까지 맞아야 올바른 분자에 잡힘. PR 리뷰 반영: 단일 aspect 출력에서는 fp==fn이 구조적으로 성립해 precision=recall=F1이 항상 같은 값이라 accuracy 하나로 통합함 (multi_output_diagnostic.rate가 0%보다 커지면 이 등식이 깨지므로 그때 재분리)",
+        "accuracy": 0.9293,
+        "tp": 355,
+        "fp": 27,
+        "fn": 2,
+        "n_true_negative": 357,
+        "n_true_negative_warning": null
+      },
+      "multi_output_diagnostic": {
+        "note": "예측 측 다중 aspect 출력 건수 — explode 계약 근거 진단(정답 없어 recall 계산 불가)",
+        "rate": 0.07,
+        "count": 42
+      },
+      "mismatches": [
+        {
+          "inquiry_id": "GEN-0003",
+          "raw_text": "상품 잘 받았는데 파손 걱정이네요, 혹시 안전한가요?",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0005",
+          "raw_text": "상품이 파손되면 어떻게 하나요? 배송 온 건 괜찮은데, 혹시 불량이면 교환 가능한가요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0006",
+          "raw_text": "배송 잘 왔는데 파손되면 어떻게 해?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0007",
+          "raw_text": "안녕하세요~ 주문한 상품이 도착했는데, 박스가 찢어져 있더라구요. 혹시 파손됐을까봐 엄청 걱정돼요. 만약 파손이 있다면 교환이나 환불 같은 건 어떻게 해야 하는지 알려주세요! 😟",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0008",
+          "raw_text": "배송받은 상품이 파손되지 않았지만, 혹시 파손되면 어떻게 처리되나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0010",
+          "raw_text": "주문한 상품이 드디어 도착했는데, 다행히도 파손 없이 잘 왔어요. 혹시 다음 번에 파손되면 어떤 절차를 따라야 하는지 알려주실 수 있나요?",
+          "true_aspect": "파손",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0011",
+          "raw_text": "상품이 파손되면 어떻게 처리해주나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0012",
+          "raw_text": "안녕하세요. 최근에 주문한 상품을 받았는데, 포장 상태가 조금 엉망이라 걱정이 되네요. 혹시 파손된 상태로 배송될 경우 어떻게 처리해야 하는지 궁금합니다. 상품이 무사히 도착했으면 좋겠네요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0014",
+          "raw_text": "상품을 받았는데 포장이 아주 꼼꼼해서 안심하고 받았어요. 혹시나 파손되는 경우에는 어떻게 보상받는지 궁금합니다.",
+          "true_aspect": "파손",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0016",
+          "raw_text": "상품이 도착했는데 포장이 뜯어진 상태라 매우 불안해요. 혹시 파손된 것 아닌지 걱정이 됩니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0017",
+          "raw_text": "상품이 도착했는데 잘 왔어요. 혹시 나중에 파손되면 어떻게 처리되나요?",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0020",
+          "raw_text": "상품이 파손될까 걱정입니다, 안전할까요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0021",
+          "raw_text": "상품이 파손되면 어떻게 보상받나요? 이번에도 파손된 제품이 오는 것 아닐까 걱정이 됩니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0023",
+          "raw_text": "상품이 파손되면 어떻게 되나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0025",
+          "raw_text": "어제 주문한 상품이 오늘 도착했는데, 포장이 정말 허술하더군요. 혹시 파손된 상태로 올까 봐 걱정했는데, 다행히 제품은 괜찮았어요. 하지만 이렇게 계속 불안하게 쇼핑해야 하는게 너무 스트레스입니다. 앞으로는 좀 더 신경 써주세요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0026",
+          "raw_text": "상품 배송 중에 파손되면 어떻게 해?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0028",
+          "raw_text": "상품 파손됐는데 어떻게 처리되나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0032",
+          "raw_text": "주문한 상품이 방금 도착했는데, 포장이 좀 찢어져 있더라고요. 물건을 확인해보니 다행히 파손은 없었지만, 다음에는 파손되면 어떻게 해결되는지 궁금합니다. 혹시 주의사항 같은 게 있으면 미리 알려주시면 좋겠어요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0035",
+          "raw_text": "구매한 상품이 파손될까 걱정되는데, 혹시 파손 시 교환이나 환불이 가능한지 알고 싶습니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0037",
+          "raw_text": "상품 잘 왔는데 혹시 파손되면 어떻게 하나요?",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0040",
+          "raw_text": "상품이 도착했는데 포장이 엉망이었어요. 파손되면 어떻게 처리되는지 궁금합니다.",
+          "true_aspect": "파손",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0041",
+          "raw_text": "주문한 상품이 도착했는데 포장이 손상되어 있었습니다. 혹시 파손된 경우 교환 어떻게 진행되는지 궁금합니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0044",
+          "raw_text": "상품이 파손된 것 같은데 어떻게 처리하나요? 교환이나 환불은 가능하죠?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0045",
+          "raw_text": "주문한 상품이 파손되지 않고 잘 도착했는데, 혹시 파손 시 교환이나 환불은 어떻게 진행되나요?",
+          "true_aspect": "파손",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0046",
+          "raw_text": "주문한 상품이 어제 도착했는데, 포장이 제대로 되어 있었고, 상품은 파손 없이 잘 왔어요. 그런데 혹시 파손이 되었을 경우에는 어떻게 처리해야 하나요? 추가로, 상품이 손상된 상태로 도착하면 환불이나 교환이 가능할까요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0051",
+          "raw_text": "안녕하세요, 지난번에 주문한 상품이 도착했는데, 다행히 파손 없이 잘 도착했어요. 그런데 혹시 배송 중에 파손이 되었을 경우, 어떤 절차로 진행해야 하는지 알고 싶습니다. 만약 불량 상품이 도착하면 교환이나 환불은 어떻게 진행되는지도 궁금합니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0053",
+          "raw_text": "상품이 잘 도착했는데 파손 여부가 걱정되네요. 배송 중 파손되지 않도록 어떻게 관리하시는지 궁금합니다.",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0054",
+          "raw_text": "상품이 파손되면 교환이나 환불은 어떻게 되나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0055",
+          "raw_text": "상품은 잘 도착했는데 혹시 파손되면 어떻게 하나요?",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0056",
+          "raw_text": "안녕하세요, 최근에 주문한 상품이 도착했는데 다행히 파손 없이 잘 arrived습니다. 그런데 혹시 배송 중에 파손되면 어떻게 처리되는지 궁금합니다. 혹시 교환이나 환불 절차가 있다면 미리 알고 싶습니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0057",
+          "raw_text": "배송받은 상품이 잘 오긴 했는데, 혹시 파손된 경우는 어떻게 처리되나요? 실수로라도 틀어져서 온 거라면 크게 걱정이 되네요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0061",
+          "raw_text": "택배 받은 지 한참인데, 손상된 거 없겠지? 그런데 파손되면 어떻게 처리해줘?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0062",
+          "raw_text": "상품이 파손되어 도착하면 어떻게 진행되나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0064",
+          "raw_text": "주문한 상품이 오늘 도착했는데, 이상 없이 잘 왔어요. 그래도 혹시 파손될 경우에는 어떻게 처리되는지 궁금해서 문의 드립니다.",
+          "true_aspect": "파손",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0070",
+          "raw_text": "안녕하세요, 최근에 주문한 상품이 도착했는데요, 다행히 파손 없이 잘 도착했습니다. 하지만 혹시라도 상품이 손상되어 도착하면 어떻게 처리해야 하는지 궁금해서 문의 드립니다. 고객센터에서 이런 경우에 대한 안내가 따로 있는지 확인 부탁드립니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0071",
+          "raw_text": "상품이 파손되면 어떻게 하나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0075",
+          "raw_text": "상품이 파손되면 어떻게 처리해줘? 이번에 배송 온 것도 좀 걱정인데, 괜찮으려나...😓",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0083",
+          "raw_text": "상품을 받았는데 포장 상태가 조금 의심스러웠어요. 혹시 파손된 상품이 도착하면 교환이나 환불이 가능한가요? 그리고 상품이 무사히 도착할 수 있도록 포장에 신경 써주셨으면 좋겠어요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0084",
+          "raw_text": "안녕하세요. 최근에 주문한 상품이 잘 도착했는데, 포장 상태가 정말 좋았어요. 하지만 혹시나 파손될 경우 어떻게 대응해야 하는지 궁금해서 문의 드립니다. 특히, 제가 구매한 저렴한 가전제품은 뚜렷한 손상 없이 잘 도착했는데, 만약 문제가 생기면 교환이나 환불이 가능할까요?",
+          "true_aspect": "파손",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0085",
+          "raw_text": "이번에 주문한 상품이 파손될까봐 걱정인데, 진짜 잘 올지 궁금해. 다치지 않고 온다고 해도, 만약 파손되면 어떻게 처리해주나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0087",
+          "raw_text": "상품을 받았는데 포장이 많이 찢어져 있었고, 내용물도 파손되었어요. 이렇게 배송이 불량하면 어떻게 보상받을 수 있는 건가요? 고객센터에 문의하려고 해도 답변이 너무 느려서 불만이 쌓이고 있습니다.",
+          "true_aspect": "파손",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0088",
+          "raw_text": "상품이 도착했는데 포장이 다 찌그러져서 걱정이에요. 이렇게 상태가 안 좋으면 교환은 어떻게 하나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0089",
+          "raw_text": "안녕하세요, 최근에 주문한 상품이 도착했는데 포장이 조금 찌그러져 있었습니다. 다행히 내부 제품에는 큰 이상이 없었지만, 혹시 파손된 채로 배송되면 어떻게 처리해야 할지 궁금합니다. 앞으로 배송 시 좀 더 안전하게 포장해 주시면 좋겠다는 생각도 들었습니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0091",
+          "raw_text": "파손된 건 어떻게 처리해줘?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0092",
+          "raw_text": "상품이 도착했는데 겉박스가 찢어져 있어서 혹시 안에 있는 것도 파손된 건 아닌지 걱정이에요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0093",
+          "raw_text": "상품을 받았는데 한쪽 모서리가 꺾여서 파손된 것 같아요. 이런 경우에는 어떻게 처리해야 하나요? 기다리고 있는 시간이 길어질까 걱정이 됩니다.",
+          "true_aspect": "파손",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0094",
+          "raw_text": "상품을 받았는데 포장이 엉망이라 불안해요. 파손된 건 아닐지 걱정입니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0096",
+          "raw_text": "상품이 파손되면 교환이나 환불은 어떻게 하나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0098",
+          "raw_text": "택배가 도착했는데 포장 상태가 좋지 않더라고요. 혹시 파손된 상품이 오면 어떻게 대처해야 하나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0100",
+          "raw_text": "상품이 파손되면 어떻게 해요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0101",
+          "raw_text": "안녕하세요! 이번에 받은 제품이 배송 중에 파손된 것 같아서 너무 걱정이 돼요ㅠㅠ 만약 파손된 상태로 도착하면 어떻게 처리해야 하나요? 그리고 다행히도 이번엔 무사히 잘 왔는데, 다음엔 아닐까 봐 불안해요. 혹시 배송 중 파손에 대한 보상은 어떻게 되는지 알고 싶어요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0102",
+          "raw_text": "상품을 받았는데 포장이 심하게 찌그러져 있네요. 파손된 건 아닌지 너무 걱정되는데, 어떻게 처리해야 하나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0103",
+          "raw_text": "안녕하세요, 제가 주문한 상품이 파손되지 않고 잘 도착했어요. 혹시 파손된 경우에는 어떻게 처리해야 하는지 궁금합니다.",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0105",
+          "raw_text": "이렇게 비싼 제품을 주문했는데 파손된 상태로 오지 않을까 걱정이 되네요. 배송 과정에서 어떻게 대응하는지 궁금합니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0106",
+          "raw_text": "상품이 파손되면 교환이나 환불이 가능한가요? 이번에는 무사히 잘 도착했는데, 다음번에도 걱정이 됩니다.",
+          "true_aspect": "파손",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0107",
+          "raw_text": "상품이 파손될까 걱정이 되는데, 혹시 파손 시 교환이 가능한지 알고 싶습니다. 이번에 주문한 제품이 안전하게 도착하길 바랍니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0108",
+          "raw_text": "상품이 파손되면 교환이나 환불은 어떻게 되는 거야? 배송 올 때 괜찮았으면 좋겠는데…😟",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0109",
+          "raw_text": "배송된 상품 상태가 아주 좋네요! 혹시 파손되면 어떻게 처리하나요?",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0110",
+          "raw_text": "구매한 상품이 파손되지 않고 잘 도착했지만, 만약 파손됐다면 어떻게 처리될지 궁금합니다. 이런 상황에 대한 대비책은 마련되어 있나요?",
+          "true_aspect": "파손",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0111",
+          "raw_text": "상품이 이상하게 왔는데, 혹시 파손된 건 아닐까 걱정돼 😟 이거 교환이나 환불 가능해?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0112",
+          "raw_text": "상품 도착했는데 포장 상태가 별로였어ㅠㅠ 파손된 건 아닌지 걱정이네.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0113",
+          "raw_text": "배송받은 상품은 다행히 파손 없이 잘 왔어! 혹시 파손되면 어떻게 처리가 되는지 궁금해.",
+          "true_aspect": "파손",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0114",
+          "raw_text": "최근에 구매한 상품을 받았는데, 다행히도 파손 없이 잘 도착했어요. 혹시 파손이 생기면 교환이나 환불은 어떻게 진행되나요?",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0115",
+          "raw_text": "상품이 파손될까 걱정되네요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0116",
+          "raw_text": "주문한 제품이 오늘 잘 도착했어요. 포장 상태도 좋고, 제품도 파손 없이 멀쩡하네요. 혹시 파손된 상태로 도착하면 처리가 어떻게 되는지 궁금해서 여쭤봅니다.",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0117",
+          "raw_text": "상품이 파손되지 않고 잘 도착했는데, 만약 파손되면 어떻게 보상받는 건가요? 이런 일이 생기지 않길 바라는 마음입니다.",
+          "true_aspect": "파손",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0118",
+          "raw_text": "안녕하세요, 제가 얼마 전에 주문한 상품이 도착했는데, 포장을 뜯어보니 제품의 한쪽 모서리가 깨져 있더라고요. 배송 중에 파손되지 않도록 잘 포장해주신 것 같긴 한데, 그래도 이런 상황이 발생하니 너무 실망스럽네요. 혹시 이런 경우에는 어떻게 보상을 받을 수 있는지, 교환이나 반품 절차가 어떻게 되는지 궁금합니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0119",
+          "raw_text": "배송 받을 때 파손되면 어떻게 되나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0120",
+          "raw_text": "안녕하세요. 어제 배송받은 상품이 있는데, 개봉해 보니까 뭔가 흠집이 나있더라고요. 이런 경우 어떻게 해야 해요? 원래 파손될까 걱정했던 건데, 진짜 다행히 잘 온 줄 알았는데 이건 좀 실망이에요. 교환이나 환불 같은 건 가능한가요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0121",
+          "raw_text": "상품이 파손될까 봐 걱정인데, 혹시 어떻게 처리되나요? 대체품 요청하면 빠르게 진행해주실 수 있나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0122",
+          "raw_text": "주문한 상품이 무사히 도착했습니다. 혹시 파손된 경우 어떻게 처리되는지 궁금합니다.",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0124",
+          "raw_text": "상품이 파손돼서 왔어요! 반품 절차 어떻게 하나요?",
+          "true_aspect": "파손",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0127",
+          "raw_text": "상품이 파손되면 어떤 절차로 교환이나 환불이 가능한가요? 이번에 받은 제품은 안전하게 왔지만 걱정이 됩니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0132",
+          "raw_text": "상품이 파손되면 어떻게 처리되나요? 급하게 필요한데, 혹시 불량품이 오면 너무 걱정이에요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0133",
+          "raw_text": "상품이 파손되면 어떻게 처리되나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0134",
+          "raw_text": "상품이 파손된 채로 도착했어요, 교환 어떻게 하나요?",
+          "true_aspect": "파손",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0140",
+          "raw_text": "상품이 파손되지 않고 잘 도착하면 좋겠는데, 혹시 파손될 경우 어떻게 처리해야 하나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0142",
+          "raw_text": "상품이 파손되면 어떻게 보상받을 수 있나요? 혹시 안전하게 배송되면 좋겠는데, 그 부분은 어떻게 보장되나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0146",
+          "raw_text": "상품이 도착하기도 전에 파손되면 어떻게 처리하나요? 배송 과정에서 주의가 필요하다고 생각해요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0151",
+          "raw_text": "안녕하세요. 제가 지난주에 주문한 상품이 오늘 배송되었는데, 확인해보니 제가 요청한 색상이 아닌 다른 색상으로 왔습니다. 주문할 때 상세히 체크했는데 이렇게 잘못 오니 많이 실망스럽네요. 혹시 잘못 배송된 상품을 교환할 수 있는 방법이 있는지 궁금합니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0152",
+          "raw_text": "안녕하세요, 방금 배송받은 상품이 제가 주문한 것과 완전 달라요. 원래는 블랙색 상의를 주문했는데, 배송된 건 화이트색으로 왔어요😭 혹시 옵션 변경 같은 거 가능한가요? 이거 어떻게 처리해야 할지 모르겠어요.",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0156",
+          "raw_text": "주문한 상품과 다른 게 왔는데, 교환 가능할까요?",
+          "true_aspect": "오배송",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0157",
+          "raw_text": "주문한 물건이 전혀 다른데 어떻게 된 건가요?",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0158",
+          "raw_text": "안녕하세요. 주문한 상품과 전혀 다른 제품이 배송되어서 매우 당황스럽습니다. 제가 선택한 상품이 무엇인지 확인해 주실 수 있나요? 혹시 주문한 상품으로 교환이 가능한지도 안내 부탁드립니다. 다음 번에는 이런 일이 없었으면 좋겠어요.",
+          "true_aspect": "오배송",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0160",
+          "raw_text": "오늘 배송 온 거 보고 깜짝 놀랐어, 이거 내가 주문한 게 아니잖아😟 뭐가 문제인지 좀 알아봐줘!",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0162",
+          "raw_text": "주문한 제품과 전혀 다른 상품이 배송됐습니다. 이럴 거면 차라리 옵션 변경 가능한지 문의라도 해주셨으면 좋았을 것 같아요.",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0164",
+          "raw_text": "주문한 핸드폰 케이스 말고 다른 게 왔어! 교환 가능한지 궁금해~",
+          "true_aspect": "오배송",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0167",
+          "raw_text": "주문한 상품이 아닌 다른 게 왔어요.",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0168",
+          "raw_text": "안녕하세요, 주문한 상품과 다른 게 왔어요! 제가 원했던 건 검정색 운동화인데, 파란색으로 배송이 됐네요. 혹시 옵션 변경도 가능할까요? 빨리 답변 부탁드립니다!",
+          "true_aspect": "오배송",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0169",
+          "raw_text": "안녕하세요. 지난주에 주문한 상품이 오늘 도착했는데, 제가 선택한 옵션과는 다른 제품이 왔습니다. 혹시 잘못 배송된 건지 확인해주실 수 있을까요? 또, 잘못 온 상품이 아닌 원래 주문한 상품으로 교환이 가능한지도 궁금합니다. 부탁드립니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0170",
+          "raw_text": "주문한 상품이 아닌 다른 제품이 배송되어 조금 당황했어요. 혹시 이 상품을 반품하고 주문한 상품으로 교환할 수 있을까요?",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0171",
+          "raw_text": "주문한 상품과 전혀 다른 걸 받았어요. 어떻게 된 건지 빨리 해결해 주세요.",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0172",
+          "raw_text": "주문한 거랑 달라서 뭔가 확인하고 싶어~",
+          "true_aspect": "오배송",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0175",
+          "raw_text": "안녕하세요, 주문한 제품이 아니라 다른 게 왔어요. 확인해보니 색상이 제가 선택한 것과 다르더라고요. 혹시 잘못 배송된 건지, 아니면 색상 변경이 가능한지도 궁금해요. 제 주문은 맞는지 확인 부탁드리겠습니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0176",
+          "raw_text": "주문한 상품 대신 전혀 다른 제품이 왔습니다. 확인해보니 색상도 다르고 사이즈도 맞지 않아서 정말 실망스럽습니다. 이런 경우 어떻게 처리해야 하나요? 잘못 온 상품을 교환해 주실 수 있는지 궁금합니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0178",
+          "raw_text": "주문한 제품과 다른 상품이 왔는데, 교환 가능한 방법이 궁금해요. 혹시 옵션 변경도 가능한지 알고 싶습니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0179",
+          "raw_text": "주문한 상품이 아닌 다른 게 왔어요. 빨리 교환 방법 알려주세요!",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0184",
+          "raw_text": "안녕하세요. 오늘 주문한 상품이 아닌 다른 게 왔어요. 제가 주문한 건 블루색 티셔츠인데, 배송된 건 레드색으로 왔어요. 🙁 이거 교환 가능할까요? 옵션 변경 같은 건 할 수 있는 건지도 궁금해요.",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0187",
+          "raw_text": "안녕하세요, 저는 지난주에 주문한 상품에 대한 문의 드립니다. 제가 주문한 것은 블루 계열의 여름 티셔츠였는데, 오늘 배송된 상품은 전혀 다른 색상의 긴팔 상의여서 좀 당황스러웠어요. 혹시 잘못 배송된 것인지 확인해 주실 수 있을까요? 아니면 옵션 변경이 가능한지도 궁금합니다. 이전에 주문했을 때는 문제가 없어서 이번에도 잘 올 줄 알았는데, 확인 부탁드립니다!",
+          "true_aspect": "오배송",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0188",
+          "raw_text": "주문한 상품이 아닌 다른 제품이 왔습니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0189",
+          "raw_text": "주문한 상품과 다른 제품이 배송되었는데, 어떻게 처리해야 하나요? 혹시 옵션 변경이 가능한지 알고 싶습니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0191",
+          "raw_text": "주문한 상품이랑 완전 다른 게 왔어요, 어떻게 하죠?",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0194",
+          "raw_text": "안녕하세요! 주문한 상품이랑 다른 게 왔어요. 원래는 블랙 색상으로 주문했는데, 흰색이 왔더라고요. 혹시 잘못된 건지 확인해 주실 수 있나요? 교환이 가능한지도 궁금해요. 그리고 주문한 대로 정확히 배송되면 좋을 것 같아요!",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0196",
+          "raw_text": "제가 주문한 블루 원피스 대신 흰색 블라우스가 왔는데, 혹시 옵션 변경이 가능한지 궁금합니다. 주문한 대로 정확히 왔습니다라는 메시지를 받았는데, 그건 아닌 것 같아요.",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0203",
+          "raw_text": "안녕하세요, 어제 주문한 상품이 드디어 도착했는데, 제가 선택한 제품과 전혀 다른 것이 왔어요. 사실 저는 특정 색상과 사이즈를 요청했는데, 지금 받은 건 전혀 다른 색상에 사이즈도 맞지 않아서 정말 당황스럽습니다. 혹시 이런 경우에 교환이나 반품이 가능한지, 그리고 제가 원했던 상품으로 바꿔줄 수 있는지도 궁금합니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0204",
+          "raw_text": "주문한 상품과 다르게 온 것 같은데 확인해주실 수 있나요? 혹시 내 상품을 변경하는 것도 가능한가요?",
+          "true_aspect": "오배송",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0211",
+          "raw_text": "주문한 상품이 아닌 다른 제품이 배송됐어요. 어떻게 처리해야 하나요?",
+          "true_aspect": "오배송",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0214",
+          "raw_text": "이번에 주문한 신발이 도착했는데, 색상이 제가 선택한 것과 달라서 확인이 필요합니다. 혹시 잘못 온 건지, 아니면 다른 색상으로 변경할 수 있는 방법이 있는지 궁금해요. 제가 원했던 색상을 다시 받을 수 있을까요?",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0219",
+          "raw_text": "안녕하세요, 주문한 상품이 아니라 전혀 다른 제품이 배송되어 왔습니다. 이럴 줄 알았으면 주문을 아예 안 했을 텐데, 제가 선택한 옵션과 다른 색상의 옷이 도착했네요. 이 문제를 어떻게 해결할 수 있을지 답변 부탁드립니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0220",
+          "raw_text": "주문한 상품이 아닌 다른 게 왔어요, 어떻게 해야 하나요?",
+          "true_aspect": "오배송",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0221",
+          "raw_text": "안녕하세요, 어제 주문한 상품과 다른 물건이 배송되었습니다. 확인해보니 주문 내역과 다르게 옵션이 변경된 것 같습니다. 혹시 옵션 변경이 가능한지, 아니면 잘못 온 상품에 대한 교환 절차를 알려주실 수 있을까요?",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0224",
+          "raw_text": "안녕하세요, 이번에 주문한 상품이 아닌 다른 걸 받았어요. 제가 주문한 제품은 블루 색상의 M사이즈였는데, 오늘 도착한 건 그린 색상의 L사이즈인데 이게 어떻게 된 건가요? 혹시 잘못 배송된 것이라면 교환 절차가 어떻게 되는지 궁금합니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0227",
+          "raw_text": "주문한 상품이 아닌 다른 게 왔어요. 교환은 어떻게 진행하나요?",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0228",
+          "raw_text": "어제 주문한 드레스가 아닌 다른 색상의 상품이 배송되어 왔어요. 혹시 주문했던 드레스를 받을 수 있는 방법이 있을까요?",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0229",
+          "raw_text": "주문한 상품이랑 다른 게 왔어요!",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0230",
+          "raw_text": "아주 만족스럽게 주문했는데, 혹시 잘못 온 건 아닌지 확인 부탁드려요!",
+          "true_aspect": "오배송",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0232",
+          "raw_text": "안녕하세요, 주문한 상품과 다르게 온 것 같아요. 확인해보니 제가 원하는 사이즈가 아니라서 너무 실망스럽습니다. 혹시 이 상품을 반품하고 원하는 사이즈로 교환할 수 있을까요?",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            },
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0240",
+          "raw_text": "주문한 상품이 다른 거 왔어, 어떻게 해야 돼?",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0241",
+          "raw_text": "안녕하세요, 최근에 주문한 상품이 잘못 배송된 것 같아요. 제가 선택한 옵션과는 전혀 다른 제품이 왔습니다. 혹시 교환이나 반품이 가능한지 알려주실 수 있을까요? 왜 이런 일이 발생했는지 이해가 잘 안 되네요.",
+          "true_aspect": "오배송",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0245",
+          "raw_text": "주문한 것과 다른 게 왔는데 어떻게 처리해야 해?",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0247",
+          "raw_text": "안녕하세요, 주문한 상품과 전혀 다른 것이 배송되었어요. 제가 주문한 것은 사이즈 M의 블라우스인데, L 사이즈의 다른 디자인이 왔습니다. 이게 도대체 어떻게 된 건가요? 교환이나 반품 절차는 어떻게 진행해야 하는지 빠른 답변 부탁드립니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0250",
+          "raw_text": "주문한 상품이 아닌 다른 제품이 왔는데, 어떻게 처리해야 하나요?",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0251",
+          "raw_text": "안녕하세요. 이번에 주문한 상품이 도착했는데, 제가 원했던 색상과 전혀 다른 색상의 제품이 왔습니다. 사실 주문할 때 색상 옵션을 잘 확인했는데 이렇게 잘못 온 건 정말 실망스럽네요. 혹시 반품 절차를 안내해 주실 수 있을까요?",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0253",
+          "raw_text": "안녕하세요, 최근에 주문한 상품이 잘못 배송된 것 같아서 문의 드립니다. 제가 주문한 것은 블루컬러의 티셔츠였는데, 대신에 그린컬러의 티셔츠가 왔습니다. 이럴 경우에는 교환이 가능한지, 혹은 환불이 가능한지 알고 싶습니다. 빠른 답변 부탁드립니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0255",
+          "raw_text": "주문한 상품과 다른 게 왔는데 어떻게 처리해야 하나요?",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0258",
+          "raw_text": "제가 주문한 블루 색상의 티셔츠 대신 빨간색이 왔는데, 이거 어떻게 해결해야 하나요? 또는 다른 옵션으로 변경할 수 있는지 궁금합니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0260",
+          "raw_text": "주문한 상품이 아닌 다른 제품이 배송돼서 정말 화가 납니다. 확인해보니 제가 선택한 옵션과는 전혀 다른 색상과 사이즈로 온 것 같은데, 어떻게 된 건가요? 이런 실수가 발생할 수 있다고 생각도 못했는데, 책임감 있는 대응 부탁드립니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0263",
+          "raw_text": "주문한 상품과 다른 제품이 배송되었습니다. 교환 절차에 대해 안내 부탁드리겠습니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0264",
+          "raw_text": "안녕하세요. 최근에 주문한 상품이 도착했는데, 제가 주문한 것과 다른 상품이 배송된 것 같아서 문의드립니다. 혹시 제가 잘못 주문한 건 아닌지 확인해 주실 수 있을까요? 앞으로도 같은 실수가 없도록 주의하겠습니다. 좋은 하루 되세요!",
+          "true_aspect": "오배송",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0267",
+          "raw_text": "주문한 제품과 전혀 다른 상품이 배송되었어요. 제가 주문한 것은 검정색 티셔츠였는데, 옷이 회색으로 오고 사이즈도 맞지 않네요. 혹시 반품 절차에 대해 안내해 주실 수 있나요?",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            },
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0271",
+          "raw_text": "안녕하세요, 주문한 상품과 다른 제품이 배송되어 확인 요청드립니다. 혹시 교환 절차는 어떻게 진행되는지 알려주실 수 있을까요?",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0278",
+          "raw_text": "주문한 제품이 아닌 다른 상품이 왔어요.",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0280",
+          "raw_text": "주문한 상품과 다른 것이 왔는데 교환 가능한가요? 그리고 혹시 옵션 변경도 가능할까요?",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0281",
+          "raw_text": "오배송이 아니라 내가 잘못 주문한 건가? 옵션 바꿔서 다시 보내줄 수 있어?",
+          "true_aspect": "오배송",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0283",
+          "raw_text": "안녕하세요. 제가 주문한 상품과 다르게 온 것 같아서 문의드려요. 원래는 빨간색 티셔츠를 주문했는데, 파란색이 왔더라고요. 혹시 옵션 변경이 가능한지 궁금하고, 만약 교환이 가능하다면 어떻게 진행해야 할지 알려주세요.",
+          "true_aspect": "오배송",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0284",
+          "raw_text": "주문한 것과 다른 상품이 왔는데, 교환 가능한가요?",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0288",
+          "raw_text": "주문한 거랑 다르긴 한데, 혹시 내가 변경한 건가?",
+          "true_aspect": "오배송",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0292",
+          "raw_text": "주문한 상품이 아닌 다른 제품이 왔어요. 교환 절차는 어떻게 진행되나요?",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0293",
+          "raw_text": "주문한 상품이 아니라 다른 게 왔는데 어떻게 해야 하나요? 혹시 옵션 변경도 가능한지 궁금해요.",
+          "true_aspect": "오배송",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0298",
+          "raw_text": "주문한 상품이랑 완전히 달라요!",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0300",
+          "raw_text": "제가 주문한 상품이 아닌 다른 물건이 배송되어 왔는데, 이럴 경우 어떻게 처리가 되나요? 혹시 옵션 변경도 가능할지 궁금합니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0301",
+          "raw_text": "어제 주문했는데 아직 배송 안 와서 좀 걱정돼😟 언제 도착할지 궁금해!",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0303",
+          "raw_text": "배송이 늦어져서 너무 불편해요.",
+          "true_aspect": "기타",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0304",
+          "raw_text": "배송이 언제 도착하는지 알고 싶어요!",
+          "true_aspect": "기타",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0306",
+          "raw_text": "안녕하세요~ 제가 지난주에 주문한 상품이 아직 안 와서 문의드립니다. 배송일이 지나갔는데도 아무런 소식이 없네요. 혹시 배송 상황 좀 알 수 있을까요? 궁금해서요~ 😅",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0307",
+          "raw_text": "배송이 언제쯤 될까요?",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0326",
+          "raw_text": "최근에 주문한 상품의 배송 상태를 확인하고 싶은데, 아직 배송 추적이 안 되고 있어요. 주문번호는 123456789이고, 어제 결제 완료했는데 발송이 안 된 것 같아요. 언제쯤 받을 수 있을지 궁금합니다.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0327",
+          "raw_text": "어제 결제를 완료했는데, 주문 확인 이메일을 아직 못 받았어요. 카드 청구는 이미 들어갔는데 확인이 안 되니 불안하네요.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0328",
+          "raw_text": "배송이 예정일보다 5일이나 늦어졌습니다. 고객센터에 문의했더니 해결 방안도 없이 시간이 더 걸린다고만 하네요. 이런 상황이 반복되면 정말 실망스럽습니다. 빠른 답변과 해결을 원합니다.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0329",
+          "raw_text": "안녕하세요. 주문한 상품이 배송 예정일보다 늦게 도착한 것 같아서 문의 드립니다. 오늘이 예상 배송일인데, 아직 트래킹 정보도 업데이트되지 않아서 조금 걱정이 되네요. 혹시 배송 상황에 대한 자세한 정보나 예상 도착일을 알 수 있을까요?",
+          "true_aspect": "기타",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0331",
+          "raw_text": "안녕하세요! 🤗 제가 주문한 상품이 배송 예정일보다 늦어지고 있어서 연락드려요. 원래 오늘 도착한다고 했는데, 아직 안 와서 너무 궁금하네요. 혹시 배송 상태 확인해주실 수 있을까요?",
+          "true_aspect": "기타",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0335",
+          "raw_text": "배송이 늦어져서 문의드립니다.",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0336",
+          "raw_text": "주문한 상품이 예상 배송일을 지나도 도착하지 않았어요. 도대체 언제 받을 수 있는지 알려주세요.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0338",
+          "raw_text": "안녕하세요, 주문한 상품이 아직 도착하지 않아서 문의드립니다. 어제 배송 예정일이었는데, 확인해보니 배송이 지연되고 있는 것 같습니다. 현재 배송 상황에 대한 안내를 부탁드립니다.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0339",
+          "raw_text": "배송이 일주일 넘게 지연되고 있는데 연락도 없고 어떻게 된 건가요? 주문한 제품이 꼭 필요해서 기다리고 있는데, 이렇게 방치하는 건 너무한 것 같아요. 현 상황에 대한 설명과 빠른 배송을 요청합니다.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0343",
+          "raw_text": "주문한 상품이 아직도 배송이 안 오고 있습니다. 주문한 지 5일이 넘었는데, 배송 상태도 업데이트되지 않고요. 이렇게 오래 기다려야 하는 건가요? 빨리 해결해 주세요.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0344",
+          "raw_text": "주문한 상품이 아직도 도착하지 않았어요. 언제 받을 수 있는지 빠르게 알려주세요!",
+          "true_aspect": "기타",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0347",
+          "raw_text": "배송이 지연되고 있는데, 언제 도착하나요?",
+          "true_aspect": "기타",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0349",
+          "raw_text": "안녕하세요. 주문한 상품이 아직 도착하지 않았어요. 배송 추적을 해보니 아직 발송 준비 중이라는데, 이게 맞나요? 너무 급하게 필요해서 빠른 답변 부탁드립니다.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0351",
+          "raw_text": "주문한 상품이 아직 오지 않아서 걱정이에요. 배송 추적해봤는데 아무런 정보가 없어요. 빨리 알려주시면 정말 감사하겠습니다!",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0353",
+          "raw_text": "안녕하세요, 지난주에 주문한 제품의 배송이 아직 오지 않아서 문의드립니다. 원래는 월요일에 도착한다고 안내받았는데, 오늘이 금요일인데도 불구하고 아무런 소식이 없네요. 배송 상태를 확인해 주실 수 있을까요? 그리고 혹시 배송 지연의 이유도 알 수 있을지 궁금합니다.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0355",
+          "raw_text": "안녕하세요, 주문한 상품이 어제 발송됐다고 확인했는데 아직도 도착하지 않았어요. 배송추적 해보니 아직 출발도 안 한 것 같아요. 정말 급하게 필요한 건데, 언제쯤 받을 수 있을까요?",
+          "true_aspect": "기타",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0356",
+          "raw_text": "지난주에 주문한 제품이 아직도 도착하지 않았어요. 배송이 이렇게 오래 걸리는 이유가 뭔가요?",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0357",
+          "raw_text": "주문한 상품이 아직 안 왔어요.",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0359",
+          "raw_text": "결제가 잘 안 되는데 뭐가 문제일까?",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0360",
+          "raw_text": "주문한 상품이 아직도 안 오는데, 언제 오는 거예요?",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0363",
+          "raw_text": "주문한 상품이 아직 배송되지 않았습니다.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0365",
+          "raw_text": "주문한 상품이 아직 배송 안 왔어요. 언제 도착하는지 빠르게 알려주세요!",
+          "true_aspect": "기타",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0366",
+          "raw_text": "배송이 아직도 안 오고 있어서 너무 불만이에요!",
+          "true_aspect": "기타",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0370",
+          "raw_text": "주문한 물건이 아직도 안 오는데, 언제쯤 도착하는 건가요?",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0371",
+          "raw_text": "안녕하세요! 제가 지난주에 주문한 상품이 아직 안 도착했어요. 배송 추적해 보니까 상태가 '출고 준비 중'으로 그대로 있더라고요. 혹시 배송 지연 사유가 뭐인지 알 수 있을까요? 빨리 받고 싶어요 ㅠㅠ",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0372",
+          "raw_text": "주문한 상품이 아직 도착하지 않았는데, 언제쯤 받을 수 있을까요? 배송 추적이 안 되어 확인이 안 됩니다.",
+          "true_aspect": "기타",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0376",
+          "raw_text": "안녕하세요. 어제 저녁에 주문한 상품이 아직 배송되지 않아서 확인 부탁드립니다. 처음에는 배송 예상일이 오늘이라고 했는데, 지금 상태를 보니 '배송 준비 중'으로만 뜨고 있어서 걱정이 됩니다. 혹시 배송 지연 사유나 예상 배송일을 알 수 있을까요? 기다리던 아이템이라 좀 불안하네요.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0377",
+          "raw_text": "주문한 상품의 배송이 언제 도착할지 궁금해요. 배송 추적이 잘 안되네요.",
+          "true_aspect": "기타",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0378",
+          "raw_text": "결제는 정상적으로 됐는데 상품이 언제 도착하는지 너무 궁금해요.",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0379",
+          "raw_text": "최근에 주문한 상품의 배송 상태를 확인하고 싶은데, 아직도 발송 준비 중입니다. 주문 번호는 12345678이며, 예상 배송일이 지났는데도 상태가 변경되지 않아서 걱정이 됩니다. 혹시 배송 지연 이유를 알 수 있을까요?",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0383",
+          "raw_text": "배송이 생각보다 많이 지연되고 있어ㅠ 언제쯤 받을 수 있을까?",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0386",
+          "raw_text": "안녕하세요, 지난주에 주문한 상품이 아직 도착하지 않아서 문의 드립니다. 배송 예정일은 어제로 알려주셨는데, 오늘까지도 아무런 소식을 들지 못해서 불안한 마음이 드네요. 배송 추적을 해보니 최근 업데이트가 없어서 이게 정상인지 궁금합니다.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0390",
+          "raw_text": "주문한 상품이 배송이 되지 않고 있습니다. 지난 주에 주문했는데 아직도 상황에 대한 안내가 없어서 매우 불안합니다. 언제쯤 배송이 될 것인지, 지금 진행 상황을 정확히 알려주세요.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0397",
+          "raw_text": "안녕하세요, 얼마 전에 주문한 상품이 아직 배송이 안 돼서 연락드려요. 주문 번호는 123456이고, 원래는 3일 안에 도착한다고 했는데, 벌써 일주일이 지났어요. 배송 추적을 해보니 아직 출고도 안 된 것 같아서 어떤 문제가 있는 건지 알고 싶습니다.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0401",
+          "raw_text": "안녕하세요. 주문한 제품의 배송이 예상보다 늦어져서 문의드립니다. 원래는 어제 도착하기로 되어 있었는데 아직 배송 상태가 변경되지 않았습니다. 혹시 배송 일정에 대해 확인해 주실 수 있으신가요?",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0402",
+          "raw_text": "안녕하세요, 최근에 주문한 상품의 배송 상태를 확인하고 싶습니다. 주문 번호는 123456789이며, 예상 배송일이 지났는데 아직 받지 못했습니다. 혹시 배송 지연 사유와 예상 도착일에 대해 알려주실 수 있을까요?",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0404",
+          "raw_text": "안녕하세요. 최근에 주문한 상품의 배송 상태를 확인하고 싶은데, 배송이 지연되고 있는 것 같습니다. 원래 예정일이었는데, 아직까지 소식이 없어 걱정이 됩니다. 혹시 배송 상황에 대해 알 수 있을까요?",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0405",
+          "raw_text": "주문한 상품이 배송될 예정일보다 일주일이 지나도 도착하지 않아서 문의드립니다. 배송 추적을 해보니 아직 출발도 하지 않은 것 같아요. 혹시 배송 상태에 대해 알 수 있을까요?",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0409",
+          "raw_text": "배송이 약속한 날에 도착하지 않아서 너무 화가 나요. 시스템에서 배송 상태를 확인해주시겠어요?",
+          "true_aspect": "기타",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0412",
+          "raw_text": "안녕하세요, 지난 주에 주문한 상품의 배송이 예상보다 늦어져서 조금 걱정이 됩니다. 원래는 금요일까지 도착할 예정이었는데, 오늘이 월요일인데도 아직 소식이 없네요. 제가 필요로 하는 일정이 있어서 너무 급한데, 혹시 배송 상황을 확인해 주실 수 있을까요? 감사합니다!",
+          "true_aspect": "기타",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0414",
+          "raw_text": "배송이 너무 늦어져서 불만이에요.",
+          "true_aspect": "기타",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0415",
+          "raw_text": "주문한 상품이 아직도 도착하지 않았습니다. 배송 예정일이 지났는데도 아무 연락이 없어서 정말 화가 납니다. 언제쯤 배송이 시작되는 건지 정확한 상황을 알려주세요.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0418",
+          "raw_text": "주문한 상품이 아직 도착하지 않았어요. 배송 추적을 해보니 아직 발송도 안 된 것 같은데, 언제쯤 받을 수 있을까요? 급하게 필요한 물건이라서 답변 빠르게 주시면 감사하겠습니다.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0423",
+          "raw_text": "주문한 상품이 배송 예정일을 지나도 오지 않아서 문의 드립니다.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0426",
+          "raw_text": "택배를 발송한 지 일주일이 지났는데 아직 도착하지 않아서 궁금합니다. 배송 추적도 안 되고 어떤 상황인지 알고 싶어요.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0431",
+          "raw_text": "배송이 너무 지연되고 있는데, 언제쯤 받을 수 있는 건가요? 이렇게 기다리는 건 처음이라 정말 불만스러워요.",
+          "true_aspect": "기타",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0433",
+          "raw_text": "안녕하세요~ 주문한 물건이 아직 배송이 안 와서 문의 드려요. 원래 오늘 도착 예정이었는데, 택배사에서 아무런 소식이 없네요. 확인 좀 해줄 수 있을까요?ㅠㅠ",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0436",
+          "raw_text": "최근에 주문한 상품의 배송이 예상보다 많이 지연되고 있어 궁금해서 연락드려요. 배송 상태를 확인해 주실 수 있을까요?",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0438",
+          "raw_text": "주문한 상품이 아직 도착하지 않았어요. 배송 상태를 확인해 주실 수 있나요?",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0439",
+          "raw_text": "주문한 상품이 아직 도착하지 않았습니다.",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0441",
+          "raw_text": "주문한 상품이 아직 도착하지 않았어요. 결제한 지 5일이 지났는데, 배송이 지연되는 건지 궁금합니다. 빠른 확인 부탁드려요.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0442",
+          "raw_text": "결제는 완료됐는데 상품이 아직 안 와서 궁금해요.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0443",
+          "raw_text": "주문한 상품이 아직 도착하지 않아서 매우 불편해요.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0447",
+          "raw_text": "상품이 아직 배송되지 않았는데 배송 상황이 궁금해요. 언제쯤 받을 수 있을까요?",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0448",
+          "raw_text": "이번 주 배송은 언제쯤 올까요?",
+          "true_aspect": "기타",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0452",
+          "raw_text": "안녕하세요. 상품 페이지에서 이 색상이 정말 예쁘다고 생각했는데, 사진과 실제 색상이 조금 다른 것 같아요. 혹시 실제 색상이 어떤지 더 자세히 알 수 있을까요? 그리고 다른 색상도 재입고될 예정인지 궁금합니다.",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0456",
+          "raw_text": "보이는 색상과 실제 색상이 많이 다르네요. 이 색상은 재입고되지 않나요?",
+          "true_aspect": "색상",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0461",
+          "raw_text": "안녕하세요, 주문한 상품 색상이 사진과 다르게 왔어요. 재고 있는 색상 확인해 주시고, 교환 가능 여부 알려주세요.",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0462",
+          "raw_text": "보라색 티셔츠를 주문했는데, 배송된 제품은 색상이 기대했던 것보다 많이 어두워서 당황했어요. 혹시 이 모델의 다른 색상도 재입고될 가능성이 있을까요?",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0471",
+          "raw_text": "이번에 구매한 제품 색상이 맘에 들어서 재구매할까 하는데, 다른 색상도 있나요? 재입고 일정도 궁금해요.",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0474",
+          "raw_text": "안녕하세요, 주문한 티셔츠의 색상이 화면에서 본 것과 너무 달라서 정말 실망했어요. 핑크색을 주문했는데, 실제로 온 건 거의 베이지색 같아서 어떻게 된 건지 궁금합니다. 혹시 재입고되는 색상 옵션이 있으면 알려주세요!",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0479",
+          "raw_text": "혹시 이 색상 재입고 안 해?? 너무 이쁘던데!",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0480",
+          "raw_text": "이번에 주문한 티셔츠 색상이 홈페이지에서 본 것과 너무 달라서 문의 드립니다. 올려진 사진과는 많이 다른 것 같아서 반품을 고려하고 있는데, 색상이 어떻게 되는 건지 확실히 알고 싶어요. 혹시 다른 색상으로도 재입고 계획이 있는지 알고 싶습니다.",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0482",
+          "raw_text": "안녕하세요, 제가 최근에 구입한 제품의 색상이 화면에서 본 것과 조금 달라서 문의드립니다. 실제로 받아보니 약간 밝은 느낌이네요. 혹시 이 제품의 다른 색상 옵션이 있는지, 재입고 계획이 있는지 궁금합니다. 색상은 마음에 드는데, 제가 선택할 수 있는 다른 색상도 있다면 알려주세요.",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0483",
+          "raw_text": "이번에 주문한 색상이랑 이미지가 너무 달라서 교환하고 싶어요.",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0485",
+          "raw_text": "제가 주문한 상품의 색상이 웹사이트에 나온 사진과 완전히 다르게 도착했습니다. 기대했던 그 색이 아니라 너무 실망스러워요. 혹시 다른 색상으로 교환이 가능할까요? 아니면 재입고 일정이라도 알려주세요.",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0487",
+          "raw_text": "이번에 주문한 상품 색상이 사진과 조금 다르게 느껴져서요. 혹시 실제 색상에 대한 정보를 더 알 수 있을까요?",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0488",
+          "raw_text": "이 상품의 색상이 화면과 어떻게 다른지 궁금해요. 재입고 시 색상 선택이 가능할까요?",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0489",
+          "raw_text": "빨간색이 아니라 핑크색이 왔어요, 교환해 주세요!",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0490",
+          "raw_text": "주문한 제품의 색상이 홈페이지에 나온 것과 완전히 달라서 너무 실망했습니다. 사진과 실제 색상 차이가 크고, 이런 경우 교환이나 환불이 가능한지 궁금합니다. 그리고 앞으로 재입고될 때 색상이 제대로 맞춰서 나왔으면 좋겠어요.",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0491",
+          "raw_text": "안녕하세요. 제가 어제 주문한 니트 스웨터의 색상이 화면에서 본 것과 조금 다르게 느껴지네요. 화면에서는 밝은 핑크색으로 보였는데 실제로는 조금 어두운 톤이라 아쉽습니다. 혹시 제가 주문한 색상에 대한 다른 고객님의 후기가 있다면 참고하고 싶습니다.",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0500",
+          "raw_text": "주문한 색상이랑 도착한 색상이 완전히 다르네요.",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0510",
+          "raw_text": "사이즈를 M으로 주문했는데, 실제로 받아보니 너무 작습니다. 제품 설명에서 사이즈가 정사이즈라고 되어 있었는데, 이건 도대체 어떻게 된 건가요? 사이즈 교환이나 환불이 가능한지 빠른 답변 부탁드립니다.",
+          "true_aspect": "사이즈",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0512",
+          "raw_text": "안녕하세요, 최근에 구매한 제품의 사이즈가 조금 작게 느껴져서 문의드립니다. 평소에 M 사이즈를 착용하는데, 이번에 구매한 상품이 M임에도 불구하고 핏이 다소 타이트한 것 같습니다. 혹시 다른 사이즈로 교환이 가능한지, 또는 사이즈 차트에 대한 추가 정보를 받을 수 있을지 궁금합니다.",
+          "true_aspect": "사이즈",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0524",
+          "raw_text": "사이즈가 너무 잘 맞아요! 그런데 다른 색상으로 바꾸고 싶은데, 사이즈 변동은 없나요?",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0527",
+          "raw_text": "이번에 산 옷 사이즈가 딱 맞아서 너무 좋아! 혹시 다른 색상도 같은 핏으로 나오는지 궁금해~",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0529",
+          "raw_text": "안녕하세요! 최근에 귀사의 쇼핑몰에서 사이즈 M의 블라우스를 구매했는데, 딱 맞는 핏이라서 정말 마음에 들었어요. 그런데 다음에 구매할 때는 혹시 L 사이즈로도 시도해볼까 하는 고민이 들어서요. M 사이즈가 잘 맞긴 했지만, L 사이즈는 좀 더 여유 있는 핏으로 입을 수 있을지 궁금해서 문의 드립니다.",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0536",
+          "raw_text": "사이즈 문의 드릴게요, 66사이즈는 어떤 핏인가요?",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0549",
+          "raw_text": "사이즈가 너무 작아서 불편해요, 교환 가능하나요?",
+          "true_aspect": "사이즈",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0563",
+          "raw_text": "이 원단 촉감이 어떤지 궁금해요. 스판기도 좋다고 하는데 정말 신축성이 뛰어난가요?",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0572",
+          "raw_text": "이 원단은 신축성이 어떤가요?",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0575",
+          "raw_text": "원단 재질이 설명과 너무 달라요. 신축성이나 텐션감도 기대 이하라서 실망했어요.",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0576",
+          "raw_text": "이 제품 원단이 생각보다 많이 신축성이 없어서 조금 불편한데, 원래 이런 텐션감이 맞는 건가요? 혹시 다른 사이즈나 재질 옵션이 있는지 궁금해요.",
+          "true_aspect": "소재",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        }
+      ],
+      "leak_filter": {
+        "note": "이번 표본에 유출 few-shot과 겹치는 문항이 0건",
+        "applied": true,
+        "n_excluded_rows_in_sample": 0
+      }
+    },
+    "multi": {
+      "n": 100,
+      "n_scored": 100,
+      "n_unanswered": 0,
+      "full_row_accuracy": 0.32,
+      "aspect_level_accuracy": 0.585,
+      "note": "full_row_accuracy=모든 aspect 다 맞은 행 비율(explode 계약 핵심 지표), aspect_level_accuracy=개별 aspect+감성 조합 단위 정확도"
+    },
+    "n_total": 700,
+    "n_failed": 0
+  }
+}

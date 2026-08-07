@@ -12,7 +12,7 @@
         alerts, suppressed = await detect_anomaly(..., prior_alerts=prior)
         발행분만 prior 에 누적          ← save_published 규칙과 동일
 
-⚠️ [6] 원인분류는 detect_anomaly 안에서 LLM 을 부른다. daily.py 의 _CountingClient
+⚠️ [6] 원인분류는 detect_anomaly 안에서 LLM 을 부른다. daily.py 의 CountingClient
    스텁을 주입해 과금 0 을 보장한다(daily.py:357 과 같은 이유).
 
 family 변형은 statistics.decide_fires 를 교체해서 넣는다 — run_detection 이 모듈
@@ -33,7 +33,7 @@ sys.path.insert(0, str(ROOT))
 from statsmodels.stats.multitest import multipletests
 
 import app.detection.statistics as stats_mod
-from app.batch.daily import STATE_RETENTION_DAYS, _CountingClient
+from app.batch.daily import STATE_RETENTION_DAYS, CountingClient
 from app.core.constants import BH_FDR_Q, CURRENT_WINDOW_DAYS
 from app.core.schemas import AspectSentiment
 from app.detection.service import detect_anomaly
@@ -81,16 +81,26 @@ def day_date(n: int) -> date:
 
 
 def load_truth() -> dict:
+    truth, _ignored = load_truth_sets()
+    return truth
+
+
+def load_truth_sets() -> tuple[dict, dict]:
     with (ROOT / "data/config/config_anomaly.csv").open(encoding="utf-8-sig") as f:
         cfg = list(csv.DictReader(f))
     truth = {}
+    ignored = {}
     for r in cfg:
+        key = (r["golden_group_id"], r["aspect"], r["channel"], r["source"])
+        span = (
+            int(r["window_start_day"]),
+            int(r["window_end_day"]),
+        )
         if r["intended_answer"].strip().upper() == "TRUE":
-            truth[(r["golden_group_id"], r["aspect"], r["channel"], r["source"])] = (
-                int(r["window_start_day"]),
-                int(r["window_end_day"]),
-            )
-    return truth
+            truth[key] = span
+        elif r["scoring_included"].strip().upper() == "N" or not r["intended_answer"].strip():
+            ignored[key] = span
+    return truth, ignored
 
 
 def swap_real(items, cache):
@@ -114,8 +124,8 @@ def swap_real(items, cache):
     return out, n
 
 
-def classify_alert(alert, truth, day_n: int) -> str:
-    """알림을 참 / 여진 / 헛알림 으로 가른다.
+def classify_alert(alert, truth, day_n: int, ignored: dict | None = None) -> str:
+    """알림을 참 / 여진 / 채점제외 / 헛알림 으로 가른다.
 
     발행 알림은 (상품, 채널, main_aspect, stats.source) 로 식별한다. 전역형은 채널이
     여러 개라 significant_channels 중 하나라도 맞으면 그 슬롯으로 본다.
@@ -136,13 +146,20 @@ def classify_alert(alert, truth, day_n: int) -> str:
             return "true"
         if span[1] < day_n <= span[1] + tail:
             return "echo"
+    if ignored:
+        for ch in channels:
+            span = ignored.get((alert.product_group_id, aspect, ch, source))
+            if not span:
+                continue
+            if span[0] <= day_n <= span[1] + tail:
+                return "ignored"
     return "false"
 
 
-async def run_family(name, keyfn, items, documents, truth, label) -> dict:
+async def run_family(name, keyfn, items, documents, truth, ignored, label) -> dict:
     stats_mod.decide_fires = make_decide(keyfn)
     published: list = []
-    n_true = n_echo = n_false = n_suppressed = 0
+    n_true = n_echo = n_ignored = n_false = n_suppressed = 0
     first_hit: dict = {}
 
     for n in range(29, 61):
@@ -156,11 +173,11 @@ async def run_family(name, keyfn, items, documents, truth, label) -> dict:
             window_end=wend,
             prior_alerts=prior,
             resolved_alert_ids=set(),
-            client=_CountingClient(),
+            client=CountingClient(),
         )
         n_suppressed += len(suppressed)
         for a in alerts:
-            kind = classify_alert(a, truth, n)
+            kind = classify_alert(a, truth, n, ignored)
             if kind == "true":
                 n_true += 1
                 first_hit.setdefault(
@@ -168,21 +185,26 @@ async def run_family(name, keyfn, items, documents, truth, label) -> dict:
                 )
             elif kind == "echo":
                 n_echo += 1
+            elif kind == "ignored":
+                n_ignored += 1
             else:
                 n_false += 1
         published.extend(alerts)
 
     stats_mod.decide_fires = _ORIGINAL_DECIDE
-    total = n_true + n_echo + n_false
+    total = n_true + n_echo + n_ignored + n_false
+    scored_total = n_true + n_echo + n_false
     cases = {(p, a, s) for (p, a, _c, s) in truth}
     return {
         "family": name,
         "label": label,
         "published": total,
+        "scored_published": scored_total,
         "true": n_true,
         "echo": n_echo,
+        "ignored": n_ignored,
         "false": n_false,
-        "fa_ratio": n_false / total if total else 0.0,
+        "fa_ratio": n_false / scored_total if scored_total else 0.0,
         "per_day": total / 32,
         "suppressed": n_suppressed,
         "cases_hit": len(first_hit),
@@ -193,14 +215,14 @@ async def run_family(name, keyfn, items, documents, truth, label) -> dict:
 async def main() -> None:
     items, documents = load_inputs()
     cache = json.loads(CACHE.read_text(encoding="utf-8"))
-    truth = load_truth()
+    truth, ignored = load_truth_sets()
     real_items, swapped = swap_real(items, cache)
     print(f"문서 {len(documents):,} / 캐시 {len(cache):,} / 실제분류로 덮음 {swapped:,}")
 
     rows = []
     for name, keyfn in FAMILIES.items():
         for label, its in (("oracle", items), ("real", real_items)):
-            r = await run_family(name, keyfn, its, documents, truth, label)
+            r = await run_family(name, keyfn, its, documents, truth, ignored, label)
             rows.append(r)
             print(f"  ...{name}/{label} done  published={r['published']}")
 
@@ -209,15 +231,16 @@ async def main() -> None:
     print("발행 1건 = 셀러가 실제로 받는 알림 1개")
     print("=" * 100)
     head = (
-        f"{'family':14s} {'label':8s} {'발행':>6s} {'참':>6s} {'여진':>6s} "
-        f"{'헛알림':>7s} {'헛알림비율':>10s} {'알림/일':>8s} {'억제':>7s} {'케이스도달':>10s}"
+        f"{'family':14s} {'label':8s} {'발행':>6s} {'채점':>6s} {'참':>6s} {'여진':>6s} "
+        f"{'제외':>6s} {'헛알림':>7s} {'헛알림비율':>10s} {'알림/일':>8s} {'억제':>7s} {'케이스도달':>10s}"
     )
     print(head)
     print("-" * 100)
     for r in rows:
         print(
             f"{r['family']:14s} {r['label']:8s} {r['published']:5d}건 "
-            f"{r['true']:5d}건 {r['echo']:5d}건 {r['false']:6d}건 "
+            f"{r['scored_published']:5d}건 {r['true']:5d}건 {r['echo']:5d}건 "
+            f"{r['ignored']:5d}건 {r['false']:6d}건 "
             f"{r['fa_ratio']:9.1%} {r['per_day']:7.2f}건 "
             f"{r['suppressed']:6d}건 {r['cases_hit']:4d}/{r['cases_total']:<5d}"
         )
@@ -225,7 +248,8 @@ async def main() -> None:
     print("  참     = 케이스 기간 [ws, we] 안에 뜬 알림")
     print("  여진   = we+1~we+6. 데이터가 아직 현재 윈도우에 남아 진짜 이상을 보고")
     print("           있는 것 — 가짜는 아니나 '늦은 알림'이라 참으로도 안 센다")
-    print("  헛알림 = 그 외 전부. 헛알림비율의 분자는 이것만이다")
+    print("  제외   = scoring_included=N 또는 intended_answer 빈칸인 설계 제외 구간")
+    print("  헛알림 = 그 외 전부. 헛알림비율은 제외를 분자/분모에서 뺀 채점 기준이다")
 
 
 if __name__ == "__main__":
