@@ -119,10 +119,15 @@ async def run_feedback(args: argparse.Namespace) -> int:
 
     import app.recommendation.pipeline as pipeline_module
     from app.config import get_settings
+    from app.consumer import wire_handlers
     from app.core import mq, mq_consumer
 
     settings = get_settings()
     alert, rec, _callback = _build_fixtures()
+
+    # 운영과 같은 배선을 탄다. 이걸 빼면 HANDLERS 가 비어 dispatch 가 KeyError 로 떨어진다
+    # — 실제로 그렇게 한 번 깨졌다(2026-08-07).
+    wire_handlers()
 
     recorded: list = []
     pipeline_module.record_hitl_outcome = lambda a, r: recorded.append(

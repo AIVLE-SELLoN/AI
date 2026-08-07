@@ -92,3 +92,19 @@ def test_unexpected_error_is_logged_as_one_record(monkeypatch, caplog):
 
     assert exc.value.code == consumer.EXIT_RUNTIME_ERROR
     assert any("예기치 않게" in r.getMessage() for r in caplog.records)
+
+
+def test_wiring_registers_the_hitl_handler(monkeypatch):
+    """⚠️ 배선이 실제로 HITL 핸들러를 꽂는지 확인한다.
+
+    다른 테스트들은 전부 자기가 등록하고 자기가 쓰기 때문에, 운영 배선이 비어 있어도
+    통과한다. 실제로 그 구멍으로 한 번 깨졌다 — 스모크 스크립트가 dispatch() 를 직접
+    부르는데 HANDLERS 가 비어 KeyError 가 났다(2026-08-07).
+    """
+    from app.core import mq_consumer
+
+    monkeypatch.setattr(mq_consumer, "HANDLERS", {})
+
+    consumer.wire_handlers()
+
+    assert mq_consumer.RECOMMENDATION_REVIEWED in mq_consumer.HANDLERS

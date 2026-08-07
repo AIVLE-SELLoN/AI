@@ -48,8 +48,12 @@ EXIT_CONFIG_ERROR = 2
 EXIT_RUNTIME_ERROR = 1
 
 
-def _wire_handlers() -> None:
+def wire_handlers() -> None:
     """처리 함수를 컨슈머에 꽂는다. **core 가 컴포넌트를 모르게 하는 배선 지점이다.**
+
+    ⚠️ **이걸 안 부르면 `HANDLERS` 가 비어 있어 모든 이벤트가 DLX 로 간다.** 컨슈머를
+    직접 띄우지 않고 `dispatch()` 만 쓰는 도구(스모크 스크립트 등)도 이 함수를 먼저
+    불러야 한다 — 공개 함수인 이유가 그것이다.
 
     리포팅(`feedback.report.created`)도 담당자가 함수를 만들면 여기 한 줄로 붙는다.
     등록 안 된 이벤트는 ACK 하지 않고 DLX 로 보낸다 — 처리한 적 없는 걸 처리했다고
@@ -63,7 +67,7 @@ def _wire_handlers() -> None:
 
 async def _run() -> None:
     """컨슈머를 띄우고 종료 신호를 기다린다."""
-    _wire_handlers()
+    wire_handlers()
     task = asyncio.create_task(consume())
 
     # SIGTERM 은 컨테이너 종료 신호다. 윈도우 이벤트 루프는 이 API 가 없어서 무시한다
