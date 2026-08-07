@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 
 from app.core import constants
+from app.core.ids import build_guideline_id
 from app.core.schemas import CSGuidelineInput, CSGuidelineOutput
 from app.reporting.grounding import (
     UNIT_COUNT,
@@ -26,7 +27,6 @@ from app.reporting.grounding import (
     find_forbidden_expressions,
     ratio_to_percent,
 )
-from app.core.ids import build_guideline_id
 
 logger = logging.getLogger("CSGuidelineValidator")
 

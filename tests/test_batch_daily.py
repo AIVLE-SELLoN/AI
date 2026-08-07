@@ -293,6 +293,37 @@ async def test_silent_recommendation_failure_still_shows_up(tmp_path, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_raised_recommendation_failure_is_counted_once(tmp_path, monkeypatch):
+    """⚠️ 실패 1건이 요약에 1건으로 잡힌다.
+
+    `generate_for_alert` 는 계약상 안 던지지만 던지는 날엔, except 와 뒤따르는
+    `rec is None` 검사가 **둘 다** 타서 실패가 2배로 보고됐다. 그러면 배치 요약의
+    실패 건수를 못 믿게 된다. (2026-08-07 재검토)
+    """
+
+    async def blows_up(alert, inquiries):
+        raise RuntimeError("LLM 폭발")
+
+    async def sent(alert, rec, trace_id):
+        return None
+
+    monkeypatch.setattr(daily, "should_generate", lambda _alert: True)
+    monkeypatch.setattr(daily, "generate_for_alert", blows_up)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json", load_inputs=_stub_inputs
+    )
+
+    rec_failures = [f for f in summary["failures"] if f["stage"] == "개선안"]
+    assert len(rec_failures) == summary["processed"], (
+        f"alert 당 1건이어야 하는데 {len(rec_failures)}건 / "
+        f"alert {summary['processed']}건"
+    )
+    assert "LLM 폭발" in rec_failures[0]["error"], "실제 사유가 남아야 한다"
+
+
+@pytest.mark.asyncio
 async def test_dry_run_skips_recommendation_when_gate_closed(tmp_path):
     """개선안 카운트는 should_generate 를 통과한 alert 만 센다.
 
