@@ -20,6 +20,7 @@ import pytest
 from jinja2 import BaseLoader, Environment, StrictUndefined, select_autoescape
 
 from app.core import constants
+from app.core.ids import build_guideline_id
 from app.core.schemas import (
     Aspect,
     CallbackStatus,
@@ -40,7 +41,6 @@ from app.reporting import cs_reply_service, monthly_report_service
 from app.reporting.callback import build_monthly_callback
 from app.reporting.cs_reply_service import generate_cs_reply_pipeline
 from app.reporting.cs_reply_validator import validate_cs_guideline
-from app.reporting.ids import build_guideline_id
 from app.reporting.metrics_calculator import (
     build_channel_divergence_pair,
     calculate_jsd_bits,

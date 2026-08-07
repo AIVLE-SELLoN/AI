@@ -51,6 +51,11 @@ jinja2==3.1.6
 #    기존에 kafka-python 이 있으면 먼저 `pip uninstall kafka-python` 할 것.
 kafka-python-ng==2.2.3
 
+# --- RabbitMQ (AI → 메인 이벤트 발행 · docs/mq_events.md) ---
+# app/core/mq.py 가 **함수 안에서** import 한다 — payload 조립 테스트가 이 패키지 없이
+# 돌아야 하기 때문(브로커 접속 정보가 아직 없다). 발행을 실제로 하려면 필요하다.
+aio-pika==9.5.7
+
 # --- 개발/테스트 ---
 pytest==9.1.1
 pytest-asyncio==1.4.0

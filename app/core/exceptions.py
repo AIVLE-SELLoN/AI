@@ -19,3 +19,33 @@ class EvidenceNotFoundError(AiServiceError):
 
 class VectorDbError(AiServiceError):
     """벡터DB 조회/적재 실패."""
+
+
+class MqDisabledError(AiServiceError):
+    """MQ_ENABLED=false — 발행하지 않았다.
+
+    no-op 이 아니라 예외인 이유: 호출부가 예외 없음을 발행 성공으로 보고 그 알림을
+    prior_alerts 캐시에 넣는다. 조용히 넘기면 안 나간 알림이 7일간 억제된다.
+    """
+
+
+class MqPublishError(AiServiceError):
+    """MQ 접속·발행 실패. 재시도 대상(다음 배치가 다시 시도한다)."""
+
+
+class MqConfigError(AiServiceError):
+    """MQ 설정이 불완전해 발행할 수 없다 (예: companyId 미설정).
+
+    접속은 되는데 **내용이 틀린 메시지**를 내보내는 상황을 막는다 — 그건 안 보내는
+    것보다 나쁘다. 받는 쪽 DB 에 남고 나중에 어느 것이 잘못됐는지 못 가려낸다.
+    """
+
+
+class HitlContextUnavailableError(AiServiceError):
+    """HITL 이벤트에 alert·recommendation 전문이 없어 컬렉션2에 적재할 수 없다.
+
+    `record_hitl_outcome()` 은 "원인 라벨 + CS 요약 + 개선안 본문"으로 문서를 만드는데
+    (§4-2), `feedback.recommendation.reviewed` payload 에는 ID 4개뿐이라 그 재료가 없다.
+    조용히 넘기지 않는 이유: 이 이벤트가 **컬렉션2 축적의 유일한 경로**라 새면 학습
+    자료가 영영 안 쌓이는데 아무도 모른다.
+    """

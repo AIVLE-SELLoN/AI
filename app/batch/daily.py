@@ -1,4 +1,4 @@
-"""담당: 서영 (Agent2) — 일 1회 탐지 배치. **운영 진입점.**
+"""담당: 지인 (2026-08-06 인수, 원작 서영) — 일 1회 탐지 배치. **운영 진입점.**
 
 왜 여기 있나
 ------------
@@ -50,6 +50,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
+from app.core.inquiries import build_linked_inquiries
 from app.core.schemas import ClassifiedItem, DetectionAlert
 from app.detection.loader import check_coverage, unreliable_slots
 from app.detection.service import detect_anomaly
@@ -108,6 +109,7 @@ def _missing(exc: ImportError, module: str) -> bool:
 
 try:  # pragma: no cover - 실물이 생기면 이쪽
     from app.core.mq import (  # type: ignore[attr-defined]
+        close_mq,
         new_trace_id,
         publish_anomaly_analyzed,
         publish_guideline_generated,
@@ -130,6 +132,9 @@ except ImportError as exc:  # pragma: no cover - 인프라 도입 전
     async def publish_guideline_generated(guideline: Any, trace_id: str) -> None:
         logger.info("[MQ 미구현] ai.guideline.generated 발행 생략")
 
+    async def close_mq() -> None:
+        return None
+
 
 try:  # pragma: no cover
     from app.recommendation.pipeline import (
@@ -142,7 +147,7 @@ except ImportError as exc:  # pragma: no cover
         raise
     RECOMMENDATION_AVAILABLE = False
 
-    async def generate_for_alert(alert: Any) -> Any:
+    async def generate_for_alert(alert: Any, inquiries: Any) -> Any:
         logger.info("[Agent3 미연결] 개선안 생성 생략 alert=%s", alert.alert_id)
         return None
 
@@ -158,7 +163,9 @@ except ImportError as exc:  # pragma: no cover
         raise
     GUIDELINE_AVAILABLE = False
 
-    async def generate_guideline(alert: Any, rec: Any) -> Any:
+    async def generate_guideline(
+        alert: Any, inquiries: Any, *, product_name: str | None = None
+    ) -> Any:
         logger.info("[가이드라인 미연결] 생성 생략 alert=%s", alert.alert_id)
         return None
 
@@ -436,60 +443,102 @@ async def run_batch(
     # ⚠️ **발행에 성공한 것만** 캐시에 넣는다. save_published docstring 참고.
     delivered: list[DetectionAlert] = []
 
-    for alert in targets:
-        # [2] 개선안 게이트 — 조치 7종 중 '개선안 생성' 일 때만 Agent3 가 돈다.
-        wants_recommendation = should_generate(alert)
+    # ⚠️ **연결을 반드시 닫는다.** app/core/mq.py 가 프로세스당 연결·채널을 재사용하는데,
+    #    닫지 않고 이벤트 루프가 내려가면 connect_robust 의 재연결 태스크가 정리되지 않아
+    #    "Task was destroyed but it is pending" 이 뜨고, 나중에 이 배치가 장수 프로세스에
+    #    얹히거나 반복 호출되면 연결이 샌다. 루프 도중 예외가 나가도 닫히도록 finally 다.
+    #    한 번도 발행하지 않았으면(dry-run 등) 연결 자체가 없어서 no-op 이다.
+    #    (서영님 PR 리뷰 §1, 2026-08-07)
+    try:
+        for alert in targets:
+            # [2] 개선안 게이트 — 조치 7종 중 '개선안 생성' 일 때만 Agent3 가 돈다.
+            wants_recommendation = should_generate(alert)
 
-        if dry_run:
-            # 실제로 몇 번 부를지만 센다. 추정이 아니라 실측이다 — 게이트를 안 태우면
-            # Agent3 비용이 크게 과대추정된다(조치 7종 중 1종만 해당).
+            if dry_run:
+                # 실제로 몇 번 부를지만 센다. 추정이 아니라 실측이다 — 게이트를 안 태우면
+                # Agent3 비용이 크게 과대추정된다(조치 7종 중 1종만 해당).
+                if wants_recommendation:
+                    counts["개선안"] += 1
+                counts["가이드라인"] += 1
+                counts["발행:이상"] += 1
+                continue
+
+            # 개선안·가이드라인이 **같은 CS 원문**을 근거로 쓴다. 여기서 한 번 만들어 둘 다
+            # 에게 넘긴다 — 각자 만들면 같은 매핑이 두 벌이 되고, C4(item_id ↔ cs/reviews PK)
+            # 가 풀려 DB 조회로 바뀔 때 고칠 곳이 두 곳이 된다.
+            inquiries = build_linked_inquiries(alert, documents)
+
+            # ⚠️ alert 1건이 터져도 배치는 계속한다. 여기서 던지면 **이미 LLM 비용을 쓴
+            #    앞쪽 알림들까지 발행되지 않고 날아간다.** 실패는 모아서 끝에 요약한다.
+            rec = guideline = None
             if wants_recommendation:
-                counts["개선안"] += 1
-            counts["가이드라인"] += 1
-            counts["발행:이상"] += 1
-            continue
+                try:
+                    rec = await generate_for_alert(alert, inquiries)
+                    counts["개선안"] += 1
+                except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
+                    failures.append(
+                        {
+                            "alert_id": alert.alert_id,
+                            "stage": "개선안",
+                            "error": repr(exc),
+                        }
+                    )
+                else:
+                    # ⚠️ `generate_for_alert` 는 **계약상 예외를 안 던지고** 실패를 None 으로
+                    #    돌려준다. 위 except 만 두면 실패가 요약에도 종료코드에도 안 남아서,
+                    #    개선안이 하나도 안 붙은 배치가 "성공"으로 끝난다. 게이트를 통과한
+                    #    알림인데 None 이면 그건 실패다 — 사유는 pipeline 이 로그로 남긴다.
+                    #    else 인 이유: except 와 둘 다 타면 실패 1건이 요약에 2건으로 잡혀
+                    #    배치 요약의 실패 건수를 못 믿게 된다.
+                    if rec is None:
+                        failures.append(
+                            {
+                                "alert_id": alert.alert_id,
+                                "stage": "개선안",
+                                "error": "생성 실패 — 사유는 app.recommendation.pipeline 로그 참고",
+                            }
+                        )
 
-        # ⚠️ alert 1건이 터져도 배치는 계속한다. 여기서 던지면 **이미 LLM 비용을 쓴
-        #    앞쪽 알림들까지 발행되지 않고 날아간다.** 실패는 모아서 끝에 요약한다.
-        rec = guideline = None
-        if wants_recommendation:
             try:
-                rec = await generate_for_alert(alert)
-                counts["개선안"] += 1
-            except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
-                failures.append(
-                    {"alert_id": alert.alert_id, "stage": "개선안", "error": repr(exc)}
-                )
-
-        try:
-            guideline = await generate_guideline(alert, rec)
-            counts["가이드라인"] += 1
-        except Exception as exc:  # noqa: BLE001
-            failures.append(
-                {"alert_id": alert.alert_id, "stage": "가이드라인", "error": repr(exc)}
-            )
-
-        try:
-            await publish_anomaly_analyzed(alert, rec, trace_id)
-            counts["발행:이상"] += 1
-            delivered.append(alert)
-        except Exception as exc:  # noqa: BLE001
-            failures.append(
-                {"alert_id": alert.alert_id, "stage": "발행:이상", "error": repr(exc)}
-            )
-
-        if guideline is not None:
-            try:
-                await publish_guideline_generated(guideline, trace_id)
-                counts["발행:가이드"] += 1
+                guideline = await generate_guideline(alert, inquiries)
+                counts["가이드라인"] += 1
             except Exception as exc:  # noqa: BLE001
                 failures.append(
                     {
                         "alert_id": alert.alert_id,
-                        "stage": "발행:가이드",
+                        "stage": "가이드라인",
                         "error": repr(exc),
                     }
                 )
+
+            try:
+                await publish_anomaly_analyzed(alert, rec, trace_id)
+                counts["발행:이상"] += 1
+                delivered.append(alert)
+            except Exception as exc:  # noqa: BLE001
+                failures.append(
+                    {
+                        "alert_id": alert.alert_id,
+                        "stage": "발행:이상",
+                        "error": repr(exc),
+                    }
+                )
+
+            if guideline is not None:
+                try:
+                    await publish_guideline_generated(guideline, trace_id)
+                    counts["발행:가이드"] += 1
+                except Exception as exc:  # noqa: BLE001
+                    failures.append(
+                        {
+                            "alert_id": alert.alert_id,
+                            "stage": "발행:가이드",
+                            "error": repr(exc),
+                        }
+                    )
+
+    finally:
+        await close_mq()
 
     # 캐시는 dry-run 에서 건드리지 않는다 — 안 보낸 걸 보냈다고 기록하지 않는다.
     cached = (
