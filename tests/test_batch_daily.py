@@ -426,3 +426,43 @@ def test_utf8_switch_is_safe_on_streams_that_cannot_reconfigure(monkeypatch):
     monkeypatch.setattr(daily.sys, "stderr", object())
 
     daily._force_utf8_output()  # 예외가 나면 이 줄에서 실패한다
+
+
+def test_main_switches_encoding_before_printing(monkeypatch):
+    """⚠️ `main()` 이 실제로 `_force_utf8_output()` 을 부른다 — 배선까지 고정한다.
+
+    헬퍼만 테스트하면 호출 한 줄이 빠져도 아무것도 안 깨진다(2026-08-07 리뷰 지적).
+    `main()` 은 인자 파싱·늦은 import·로깅 설정이 몰려 있어 손이 자주 가는 함수라,
+    빠지면 윈도우에서 **성공한 배치가 다시 비-0 으로 끝나고** 종료코드 판정이 죽는다.
+    """
+    calls: list[str] = []
+
+    async def fake_run_batch(**_kwargs):
+        calls.append("run_batch")
+        return {
+            "trace_id": "trace-1",
+            "dry_run": True,
+            "input_source": "load_golden_inputs",  # ⚠️ 줄을 태운다
+            "elapsed_sec": 1.0,
+            "items": 0,
+            "documents": 0,
+            "prior_alerts": 0,
+            "published": 0,
+            "suppressed": 0,
+            "processed": 0,
+            "delivered": 0,
+            "llm_calls": {},
+            "cause_calls": 0,
+            "failures": [],
+            "state_cached": 0,
+        }
+
+    monkeypatch.setattr(daily, "_force_utf8_output", lambda: calls.append("utf8"))
+    monkeypatch.setattr(daily, "run_batch", fake_run_batch)
+    monkeypatch.setattr(daily.sys, "argv", ["daily", "--dry-run"])
+
+    daily.main()
+
+    assert "utf8" in calls, "main() 이 _force_utf8_output() 을 부르지 않았습니다"
+    # 출력·로깅보다 먼저 불려야 한다.
+    assert calls.index("utf8") < calls.index("run_batch")
