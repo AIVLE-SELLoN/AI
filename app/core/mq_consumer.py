@@ -22,7 +22,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from app.config import get_settings
 from app.core.exceptions import HitlContextUnavailableError, MqDisabledError
@@ -181,8 +181,14 @@ async def consume(*, queue_name: str = INBOUND_QUEUE) -> None:
                 event_type = message.type or message.routing_key or ""
                 try:
                     await dispatch(event_type, message.body)
-                except (KeyError, ValidationError, HitlContextUnavailableError) as exc:
+                except (KeyError, ValueError, HitlContextUnavailableError) as exc:
                     # 다시 넣어도 결과가 같은 실패 — 바로 DLX 로 보낸다.
+                    #
+                    # ValueError 가 덮는 범위: 깨진 JSON(JSONDecodeError) · 계약 위반
+                    # (pydantic ValidationError) · record_hitl_outcome 의 alert_id 불일치와
+                    # hitl_status 대기. 셋 다 ValueError 서브클래스이고 전부 재전달해도
+                    # 같은 결과다. 재시도 대상으로 두면 delivery-limit 5 를 다 태운 뒤에야
+                    # DLX 로 가고, 로컬 classic 큐는 그 상한이 없어 무한 재전달이 된다.
                     logger.error("처리 불가 eventType=%s: %r", event_type, exc)
                     await message.nack(requeue=False)
                 except Exception as exc:  # noqa: BLE001 - 일시적 오류는 재시도 대상

@@ -272,3 +272,165 @@ async def test_declares_queue_only_for_local_topology(monkeypatch):
     await mq_consumer.resolve_queue(channel, mq_consumer.INBOUND_QUEUE, settings)
 
     assert channel.calls == ["declare_queue"]
+
+
+# ── 실패 분류(nack requeue) ──────────────────────────────────────
+#
+# consume() 의 루프를 브로커만 가짜로 두고 실제로 태운다. 여기까지 안 오면
+# "영구 실패를 재시도로 분류"하는 버그가 유닛 테스트를 그대로 통과한다.
+
+
+def _raise(exc: Exception):
+    """주어진 예외를 던지는 핸들러."""
+
+    def handler(_payload: dict) -> None:
+        raise exc
+
+    return handler
+
+
+class _FakeMessage:
+    def __init__(self, body: bytes, event_type: str) -> None:
+        self.body = body
+        self.type = event_type
+        self.routing_key = event_type
+        self.actions: list[tuple[str, bool | None]] = []
+
+    async def ack(self) -> None:
+        self.actions.append(("ack", None))
+
+    async def nack(self, requeue: bool = True) -> None:
+        self.actions.append(("nack", requeue))
+
+
+class _FakeIterator:
+    def __init__(self, messages: list) -> None:
+        self._messages = list(messages)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._messages:
+            raise StopAsyncIteration
+        return self._messages.pop(0)
+
+
+class _FakeQueue:
+    def __init__(self, messages: list) -> None:
+        self._messages = messages
+
+    async def bind(self, *_args, **_kwargs) -> None:
+        return None
+
+    def iterator(self):
+        return _FakeIterator(self._messages)
+
+
+class _FakeConsumerChannel:
+    def __init__(self, queue: _FakeQueue) -> None:
+        self._queue = queue
+
+    async def set_qos(self, **_kwargs) -> None:
+        return None
+
+    async def get_queue(self, *_args, **_kwargs):
+        return self._queue
+
+    async def declare_queue(self, *_args, **_kwargs):
+        return self._queue
+
+
+class _FakeConnection:
+    def __init__(self, channel: _FakeConsumerChannel) -> None:
+        self._channel = channel
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+    async def channel(self, **_kwargs):
+        return self._channel
+
+
+async def _consume_one(monkeypatch, body: bytes, handler) -> _FakeMessage:
+    """메시지 1건을 consume() 루프에 태우고 ack/nack 결과를 돌려준다."""
+    import aio_pika
+
+    from app.config import get_settings
+    from app.core import mq
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "mq_enabled", True)
+    monkeypatch.setattr(settings, "mq_declare_topology", False)
+
+    message = _FakeMessage(body, mq_consumer.RECOMMENDATION_REVIEWED)
+    connection = _FakeConnection(_FakeConsumerChannel(_FakeQueue([message])))
+
+    async def fake_connect(**_kwargs):
+        return connection
+
+    async def fake_exchange(*_args, **_kwargs):
+        return object()
+
+    monkeypatch.setattr(aio_pika, "connect_robust", fake_connect)
+    monkeypatch.setattr(mq, "resolve_exchange", fake_exchange)
+    handlers = {mq_consumer.RECOMMENDATION_REVIEWED: handler} if handler else {}
+    monkeypatch.setattr(mq_consumer, "HANDLERS", handlers)
+
+    await mq_consumer.consume()
+    return message
+
+
+_GOOD_BODY = b'{"eventType": "feedback.recommendation.reviewed", "payload": {"x": 1}}'
+
+
+@pytest.mark.asyncio
+async def test_successful_handling_acks(monkeypatch):
+    message = await _consume_one(monkeypatch, _GOOD_BODY, lambda _payload: None)
+
+    assert message.actions == [("ack", None)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body, handler",
+    [
+        # record_hitl_outcome 의 alert_id 불일치·hitl_status 대기 — 둘 다 ValueError 다.
+        (_GOOD_BODY, _raise(ValueError("alert_id 가 다릅니다"))),
+        # 계약 위반. pydantic ValidationError 도 ValueError 서브클래스라 같이 걸린다.
+        (_GOOD_BODY, _raise(HitlContextUnavailableError("재료 부족"))),
+        # 깨진 JSON — 핸들러에 닿지도 못한다(JSONDecodeError 는 ValueError).
+        (b"{not json", lambda _payload: None),
+        # 핸들러 미등록(용준 feedback.report.created) — ACK 하면 그 메시지가 사라진다.
+        (_GOOD_BODY, None),
+    ],
+)
+async def test_permanent_failures_go_straight_to_dlx(monkeypatch, body, handler):
+    """⚠️ 다시 넣어도 결과가 같은 실패는 requeue 하지 않는다.
+
+    재시도로 분류하면 운영에서는 delivery-limit 5 를 다 태운 뒤에야 DLX 로 가고
+    (Chroma 쓰기 5회 + 에러 로그 5줄), 로컬 classic 큐는 그 상한이 없어 무한 재전달이
+    된다. 2026-08-07 재검토에서 ValueError 계열이 이 분류에서 빠져 있던 것을 고쳤다.
+    """
+    message = await _consume_one(monkeypatch, body, handler)
+
+    assert message.actions == [("nack", False)]
+
+
+@pytest.mark.asyncio
+async def test_transient_failures_are_retried(monkeypatch):
+    """벡터DB 다운 같은 일시적 오류만 requeue 한다 — 다음 전달에서 성공할 수 있다."""
+    message = await _consume_one(
+        monkeypatch, _GOOD_BODY, _raise(ConnectionError("chroma down"))
+    )
+
+    assert message.actions == [("nack", True)]
