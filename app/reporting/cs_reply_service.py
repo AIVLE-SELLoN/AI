@@ -21,7 +21,16 @@ from app.core import constants
 from app.core.ids import build_guideline_id as _build_guideline_id
 from app.core.llm_client import get_llm_client
 from app.core.prompts import load_prompt
-from app.core.schemas import CallbackStatus, CSGuidelineInput, CSGuidelineOutput
+from app.core.schemas import (
+    CallbackStatus,
+    CSGuidelineInput,
+    CSGuidelineOutput,
+    CSGuidelineRootCause,
+    CSGuidelineStatsInput,
+    DetectionAlert,
+    GenerationCallback,
+    LinkedCSInquiry,
+)
 from app.reporting.callback import GenerationResult, build_guideline_callback
 from app.reporting.cs_reply_validator import validate_cs_guideline
 from app.reporting.pdf_compiler import ReportType, compile_report_to_pdf
@@ -184,7 +193,7 @@ async def generate_cs_reply_pipeline(
         )
         pdf_s3_meta = await upload_pdf_to_s3(
             pdf_bytes=pdf_bytes,
-            report_type=REPORT_TYPE_GUIDELINE,  # → cs-guideline 프리픽스 (1일 보존)
+            report_type=REPORT_TYPE_GUIDELINE,  # → cs-guideline 프리픽스 (7일 보존)
             # CS 는 대상 "기간"이 없으므로 탐지 연월을 경로 기준으로 쓴다.
             # 생성 시각이 아니라 탐지 시각이라 재생성해도 같은 폴더에 떨어진다.
             period=input_data.detected_at.strftime("%Y-%m"),
@@ -243,3 +252,121 @@ async def generate_cs_reply_pipeline(
             pdf_s3_meta=pdf_s3_meta,
         ),
     )
+
+
+# ── 배치 진입점 ──────────────────────────────────────────────────────────
+
+
+def is_guideline_target(alert: DetectionAlert) -> bool:
+    """이 알림이 CS 가이드라인 생성 대상인가.
+
+    `evidence.inquiry_ids` 가 비어 있으면 대상이 아니다. **이건 오류가 아니라 정상
+    상태다** — 원인 분류([6])는 스코프 안(색상·사이즈·소재) 알림만 타므로, 파손·오배송
+    같은 스코프 밖 알림은 언제나 이 목록이 비어 있다(`app/detection/alert.py` 참고).
+    답변할 문의가 없는데 상담 가이드라인을 만들 수는 없다.
+
+    ⚠️ 여기서 걸러 내지 않으면 스코프 밖 알림이 뜰 때마다 배치 요약에 "가이드라인 실패"가
+       쌓인다. 정상 동작이 실패로 보이기 시작하면 요약을 아무도 안 읽게 되고, 그때부터는
+       **진짜 실패도 같이 묻힌다**.
+
+    판정 유형(`GUIDELINE_EXCLUDED_VERDICTS`)과 중복 판정은 하지 않는다 — 그건
+    `CSGuidelineInput` 의 검증기가 이미 본다.
+    """
+    return bool(alert.evidence.inquiry_ids)
+
+
+def build_guideline_input(
+    alert: DetectionAlert,
+    inquiries: list[LinkedCSInquiry],
+    *,
+    product_name: str | None = None,
+) -> CSGuidelineInput:
+    """`DetectionAlert` + CS 원문 → 가이드라인 입력.
+
+    탐지 쪽 모델을 그대로 못 넘기는 이유는 두 군데가 좁아지기 때문이다:
+      - `DetectionStats.source` 는 가이드라인 입력에 없다. CS·리뷰를 종합한 뒤의
+        알림이라 "이 지표가 어느 쪽에서 왔는지"는 문서에 쓰지 않는다(§4-4).
+      - `RootCause.consistent` 도 없다. 원인 일관성은 탐지가 판정에 쓰는 값이지
+        상담원에게 보여 줄 내용이 아니다.
+    남은 필드는 이름이 같아 그대로 옮긴다.
+
+    Raises:
+        ValueError: 알림은 문의를 가리키는데 넘어온 `inquiries` 가 비었을 때. 원문 조회가
+            전부 실패했다는 뜻이라 근거 없는 가이드라인이 나가지 않도록 막는다
+            (`build_linked_inquiries` 는 원문 없는 ID 를 버리고 경고만 남긴다).
+            애초에 가리키는 문의가 없는 알림은 여기까지 오면 안 된다 —
+            `is_guideline_target()` 로 먼저 거른다.
+    """
+    if not inquiries:
+        raise ValueError(
+            f"alert_id={alert.alert_id}: evidence.inquiry_ids "
+            f"{alert.evidence.inquiry_ids} 에 해당하는 CS 원문을 하나도 찾지 못해 "
+            "가이드라인을 만들 수 없습니다"
+        )
+
+    return CSGuidelineInput(
+        alert_id=alert.alert_id,
+        detected_at=alert.detected_at,
+        product_group_id=alert.product_group_id,
+        product_name=product_name,
+        channel=alert.channel,
+        main_aspect=alert.main_aspect,
+        verdict=alert.verdict,
+        recommended_action=alert.recommended_action,
+        detection_confidence=alert.detection_confidence,
+        stats=CSGuidelineStatsInput(
+            cur_rate=alert.stats.cur_rate,
+            past_rate=alert.stats.past_rate,
+            delta=alert.stats.delta,
+            cur_total=alert.stats.cur_total,
+            p_value=alert.stats.p_value,
+            bh_significant=alert.stats.bh_significant,
+        ),
+        root_cause=(
+            None
+            if alert.root_cause is None
+            else CSGuidelineRootCause(
+                label=alert.root_cause.label,
+                count=alert.root_cause.count,
+                total=alert.root_cause.total,
+            )
+        ),
+        linked_inquiries=inquiries,
+    )
+
+
+async def generate_guideline(
+    alert: DetectionAlert,
+    inquiries: list[LinkedCSInquiry],
+    *,
+    product_name: str | None = None,
+) -> GenerationCallback | None:
+    """일간 배치(`app/batch/daily.py`)가 부르는 진입점.
+
+    `generate_cs_reply_pipeline` 을 감싸기만 한다. 배치가 파이프라인을 직접 못 부르는
+    이유는 입력·출력 양쪽이 다르기 때문이다 — 배치는 탐지 알림을 들고 있고, 결과를
+    `publish_guideline_generated(callback, trace_id)` 로 바로 넘긴다. 그래서 여기서
+    `CSGuidelineInput` 을 조립하고 `GenerationResult` 에서 콜백만 꺼내 돌려준다.
+
+    반환값 세 가지를 구분한다:
+      콜백(SUCCESS)      정상 생성. 배치가 그대로 발행한다.
+      콜백(FAILED_*)     생성은 시도했으나 실패. **None 이 아니다** — 배치가
+                         `if guideline is not None` 로 발행 여부를 가르는데 실패를
+                         None 으로 돌려주면 백엔드가 "생성 중"에서 영영 못 벗어난다.
+      None               애초에 생성 대상이 아님(`is_guideline_target()` 참고).
+                         실패가 아니라 게이트라 발행할 것도, 요약에 남길 것도 없다.
+
+    Raises:
+        ValueError: 대상 알림인데 원문 조회가 전부 실패한 경우. 이건 진짜 실패라
+            배치 요약에 남아야 한다.
+    """
+    if not is_guideline_target(alert):
+        logger.info(
+            f"[SKIP] alert_id={alert.alert_id} | 가리키는 CS 문의가 없어 가이드라인 대상이 "
+            f"아닙니다 (main_aspect={alert.main_aspect.value}, scope_in={alert.scope_in})"
+        )
+        return None
+
+    input_data = build_guideline_input(alert, inquiries, product_name=product_name)
+    result = await generate_cs_reply_pipeline(input_data)
+    return result.callback

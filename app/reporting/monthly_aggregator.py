@@ -66,6 +66,77 @@ assert {Aspect(a) for a in JSD_ASPECT_ORDER} == set(SCHEMA_MONTHLY_ASPECTS), (
 #    분모가 조용히 줄어든다(§2-4 가 금지한 상황).
 SOURCE_TABLE = raw_schema.VOC_DOCUMENT
 
+# 상품그룹 대표 상품명을 고르는 규칙 (2026-08-05 확정).
+#   1순위: 채널별 표기명 중 **최빈값**
+#   2순위: 동점이면 아래 채널 우선순위로 깬다
+# 채널마다 표기가 달라 어느 하나를 골라야 하는데, 실행마다 이름이 흔들리면 같은 상품의
+# 리포트가 달의 표지마다 다른 이름으로 나간다. 그래서 결정적으로 고정한다.
+PRODUCT_NAME_CHANNEL_PRIORITY: tuple[str, ...] = ("ZIGZAG", "NAVER", "COUPANG")
+
+
+def resolve_product_name(candidates: dict[str, str]) -> str | None:
+    """{채널: 표기 상품명} → 대표 상품명. 후보가 없으면 None.
+
+    최빈값 우선, 동점이면 PRODUCT_NAME_CHANNEL_PRIORITY 순으로 깬다. 우선순위에 없는
+    채널만 남으면 채널명 오름차순으로 깬다(입력 순서에 흔들리지 않게).
+    """
+    named = {ch: name.strip() for ch, name in candidates.items() if name and name.strip()}
+    if not named:
+        return None
+
+    freq: dict[str, int] = {}
+    for name in named.values():
+        freq[name] = freq.get(name, 0) + 1
+    top = max(freq.values())
+    tied = {name for name, n in freq.items() if n == top}
+    if len(tied) == 1:
+        return next(iter(tied))
+
+    def rank(channel: str) -> tuple[int, str]:
+        try:
+            return (PRODUCT_NAME_CHANNEL_PRIORITY.index(channel), "")
+        except ValueError:
+            return (len(PRODUCT_NAME_CHANNEL_PRIORITY), channel)
+
+    for channel in sorted(named, key=rank):
+        if named[channel] in tied:
+            return named[channel]
+    return None
+
+
+def _fetch_product_names(conn: sqlite3.Connection, product_group_id: str) -> str | None:
+    """products ⋈ mapped_data 에서 채널별 표기명을 모아 대표명을 고른다.
+
+    ⚠️ 목 파이프라인에는 아직 두 테이블이 없다 — 확정 스키마 §2-2·§2-3 에 정의는 있지만
+       채울 대본 CSV 가 없어 mock_producer 가 만들지 않는다. 그때는 None 을 돌려
+       호출부가 product_group_id 를 그대로 쓰게 한다 — 이름을 지어내지 않는다.
+    """
+    has_tables = conn.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('products','mapped_data')"
+    ).fetchone()[0]
+    if has_tables < 2:
+        return None
+
+    rows = conn.execute(
+        "SELECT p.channel_id, p.channel_product_name FROM mapped_data m "
+        "JOIN products p ON p.variant_row_id = m.variant_row_id "
+        "WHERE m.product_group_id = ? AND p.channel_product_name IS NOT NULL",
+        (product_group_id,),
+    ).fetchall()
+
+    # 같은 채널에 여러 variant 가 있으면 채널 안에서도 최빈값을 먼저 고른다.
+    by_channel: dict[str, dict[str, int]] = {}
+    for channel, name in rows:
+        if not name:
+            continue
+        counter = by_channel.setdefault(str(channel), {})
+        counter[name] = counter.get(name, 0) + 1
+    candidates = {
+        channel: max(counter, key=lambda n: (counter[n], n)) for channel, counter in by_channel.items()
+    }
+    return resolve_product_name(candidates)
+
+
 # 채널 분열은 채널쌍 전수를 본다. 조합 순서를 고정해 라벨이 실행마다 흔들리지 않게 한다.
 CHANNEL_PAIRS: tuple[tuple[str, str], ...] = (
     ("COUPANG", "NAVER"),
@@ -296,7 +367,10 @@ def aggregate_monthly_inputs(
                 start_date=start,
                 end_date=end,
                 product_group_id=row["product_group_id"],
-                product_name=row["product_group_id"],
+                # 상품명은 커머스 DB 소관이라 여기서는 코드로 대체한다.
+                # 연동되면 이 한 줄만 조인으로 바꾸면 된다.
+                product_name=_fetch_product_names(conn, row["product_group_id"])
+                or row["product_group_id"],
                 total_voc_count=row["total_voc_count"],
                 aspect_distributions=row["distributions"],
                 sentiment_drifts=row["drifts"],

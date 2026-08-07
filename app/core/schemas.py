@@ -364,11 +364,26 @@ class PdfS3Meta(BaseModel):
        메인이 파일을 다시 찾거나 목록에 표시할 때 필요한 최소 집합이라 optional 로 두지
        않는다. 앞으로 PDF 외 형식(엑셀·CSV 등)이 늘어도 같은 4종을 유지한다.
 
+    📌 **확장자는 별도 컬럼으로 두지 않는다** (인프라 §4, 2026-08-06).
+       "확장자는 파일명에 `.pdf` 로 고정 포함(이미지와 다르게 DB 별도 컬럼에 저장하지
+       않음)"이 규칙이다. 예전에는 `file_extension="pdf"` 필드가 있었는데, 파일명에
+       이미 들어 있는 값을 한 번 더 들고 다니면 둘이 어긋날 수 있다.
+
+    📌 **회사 구분은 메타데이터로 실어 보낸다** (2026-08-06 확정).
+       S3 경로가 `reports/{report_type}/{company_id}/…` 로 회사 단위로 갈리는데, 그 값이
+       어느 입력 스키마에도 없어 산출물만 보고는 어느 회사 것인지 알 수 없었다.
+       `company_id` 를 필수로 실어 메인이 **S3 키를 파싱하지 않고** 바로 알 수 있게 한다.
+
+       ⚠️ 경로에는 `company_id`(불변 식별자)만 쓴다. `company_name` 은 표시용이다 —
+          회사명이 바뀌면 경로가 갈라져 이전 산출물을 못 찾게 된다.
+
     ⚠️ 보존 정책은 문서 종류별로 다르다 (2026-08-03 확정). 삭제는 S3 Lifecycle 이 한다:
       - **월간 리포트**: PDF 가 **유일한 산출물**이다(DB 에 데이터를 적재하지 않는다).
         생성 후 **6개월** 뒤 자동 삭제되며, 원본이 없으므로 **만료 = 영구 소실**이다.
       - **CS 가이드라인**: 출력 데이터가 DB 에 적재되어 재컴파일이 가능하다 →
-        업로드 후 **24시간** 뒤 자동 삭제.
+        업로드 후 **7일** 뒤 자동 삭제 (2026-08-06 확정, 기존 24시간에서 연장).
+        메일 발송이 **운영 MD 승인 뒤에** 일어나므로, 승인 대기 중에 객체가 사라지면
+        발송할 것이 없어진다.
 
     두 시각은 의미가 다르다:
       - `object_expires_at`   S3 가 객체를 지우는 시각 = **다운로드 가능 기한**
@@ -377,7 +392,17 @@ class PdfS3Meta(BaseModel):
     링크가 객체보다 오래 살 수는 없으므로 아래 validator 가 그 조합을 거부한다.
     """
 
-    s3_bucket_name: str = Field(..., description="S3 버킷명 (월간 6개월 / CS 24시간 보존)")
+    company_id: str = Field(
+        ...,
+        description=(
+            "[회사] 경로에 쓰인 고객사 식별자 "
+            "(s3_file_path 의 reports/{report_type}/ 다음 구간)"
+        ),
+    )
+    company_name: str | None = Field(
+        None, description="[회사] 표시용 고객사명. 경로에는 쓰지 않는다(이름은 바뀔 수 있다)"
+    )
+    s3_bucket_name: str = Field(..., description="S3 버킷명 (월간 6개월 / CS 7일 보존)")
     s3_file_path: str = Field(..., description="S3 디렉토리 경로 (trailing slash 포함)")
     original_file_name: str = Field(..., description="[필수 4종] 원본·표시용 파일명")
     new_file_name: str = Field(..., description="[필수 4종] 버킷에 저장한 파일명")
@@ -389,19 +414,27 @@ class PdfS3Meta(BaseModel):
         description="[필수 4종] 파일 크기 (bytes, 최대 10MB)",
     )
     s3_full_key: str = Field(..., description="S3 객체 전체 키 (= s3_file_path + new_file_name)")
-    file_extension: str = Field("pdf", description="파일 확장자")
     presigned_url: str | None = Field(None, description="다운로드·미리보기용 URL")
     presigned_expires_at: datetime | None = Field(
         None, description="URL 만료 시각 (만료 후 s3_full_key 로 재발급)"
     )
     object_expires_at: datetime | None = Field(
-        None, description="S3 Lifecycle 자동 삭제 시각 = 다운로드 가능 기한 (월간 6개월/CS 24시간)"
+        None, description="S3 Lifecycle 자동 삭제 시각 = 다운로드 가능 기한 (월간 6개월/CS 7일)"
     )
 
     model_config = ConfigDict(populate_by_name=True)
 
     @model_validator(mode="after")
     def _validate_full_key(self) -> PdfS3Meta:
+        # 경로에 박힌 회사 구간과 company_id 가 다르면, 메인이 둘 중 뭘 믿어야 할지 모른다.
+        # 경로는 reports/{report_type}/{company_id}/{yyyy}/{mm}/ 순이다(2026-08-06).
+        marker = f"/{self.company_id}/"
+        if self.s3_file_path.startswith("reports/") and marker not in self.s3_file_path:
+            raise ValueError(
+                f"company_id 가 s3_file_path 의 회사 구간과 다릅니다: "
+                f"{self.company_id!r} not in {self.s3_file_path!r}"
+            )
+
         expected = f"{self.s3_file_path}{self.new_file_name}"
         if self.s3_full_key != expected:
             raise ValueError(

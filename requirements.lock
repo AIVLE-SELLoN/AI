@@ -129,3 +129,4 @@ tinycss2==1.5.1
 tinyhtml5==2.1.0
 webencodings==0.5.1
 zopfli==0.4.3
+boto3==1.43.65
