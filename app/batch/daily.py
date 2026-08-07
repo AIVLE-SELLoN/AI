@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import contextlib
 import json
 import logging
 import os
@@ -50,6 +49,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.core.console import force_utf8_output
 from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
 from app.core.inquiries import build_linked_inquiries
 from app.core.schemas import ClassifiedItem, DetectionAlert
@@ -574,22 +574,6 @@ async def run_batch(
     }
 
 
-def _force_utf8_output() -> None:
-    """표준 출력·에러를 UTF-8 로 돌린다. **윈도우 콘솔 기본값(cp949)에서 배치가 죽는다.**
-
-    요약에 쓰는 `⚠️`(U+26A0)·`ℹ️`(U+2139) 가 cp949 에 없어서 `print_summary()` 가
-    `UnicodeEncodeError` 로 터진다. 탐지·발행이 다 끝난 **뒤에** 죽는 게 더 나쁘다 —
-    `main()` 끝의 `sys.exit(1)` 에 도달하지 못해서 **성공한 배치도 traceback 으로
-    비-0 종료**가 되고, 종료코드로 성패를 판정할 수 없게 된다.
-
-    운영은 리눅스(기본 UTF-8)라 실사고는 아니지만 로컬 재현·디버깅이 매번 막힌다.
-    `errors="replace"` 는 최후 보루다 — 콘솔이 어떤 코드페이지든 요약은 나와야 한다.
-    """
-    for stream in (sys.stdout, sys.stderr):
-        with contextlib.suppress(AttributeError, ValueError):
-            stream.reconfigure(encoding="utf-8", errors="replace")
-
-
 def print_summary(summary: dict) -> None:
     print("\n" + "=" * 62)
     print(f"배치 요약  trace_id={summary['trace_id']}  {summary['elapsed_sec']}초")
@@ -672,10 +656,8 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    # 출력이 나가기 전에. (로깅과의 순서는 무관하다 — reconfigure 는 스트림 객체를
-    # 교체하지 않고 제자리에서 바꾸므로, basicConfig 가 먼저 핸들러를 만들어도 같은
-    # 객체를 들고 있어서 결과가 같다.)
-    _force_utf8_output()
+    # 출력이 나가기 전에. 사유는 app/core/console.py 참고.
+    force_utf8_output()
 
     loader = None
     if args.input_source == "golden":

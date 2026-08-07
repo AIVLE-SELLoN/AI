@@ -388,48 +388,8 @@ async def test_mq_connection_is_closed_on_the_normal_path(tmp_path, monkeypatch)
     assert closed
 
 
-def test_output_streams_are_switched_to_utf8(monkeypatch):
-    """⚠️ 요약을 내기 전에 출력 스트림을 UTF-8 로 돌린다.
-
-    윈도우 기본 콘솔(cp949)에는 `⚠️`(U+26A0)·`ℹ️`(U+2139) 가 없어서 print_summary 가
-    UnicodeEncodeError 로 터졌다. 탐지·발행이 다 끝난 **뒤에** 죽는 게 더 나쁘다 —
-    main() 끝의 sys.exit(1) 에 도달을 못 해 성공한 배치도 비-0 으로 끝나고, 종료코드로
-    성패를 판정할 수 없게 된다. (2026-08-07)
-    """
-
-    class _Reconfigurable:
-        def __init__(self) -> None:
-            self.kwargs: dict = {}
-
-        def reconfigure(self, **kwargs) -> None:
-            self.kwargs = kwargs
-
-    out, err = _Reconfigurable(), _Reconfigurable()
-    monkeypatch.setattr(daily.sys, "stdout", out)
-    monkeypatch.setattr(daily.sys, "stderr", err)
-
-    daily._force_utf8_output()
-
-    # stderr 도 같이 — 로그 레코드가 그쪽으로 나간다.
-    for stream in (out, err):
-        assert stream.kwargs["encoding"] == "utf-8"
-        assert stream.kwargs["errors"] == "replace"
-
-
-def test_utf8_switch_is_safe_on_streams_that_cannot_reconfigure(monkeypatch):
-    """pytest 캡처 스트림처럼 reconfigure 가 없는 곳에서도 터지지 않는다.
-
-    여기서 예외가 새면 배치가 **아무 일도 하기 전에** 죽는다 — 인코딩 편의 때문에
-    운영 진입점을 못 띄우는 건 원래 문제보다 나쁘다.
-    """
-    monkeypatch.setattr(daily.sys, "stdout", object())
-    monkeypatch.setattr(daily.sys, "stderr", object())
-
-    daily._force_utf8_output()  # 예외가 나면 이 줄에서 실패한다
-
-
 def test_main_switches_encoding_before_printing(monkeypatch):
-    """⚠️ `main()` 이 실제로 `_force_utf8_output()` 을 부른다 — 배선까지 고정한다.
+    """⚠️ `main()` 이 실제로 `force_utf8_output()` 을 부른다 — 배선까지 고정한다.
 
     헬퍼만 테스트하면 호출 한 줄이 빠져도 아무것도 안 깨진다(2026-08-07 리뷰 지적).
     `main()` 은 인자 파싱·늦은 import·로깅 설정이 몰려 있어 손이 자주 가는 함수라,
@@ -457,12 +417,12 @@ def test_main_switches_encoding_before_printing(monkeypatch):
             "state_cached": 0,
         }
 
-    monkeypatch.setattr(daily, "_force_utf8_output", lambda: calls.append("utf8"))
+    monkeypatch.setattr(daily, "force_utf8_output", lambda: calls.append("utf8"))
     monkeypatch.setattr(daily, "run_batch", fake_run_batch)
     monkeypatch.setattr(daily.sys, "argv", ["daily", "--dry-run"])
 
     daily.main()
 
-    assert "utf8" in calls, "main() 이 _force_utf8_output() 을 부르지 않았습니다"
+    assert "utf8" in calls, "main() 이 force_utf8_output() 을 부르지 않았습니다"
     # 출력·로깅보다 먼저 불려야 한다.
     assert calls.index("utf8") < calls.index("run_batch")

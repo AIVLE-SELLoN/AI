@@ -39,17 +39,20 @@ AI_BINDING = "ai.#"
 
 
 async def setup() -> None:
-    from aio_pika import ExchangeType, connect_robust
+    from aio_pika import connect_robust
 
     from app.config import get_settings
+    from app.core import mq
     from app.core.mq_consumer import FEEDBACK_BINDING, INBOUND_QUEUE
 
     settings = get_settings()
     if not settings.mq_declare_topology:
         raise SystemExit(
-            "MQ_DECLARE_TOPOLOGY=false 입니다 — 이 스크립트는 로컬 전용입니다.\n"
+            "MQ_DECLARE_TOPOLOGY=false 입니다. 이 스크립트는 로컬 전용입니다.\n"
             "운영 토폴로지는 백엔드 인프라가 소유하고, 우리가 큐를 만들면 "
-            "PRECONDITION_FAILED 로 거부당합니다 (docs/mq_events.md §2-1)."
+            "PRECONDITION_FAILED 로 거부당합니다 (docs/mq_events.md §2-1).\n"
+            "⚠️ 이 가드가 보는 건 MQ_HOST 가 아니라 이 플래그다 — 운영 브로커를 가리킨 채로"
+            " true 로 두면 운영에 큐를 만든다."
         )
 
     connection = await connect_robust(
@@ -61,9 +64,11 @@ async def setup() -> None:
     )
     async with connection:
         channel = await connection.channel()
-        exchange = await channel.declare_exchange(
-            settings.mq_exchange, ExchangeType.TOPIC, durable=True
-        )
+        # 운영과 같은 함수를 탄다 — 여기서만 직접 declare 하면 exchange 인자(TOPIC·durable)를
+        # 아는 곳이 둘로 갈려서, 한쪽만 바뀌면 로컬이 PRECONDITION_FAILED 로 막힌다.
+        # 가드를 통과했다는 건 mq_declare_topology=True 라 어차피 declare 분기를 탄다는 뜻이다.
+        # (smoke_mq.py 가 같은 자리에서 같은 이유로 이 함수를 쓴다.)
+        exchange = await mq.resolve_exchange(channel, settings)
         print(f"exchange {settings.mq_exchange} (topic, durable)")
 
         for queue_name, binding in (
@@ -80,4 +85,10 @@ async def setup() -> None:
 
 
 if __name__ == "__main__":
+    # ⚠️ 출력보다 먼저. 완료 메시지의 `—`(U+2014)가 cp949 에 없어서, 큐를 다 만들어 놓고
+    #    마지막 print 에서 죽어 **성공이 exit 1 로 보고**됐다. 그러면 종료코드가 성공과
+    #    "가드에 막혀 아무것도 안 함"을 구분하지 못한다. (app/core/console.py 참고)
+    from app.core.console import force_utf8_output
+
+    force_utf8_output()
     asyncio.run(setup())
