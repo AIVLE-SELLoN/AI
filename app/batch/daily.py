@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -573,6 +574,22 @@ async def run_batch(
     }
 
 
+def _force_utf8_output() -> None:
+    """표준 출력·에러를 UTF-8 로 돌린다. **윈도우 콘솔 기본값(cp949)에서 배치가 죽는다.**
+
+    요약에 쓰는 `⚠️`(U+26A0)·`ℹ️`(U+2139) 가 cp949 에 없어서 `print_summary()` 가
+    `UnicodeEncodeError` 로 터진다. 탐지·발행이 다 끝난 **뒤에** 죽는 게 더 나쁘다 —
+    `main()` 끝의 `sys.exit(1)` 에 도달하지 못해서 **성공한 배치도 traceback 으로
+    비-0 종료**가 되고, 종료코드로 성패를 판정할 수 없게 된다.
+
+    운영은 리눅스(기본 UTF-8)라 실사고는 아니지만 로컬 재현·디버깅이 매번 막힌다.
+    `errors="replace"` 는 최후 보루다 — 콘솔이 어떤 코드페이지든 요약은 나와야 한다.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, ValueError):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def print_summary(summary: dict) -> None:
     print("\n" + "=" * 62)
     print(f"배치 요약  trace_id={summary['trace_id']}  {summary['elapsed_sec']}초")
@@ -654,6 +671,9 @@ def main() -> None:
         " 셀러에게 안 간다.",
     )
     args = ap.parse_args()
+
+    # 로깅 설정보다 먼저 — 로그도 같은 스트림으로 나간다.
+    _force_utf8_output()
 
     loader = None
     if args.input_source == "golden":
