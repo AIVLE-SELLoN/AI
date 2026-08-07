@@ -1,0 +1,49 @@
+﻿day,product,source,aspect,channel,significant_channels,verdict,confidence,interpretation,recommended_action,cur_total,cur_rate,past_rate,delta,baseline_rate,cur_minus_baseline,past_minus_baseline,p_value,bh_significant,kind,reason_hint
+29,P001,cs,색상,COUPANG,COUPANG,편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,198,0.0404,0.0065,0.0339,0.05,-0.0096,-0.0435,0.002132280738272268,True,false,early_same_case
+29,P017,cs,색상,COUPANG,"COUPANG,NAVER",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,202,0.0396,0.0034,0.0362,0.05,-0.0104,-0.0466,0.0004214880438611856,True,false,early_same_case
+29,P017,cs,색상,NAVER,"COUPANG,NAVER",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,200,0.04,0.0064,0.0336,0.06,-0.02,-0.0536,0.002156202513150134,True,false,early_same_case
+29,P030,cs,색상,COUPANG,"COUPANG,ZIGZAG",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,203,0.069,0.0242,0.0448,0.05,0.019,-0.0258,0.004214624115242374,True,false,early_same_case
+29,P030,cs,색상,ZIGZAG,"COUPANG,ZIGZAG",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,42,0.1667,0.0303,0.1364,0.07,0.0967,-0.0397,0.004660132776896403,True,false,early_same_case
+29,P031,cs,색상,ALL,"COUPANG,NAVER,ZIGZAG",전역형,해당없음,CS 선행 신호 — 리뷰는 시차로 미반영 가능,상품 자체 점검 권장,42,0.1667,0.0227,0.1439,,,,0.002077123397113776,True,false,early_same_case
+29,P032,cs,색상,ALL,"COUPANG,NAVER,ZIGZAG",전역형,해당없음,CS 선행 신호 — 리뷰는 시차로 미반영 가능,상품 자체 점검 권장,42,0.1667,0.0227,0.1439,,,,0.002077123397113776,True,false,early_same_case
+29,P033,cs,색상,ALL,"COUPANG,NAVER,ZIGZAG",전역형,해당없음,CS 선행 신호 — 리뷰는 시차로 미반영 가능,상품 자체 점검 권장,42,0.1667,0.0152,0.1515,,,,0.0007635930458444707,True,false,early_same_case
+29,P034,cs,색상,ALL,"COUPANG,NAVER,ZIGZAG",전역형,해당없음,CS 선행 신호 — 리뷰는 시차로 미반영 가능,상품 자체 점검 권장,42,0.1667,0.0076,0.1591,,,,0.00020786866646130321,True,false,early_same_case
+29,P035,review,색상,COUPANG,COUPANG,편중형,중간,리뷰 지연 반영 또는 CS 미표출,개선안 생성,70,0.1,0.0133,0.0867,0.05,0.05,-0.0367,0.0020742350973215647,True,false,early_same_case
+29,P035,cs,색상,NAVER,"NAVER,ZIGZAG",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,42,0.1667,0.0303,0.1364,0.06,0.1067,-0.0297,0.004660132776896403,True,false,no_golden_case_same_product_aspect_source
+29,P035,cs,색상,ZIGZAG,"NAVER,ZIGZAG",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,42,0.1667,0.0152,0.1515,0.07,0.0967,-0.0548,0.0007635930458444707,True,false,no_golden_case_same_product_aspect_source
+29,P036,cs,색상,NAVER,"NAVER,ZIGZAG",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,42,0.1429,0.0076,0.1353,0.06,0.0829,-0.0524,0.0008484953815835656,True,false,no_golden_case_same_product_aspect_source
+29,P036,cs,색상,ZIGZAG,"NAVER,ZIGZAG",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,42,0.1429,0.0152,0.1277,0.07,0.0729,-0.0548,0.002770375526950353,True,false,no_golden_case_same_product_aspect_source
+29,P041,cs,색상,COUPANG,COUPANG,구분불가,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,편중·전역 구분 불가(채널 표본 부족),203,0.069,0.0076,0.0614,0.05,0.019,-0.0424,0.005064225166664355,True,false,no_golden_case_same_product_aspect_source
+29,P042,cs,색상,NAVER,NAVER,편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,203,0.069,0.0,0.069,0.06,0.009,-0.06,0.0007494773068230785,True,false,no_golden_case_same_product_aspect_source
+30,P001,cs,색상,ZIGZAG,"COUPANG,ZIGZAG",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,42,0.119,0.0072,0.1118,0.07,0.049,-0.0628,0.0028241510956162805,True,false,early_same_case
+30,P031,cs,색상,COUPANG,COUPANG,편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,203,0.069,0.0187,0.0502,0.05,0.019,-0.0313,0.0008427092175553602,True,false,early_same_case
+31,P017,cs,색상,ALL,"COUPANG,NAVER,ZIGZAG",전역형,해당없음,CS 선행 신호 — 리뷰는 시차로 미반영 가능,상품 자체 점검 권장,203,0.0591,0.0034,0.0558,,,,3.1372997525040638e-06,True,false,early_same_case
+31,P033,cs,색상,COUPANG,"COUPANG,ZIGZAG",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,203,0.069,0.0193,0.0497,0.05,0.019,-0.0307,0.0009059560480866486,True,false,early_same_case
+31,P033,cs,색상,ZIGZAG,"COUPANG,ZIGZAG",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,42,0.1667,0.0278,0.1389,0.07,0.0967,-0.0422,0.003077722698986763,True,false,early_same_case
+32,P001,cs,색상,ALL,"COUPANG,NAVER,ZIGZAG",전역형,해당없음,CS 선행 신호 — 리뷰는 시차로 미반영 가능,상품 자체 점검 권장,42,0.1667,0.0072,0.1594,,,,0.00016455247481921955,True,false,early_same_case
+32,P011,cs,파손,COUPANG,COUPANG,편중형,낮음,CS 선행 신호 — 리뷰는 시차로 미반영 가능,물류 점검 권장,203,0.0345,0.0029,0.0316,0.02,0.0145,-0.0171,0.0006679051771496059,True,false,early_same_case
+32,P032,cs,색상,COUPANG,"COUPANG,NAVER",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,203,0.069,0.0239,0.045,0.05,0.019,-0.0261,0.0032910748649925296,True,false,early_same_case
+32,P032,cs,색상,NAVER,"COUPANG,NAVER",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,203,0.069,0.0199,0.0491,0.06,0.009,-0.0401,0.0010125608896229688,True,false,early_same_case
+32,P034,cs,색상,COUPANG,"COUPANG,ZIGZAG",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,203,0.069,0.0142,0.0547,0.05,0.019,-0.0358,0.00012353586503330746,True,false,early_same_case
+32,P034,cs,색상,ZIGZAG,"COUPANG,ZIGZAG",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,42,0.1667,0.0267,0.14,0.07,0.0967,-0.0433,0.0025221579384923786,True,false,early_same_case
+32,P036,cs,색상,ALL,"NAVER,ZIGZAG",잠정 전역형,해당없음,CS 선행 신호 — 리뷰는 시차로 미반영 가능,상품 자체 점검 권장,42,0.1667,0.0076,0.1591,,,,0.00020786866646130321,True,false,no_golden_case_same_product_aspect_source
+36,P001,cs,색상,COUPANG,"COUPANG,ZIGZAG",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,203,0.069,0.0068,0.0622,0.05,0.019,-0.0432,4.169433529781886e-06,True,false,early_same_case
+36,P013,review,소재,ZIGZAG,ZIGZAG,편중형,중간,리뷰 지연 반영 또는 CS 미표출,개선안 생성,69,0.087,0.0072,0.0798,0.06,0.027,-0.0528,0.0010244632758109947,True,false,no_golden_case_same_product_aspect_source
+36,P035,review,색상,COUPANG,COUPANG,편중형,중간,리뷰 지연 반영 또는 CS 미표출,개선안 생성,70,0.1,0.014,0.086,0.05,0.05,-0.036,0.0026364690689326055,True,false,early_same_case
+36,P042,cs,색상,NAVER,NAVER,편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,203,0.069,0.0,0.069,0.06,0.009,-0.06,0.000970185665499898,True,false,no_golden_case_same_product_aspect_source
+37,P001,cs,색상,ZIGZAG,"COUPANG,ZIGZAG",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,42,0.1667,0.0,0.1667,0.07,0.0967,-0.07,4.0858396141325744e-05,True,false,early_same_case
+37,P017,cs,색상,COUPANG,"COUPANG,NAVER",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,203,0.069,0.007,0.062,0.05,0.019,-0.043,5.250362458108759e-06,True,false,early_same_case
+37,P017,cs,색상,NAVER,"COUPANG,NAVER",편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,203,0.069,0.0084,0.0605,0.06,0.009,-0.0516,1.1493807265281865e-05,True,false,early_same_case
+39,P011,cs,파손,COUPANG,COUPANG,편중형,낮음,CS 선행 신호 — 리뷰는 시차로 미반영 가능,물류 점검 권장,203,0.0345,0.0017,0.0328,0.02,0.0145,-0.0183,0.00045008423359670243,True,false,early_same_case
+39,P032,cs,색상,NAVER,NAVER,편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,200,0.07,0.022,0.048,0.06,0.01,-0.038,0.0023203737674976394,True,false,early_same_case
+43,P001,cs,색상,COUPANG,COUPANG,편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,201,0.0398,0.0026,0.0372,0.05,-0.0102,-0.0474,0.0010222395404345058,True,false,early_same_case
+44,P017,cs,색상,NAVER,NAVER,편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,200,0.07,0.0102,0.0598,0.06,0.01,-0.0498,0.00013573650897214353,True,false,early_same_case
+51,P027,cs,색상,COUPANG,COUPANG,편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,200,0.115,0.05,0.065,0.05,0.065,0.0,0.0012235782468010899,True,ignored,scoring_excluded_window
+51,P028,cs,사이즈,ALL,"NAVER,ZIGZAG",잠정 전역형,해당없음,CS 선행 신호 — 리뷰는 시차로 미반영 가능,상품 자체 점검 권장,200,0.16,0.09,0.07,,,,0.003971584727366624,True,ignored,scoring_excluded_window
+52,P029,cs,소재,ZIGZAG,ZIGZAG,편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,200,0.13,0.06,0.07,0.06,0.07,0.0,0.0011323373379464724,True,ignored,scoring_excluded_window
+53,P012,review,사이즈,NAVER,NAVER,편중형,중간,리뷰 지연 반영 또는 CS 미표출,개선안 생성,68,0.1176,0.0217,0.0959,0.09,0.0276,-0.0683,0.0017556011939246837,True,false,no_golden_case_same_product_aspect_source
+53,P022,cs,사이즈,NAVER,NAVER,편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,43,0.093,0.0,0.093,0.09,0.003,-0.09,0.0009154342315285311,True,false,no_golden_case_same_product_aspect_source
+54,P011,cs,색상,COUPANG,COUPANG,편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,197,0.0406,0.0063,0.0344,0.05,-0.0094,-0.0438,0.001053783024908096,True,false,no_golden_case_same_product_aspect_source
+55,P041,cs,색상,COUPANG,COUPANG,구분불가,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,편중·전역 구분 불가(채널 표본 부족),200,0.11,0.0452,0.0648,0.05,0.06,-0.0048,0.001647502424786118,True,ignored,scoring_excluded_window
+56,P042,cs,색상,COUPANG,COUPANG,편중형,중간,CS 선행 신호 — 리뷰는 시차로 미반영 가능,개선안 생성,200,0.115,0.0501,0.0649,0.05,0.065,0.0001,0.0013059925901571583,True,ignored,scoring_excluded_window
+57,P042,cs,색상,ALL,"COUPANG,NAVER",잠정 전역형,해당없음,CS 선행 신호 — 리뷰는 시차로 미반영 가능,상품 자체 점검 권장,200,0.125,0.0505,0.0745,,,,0.0003442506201546273,True,ignored,scoring_excluded_window

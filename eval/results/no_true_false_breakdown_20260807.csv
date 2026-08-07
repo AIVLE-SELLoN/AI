@@ -1,0 +1,13 @@
+﻿day,product,source,aspect,channel,significant_channels,category,oracle_same_day_match,nearest_case_id,nearest_window,nearest_case_past,current_window,case_past_overlap_days,evidence,cur_rate,past_rate,delta
+29,P035,cs,색상,NAVER,NAVER|ZIGZAG,future_scored_FALSE_same_pas_case_past,True,SC-035,51-57,23-50,23-29,7,SC-035 NAVER cs 색상 51-57 scoring=Y intended=FALSE case_past=23-50 overlap=7d note=,0.1667,0.0303,0.1364
+29,P035,cs,색상,ZIGZAG,NAVER|ZIGZAG,future_scored_FALSE_same_pas_case_past,True,SC-035,51-57,23-50,23-29,7,SC-035 ZIGZAG cs 색상 51-57 scoring=Y intended=FALSE case_past=23-50 overlap=7d note=,0.1667,0.0152,0.1515
+29,P036,cs,색상,NAVER,NAVER|ZIGZAG,future_scoring_excluded_same_pas_case_past,True,SC-036,52-58,24-51,23-29,6,SC-036 NAVER cs 색상 52-58 scoring=N intended=FALSE case_past=24-51 overlap=6d note=,0.1429,0.0076,0.1353
+29,P036,cs,색상,ZIGZAG,NAVER|ZIGZAG,future_scoring_excluded_same_pas_case_past,True,SC-036,52-58,24-51,23-29,6,SC-036 ZIGZAG cs 색상 52-58 scoring=N intended=FALSE case_past=24-51 overlap=6d note=,0.1429,0.0152,0.1277
+29,P041,cs,색상,COUPANG,COUPANG,future_scoring_excluded_same_pas_case_past,True,SC-037,51-57,23-50,23-29,7,SC-037 COUPANG cs 색상 51-57 scoring=N intended=blank case_past=23-50 overlap=7d note=구분불가 관찰 — 발화 p=0.00013,0.069,0.0076,0.0614
+29,P042,cs,색상,NAVER,NAVER,future_scoring_excluded_same_pas_case_past,True,SC-038,51-57,23-50,23-29,7,SC-038 NAVER cs 색상 51-57 scoring=N intended=blank case_past=23-50 overlap=7d note=잠정전역 관찰 — 발화 p=0.00029,0.069,0.0,0.069
+32,P036,cs,색상,ALL,NAVER|ZIGZAG,future_scoring_excluded_same_pas_case_past,True,SC-036,52-58,24-51,26-32,7,SC-036 NAVER cs 색상 52-58 scoring=N intended=FALSE case_past=24-51 overlap=7d note=,0.1667,0.0076,0.1591
+36,P013,review,소재,ZIGZAG,ZIGZAG,other_aspect_same_product_case_past,True,SC-012,36-42,8-35,30-36,6,SC-012 ZIGZAG cs 파손 36-42 scoring=Y intended=TRUE case_past=8-35 overlap=6d note=,0.087,0.0072,0.0798
+36,P042,cs,색상,NAVER,NAVER,future_scoring_excluded_same_pas_case_past,True,SC-038,51-57,23-50,30-36,7,SC-038 NAVER cs 색상 51-57 scoring=N intended=blank case_past=23-50 overlap=7d note=잠정전역 관찰 — 발화 p=0.00029,0.069,0.0,0.069
+53,P012,review,사이즈,NAVER,NAVER,unexplained_by_config_overlap,True,SC-011,35-41,7-34,47-53,0,SC-011 COUPANG cs 파손 35-41 scoring=Y intended=FALSE case_past=7-34 overlap=0d note=,0.1176,0.0217,0.0959
+53,P022,cs,사이즈,NAVER,NAVER,unexplained_by_config_overlap,True,SC-021,41-47,13-40,47-53,0,SC-021 COUPANG cs 소재 41-47 scoring=Y intended=FALSE case_past=13-40 overlap=0d note=,0.093,0.0,0.093
+54,P011,cs,색상,COUPANG,COUPANG,other_aspect_same_product_case_past,False,SC-010,54-60,26-53,48-54,6,SC-010 COUPANG cs 파손 54-60 scoring=Y intended=TRUE case_past=26-53 overlap=6d note=,0.0406,0.0063,0.0344
