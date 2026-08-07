@@ -428,12 +428,18 @@ class PdfS3Meta(BaseModel):
     def _validate_full_key(self) -> PdfS3Meta:
         # 경로에 박힌 회사 구간과 company_id 가 다르면, 메인이 둘 중 뭘 믿어야 할지 모른다.
         # 경로는 reports/{report_type}/{company_id}/{yyyy}/{mm}/ 순이다(2026-08-06).
-        marker = f"/{self.company_id}/"
-        if self.s3_file_path.startswith("reports/") and marker not in self.s3_file_path:
-            raise ValueError(
-                f"company_id 가 s3_file_path 의 회사 구간과 다릅니다: "
-                f"{self.company_id!r} not in {self.s3_file_path!r}"
-            )
+        #
+        # ⚠️ **자리를 지정해서 본다**(3번째 구간). 부분 문자열로 찾으면 company_id 가 "07"
+        #    같은 짧은 값일 때 연월 구간("/2026/07/")과 우연히 맞아 통과한다. 지금 실제
+        #    값은 UUID 라 안 걸리지만, 검사가 우연에 기대고 있으면 검사가 아니다.
+        segments = self.s3_file_path.strip("/").split("/")
+        if segments and segments[0] == "reports":
+            company_segment = segments[2] if len(segments) > 2 else None
+            if company_segment != self.company_id:
+                raise ValueError(
+                    f"company_id 가 s3_file_path 의 회사 구간과 다릅니다: "
+                    f"{self.company_id!r} != {company_segment!r} ({self.s3_file_path!r})"
+                )
 
         expected = f"{self.s3_file_path}{self.new_file_name}"
         if self.s3_full_key != expected:

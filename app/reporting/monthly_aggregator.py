@@ -104,17 +104,31 @@ def resolve_product_name(candidates: dict[str, str]) -> str | None:
     return None
 
 
+def has_product_name_tables(conn: sqlite3.Connection) -> bool:
+    """products·mapped_data 가 둘 다 있는가.
+
+    ⚠️ 목 파이프라인에는 아직 두 테이블이 없다 — 확정 스키마 §2-2·§2-3 에 정의는 있지만
+       채울 대본 CSV 가 없어 mock_producer 가 만들지 않는다.
+
+    상품 목록을 도는 루프 **바깥**에서 한 번만 부르라고 따로 뺐다. 상품이 126개면 안에서
+    부를 때 같은 카탈로그 조회를 126번 한다 — 답이 실행 중에 바뀌지 않는 값이다.
+    """
+    return (
+        conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE type='table' AND name IN ('products','mapped_data')"
+        ).fetchone()[0]
+        >= 2
+    )
+
+
 def _fetch_product_names(conn: sqlite3.Connection, product_group_id: str) -> str | None:
     """products ⋈ mapped_data 에서 채널별 표기명을 모아 대표명을 고른다.
 
-    ⚠️ 목 파이프라인에는 아직 두 테이블이 없다 — 확정 스키마 §2-2·§2-3 에 정의는 있지만
-       채울 대본 CSV 가 없어 mock_producer 가 만들지 않는다. 그때는 None 을 돌려
-       호출부가 product_group_id 를 그대로 쓰게 한다 — 이름을 지어내지 않는다.
+    두 테이블이 없으면 None 을 돌려 호출부가 product_group_id 를 그대로 쓰게 한다 —
+    이름을 지어내지 않는다.
     """
-    has_tables = conn.execute(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('products','mapped_data')"
-    ).fetchone()[0]
-    if has_tables < 2:
+    if not has_product_name_tables(conn):
         return None
 
     rows = conn.execute(
@@ -387,6 +401,8 @@ def aggregate_monthly_inputs(
     )
 
     calculated_at = datetime.now().astimezone()
+    # 카탈로그 존재 여부는 실행 중에 바뀌지 않는다 — 상품마다 다시 묻지 않는다.
+    catalog_ready = has_product_name_tables(conn)
     inputs: list[MonthlyReportInput] = []
     for row in staged:
         inputs.append(
@@ -395,10 +411,10 @@ def aggregate_monthly_inputs(
                 start_date=start,
                 end_date=end,
                 product_group_id=row["product_group_id"],
-                # 상품명은 커머스 DB 소관이라 여기서는 코드로 대체한다.
-                # 연동되면 이 한 줄만 조인으로 바꾸면 된다.
-                product_name=_fetch_product_names(conn, row["product_group_id"])
-                or row["product_group_id"],
+                # 상품명은 커머스 DB 소관이라, 카탈로그가 없으면 코드로 대체한다.
+                product_name=(
+                    catalog_ready and _fetch_product_names(conn, row["product_group_id"])
+                ) or row["product_group_id"],
                 total_voc_count=row["total_voc_count"],
                 aspect_distributions=row["distributions"],
                 sentiment_drifts=row["drifts"],

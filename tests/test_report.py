@@ -97,15 +97,30 @@ def short_mirror_dir():
 
 @pytest.fixture(autouse=True)
 def block_real_s3():
-    """테스트가 **실제 AWS 를 호출하지 않게** 막는다.
+    """테스트가 **실제 AWS 를 호출하지 않게** 막고, 자격증명도 가짜로 고정한다.
 
     `upload_pdf_to_s3` 는 이제 boto3 로 진짜 올린다. 막지 않으면 테스트가 네트워크를 타고,
     자격증명이 있으면 개발 버킷에 쓰레기 객체를 쌓는다.
+
+    ⚠️ 키까지 여기서 patch 하는 이유: 키 존재 검사가 `_get_s3_client()` 호출보다 **한 칸
+       위**에 있어서, 클라이언트를 막는 것만으로는 그 전에 걸린다. 그러면 `.env` 에 키가
+       있는 사람만 통과하고 없는 사람은 9개가 `S3NotConfiguredError` 로 죽는다 — CI 가
+       따로 없어 **각자 로컬이 곧 CI** 인데 "PR 전 pytest 통과" 게이트가 사람마다 달라진다.
+       AWS 에 닿지도 않는 로컬 미러 테스트까지 "정적 액세스 키가 없습니다" 로 죽어서
+       원인 파악도 어렵다.
+
+       가짜 값이어도 되는 건 위에서 실제 서명 경로를 이미 가로챘기 때문이다. 반대로 키를
+       채우라고 안내하는 쪽은, 빈 문자열 검사 하나를 맞추려고 **실제 정적 키를 팀에
+       배포하는** 모순이 된다.
     """
     client = MagicMock()
     client.generate_presigned_url.return_value = "https://example.test/signed"
     real_factory = s3_uploader._get_s3_client  # 클라이언트 생성 규칙 자체를 검증할 때 쓴다
-    with patch("app.reporting.s3_uploader._get_s3_client", return_value=client) as factory:
+    with (
+        patch("app.reporting.s3_uploader._get_s3_client", return_value=client) as factory,
+        patch("app.reporting.s3_uploader.AWS_ACCESS_KEY_ID", "AKIATEST"),
+        patch("app.reporting.s3_uploader.AWS_SECRET_ACCESS_KEY", "secret"),
+    ):
         factory.client = client
         factory.real = real_factory
         yield factory
@@ -139,6 +154,13 @@ def mock_infrastructure() -> Generator[None, None, None]:
             "app.reporting.cs_reply_service.upload_pdf_to_s3",
             new_callable=AsyncMock,
             return_value=dummy_s3_meta,
+        ),
+        # 업로드를 mock 했으면 그 **사전 점검**도 같이 통과시켜야 한다. 점검이 LLM 호출
+        # 앞으로 당겨져 있어서(비용 0 으로 거르려고), 여기를 빼면 파이프라인이 생성도
+        # 해보기 전에 FAILED_ERROR 로 끝난다.
+        patch(
+            "app.reporting.cs_reply_service.ensure_s3_ready",
+            return_value=_COMPANY_ID,
         ),
         # 월간은 합본 컴파일러를 쓴다(상품별 PDF 는 더 이상 만들지 않는다)
         patch(
@@ -1372,3 +1394,50 @@ async def test_generate_guideline_returns_publishable_callback(biased_alert) -> 
     assert result.guideline_id is not None
     assert result.report_id is None
     assert result.source_payload["input"]["alert_id"] == biased_alert.alert_id
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_s3_fails_before_paying_for_the_llm(cs_input) -> None:
+    """S3 가 구성 안 됐으면 **LLM 을 부르기 전에** 끝낸다.
+
+    ⚠️ 업로드는 `LLM 호출 → PDF 컴파일 → S3` 의 마지막 단계다. 점검이 거기 있으면
+       알림 1건마다 LLM 값을 다 지불하고 FAILED_ERROR 만 돌아온다. 가이드라인은 개선안과
+       달리 발화한 알림 **거의 전부**에 대해 생성되므로 건수가 그대로 비용이다.
+       결론은 같고 비용만 0 이어야 한다.
+    """
+    with (
+        patch.object(
+            cs_reply_service,
+            "ensure_s3_ready",
+            side_effect=S3NotConfiguredError("S3_COMPANY_ID 미설정"),
+        ),
+        patch.object(cs_reply_service, "get_llm_client") as llm,
+        patch.object(cs_reply_service, "compile_report_to_pdf") as pdf,
+    ):
+        result = await generate_cs_reply_pipeline(cs_input)
+
+    llm.assert_not_called()
+    pdf.assert_not_called()
+    assert result.output is None
+    assert result.callback.status == CallbackStatus.FAILED_ERROR
+    # 실패도 guideline_id 를 달고 나가야 백엔드가 "생성 중"에서 벗어난다
+    assert result.callback.guideline_id is not None
+
+
+def test_upload_precheck_is_reusable_before_generation() -> None:
+    """`ensure_s3_ready` 는 PDF 바이트 없이 부를 수 있다 — 돈 쓰기 전에 부르라고 뺀 함수다."""
+    with (
+        patch.object(s3_uploader, "S3_ENABLED", True),
+        patch.object(s3_uploader, "S3_DEFAULT_COMPANY_ID", _COMPANY_ID),
+        patch.object(s3_uploader, "AWS_ACCESS_KEY_ID", "AKIATEST"),
+        patch.object(s3_uploader, "AWS_SECRET_ACCESS_KEY", "secret"),
+    ):
+        assert s3_uploader.ensure_s3_ready() == _COMPANY_ID
+        # 인자로 준 값이 환경변수보다 우선한다
+        assert s3_uploader.ensure_s3_ready("other-company") == "other-company"
+
+    with (
+        patch.object(s3_uploader, "S3_ENABLED", False),
+        pytest.raises(S3NotConfiguredError, match="S3_ENABLED=false"),
+    ):
+        s3_uploader.ensure_s3_ready(_COMPANY_ID)
