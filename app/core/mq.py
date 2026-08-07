@@ -218,7 +218,7 @@ async def _publish(event_type: str, payload: dict, trace_id: str, *, key: str) -
     try:
         exchange = await _get_exchange(settings)
         message = _build_message(envelope, body)
-        await exchange.publish(
+        confirmation = await exchange.publish(
             message, routing_key=event_type, timeout=settings.mq_publish_timeout_seconds
         )
     except Exception as exc:
@@ -227,6 +227,8 @@ async def _publish(event_type: str, payload: dict, trace_id: str, *, key: str) -
         # 우리가 없애는 꼴이라, 일시적 실패가 배치 전체 실패로 번진다.
         raise MqPublishError(f"{event_type}({key}) 발행 실패: {exc!r}") from exc
 
+    _require_ack(confirmation, event_type, key)
+
     logger.info(
         "발행 %s key=%s eventId=%s trace=%s",
         event_type,
@@ -234,6 +236,47 @@ async def _publish(event_type: str, payload: dict, trace_id: str, *, key: str) -
         envelope["eventId"],
         trace_id,
     )
+
+
+def _require_ack(confirmation: Any, event_type: str, key: str) -> None:
+    """브로커가 **큐에 넣었다**고 확인했는지 본다. `Basic.Ack` 이 아니면 발행 실패다.
+
+    ⚠️ **토픽 exchange 는 바인딩된 큐가 없으면 메시지를 조용히 버린다.** 그때 aio_pika 는
+    예외를 던지지 않고 `Basic.Return` 을 담은 `DeliveredMessage` 를 돌려준다 —
+    2026-08-07 로컬 브로커로 실측했다(라우팅되면 `Basic.Ack`, 안 되면 `Return`).
+    반환값을 안 보면 "발행 성공"으로 넘어가고, 호출부(`app/batch/daily.py`)가 그 알림을
+    `prior_alerts` 캐시에 넣어 `RENOTIFY_BLOCK_DAYS` 동안 재알림이 막힌다 —
+    **셀러가 그 알림을 영영 못 본다.**
+
+    이건 가정이 아니라 실제로 일어날 시나리오다: 백엔드가 `main.inbound` 바인딩을 아직
+    안 걸었거나, 라우팅 키를 바꿨거나(`ai.anomaly.detected` 구 이름이 문서에 남아 있다),
+    `ai.#` 대신 더 좁은 패턴을 걸면 전부 여기로 떨어진다. **접속이 되는 것과 배달이 되는
+    것은 다르다** — publisher confirm 은 "브로커가 받았다"까지만 보증한다.
+    """
+    from pamqp.commands import Basic
+
+    if isinstance(confirmation, Basic.Ack):
+        return
+
+    delivery = getattr(confirmation, "delivery", confirmation)
+    if isinstance(delivery, Basic.Return):
+        raise MqPublishError(
+            f"{event_type}({key}) 가 어느 큐에도 도착하지 않았습니다 "
+            f"(unroutable: {delivery.reply_text}). exchange={_exchange_name()} 에 "
+            f"'{event_type}' 을 받는 바인딩이 있는지 확인할 것 — 계약상 main.inbound 가 "
+            "'ai.#' 로 바인딩돼 있어야 합니다 (docs/mq_events.md §2-1)"
+        )
+    raise MqPublishError(
+        f"{event_type}({key}) 를 브로커가 확인하지 않았습니다: {confirmation!r}"
+    )
+
+
+def _exchange_name() -> str:
+    """오류 메시지용. 설정을 못 읽어도 메시지는 나와야 한다."""
+    try:
+        return get_settings().mq_exchange
+    except Exception:  # noqa: BLE001 - 진단 문구를 만들다 진짜 오류를 가리면 안 된다
+        return "?"
 
 
 def _build_message(envelope: dict, body: bytes) -> Any:
