@@ -352,10 +352,14 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    # 윈도우 콘솔 기본 코드페이지(cp949)는 한글은 되지만 em대시 같은 문자에서 터진다.
+    # 윈도우 콘솔 기본 코드페이지(cp949)는 한글은 되지만 em대시·`❌` 같은 문자에서 터진다.
     # payload 를 그대로 찍는 스크립트라 내용에 따라 검증이 아니라 출력에서 죽는다.
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    # 원래 여기서 stdout 만 직접 돌렸는데, 같은 처리가 배치·셋업 스크립트에도 필요해져
+    # 공용 헬퍼로 뺐다(stderr 까지 함께 돌린다). app/core/console.py 참고.
+    # import 가 함수 안인 이유는 이 파일의 다른 app import 와 같다 — sys.path 조정 뒤여야 한다.
+    from app.core.console import force_utf8_output
+
+    force_utf8_output()
 
     # get_settings() 는 lru_cache 라 **import 전에** 넣어야 반영된다. .env 를 고치지 않고
     # 이 스크립트만으로 검증할 수 있게 하려는 것 — 운영 기본값은 MQ_ENABLED=false 다.

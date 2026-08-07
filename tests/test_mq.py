@@ -9,6 +9,7 @@ import json
 from datetime import date, datetime, timezone
 
 import pytest
+from pamqp.commands import Basic
 
 from app.core import mq
 from app.core.exceptions import MqConfigError, MqDisabledError, MqPublishError
@@ -279,6 +280,8 @@ async def test_publish_sends_envelope_on_the_right_routing_key(
             sent["routing_key"] = routing_key
             sent["body"] = message.body
             sent["message_id"] = message.message_id
+            # 브로커가 "큐에 넣었다"고 확인한 상태 — 실물이 돌려주는 값과 같은 타입이다.
+            return Basic.Ack(delivery_tag=1)
 
     async def fake_get_exchange(_settings):
         return FakeExchange()
@@ -295,6 +298,65 @@ async def test_publish_sends_envelope_on_the_right_routing_key(
     assert envelope["payload"]["alert_id"] == "ALT-20260828-P001-COUPANG"
     # 멱등 재전송을 소비 측이 알아볼 수 있게 message_id 를 eventId 로 맞춘다.
     assert sent["message_id"] == envelope["eventId"]
+
+
+@pytest.mark.asyncio
+async def test_unroutable_message_is_a_failure_not_a_success(alert, monkeypatch):
+    """⚠️ 어느 큐에도 안 닿은 메시지를 발행 성공으로 보고하지 않는다.
+
+    토픽 exchange 는 바인딩된 큐가 없으면 메시지를 **조용히 버린다.** aio_pika 는 그때
+    예외를 던지지 않고 `Basic.Return` 을 돌려준다(2026-08-07 로컬 브로커 실측). 반환값을
+    안 보면 배치가 그 알림을 prior_alerts 캐시에 넣어 RENOTIFY_BLOCK_DAYS 동안 재알림이
+    막히고 **셀러가 그 알림을 영영 못 본다.**
+
+    백엔드가 main.inbound 바인딩을 안 걸었거나 라우팅 키를 바꾼 상황이 정확히 이것이라,
+    가정이 아니라 실제로 일어날 경로다.
+    """
+
+    class UnroutableExchange:
+        async def publish(self, message, routing_key, timeout=None):
+            # 실물이 돌려주는 모양: delivery 에 Basic.Return 이 담긴 래퍼.
+            class Delivered:
+                delivery = Basic.Return(
+                    reply_code=312, reply_text="NO_ROUTE", exchange="app.events"
+                )
+
+            return Delivered()
+
+    async def fake_get_exchange(_settings):
+        return UnroutableExchange()
+
+    monkeypatch.setattr(mq.get_settings(), "mq_enabled", True)
+    monkeypatch.setattr(mq.get_settings(), "mq_company_id", "SLN-test")
+    monkeypatch.setattr(mq, "_get_exchange", fake_get_exchange)
+
+    with pytest.raises(MqPublishError, match="어느 큐에도 도착하지 않았습니다"):
+        await mq.publish_anomaly_analyzed(alert, None, "trace-1")
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_publish_is_a_failure(alert, monkeypatch):
+    """Ack 도 Return 도 아닌 응답을 성공으로 넘기지 않는다.
+
+    ⚠️ **Nack 은 여기 안 온다** — aiormq 가 `DeliveryError` 예외로 던져서
+    (`aiormq/channel.py` `_confirm_delivery`) 위쪽 try/except 가 먼저 `MqPublishError` 로
+    감싼다. 즉 세 갈래(Ack / Return / 그 외)가 전부 막히되 경로가 다르다. 이 분기는
+    라이브러리가 계약을 바꿔도 조용히 새지 않게 두는 방어다.
+    """
+
+    class SilentExchange:
+        async def publish(self, message, routing_key, timeout=None):
+            return None
+
+    async def fake_get_exchange(_settings):
+        return SilentExchange()
+
+    monkeypatch.setattr(mq.get_settings(), "mq_enabled", True)
+    monkeypatch.setattr(mq.get_settings(), "mq_company_id", "SLN-test")
+    monkeypatch.setattr(mq, "_get_exchange", fake_get_exchange)
+
+    with pytest.raises(MqPublishError, match="확인하지 않았습니다"):
+        await mq.publish_anomaly_analyzed(alert, None, "trace-1")
 
 
 @pytest.mark.asyncio

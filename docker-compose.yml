@@ -209,10 +209,22 @@ services:
   #    MQ_ENABLED=false 로 두면 "안 터진다"만 확인되고 발행 자체는 검증이 안 된다.
   #    (Kafka 를 우리가 띄워서 유입 구간을 검증한 것과 같은 방식)
   #
-  # 접속 정보가 오면 .env 의 MQ_HOST 만 그쪽으로 돌리면 되고 이 서비스는 안 띄우면 된다.
+  # 접속 정보가 오면 .env 의 접속 4개(HOST/PORT/USER/PASSWORD)를 그쪽으로 돌리고
+  # 이 서비스는 안 띄우면 된다.
+  #
+  # 🔴 **그때 MQ_DECLARE_TOPOLOGY=false · MQ_VHOST=/app 도 같이 내릴 것.** 접속만 바꾸면
+  #    ① resolve_exchange() 가 운영 exchange 를 선언하러 들어가 PRECONDITION_FAILED 를
+  #    맞고 ② setup_local_mq.py 의 가드가 MQ_HOST 가 아니라 이 플래그를 보므로
+  #    **운영 브로커에 큐를 만든다.**
   #
   #   docker compose up -d rabbitmq
+  #   python scripts/setup_local_mq.py   ← ⚠️ 이걸 안 하면 발행이 전부 실패한다(아래 참고)
   #   관리 UI: http://localhost:15672  (기본 sellon/sellon — 큐·메시지를 눈으로 본다)
+  #
+  # ⚠️ **큐는 이 compose 가 만들지 않는다.** 운영에서 main.inbound·ai.inbound 는 백엔드
+  #    인프라가 만들고 우리는 발행·구독만 한다(mq_events.md §2-1). 그래서 빈 브로커에는
+  #    ai.# 를 받는 큐가 없고, 토픽 exchange 는 받는 큐가 없으면 메시지를 버린다 —
+  #    발행이 MqPublishError(unroutable) 로 실패한다. setup_local_mq.py 가 그 대역을 만든다.
   rabbitmq:
     image: rabbitmq:3.13-management
     container_name: sellon-rabbitmq
@@ -226,8 +238,8 @@ services:
       RABBITMQ_DEFAULT_PASS: ${MQ_PASSWORD:-sellon}
       RABBITMQ_DEFAULT_VHOST: ${MQ_VHOST:-/}
     volumes:
-      # 볼륨이 없으면 재시작마다 exchange·큐가 날아간다. 발행기가 exchange 를 선언하므로
-      # 발행은 계속 되지만, 그 사이 쌓여 있던 메시지가 사라져 수신 검증이 헛돈다.
+      # 볼륨이 없으면 재시작마다 exchange·큐·바인딩이 통째로 날아간다. 그러면 발행이
+      # unroutable 로 **실패**하므로(위 ⚠️ 참고) setup_local_mq.py 를 다시 돌려야 한다.
       - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]

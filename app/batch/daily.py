@@ -49,6 +49,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.core.console import force_utf8_output
 from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
 from app.core.inquiries import build_linked_inquiries
 from app.core.schemas import ClassifiedItem, DetectionAlert
@@ -654,6 +655,9 @@ def main() -> None:
         " 셀러에게 안 간다.",
     )
     args = ap.parse_args()
+
+    # 출력이 나가기 전에. 사유는 app/core/console.py 참고.
+    force_utf8_output()
 
     loader = None
     if args.input_source == "golden":
