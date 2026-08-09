@@ -40,9 +40,29 @@ from app.detection.service import detect_anomaly
 from scripts.golden_inputs import load_golden_inputs as load_inputs
 
 ANCHOR = date(2026, 8, 28)  # day 60
-CACHE = (
-    ROOT / "data/eval_cache/pipeline_full_batch_classify_aspect_v5-15290041_run1.json"
-)
+
+CACHE_DIR = ROOT / "data/eval_cache"
+CACHE_GLOB = "pipeline_*_run*.json"
+"""분류 캐시 후보. **파일명을 고정하지 않는다.**
+
+옛 코드는 파일 하나를 하드코딩했는데(`...classify_aspect_v5-15290041_run1.json`),
+캐시 이름에는 프롬프트 지문이 들어가고 2026-08-09 부터 데이터 지문까지 들어간다
+(run_pipeline_eval.cache_fingerprint). 이름을 박아두면 캐시를 새로 만들어도 못 찾고
+조용히 oracle 만 나온다.
+
+⚠️ **지문 대조로는 못 고른다.** 데이터 지문은 그 실행의 문서 집합으로 계산되는데,
+   실험②는 케이스 상품 현재 윈도우(약 12,000건)만 분류하고 데모는 전량(약 128,000건)을
+   본다. 두 집합이 다르니 지문은 원리상 영영 안 맞는다. 그래서 지문이 아니라
+   **실제 적용률(캐시가 덮는 item 비율)** 로 고른다 — 그게 결과의 정확성을 실제로
+   좌우하는 값이다.
+"""
+
+MIN_CACHE_COVERAGE = 0.99
+"""이 미만이면 real 을 아예 안 낸다.
+
+swap_real 은 캐시에 없는 item_id 를 조용히 golden 으로 되돌린다. 적용률이 낮으면
+"real" 열이 사실상 oracle 인데 실제 분류 결과처럼 보인다 — 숫자가 없는 것보다 나쁘다.
+"""
 
 FAMILIES = {
     "현재(전체)": None,
@@ -212,6 +232,30 @@ async def run_family(name, keyfn, items, documents, truth, ignored, label) -> di
     }
 
 
+def pick_cache(items: list):
+    """eval_cache 후보 중 **적용률이 가장 높은** 캐시를 고른다.
+
+    Returns:
+        (경로, 캐시dict, 덮어쓴 items, 적용률) 또는 후보가 하나도 없으면 None.
+
+    적용률이 0 인 캐시(옛 mock 으로 만들어져 item_id 가 하나도 안 겹치는 것)는 후보에서
+    뺀다 — 골라봐야 real 이 통째로 oracle 이 된다.
+    """
+    candidates = []
+    for path in sorted(CACHE_DIR.glob(CACHE_GLOB)) if CACHE_DIR.exists() else []:
+        try:
+            cache = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"  ⚠️ 캐시 읽기 실패 — 건너뜀: {path.name} ({exc})")
+            continue
+        real_items, swapped = swap_real(items, cache)
+        if swapped:
+            candidates.append((path, cache, real_items, swapped / len(items)))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda c: c[3])
+
+
 async def main() -> None:
     items, documents = load_inputs()
     truth, ignored = load_truth_sets()
@@ -222,25 +266,27 @@ async def main() -> None:
     #    2026-08-09 mock 재생성으로 옛 캐시는 전부 무효다 — 같은 item_id 에 다른 텍스트가
     #    들어가서, 남아 있는 캐시를 그대로 쓰면 옛 라벨로 새 문서를 채점하게 된다.
     arms: list[tuple[str, list]] = [("oracle", items)]
-    if CACHE.exists():
-        cache = json.loads(CACHE.read_text(encoding="utf-8"))
-        real_items, swapped = swap_real(items, cache)
-        coverage = swapped / len(items) if items else 0.0
-        print(f"문서 {len(documents):,} / 캐시 {len(cache):,} / 실제분류로 덮음 {swapped:,}")
-        if coverage < 0.99:
+    best = pick_cache(items)
+    if best is None:
+        print(
+            f"문서 {len(documents):,} / 쓸 수 있는 분류 캐시 없음 ({CACHE_DIR}/{CACHE_GLOB})\n"
+            "  → oracle 만 측정한다. real 을 보려면 **데모와 같은 전량 문서**로 분류를\n"
+            "     돌려 캐시를 만들어야 한다. 실험②의 캐시는 케이스 상품 현재 윈도우만\n"
+            "     덮어서 적용률이 10% 도 안 된다."
+        )
+    else:
+        path, cache, real_items, coverage = best
+        print(
+            f"문서 {len(documents):,} / 캐시 {len(cache):,} ({path.name})"
+            f" / 적용률 {coverage:.1%}"
+        )
+        if coverage < MIN_CACHE_COVERAGE:
             print(
-                f"  ⚠️ 캐시 적용률 {coverage:.1%} — 나머지는 golden 으로 폴백된다.\n"
-                f"     real 열이 oracle 과 섞이므로 이번 실행에서는 real 을 뺀다."
+                f"  ⚠️ 적용률이 {MIN_CACHE_COVERAGE:.0%} 미만이라 real 을 뺀다 —"
+                " 나머지가 golden 으로 폴백돼 oracle 과 섞인다."
             )
         else:
             arms.append(("real", real_items))
-    else:
-        print(
-            f"문서 {len(documents):,} / 분류 캐시 없음 ({CACHE.name})\n"
-            "  → oracle 만 측정한다. real 을 보려면 재생성된 data/input 으로 분류를\n"
-            "     다시 돌려 캐시를 만들어야 한다(옛 캐시 재사용 금지 — item_id 는 같고\n"
-            "     텍스트만 바뀌어서 조용히 틀린 채점이 된다)."
-        )
 
     rows = []
     for name, keyfn in FAMILIES.items():
