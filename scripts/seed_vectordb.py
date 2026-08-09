@@ -19,6 +19,7 @@ core/schemas.py의 Channel·Aspect enum 값에 포함).
 
 from __future__ import annotations
 
+import argparse
 import csv
 import sys
 from pathlib import Path
@@ -27,7 +28,15 @@ from typing import Any
 # 저장소 루트를 sys.path에 넣어야 함(실행 방식에 따라 자동으로 안 잡힐 수 있어서 명시)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.core.vectordb import get_detail_pages
+from chromadb.errors import NotFoundError
+
+from app.core.console import force_utf8_output
+from app.core.constants import (
+    COLLECTION_DETAIL_PAGES,
+    COLLECTION_REJECTION_REASONS,
+    EMBEDDING_MODEL,
+)
+from app.core.vectordb import get_client, get_detail_pages
 
 CSV_PATH = Path(__file__).resolve().parent.parent / "data" / "input" / "input_detail_fields.csv"
 
@@ -37,12 +46,36 @@ def _make_id(entry: dict[str, Any]) -> str:
     return f"{entry['product_group_id']}:{entry['channel']}:{entry['aspect']}"
 
 
-def main() -> None:
+def reset_collections() -> None:
+    """두 컬렉션을 지운다. `EMBEDDING_MODEL` 을 바꿨을 때 필요하다.
+
+    컬렉션2 도 같이 지우는 이유는 임베딩 모델이 컬렉션별 설정이라, 안 지우면 옛 모델로
+    남아 새 모델과 벡터 공간이 갈리기 때문이다. 컬렉션2 는 시드 대상이 아니므로 다시
+    안 채운다 — 다음 `record_hitl_outcome()` 때 새 설정으로 생성된다.
+
+    ⚠️ 컬렉션2 에 쌓인 반려 사례는 **복구 불가**다(`.chroma/` 는 gitignore).
+    """
+    client = get_client()
+    for name in (COLLECTION_DETAIL_PAGES, COLLECTION_REJECTION_REASONS):
+        try:
+            count = client.get_collection(name=name).count()
+        except (ValueError, NotFoundError):
+            print(f"  - {name}: 없음, 건너뜀")
+            continue
+        client.delete_collection(name=name)
+        print(f"  - {name}: {count}건 삭제")
+
+
+def main(reset: bool = False) -> None:
     with CSV_PATH.open(encoding="utf-8-sig", newline="") as f:
         entries = list(csv.DictReader(f))
     if not entries:
         print(f"CSV가 비어 있습니다: {CSV_PATH}")
         return
+
+    if reset:
+        print(f"임베딩 모델 = {EMBEDDING_MODEL} / 컬렉션 초기화")
+        reset_collections()
 
     collection = get_detail_pages()
     collection.upsert(
@@ -61,4 +94,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    force_utf8_output()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="적재 전에 두 컬렉션을 삭제한다 (EMBEDDING_MODEL 변경 시 필수).",
+    )
+    main(reset=parser.parse_args().reset)
