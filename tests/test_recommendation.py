@@ -40,20 +40,23 @@ class _FakeAgentLlmClient:
         return self._generation_response
 
 
-def _stub_context(alert):
+def _stub_context(alert, inquiries=()):
     return {
         "detail_text": "아이보리 컬러",
+        "cs_quotes": "\n".join(f"- {q.raw_text}" for q in inquiries) or pipeline.NO_DETAIL_TEXT,
         "cs_summary": "CS 20건 중 14건이 '사진_색감_오차' 관련 언급",
         "similar_case": None,
     }
 
 
 @pytest.mark.asyncio
-async def test_run_generates_recommendation_for_biased_alert(monkeypatch, biased_alert):
+async def test_run_generates_recommendation_for_biased_alert(
+    monkeypatch, biased_alert, linked_inquiries
+):
     fake_client = _FakeAgentLlmClient(
         tool_name="use_image_guide",
         generation_response={
-            "current_text": "CS 20건 중 14건이 '사진_색감_오차' 관련 언급",
+            "current_text": "사진이랑 색이 너무 달라요",
             "proposed_text": "자연광 촬영 이미지 추가를 검토하세요.",
             "rationale": "원인 분류: 사진_색감_오차",
         },
@@ -61,7 +64,7 @@ async def test_run_generates_recommendation_for_biased_alert(monkeypatch, biased
     monkeypatch.setattr(pipeline, "retrieve_context", _stub_context)
     monkeypatch.setattr(pipeline, "get_llm_client", lambda: fake_client)
 
-    result = await pipeline.run(biased_alert)
+    result = await pipeline.run(biased_alert, linked_inquiries)
 
     assert isinstance(result, Recommendation)
     assert result.alert_id == biased_alert.alert_id
@@ -73,11 +76,36 @@ async def test_run_generates_recommendation_for_biased_alert(monkeypatch, biased
     assert result.hitl_status == HitlStatus.PENDING
     assert result.hitl_feedback is None
     assert result.proposal is not None
-    # raw_text 조회 경로가 없어 진짜 CS 인용을 못 만든다 — 빈 자리를 채우는 가짜
-    # Citation(quote="") 대신 정직하게 빈 리스트(2026-07-27 수정, 이전엔 가짜였음).
-    assert result.citations == []
+
+    # 인용이 실제로 박제된다(2026-08-09). 인용문은 첫 번째 문의에만 있으므로 1건이어야
+    # 한다 — inquiries 전체를 그냥 싣는 구현이면 여기서 2건이 되어 걸린다.
+    assert [c.inquiry_id for c in result.citations] == ["INQ-000412"]
+    assert result.citations[0].quote == "사진이랑 색이 너무 달라요"
 
     validate_citations_grounded(result, biased_alert)
+
+
+@pytest.mark.asyncio
+async def test_run_leaves_citations_empty_without_cs_inquiries(monkeypatch, biased_alert):
+    """원문을 못 받으면 image_guide 는 근거가 없다 — fallback 으로 떨어지고 인용도 없다.
+
+    예전엔 통계 요약을 근거로 써서 이 경우에도 grounding=True 가 나왔다(자기참조).
+    """
+    fake_client = _FakeAgentLlmClient(
+        tool_name="use_image_guide",
+        generation_response={
+            "current_text": "사진이랑 색이 너무 달라요",
+            "proposed_text": "자연광 촬영 이미지 추가를 검토하세요.",
+            "rationale": "원인 분류: 사진_색감_오차",
+        },
+    )
+    monkeypatch.setattr(pipeline, "retrieve_context", _stub_context)
+    monkeypatch.setattr(pipeline, "get_llm_client", lambda: fake_client)
+
+    result = await pipeline.run(biased_alert)
+
+    assert result.evaluator.checks.grounding is False
+    assert result.citations == []
 
 
 class _FakeRecoveringClient:

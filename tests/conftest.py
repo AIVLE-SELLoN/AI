@@ -16,11 +16,34 @@ from app.core.schemas import (
     DetectionConfidence,
     DetectionStats,
     Evidence,
+    LinkedCSInquiry,
     RecommendedAction,
     RootCause,
     SourceSignals,
     Verdict,
 )
+
+
+@pytest.fixture
+def linked_inquiries() -> list[LinkedCSInquiry]:
+    """biased_alert.evidence.inquiry_ids 에 대응하는 CS 원문.
+
+    배치(`app/core/inquiries.py`)가 만들어 Agent3·가이드라인에 같이 넘기는 그 리스트다.
+    image_guide 의 근거이자 citations 의 출처라, ID 가 alert 의 것과 어긋나면
+    `validate_citations_grounded()` 가 잡는다 — 일부러 같은 ID 를 쓴다.
+    """
+    return [
+        LinkedCSInquiry(
+            item_id="INQ-000412",
+            raw_text="사진이랑 색이 너무 달라요. 화면에서 본 아이보리가 아니에요.",
+            created_at="2026-05-25T09:12:00",
+        ),
+        LinkedCSInquiry(
+            item_id="INQ-000415",
+            raw_text="조명 때문인지 실물 색이 훨씬 어둡습니다.",
+            created_at="2026-05-26T14:03:00",
+        ),
+    ]
 
 
 @pytest.fixture

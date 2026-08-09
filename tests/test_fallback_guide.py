@@ -37,8 +37,13 @@ class _FakeHallucinatingClient:
         return {"proposed_text": "상세페이지 내용과 실제 상품이 일치하는지 확인해보세요.", "rationale": "근거를 특정하지 못해 일반 가이드로 대체"}
 
 
-def _stub_context(alert):
-    return {"detail_text": "아이보리 컬러", "cs_summary": "무관", "similar_case": None}
+def _stub_context(alert, inquiries=()):
+    return {
+        "detail_text": "아이보리 컬러",
+        "cs_quotes": "무관",
+        "cs_summary": "무관",
+        "similar_case": None,
+    }
 
 
 @pytest.mark.asyncio
