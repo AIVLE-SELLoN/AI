@@ -448,3 +448,30 @@ def test_legacy_raw_db_is_rejected_with_guidance(tmp_path, caplog) -> None:
     # 원문까지 지우라고 하면 12.8만 행을 다시 재생해야 한다 — AI 소유 테이블만 지운다
     assert "DROP TABLE classification_cursor;" in caplog.text
     assert "DROP TABLE cs" not in caplog.text
+
+
+# ── FK 실효성 (리뷰 3번) ─────────────────────────────────────────────────
+
+
+def test_foreign_keys_are_actually_enforced(tmp_path) -> None:
+    """`PRAGMA foreign_keys=ON` 이 켜져 DDL 의 REFERENCES 가 실제로 걸린다.
+
+    ⚠️ sqlite 는 FK 가 **기본 OFF** 라, 안 켜면 REFERENCES 가 장식으로만 남는다. 그러면
+       부모 없는 aspect 행이 조용히 생기고 — "분류 결과는 있는데 문서가 없는" 상태 —
+       원문에서 분모를 세는 합의 아래에서 커버리지 집계가 어긋난다.
+    """
+    db_path = tmp_path / "fk.db"
+    seed = sqlite3.connect(db_path)
+    raw_schema.create_source_tables(seed)
+    seed.commit()
+    seed.close()
+
+    conn = worker.open_db(str(db_path))
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO classified_item_aspect (item_id, aspect, sentiment, mixed_signal) "
+            "VALUES ('없는-부모', '색상', -1, NULL)"
+        )
+    conn.close()

@@ -40,6 +40,11 @@ import pandas as pd
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from app.core import raw_schema
+from app.core.schemas import Channel
+
+# §2-1 channel 마스터에 넣을 채널. `Channel` enum 이 정본이다.
+# ALL 은 전역형 알림을 가리키는 가상 채널이라 연동 채널이 아니다.
+MASTER_CHANNELS: tuple[str, ...] = tuple(c.value for c in Channel if c is not Channel.ALL)
 
 # Kafka 내부 재시도 로그 차단
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -172,6 +177,10 @@ def open_raw_db(db_path_str: str) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA busy_timeout=30000;")
+    # ⚠️ sqlite 는 FK 가 **기본 OFF** 라 연결마다 켜야 한다. 안 켜면 DDL 의
+    #    REFERENCES 가 장식으로만 남아 채널 오타가 조용히 통과한다 — 운영 Postgres 는
+    #    기본으로 잡아 주므로, 목에서만 못 잡히면 거기서 처음 터진다.
+    conn.execute("PRAGMA foreign_keys=ON;")
     raw_schema.create_source_tables(conn)
     conn.commit()
 
@@ -179,22 +188,38 @@ def open_raw_db(db_path_str: str) -> sqlite3.Connection:
     return conn
 
 
-def seed_channels(conn: sqlite3.Connection, channel_ids: set[str]) -> None:
-    """§2-1 channel 마스터를 대본에 실제로 등장한 채널로 채운다.
+def seed_channels(conn: sqlite3.Connection, observed: set[str]) -> None:
+    """§2-1 channel 마스터를 채운다. 마스터의 정본은 **`Channel` enum** 이다.
 
-    cs·reviews·orders 의 channel_id 가 이 테이블을 참조하므로 비어 있으면 FK 가 뜬다.
-    실서비스에서는 main server 가 연동 시점에 넣는 값이라, 목에서는 대본에서 관측된
-    채널만 넣는다 — 쓰이지도 않는 채널을 미리 지어내지 않는다.
+    확정 문서 §2-1 이 "channel_id 는 문자열 자체가 PK — 우리 `Channel` enum 과 그대로
+    일치" 로 못박았다. 그래서 대본에서 관측된 값이 아니라 enum 을 넣는다.
+
+    ⚠️ 예전에는 관측된 채널을 그대로 넣었는데, 그러면 **FK 가 아무것도 못 잡는다** —
+       대본에 'coupang' 오타가 있으면 그 오타가 마스터에도 같이 들어가 버려서 참조가
+       항상 성립한다. 마스터를 enum 으로 고정해야 오타가 FK 위반으로 걸린다.
+       (걸린 행은 `RawDbSink` 가 행 단위로 격리해 실패 건수로 집계한다.)
+
+    `Channel.ALL` 은 전역형 알림을 가리키는 가상 채널이라 연동 채널 마스터에 넣지 않는다.
     """
     now = datetime.now(KST).isoformat()
-    for channel_id in sorted(channel_ids):
+    for channel_id in MASTER_CHANNELS:
         conn.execute(
             "INSERT OR IGNORE INTO channel (channel_id, display_name, connected_at, status) "
             "VALUES (?, ?, ?, 'active')",
             (channel_id, channel_id, now),
         )
     conn.commit()
-    logger.info(f"[RAW DB] channel 마스터 {len(channel_ids)}건 보장: {sorted(channel_ids)}")
+    logger.info(f"[RAW DB] channel 마스터 {len(MASTER_CHANNELS)}건 보장: {list(MASTER_CHANNELS)}")
+
+    # 적재가 시작되기 전에 미리 알려 준다 — FK 위반은 행 단위 오류로만 나와서, 대본
+    # 전체가 어긋난 경우 12만 줄짜리 ERROR 로그를 보고서야 원인을 알게 된다.
+    unknown = sorted(observed - set(MASTER_CHANNELS))
+    if unknown:
+        logger.error(
+            f"[RAW DB] 대본에 마스터에 없는 채널이 있습니다: {unknown} — "
+            f"해당 행은 FK 위반으로 적재되지 않습니다(마스터: {list(MASTER_CHANNELS)}). "
+            "CSV 의 channel 표기를 확인하세요."
+        )
 
 
 def build_db_row(event: dict[str, Any]) -> tuple | None:

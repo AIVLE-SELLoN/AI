@@ -52,6 +52,7 @@ Pre-signed URL 은 객체 수명과 별개인 "링크의 만료"이며 **발급 
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -291,6 +292,57 @@ def _put_and_sign(*, bucket: str, key: str, pdf_bytes: bytes, ttl_hours: int) ->
         raise S3UploadError(f"S3 업로드·서명 실패: s3://{bucket}/{key} — {exc}") from exc
 
 
+def ensure_s3_ready(company_id: str | None = None, *, context: str = "") -> str:
+    """올릴 수 있는 구성인지 확인하고 회사 식별자를 확정한다. 못 올리면 예외.
+
+    `upload_pdf_to_s3` 가 올리기 직전에 부르지만, **생성 파이프라인이 시작하기 전에도**
+    부를 수 있게 따로 뺐다. 업로드는 `LLM 호출 → PDF 컴파일 → S3` 의 마지막 단계라,
+    구성이 틀어져 있으면 알림 1건마다 **LLM 값을 다 지불하고** FAILED 만 돌아온다.
+    가이드라인은 개선안과 달리 발화한 알림 거의 전부에 대해 생성되므로 건수가 그대로
+    비용이다. 여기서 미리 걸러 비용을 0 으로 만든다.
+
+    돈이 드는 일을 하기 전에 부를 수 있도록 **PDF 바이트를 받지 않는다** — 용량 검사는
+    바이트가 있어야 하므로 `upload_pdf_to_s3` 에 남겨 뒀다.
+
+    Args:
+        company_id: 생략하면 `S3_COMPANY_ID` 환경변수를 쓴다.
+        context: 오류 메시지에 붙일 식별 문자열(`report_type/period` 또는 `alert_id=...`).
+
+    Returns:
+        확정된 `company_id`.
+
+    Raises:
+        S3NotConfiguredError: 셋 중 하나라도 준비되지 않았을 때.
+    """
+    where = f" ({context})" if context else ""
+
+    if not S3_ENABLED:
+        raise S3NotConfiguredError(
+            f"S3 업로드가 꺼져 있습니다(S3_ENABLED=false). "
+            f"업로드하지 않은 파일을 성공으로 보고하지 않습니다{where}"
+        )
+
+    resolved_company_id = company_id or S3_DEFAULT_COMPANY_ID
+    if not resolved_company_id:
+        # 경로가 회사 단위로 갈리므로, 모르는 채로 올리면 남의 폴더이거나 규칙 밖
+        # 경로가 된다. 추측해서 올리느니 실패시킨다.
+        raise S3NotConfiguredError(
+            f"company_id 를 알 수 없습니다(S3_COMPANY_ID 미설정). "
+            f"경로가 회사 단위로 갈리므로 임의 경로에 올리지 않습니다{where}"
+        )
+
+    if not (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY):
+        # 정적 키가 없으면 7일짜리 서명을 만들 수 없다. 짧은 링크를 7일이라고 안내하느니
+        # 실패시킨다 — 만료된 링크가 셀러 메일에 실리는 쪽이 더 나쁘다.
+        raise S3NotConfiguredError(
+            "Pre-signed URL 서명용 정적 액세스 키가 없습니다"
+            "(AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY). IAM Role 임시 자격증명으로는 "
+            f"7일 링크를 만들 수 없습니다{where}"
+        )
+
+    return resolved_company_id
+
+
 async def upload_pdf_to_s3(
     pdf_bytes: bytes,
     report_type: str,
@@ -320,30 +372,7 @@ async def upload_pdf_to_s3(
         S3UploadError: 실제 업로드·서명이 실패했을 때.
     """
     file_size = len(pdf_bytes)
-    if not S3_ENABLED:
-        raise S3NotConfiguredError(
-            f"S3 업로드가 아직 구현되지 않았습니다(S3_ENABLED=false). "
-            f"업로드하지 않은 파일을 성공으로 보고하지 않습니다 ({report_type}/{period}, "
-            f"{file_size} bytes)"
-        )
-
-    resolved_company_id = company_id or S3_DEFAULT_COMPANY_ID
-    if not resolved_company_id:
-        # 경로가 회사 단위로 갈리므로, 모르는 채로 올리면 남의 폴더이거나 규칙 밖
-        # 경로가 된다. 추측해서 올리느니 실패시킨다.
-        raise S3NotConfiguredError(
-            f"company_id 를 알 수 없습니다(S3_COMPANY_ID 미설정). "
-            f"경로가 회사 단위로 갈리므로 임의 경로에 올리지 않습니다 ({report_type}/{period})"
-        )
-
-    if not (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY):
-        # 정적 키가 없으면 7일짜리 서명을 만들 수 없다. 짧은 링크를 7일이라고 안내하느니
-        # 실패시킨다 — 만료된 링크가 셀러 메일에 실리는 쪽이 더 나쁘다.
-        raise S3NotConfiguredError(
-            "Pre-signed URL 서명용 정적 액세스 키가 없습니다"
-            "(AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY). IAM Role 임시 자격증명으로는 "
-            f"7일 링크를 만들 수 없습니다 ({report_type}/{period})"
-        )
+    resolved_company_id = ensure_s3_ready(company_id, context=f"{report_type}/{period}")
 
     if file_size > constants.MAX_PDF_SIZE_BYTES:
         raise PdfSizeExceededError(
@@ -356,7 +385,12 @@ async def upload_pdf_to_s3(
     s3_full_key = f"{s3_file_path}{new_file_name}"
     now = datetime.now(UTC)
 
-    presigned_url = _put_and_sign(
+    # ⚠️ boto3 는 동기 라이브러리라 그냥 부르면 **이벤트 루프를 잡고 있는다.**
+    #    `POST /api/v1/reports` 로 들어오면 업로드가 끝날 때까지 같은 워커의 다른 요청이
+    #    전부 멈춘다 — 여기는 네트워크라, boto3 기본 재시도까지 걸리면 대기가 길다.
+    #    스레드로 넘겨 루프를 돌려준다.
+    presigned_url = await asyncio.to_thread(
+        _put_and_sign,
         bucket=policy.bucket_name,
         key=s3_full_key,
         pdf_bytes=pdf_bytes,

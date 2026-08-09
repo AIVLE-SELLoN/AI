@@ -104,17 +104,31 @@ def resolve_product_name(candidates: dict[str, str]) -> str | None:
     return None
 
 
+def has_product_name_tables(conn: sqlite3.Connection) -> bool:
+    """products·mapped_data 가 둘 다 있는가.
+
+    ⚠️ 목 파이프라인에는 아직 두 테이블이 없다 — 확정 스키마 §2-2·§2-3 에 정의는 있지만
+       채울 대본 CSV 가 없어 mock_producer 가 만들지 않는다.
+
+    상품 목록을 도는 루프 **바깥**에서 한 번만 부르라고 따로 뺐다. 상품이 126개면 안에서
+    부를 때 같은 카탈로그 조회를 126번 한다 — 답이 실행 중에 바뀌지 않는 값이다.
+    """
+    return (
+        conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE type='table' AND name IN ('products','mapped_data')"
+        ).fetchone()[0]
+        >= 2
+    )
+
+
 def _fetch_product_names(conn: sqlite3.Connection, product_group_id: str) -> str | None:
     """products ⋈ mapped_data 에서 채널별 표기명을 모아 대표명을 고른다.
 
-    ⚠️ 목 파이프라인에는 아직 두 테이블이 없다 — 확정 스키마 §2-2·§2-3 에 정의는 있지만
-       채울 대본 CSV 가 없어 mock_producer 가 만들지 않는다. 그때는 None 을 돌려
-       호출부가 product_group_id 를 그대로 쓰게 한다 — 이름을 지어내지 않는다.
+    두 테이블이 없으면 None 을 돌려 호출부가 product_group_id 를 그대로 쓰게 한다 —
+    이름을 지어내지 않는다.
     """
-    has_tables = conn.execute(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('products','mapped_data')"
-    ).fetchone()[0]
-    if has_tables < 2:
+    if not has_product_name_tables(conn):
         return None
 
     rows = conn.execute(
@@ -143,6 +157,10 @@ CHANNEL_PAIRS: tuple[tuple[str, str], ...] = (
     ("COUPANG", "ZIGZAG"),
     ("NAVER", "ZIGZAG"),
 )
+
+# 위 쌍이 짝지을 수 있는 채널 전부. 조회 결과가 여기 없는 값이면 그 채널의 분포는 어느
+# 쌍에도 안 들어간다 — 아래 경고의 판정 기준이다.
+KNOWN_CHANNELS: frozenset[str] = frozenset(c for pair in CHANNEL_PAIRS for c in pair)
 
 
 def month_bounds(report_month: str) -> tuple[date, date]:
@@ -222,23 +240,47 @@ def _fetch_negative_aspect_counts_by_channel(
 
     "두 채널의 여론이 얼마나 다른가"를 **부정 의견이 어느 속성에 쏠렸는지**로 본다.
     전체 문서로 재면 채널별 판매량 차이가 그대로 신호로 잡힌다.
+
+    ⚠️ 채널값을 **여기서 대문자로 맞춘다.** 예전에는 `classified_item.channel` 을 읽었고
+       그 값은 `ClassifiedItem` 을 거치면서 `Channel` enum 이 표기를 보장해 줬다. 지금은
+       원문 테이블(§2-4·§2-5)의 `channel_id` 가 그대로 나오는데, 그 표기는 메인 서버가
+       채우는 값이라 우리가 보장할 수 없다.
+
+       맞추지 않으면 **에러 없이 결과만 조용히 틀어진다**: 호출부가
+       `channel_counts.get(left, [0,0,0])` 로 꺼내므로, 'coupang' 이 들어오면 'COUPANG'
+       조회가 빗나가 그 채널이 **빈 분포로 취급**되고 그 쌍의 판정이 통째로 어긋난다.
+       대소문자만 다른 경우는 UPPER 로 흡수하고, 아예 모르는 채널은 아래에서 경고한다.
     """
     start, end = _window(report_month)
     rows = conn.execute(
-        f"SELECT r.channel_id, a.aspect, COUNT(*) FROM {SOURCE_TABLE} r "
+        f"SELECT UPPER(r.channel_id), a.aspect, COUNT(*) FROM {SOURCE_TABLE} r "
         "JOIN classified_item_aspect a ON a.item_id = r.item_id "
         "WHERE r.product_group_id = ? AND a.sentiment = -1 "
         "  AND r.occurred_at >= ? AND r.occurred_at < ? "
-        "GROUP BY r.channel_id, a.aspect",
+        "GROUP BY UPPER(r.channel_id), a.aspect",
         (product_group_id, start, end),
     ).fetchall()
 
     counts: dict[str, list[int]] = {}
     index = {a: i for i, a in enumerate(JSD_ASPECT_ORDER)}
+    unknown: dict[str | None, int] = {}
     for channel, aspect, count in rows:
         if aspect not in index:
             continue
+        if channel not in KNOWN_CHANNELS:
+            # 대문자로 맞춰도 못 알아본 값 — 조용히 버리면 그 채널의 부정 의견이
+            # 어느 쌍에도 안 들어간 채 리포트가 정상처럼 나간다.
+            unknown[channel] = unknown.get(channel, 0) + count
+            continue
         counts.setdefault(channel, [0] * len(JSD_ASPECT_ORDER))[index[aspect]] = count
+
+    if unknown:
+        detail = ", ".join(f"{c!r}({n}건)" for c, n in sorted(unknown.items(), key=lambda x: str(x[0])))
+        logger.warning(
+            f"[{product_group_id}/{report_month}] 채널 분열 집계에서 제외된 채널: {detail} "
+            f"— CHANNEL_PAIRS({sorted(KNOWN_CHANNELS)}) 에 없는 값이라 어느 쌍에도 "
+            "들어가지 않습니다. 원문의 channel_id 표기를 확인하세요."
+        )
     return counts
 
 
@@ -359,6 +401,8 @@ def aggregate_monthly_inputs(
     )
 
     calculated_at = datetime.now().astimezone()
+    # 카탈로그 존재 여부는 실행 중에 바뀌지 않는다 — 상품마다 다시 묻지 않는다.
+    catalog_ready = has_product_name_tables(conn)
     inputs: list[MonthlyReportInput] = []
     for row in staged:
         inputs.append(
@@ -367,10 +411,10 @@ def aggregate_monthly_inputs(
                 start_date=start,
                 end_date=end,
                 product_group_id=row["product_group_id"],
-                # 상품명은 커머스 DB 소관이라 여기서는 코드로 대체한다.
-                # 연동되면 이 한 줄만 조인으로 바꾸면 된다.
-                product_name=_fetch_product_names(conn, row["product_group_id"])
-                or row["product_group_id"],
+                # 상품명은 커머스 DB 소관이라, 카탈로그가 없으면 코드로 대체한다.
+                product_name=(
+                    catalog_ready and _fetch_product_names(conn, row["product_group_id"])
+                ) or row["product_group_id"],
                 total_voc_count=row["total_voc_count"],
                 aspect_distributions=row["distributions"],
                 sentiment_drifts=row["drifts"],

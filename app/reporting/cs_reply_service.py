@@ -38,6 +38,7 @@ from app.reporting.s3_uploader import (
     REPORT_TYPE_GUIDELINE,
     PdfSizeExceededError,
     S3NotConfiguredError,
+    ensure_s3_ready,
     upload_pdf_to_s3,
 )
 
@@ -139,6 +140,27 @@ async def generate_cs_reply_pipeline(
     """CS 가이드라인 생성 → 검증 → PDF → S3 → 콜백."""
     guideline_id = build_guideline_id(input_data)
     trace_base = f"alert_id={input_data.alert_id}"
+
+    # ⚠️ S3 구성 확인을 **LLM 호출 앞으로** 당긴다. 업로드는 파이프라인 마지막 단계라,
+    #    구성이 틀어져 있으면 알림 1건마다 LLM 값을 다 지불하고 FAILED_ERROR 만 돌아온다.
+    #    가이드라인은 개선안과 달리 발화한 알림 **거의 전부**에 대해 생성되므로 건수가
+    #    그대로 비용이다. 결론(FAILED_ERROR)은 같고 비용만 0 이 된다.
+    #
+    #    배치·REST 두 경로가 모두 이 함수를 지나므로 여기 한 곳이면 둘 다 덮인다.
+    try:
+        ensure_s3_ready(context=trace_base)
+    except S3NotConfiguredError as exc:
+        logger.error(f"[FAILED_ERROR] {trace_base} | 생성 전 중단 — {exc!s}")
+        return GenerationResult(
+            output=None,
+            callback=build_guideline_callback(
+                input_data,
+                None,
+                status=CallbackStatus.FAILED_ERROR,
+                guideline_id=guideline_id,
+                notice_message="S3 업로드가 아직 구성되지 않아 문서를 저장하지 못했습니다.",
+            ),
+        )
 
     client = get_llm_client()
 

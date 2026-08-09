@@ -256,6 +256,10 @@ def open_db(db_path_str: str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA busy_timeout=30000;")
+    # 프로듀서와 같은 이유로 켠다(sqlite 기본 OFF). 여기서 지키는 것은
+    # classified_item_aspect.item_id → classified_item.item_id 다 — 부모 없는 aspect 행이
+    # 생기면 "분류 결과는 있는데 문서가 없는" 상태가 되어 커버리지 집계가 어긋난다.
+    conn.execute("PRAGMA foreign_keys=ON;")
 
     placeholders = ", ".join(["?"] * len(raw_schema.SOURCE_TABLES))
     found = {

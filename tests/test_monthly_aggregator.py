@@ -1,11 +1,13 @@
 """월간 집계(`app/reporting/monthly_aggregator.py`) 테스트.
 
-「Raw DB 스키마 확정 (8/7)」 §2-6 을 따르면서 생긴 두 가지를 고정한다:
+「Raw DB 스키마 확정 (8/7)」로 원문이 cs·reviews 로 갈리면서 생긴 두 가지를 고정한다:
 
 1. **기간 절단은 원문 테이블의 발생 시각으로 한다.** 분류 결과 테이블에는 발생 시각이
    없다(원문 사본을 만들지 않기로 했다 — 아키텍처 §6). 분류 시각으로 자르면 말일 문의를
    1일 새벽에 분류했을 때 그 건이 다음 달 리포트로 넘어간다.
-2. **상품그룹 대표 상품명은 결정적으로 고른다.** 최빈값 우선, 동점이면
+2. **채널 표기는 조회 시점에 맞춘다.** 원문의 channel_id 표기는 메인 서버 소관이라
+   우리가 보장할 수 없는데, 어긋나면 에러 없이 그 채널쌍의 판정만 조용히 틀어진다.
+3. **상품그룹 대표 상품명은 결정적으로 고른다.** 최빈값 우선, 동점이면
    지그재그 > 네이버 > 쿠팡. 실행마다 흔들리면 같은 상품이 달마다 다른 이름으로 나간다.
 """
 
@@ -133,6 +135,60 @@ def test_channel_counts_come_from_source_table(conn: sqlite3.Connection) -> None
     assert counts["COUPANG"] == [1, 0, 0]
     assert counts["NAVER"] == [0, 1, 0]
     assert counts["ZIGZAG"] == [0, 0, 1]
+
+
+# ── 채널 표기 정규화 ──────────────────────────────────────────────────────
+
+
+def _insert(db: sqlite3.Connection, item_id: str, channel: str, aspect: str) -> None:
+    occurred = "2026-07-10T10:00:00+09:00"
+    db.execute(
+        "INSERT INTO cs (id, channel_product_id, product_group_id, channel_id, "
+        "content, inquired_at, created_at) VALUES (?,?,?,?,?,?,?)",
+        (item_id, "C1", "P002", channel, "원문", occurred, occurred),
+    )
+    db.execute("INSERT INTO classified_item VALUES (?,?,?,?)", (item_id, "cs", occurred, "v1"))
+    db.execute(
+        "INSERT INTO classified_item_aspect (item_id, aspect, sentiment, mixed_signal) "
+        "VALUES (?,?,?,?)",
+        (item_id, aspect, -1, None),
+    )
+
+
+def test_channel_case_is_normalized(conn: sqlite3.Connection) -> None:
+    """원문의 채널 표기가 소문자로 와도 같은 채널로 묶인다.
+
+    ⚠️ 예전에는 `classified_item.channel` 을 읽었고 그 값은 `ClassifiedItem` 을 거쳐
+       `Channel` enum 이 표기를 보장했다. 지금은 원문 테이블 값이 그대로 나오는데 그
+       표기는 메인 서버 소관이다. 맞추지 않으면 호출부의
+       `channel_counts.get("COUPANG", [0,0,0])` 가 빗나가 그 채널이 **빈 분포**로
+       취급되고, 에러 없이 그 쌍의 판정만 조용히 틀어진다.
+    """
+    _insert(conn, "INQ-L1", "coupang", "색상")
+    _insert(conn, "INQ-U1", "COUPANG", "사이즈")
+    conn.commit()
+
+    counts = _fetch_negative_aspect_counts_by_channel(conn, "P002", MONTH)
+
+    assert set(counts) == {"COUPANG"}, "대소문자만 다른 값이 따로 잡히면 안 된다"
+    assert counts["COUPANG"] == [1, 1, 0]
+
+
+def test_unknown_channel_is_excluded_and_logged(conn: sqlite3.Connection, caplog) -> None:
+    """CHANNEL_PAIRS 에 없는 채널은 제외하되 **조용히 버리지는 않는다**.
+
+    대소문자로 흡수되지 않는 값(연동 채널 추가 등)은 어느 쌍에도 못 들어간다. 경고가
+    없으면 그 채널의 부정 의견이 통째로 빠진 리포트가 정상처럼 나간다.
+    """
+    _insert(conn, "INQ-K1", "COUPANG", "색상")
+    _insert(conn, "INQ-X1", "11ST", "소재")
+    conn.commit()
+
+    with caplog.at_level("WARNING"):
+        counts = _fetch_negative_aspect_counts_by_channel(conn, "P002", MONTH)
+
+    assert set(counts) == {"COUPANG"}
+    assert "11ST" in caplog.text
 
 
 def test_product_name_falls_back_when_tables_absent(conn: sqlite3.Connection) -> None:
