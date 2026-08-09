@@ -76,3 +76,6 @@ eval/eval_sets/relabel_300.csv
 #    relabel_300_labels.csv 에 원문 없이 남긴다. select_relabel_300.py 는 relabel_*
 #    컬럼을 빈 값으로 내보내므로(:153-155), AI Hub 에서 다시 받아도 그 판단은
 #    복구되지 않는다. 프로젝트의 유일한 실성능 기준선이라 반드시 보존해야 한다.
+
+# 생성기 sandbox 출력 — data/ 와 같은 이유로 git 제외 (README 데이터 섹션)
+.sandbox/
