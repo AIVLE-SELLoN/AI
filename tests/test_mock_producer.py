@@ -93,7 +93,9 @@ def test_sink_isolates_the_bad_row_and_keeps_the_rest(tmp_path) -> None:
             "channel_product_id": "C1",
             "product_group_id": "P001",
             "raw_text": "색이 달라요",
-            "time": datetime(2026, 5, 1, 10, 0),
+            # naive 가 **의도**다 — 대본 CSV 의 시각이 오프셋 없는 한국 벽시계이고,
+            # 오프셋을 붙이는 건 sink 의 일이다. tzinfo 를 넣어 "고치면" 그걸 못 본다.
+            "time": datetime(2026, 5, 1, 10, 0),  # noqa: DTZ001
             "payload": {},
         }
 
@@ -118,10 +120,13 @@ def test_timestamps_carry_the_kst_offset(tmp_path) -> None:
 
     from datetime import datetime
 
+    # naive 로 넣어야 "sink 가 KST 를 붙인다"를 검증할 수 있다 — 이 테스트의 전부다.
     sink.add({
         "table": "cs", "event_id": "INQ-1", "channel": "COUPANG",
         "channel_product_id": "C1", "product_group_id": "P001",
-        "raw_text": "색이 달라요", "time": datetime(2026, 5, 1, 10, 0), "payload": {},
+        "raw_text": "색이 달라요",
+        "time": datetime(2026, 5, 1, 10, 0),  # noqa: DTZ001
+        "payload": {},
     })
     sink.flush()
 
