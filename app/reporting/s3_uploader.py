@@ -179,6 +179,14 @@ def _get_s3_client():
     ⚠️ `signature_version="s3v4"` 를 못 박는다. 7일(604,800초)은 **SigV4 서명의 상한**이고
        구버전 서명(s3)은 그만큼 못 버틴다.
 
+    ⚠️ `addressing_style="virtual"` 도 못 박는다. **이게 없으면 presigned URL 이 403 이다**
+       (2026-08-09 실적재 테스트에서 확인). 기본값(auto)은 호스트를
+       `{버킷}.s3.amazonaws.com` 으로 만드는데, 서명은 `region_name` 대로
+       ap-northeast-2 로 하면서 호스트에는 리전이 빠져 둘이 어긋난다.
+       업로드(put_object)는 SDK 가 리다이렉트를 따라가 성공하므로 **적재는 되는데
+       링크만 죽는** 형태라, 서버 로그만 봐서는 안 드러난다.
+       명시하면 `{버킷}.s3.ap-northeast-2.amazonaws.com` 이 되어 200 이 뜬다.
+
     boto3 는 여기서만 import 한다 — S3 경로를 안 타는 실행(테스트 대부분)이 불필요하게
     로딩하지 않도록. weasyprint 를 pdf_compiler 함수 안에서 import 하는 것과 같은 이유다.
     """
@@ -190,7 +198,10 @@ def _get_s3_client():
         region_name=S3_REGION,
         aws_access_key_id=AWS_ACCESS_KEY_ID,
         aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-        config=Config(signature_version="s3v4"),
+        config=Config(
+            signature_version="s3v4",
+            s3={"addressing_style": "virtual"},
+        ),
     )
 
 

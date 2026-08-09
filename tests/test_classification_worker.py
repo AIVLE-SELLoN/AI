@@ -459,6 +459,11 @@ def test_foreign_keys_are_actually_enforced(tmp_path) -> None:
     ⚠️ sqlite 는 FK 가 **기본 OFF** 라, 안 켜면 REFERENCES 가 장식으로만 남는다. 그러면
        부모 없는 aspect 행이 조용히 생기고 — "분류 결과는 있는데 문서가 없는" 상태 —
        원문에서 분모를 세는 합의 아래에서 커버리지 집계가 어긋난다.
+
+    ⚠️ 평문 INSERT 가 아니라 **프로덕션과 같은 `INSERT OR IGNORE`** 로 찌른다. 워커의
+       적재 구문이 `OR IGNORE` 라, 평문으로 검증하면 "OR IGNORE 니까 실제로는 조용히
+       넘어가는 것 아닌가" 라는 의심이 그대로 남는다. sqlite 에서 `OR IGNORE` 는 제약
+       위반 중 **FK 만은 삼키지 않는다** — 그 사실까지 여기서 같이 고정한다.
     """
     db_path = tmp_path / "fk.db"
     seed = sqlite3.connect(db_path)
@@ -470,8 +475,13 @@ def test_foreign_keys_are_actually_enforced(tmp_path) -> None:
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
     with pytest.raises(sqlite3.IntegrityError):
-        conn.execute(
-            "INSERT INTO classified_item_aspect (item_id, aspect, sentiment, mixed_signal) "
-            "VALUES ('없는-부모', '색상', -1, NULL)"
-        )
+        conn.execute(worker.CLASSIFIED_ITEM_ASPECT_INSERT, ("없는-부모", "색상", -1, None))
+
+    # 대조군: OR IGNORE 가 실제로 삼키는 것(UNIQUE 중복)은 그대로 통과해야 한다.
+    # 이게 없으면 위 단언이 "OR IGNORE 가 아무것도 안 삼킨다"로 오해될 수 있다.
+    conn.execute(worker.CLASSIFIED_ITEM_INSERT, ("INQ-1", "cs", None, "v1"))
+    conn.execute(worker.CLASSIFIED_ITEM_ASPECT_INSERT, ("INQ-1", "색상", -1, None))
+    conn.execute(worker.CLASSIFIED_ITEM_ASPECT_INSERT, ("INQ-1", "색상", -1, None))  # 중복
+    assert conn.execute("SELECT COUNT(*) FROM classified_item_aspect").fetchone()[0] == 1
+
     conn.close()

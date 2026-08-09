@@ -71,9 +71,15 @@ def render_sentiment_donut(
         )
         offset += max(0.0, min(1.0, ratio))
 
+    # ⚠️ 가운데 수치는 **구멍 안에** 완전히 들어가야 한다(2026-08-09).
+    #    링 안쪽 반지름은 radius - stroke/2 = 20. 예전 15px 로 그리면 "50%" 폭이 40px 라
+    #    반폭 20px 가 그 값과 같아져, 글자 좌우 끝이 링을 파고들었다.
+    #    12px 로 줄이면 반폭 16.2px 이고 그 지점의 구멍 반높이가 11.7px 이라,
+    #    아래끝(baseline cy+8.5)과 약 3px 뜬다. **링 두께(10)는 그대로 두었다** —
+    #    도넛 인상을 바꾸지 않으려고 글자 쪽만 조정했다.
     parts.append(
-        f'<text x="{cx}" y="{cy - 2}" text-anchor="middle" font-size="7" fill="{COLOR_MUTED}">부정</text>'
-        f'<text x="{cx}" y="{cy + 12}" text-anchor="middle" font-size="15" font-weight="bold" '
+        f'<text x="{cx}" y="{cy - 5}" text-anchor="middle" font-size="7" fill="{COLOR_MUTED}">부정</text>'
+        f'<text x="{cx}" y="{cy + 8.5}" text-anchor="middle" font-size="12" font-weight="bold" '
         f'fill="{COLOR_TEXT}">{negative_ratio * 100:.0f}%</text>'
     )
     parts.append("</svg>")
@@ -81,11 +87,16 @@ def render_sentiment_donut(
 
 
 def _gradient_slices(x: float, width: float, y: float, height: float, slices: int = 48) -> list[str]:
-    """초록→노랑→빨강 그라디언트를 가는 사각형으로 근사한다.
+    """초록→노랑→빨강 그라디언트를 가는 사각형으로 근사하고, **양 끝을 둥글게** 막는다.
 
     SVG linearGradient 대신 슬라이스를 쓰는 이유: weasyprint 의 SVG 지원은 기본 도형에
     강하고 그라디언트는 렌더러 버전을 탄다. 인쇄물에서 색이 통째로 빠지는 사고를 피하려고
     확실히 그려지는 방식으로 만든다.
+
+    ⚠️ 끝 처리에 `clipPath` 를 쓰지 않는다 — 같은 이유로 렌더러 버전을 타기 때문이다.
+       대신 양 끝을 **반원 path** 로 따로 그린다(호는 기본 도형이라 확실히 그려진다).
+       가운데 슬라이스는 반원 반지름만큼 안쪽에서 시작해, 사각 모서리가 반원 밖으로
+       비어져 나오지 않게 한다.
     """
     # slices=1 이면 아래 i/(slices-1) 이 0 나눗셈이 된다. 지금 호출부는 기본값뿐이라
     # 도달하지 않지만, 인자를 열어둔 함수라 방어한다.
@@ -100,11 +111,29 @@ def _gradient_slices(x: float, width: float, y: float, height: float, slices: in
                 return f"#{r:02x}{g:02x}{b:02x}"
         return "#f03e3e"
 
-    parts, slice_w = [], width / slices
+    radius = height / 2  # 알약(pill) 형태 — 막대 높이의 절반
+    inner_x, inner_w = x + radius, max(0.0, width - height)
+
+    parts = [
+        # 왼쪽 반원 (위→아래, sweep=0 이라 왼쪽으로 부푼다)
+        (
+            f'<path d="M {inner_x:.2f},{y} A {radius:.2f},{radius:.2f} 0 0 0 '
+            f'{inner_x:.2f},{y + height} Z" fill="{color_at(0.0)}"/>'
+        ),
+        # 오른쪽 반원 (위→아래, sweep=1 이라 오른쪽으로 부푼다)
+        (
+            f'<path d="M {inner_x + inner_w:.2f},{y} A {radius:.2f},{radius:.2f} 0 0 1 '
+            f'{inner_x + inner_w:.2f},{y + height} Z" fill="{color_at(1.0)}"/>'
+        ),
+    ]
+
+    slice_w = inner_w / slices
     for i in range(slices):
+        # 위치(t)는 **막대 전체** 기준으로 잡는다 — 반원 색과 이어지도록.
+        t = (radius + i * slice_w) / width
         parts.append(
-            f'<rect x="{x + i * slice_w:.2f}" y="{y}" width="{slice_w + 0.6:.2f}" '
-            f'height="{height}" fill="{color_at(i / (slices - 1))}"/>'
+            f'<rect x="{inner_x + i * slice_w:.2f}" y="{y}" width="{slice_w + 0.6:.2f}" '
+            f'height="{height}" fill="{color_at(min(1.0, t))}"/>'
         )
     return parts
 
@@ -159,13 +188,17 @@ def render_divergence_gauge(
     if jsd_score is not None:
         x = pad + bar_w * max(0.0, min(1.0, jsd_score))
         label = f"Score {jsd_score:.2f}"
-        box_w = 96  # 좌우를 넉넉히 — 좁으면 "Score 0.54" 가 답답하게 붙는다
+        # 폭은 실측 기준이다: "Score 0.42" 는 9px 산세리프에서 49.1px.
+        #   점(cx +11, r 3.5) → 텍스트 시작 +19 → 텍스트 끝 ≒ +68 → 우측 여백 ≒ 10
+        # 점수는 항상 `%.2f` 라 글자 수가 고정이므로 폭이 흔들리지 않는다.
+        # (예전 96px 는 20px 가까이 비어 카드가 헐렁했다 — 2026-08-09)
+        box_w = 78
         box_x = min(max(x - box_w / 2, pad), width - pad - box_w)
         parts.append(
             f'<rect x="{box_x:.1f}" y="1" width="{box_w}" height="17" rx="8.5" '
             f'fill="#ffffff" stroke="#dee2e6"/>'
-            f'<circle cx="{box_x + 14:.1f}" cy="9.5" r="3.5" fill="{COLOR_NEGATIVE}"/>'
-            f'<text x="{box_x + 23:.1f}" y="13" font-size="9" fill="{COLOR_TEXT}">{label}</text>'
+            f'<circle cx="{box_x + 11:.1f}" cy="9.5" r="3.5" fill="{COLOR_NEGATIVE}"/>'
+            f'<text x="{box_x + 19:.1f}" y="13" font-size="9" fill="{COLOR_TEXT}">{label}</text>'
             f'<line x1="{x:.1f}" y1="{bar_y}" x2="{x:.1f}" y2="{bar_y + bar_h}" '
             f'stroke="#ffffff" stroke-width="2"/>'
         )

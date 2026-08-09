@@ -7,6 +7,7 @@ from typing import Any
 
 from jinja2 import BaseLoader, Environment, select_autoescape
 
+from app.core import constants
 from app.reporting.charts import (
     render_divergence_gauge,
     render_sentiment_donut,
@@ -21,9 +22,11 @@ if sys.platform == "win32":
         os.environ["PATH"] = gtk_path + os.path.pathsep + os.environ.get("PATH", "")
 
 
-# 게이지 폭(px) — A4 가로(297mm) - 좌우 여백(24mm) 의 60% 열에서 카드 안쪽 여백을 뺀 값.
-# CSS 로 늘리면 viewBox 비율 때문에 높이까지 커져 페이지가 넘치므로, 생성 시점에 맞춘다.
-GAUGE_WIDTH_PX = 715
+# 게이지 폭(px) — A4 가로(297mm) - 좌우 여백(24mm) 의 우측 열(75%)에서 열 간격과
+# 카드 안쪽 여백을 뺀 값. CSS 로 늘리면 viewBox 비율 때문에 높이까지 커져 페이지가
+# 넘치므로, 생성 시점에 맞춘다.
+#   (297 - 24 - 4) × 0.75 - 5 ≒ 197mm ≒ 745px @96dpi
+GAUGE_WIDTH_PX = 745
 
 # 채널 코드 → 화면 표기. 리포트는 셀러가 읽는 문서라 영문 코드를 그대로 쓰지 않는다.
 CHANNEL_LABEL = {"COUPANG": "쿠팡", "NAVER": "네이버", "ZIGZAG": "지그재그"}
@@ -36,13 +39,16 @@ class ReportType(str, Enum):
 
 _BASE_CSS = """
     /* 가로(landscape) — 세로로 두면 좌우 시각자료가 잘려 한 눈에 안 들어온다(2026-08-04) */
-    @page { size: A4 landscape; margin: 12mm 12mm; }
+    /* ⚠️ 여백 12mm → 8mm. 상품 1건이 **정확히 한 페이지**여야 한다(2026-08-09) —
+       화면이 첫 페이지만 미리보기로 띄우는데 내용이 두 장으로 갈리면 뒷장이 안 보인다.
+       세로 여유가 8mm 늘어난다. */
+    @page { size: A4 landscape; margin: 8mm 12mm; }
     body { font-family: 'Malgun Gothic', 'Noto Sans KR', sans-serif; font-size: 9pt; color: #1a1a1a; }
     /* ⚠️ 한글 어절 단위 줄바꿈(word-break: keep-all)은 weasyprint 63.1 이 무시한다.
        줄 끝에 한 글자만 넘어가는 것은 폭·글자 크기로 조절할 수밖에 없다. */
-    h1 { font-size: 14pt; margin: 0 0 1.5mm; }
-    h2 { font-size: 10pt; margin: 1mm 0 1.2mm; border-bottom: 1px solid #ccc; padding-bottom: 0.8mm; }
-    .meta { color: #666; font-size: 8pt; margin-bottom: 3mm; }
+    h1 { font-size: 13pt; margin: 0 0 1mm; }
+    h2 { font-size: 10pt; margin: 0.5mm 0 1mm; border-bottom: 1px solid #ccc; padding-bottom: 0.6mm; }
+    .meta { color: #666; font-size: 8pt; margin-bottom: 1.5mm; }
     table { width: 100%; border-collapse: collapse; margin-bottom: 3mm; }
     th, td { border: 1px solid #ddd; padding: 2mm 2.5mm; text-align: left; font-size: 9.5pt; }
     th { background: #f4f4f4; }
@@ -51,10 +57,10 @@ _BASE_CSS = """
     .quote { background: #f8f8f8; border-left: 3px solid #999; padding: 2mm 3mm; margin-bottom: 2mm; }
 
     /* KPI 카드 — 대시보드 상단과 같은 구성 */
-    .kpi-row { display: flex; gap: 2.5mm; margin-bottom: 2mm; }
-    .kpi { flex: 1; border: 1px solid #e9ecef; border-radius: 3mm; padding: 2.2mm 2.5mm; }
+    .kpi-row { display: flex; gap: 2.5mm; margin-bottom: 1.2mm; }
+    .kpi { flex: 1; border: 1px solid #e9ecef; border-radius: 3mm; padding: 1.4mm 2.5mm; }
     .kpi .label { font-size: 7.5pt; color: #868e96; letter-spacing: .3px; }
-    .kpi .value { font-size: 13pt; font-weight: bold; margin-top: 0.5mm; }
+    .kpi .value { font-size: 12pt; font-weight: bold; margin-top: 0.3mm; }
     .kpi .sub { font-size: 8pt; color: #868e96; margin-top: 1mm; }
     .kpi.accent { background: #4c6ef5; border-color: #4c6ef5; color: #fff; }
     .kpi.accent .label, .kpi.accent .sub { color: #dbe4ff; }
@@ -76,34 +82,44 @@ _BASE_CSS = """
 
     /* 상품 페이지 2단 — 좌: VOC·감성분포 / 우: 채널 격차 */
     /* KPI 는 좌측 열(감성 분포) 위에만 놓이므로 폭을 왼쪽 셀에 맞춘다. */
-    .kpi-row.section { width: 29%; }
+    .kpi-row.section { width: 25%; }
     .gauge-block svg { display: block; }
     /* 행 단위 그리드 — 좌(감성 카드) : 우(게이지)를 같은 행에 묶어 세로 정렬을 보장한다 */
+    /* ⚠️ 좌 29%→25%. 왼쪽(도넛+범례)은 고정 높이라 폭이 남지만, 오른쪽 원인·조치 카드는
+       폭이 좁을수록 줄바꿈이 늘어 **행 높이가 커진다**. 페이지 넘침은 항상 오른쪽에서
+       난다(2026-08-09). 폭을 옮기면 같은 글자 수를 더 적은 줄에 담는다. */
     .grid-row { display: flex; gap: 4mm; align-items: stretch; }
-    .grid-row .cell-left { width: 29%; display: flex; }
-    .grid-row .cell-right { width: 71%; display: flex; }
+    .grid-row .cell-left { width: 25%; display: flex; }
+    .grid-row .cell-right { width: 75%; display: flex; }
     .grid-row .cell-left > *, .grid-row .cell-right > * { width: 100%; }
     /* 제목 행은 세로로 쌓아야 밑줄이 열 전체로 이어진다(가로 flex 면 부제가 옆에 붙는다) */
     .grid-row.head { align-items: flex-start; }
     .grid-row.head .cell-left, .grid-row.head .cell-right { flex-direction: column; }
     .summary-line { font-size: 8pt; color: #495057; background: #f8f9fa; border-radius: 2mm;
-                    padding: 1.2mm 2.5mm; margin-bottom: 1.5mm; line-height: 1.4; }
+                    padding: 1mm 2.5mm; margin-bottom: 1.2mm; line-height: 1.35; }
     /* 범례는 왼쪽, 도넛은 오른쪽 정렬 */
     .aspect-card .row { display: flex; align-items: center; gap: 2mm; }
     .aspect-card .row .chart { margin: 0 0 0 auto; }
     /* 감성 분포 카드와 게이지 블록의 높이를 맞춰 좌우가 나란히 떨어지게 한다 */
-    .aspect-card, .gauge-block { margin-bottom: 1.2mm; }
-    .gauge-block { border: 1px solid #e9ecef; border-radius: 3mm; padding: 1.6mm 2.5mm; margin-bottom: 1.2mm; }
-    .gauge-block .pair { font-size: 9.5pt; font-weight: bold; margin-bottom: 1mm; }
+    .aspect-card, .gauge-block { margin-bottom: 0.8mm; }
+    .gauge-block { border: 1px solid #e9ecef; border-radius: 3mm; padding: 1.2mm 2.5mm; margin-bottom: 0.8mm; }
+    .gauge-block .pair { font-size: 9.5pt; font-weight: bold; margin-bottom: 0.8mm; }
     /* 게이지 아래 원인·조치는 각각 **독립된 카드**로 감싼다(2026-08-04 화면 확정) */
-    .gauge-block .pair-note { display: flex; gap: 2.5mm; margin-top: 1.5mm; }
+    .gauge-block .pair-note { display: flex; gap: 2.5mm; margin-top: 1mm; }
     .note-card { flex: 1; border: 1px solid #e9ecef; border-radius: 2.5mm;
-                 background: #fbfbfc; padding: 1.6mm 2.2mm; }
-    .note-card h4 { font-size: 8pt; margin: 0 0 1.2mm; color: #212529; }
-    .note-card ol { margin: 0; padding-left: 4mm; font-size: 8pt; color: #495057;
-                    line-height: 1.5; }
-    .note-card li { margin-bottom: 0.8mm; }
+                 background: #fbfbfc; padding: 1.2mm 2mm; }
+    .note-card h4 { font-size: 8pt; margin: 0 0 0.8mm; color: #212529; }
+    .note-card ol { margin: 0; padding-left: 4mm; font-size: 7.5pt; color: #495057;
+                    line-height: 1.35; }
+    .note-card li { margin-bottom: 0.5mm; }
     .note-card li:last-child { margin-bottom: 0; }
+
+    /* 보류 상품 페이지 — 사유만 적는다. 수록 상품과 같은 머리글을 써서 같은 책으로 읽힌다 */
+    .hold-box { border: 1px solid #ffe3e3; background: #fff5f5; border-radius: 3mm;
+                padding: 8mm 10mm; margin-top: 4mm; text-align: center; }
+    .hold-title { font-size: 11pt; font-weight: bold; color: #f03e3e; margin-bottom: 3mm; }
+    .hold-msg { font-size: 10pt; color: #212529; line-height: 1.6; }
+    .hold-sub { font-size: 8.5pt; color: #868e96; margin-top: 3mm; line-height: 1.5; }
 
     /* 합본: 상품마다 새 페이지 — 첫 상품 페이지를 화면 미리보기로 쓴다 */
     .product-page { page-break-before: always; }
@@ -226,7 +242,7 @@ _MONTHLY_SECTION_HTML = """
                         <ol>{% for t in analysis.cause_analysis %}<li>{{ t }}</li>{% endfor %}</ol>
                     </div>
                     <div class="note-card">
-                        <h4>💡 권장 조치 사항</h4>
+                        <h4>권장 조치 사항</h4>
                         <ol>{% for t in analysis.recommended_actions %}<li>{{ t }}</li>{% endfor %}</ol>
                     </div>
                 </div>
@@ -265,7 +281,25 @@ MONTHLY_BOOK_HTML = (
             pair_label=item.pair_label, analysis_by_pair=item.analysis_by_pair,
             brand_sentiment=item.brand_sentiment %}"""
     + _MONTHLY_SECTION_HTML
-    + """{% endwith %}</section>{% endfor %}</body></html>"""
+    + """{% endwith %}</section>{% endfor %}"""
+    # 보류 상품 — 사유만 적은 페이지. 수록 상품 뒤에 이어 붙인다(2026-08-09).
+    # ⚠️ 이 페이지가 없으면 PDF 만 받아보는 사람은 자기 상품이 왜 빠졌는지 알 수 없다.
+    #    표지도 목차도 없는 구조라 "빠졌다"는 사실 자체가 안 보인다.
+    + """
+{% for input in held %}<section class="product-page{% if loop.first and not items %} first{% endif %}">
+    <h1>{{ input.product_name }} <span style="color:#868e96">({{ input.product_group_id }})</span></h1>
+    <div class="meta">
+        {{ report_month }} 월간 분석 · {{ input.start_date }} ~ {{ input.end_date }}
+    </div>
+    <div class="hold-box">
+        <div class="hold-title">리포트 생성 보류</div>
+        <div class="hold-msg">{{ hold_notice }}</div>
+        <div class="hold-sub">
+            이번 달 수집된 VOC {{ '{:,}'.format(input.total_voc_count) }}건 —
+            데이터가 쌓이면 다음 호부터 분석이 재개됩니다.
+        </div>
+    </div>
+</section>{% endfor %}</body></html>"""
 )
 
 def _build_monthly_chart_context(context: dict[str, Any]) -> dict[str, Any]:
@@ -334,21 +368,28 @@ def _build_monthly_chart_context(context: dict[str, Any]) -> dict[str, Any]:
 def build_book_context(
     report_month: str,
     items: list[dict[str, Any]],
+    held: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """월간 합본(상품별 섹션) 컨텍스트.
 
     items 원소는 `{"input": MonthlyReportInput.model_dump(mode="json"),
                    "report": MonthlyReportOutput.model_dump(mode="json")}`.
+    held  원소는 `MonthlyReportInput.model_dump(mode="json")` — 표본 부족으로 보류된 상품.
 
     ⚠️ 총합 요약(표지) 페이지는 만들지 않는다 (2026-08-04 확정). 표지가 쓰던 값
-       (전사 합계·상품 목록·기간·생성 시각·보류/실패 목록)은 **계산까지 함께 지웠다** —
-       렌더링하지 않는 값을 컨텍스트에 남겨두면 나중에 본문과 어긋난 채로 되살아난다.
-       보류·실패 상품 안내는 컨텍스트가 아니라 콜백 notice_message 로 나간다
-       (`monthly_report_service._build_excluded_notice`).
+       (전사 합계·상품 목록·기간·생성 시각)은 **계산까지 함께 지웠다** — 렌더링하지 않는
+       값을 컨텍스트에 남겨두면 나중에 본문과 어긋난 채로 되살아난다.
+
+    ⚠️ 보류 상품은 **지면에도 남긴다**(2026-08-09). 예전에는 합본에서 통째로 빼고 콜백
+       `notice_message` 로만 알렸는데, 표지도 목차도 없는 구조라 **PDF 만 받아보는 사람은
+       자기 상품이 왜 없는지 알 방법이 없었다.** 콜백 안내는 그대로 두고(메인 화면용),
+       지면에도 사유를 적어 문서 자체로 설명이 되게 한다.
     """
-    # ⚠️ report_month 를 여기 담지 않는다 — 합본 템플릿이 읽지 않는다. 본문의
-    #    {{ report.report_month }} 는 item.report 에서 오는 **별개 값**이다.
-    #    인자로는 계속 받는다(호출부 계약이자, 페이지 구성이 월 단위임을 드러낸다).
+    # ⚠️ `report_month` 는 **보류 페이지 전용**이다(2026-08-09). 수록 상품 페이지의
+    #    `{{ report.report_month }}` 는 item.report 에서 오는 **별개 값**이라 이것과
+    #    무관하다 — 보류 상품은 report(LLM 산출물)가 없어서 머리글에 쓸 연월을 따로
+    #    받아야 한다. 지우면 보류 페이지의 meta 줄이 빈칸이 된다.
+    #    (예전 주석은 "여기 담지 않는다"였는데, 보류 페이지가 생기면서 담게 됐다.)
     return {
         "items": [
             {
@@ -358,6 +399,9 @@ def build_book_context(
             }
             for item in items
         ],
+        "held": list(held or []),
+        "hold_notice": constants.HOLD_IN_BOOK_NOTICE,
+        "report_month": report_month,
     }
 
 
