@@ -131,6 +131,33 @@ def prompt_fingerprint() -> str:
     return f"{PROMPT_ASPECT_VERSION}-{digest}"
 
 
+def data_fingerprint(documents: list[dict]) -> str:
+    """캐시 키에 넣을 **데이터 지문** — 분류 대상 문서의 (id, 본문) 해시.
+
+    위 prompt_fingerprint 와 정확히 같은 논리를 데이터로 확장한 것이다. 캐시는
+    `d["id"]` 로만 조회하는데(:todo 계산), mock 을 재생성하면 **같은 id 에 다른
+    텍스트**가 들어간다. 파일명이 안 갈리면 "신규 호출 0건" 으로 조용히 통과하면서
+    **옛 라벨로 새 문서를 채점한다.** 비용이 안 드는 것처럼 보이면서 결과만 틀리는,
+    제일 나쁜 형태의 실패다.
+
+    ⚠️ 수동 규칙("재생성하면 캐시 지우기")으로 막지 않는 이유: `data/` 가 gitignore 라
+       팀원마다 캐시가 따로 놀고, 한 명만 잊으면 틀린 숫자가 나온다. 기계가 막아야 한다.
+       (지인님 리뷰 조건 1, 2026-08-09 — 배경 baseline 재생성 직전에 지적됨)
+    """
+    h = hashlib.sha256()
+    for d in documents:  # 생성이 결정론이라 순서가 안정적이다
+        h.update(str(d["id"]).encode("utf-8"))
+        h.update(b"\x00")
+        h.update(str(d["text"]).encode("utf-8"))
+        h.update(b"\x1e")
+    return h.hexdigest()[:8]
+
+
+def cache_fingerprint(documents: list[dict]) -> str:
+    """캐시 파일명에 들어가는 지문 = 프롬프트 + 데이터. 둘 중 하나만 바뀌어도 갈린다."""
+    return f"{prompt_fingerprint()}-d{data_fingerprint(documents)}"
+
+
 # ── 대상 문의 수집 ───────────────────────────────────────────────
 
 
@@ -369,8 +396,9 @@ async def classify_cached(
     """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     # 대상이 CS 전용이라 프롬프트1 지문만 본다 (collect_documents 가 source=cs 만 모음).
+    # 데이터 지문도 같이 넣는다 — 같은 id 에 다른 텍스트가 들어와도 갈리게 (data_fingerprint).
     cache_path = (
-        CACHE_DIR / f"pipeline_{tag}_{mode}_{prompt_fingerprint()}_run{run}.json"
+        CACHE_DIR / f"pipeline_{tag}_{mode}_{cache_fingerprint(documents)}_run{run}.json"
     )
     cache: dict = (
         json.loads(cache_path.read_text(encoding="utf-8"))
@@ -605,13 +633,15 @@ def _load_caches(tag: str, mode: str, fingerprint: str, runs: int) -> list[tuple
 
 def diagnose(documents, config_rows, products, golden, tag, mode, runs) -> None:
     """캐시된 분류 결과로 ②의 하락 원인을 분해한다. LLM 호출 0회."""
-    fingerprint = prompt_fingerprint()
+    fingerprint = cache_fingerprint(documents)
     caches = _load_caches(tag, mode, fingerprint, runs)
 
     if not caches:
-        # 지금 프롬프트로 돌린 캐시가 없다. 과거 실행을 진단하는 건 정당한 용도지만
-        # (개선 전 대조군을 다시 뽑는 등), **어느 프롬프트 결과인지 반드시 밝힌다** —
+        # 지금 프롬프트·데이터로 돌린 캐시가 없다. 과거 실행을 진단하는 건 정당한 용도지만
+        # (개선 전 대조군을 다시 뽑는 등), **어느 실행 결과인지 반드시 밝힌다** —
         # 조용히 옛 캐시를 쓰면 캐시 키에 지문을 넣은 의미가 없어진다.
+        # ⚠️ mock 재생성 후에는 데이터 지문이 갈리므로 여기로 떨어진다. 그때 나오는
+        #    숫자는 **옛 데이터로 낸 것**이라 새 데이터의 성능이 아니다.
         stale = sorted(CACHE_DIR.glob(f"pipeline_{tag}_{mode}_*_run1.json"))
         if not stale:
             raise SystemExit(
@@ -621,8 +651,9 @@ def diagnose(documents, config_rows, products, golden, tag, mode, runs) -> None:
         fingerprint = stale[-1].stem.split(f"pipeline_{tag}_{mode}_")[1].rsplit("_run", 1)[0]
         caches = _load_caches(tag, mode, fingerprint, runs)
         print(
-            f"\n⚠️ 현재 프롬프트({prompt_fingerprint()})로 돌린 캐시가 없어"
-            f" **과거 실행({fingerprint})** 을 진단한다. 지금 코드의 성능이 아니다."
+            f"\n⚠️ 현재 프롬프트·데이터({cache_fingerprint(documents)})로 돌린 캐시가 없어"
+            f" **과거 실행({fingerprint})** 을 진단한다."
+            f"\n   지금 코드·데이터의 성능이 아니다. 지문의 -d 뒤가 다르면 다른 mock 이다."
         )
 
     print(f"\n{'=' * 72}")

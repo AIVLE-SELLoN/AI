@@ -214,14 +214,37 @@ async def run_family(name, keyfn, items, documents, truth, ignored, label) -> di
 
 async def main() -> None:
     items, documents = load_inputs()
-    cache = json.loads(CACHE.read_text(encoding="utf-8"))
     truth, ignored = load_truth_sets()
-    real_items, swapped = swap_real(items, cache)
-    print(f"문서 {len(documents):,} / 캐시 {len(cache):,} / 실제분류로 덮음 {swapped:,}")
+
+    # ⚠️ swap_real 은 캐시에 없는 item_id 를 **조용히 golden 으로 폴백**한다(cache.get →
+    #    None 이면 원본 유지). 그래서 캐시가 없거나 비면 "real" 열에 oracle 값이 그대로
+    #    찍히면서 실제 분류 결과인 척한다. 숫자가 안 나오는 것보다 나쁜 실패라 막는다.
+    #    2026-08-09 mock 재생성으로 옛 캐시는 전부 무효다 — 같은 item_id 에 다른 텍스트가
+    #    들어가서, 남아 있는 캐시를 그대로 쓰면 옛 라벨로 새 문서를 채점하게 된다.
+    arms: list[tuple[str, list]] = [("oracle", items)]
+    if CACHE.exists():
+        cache = json.loads(CACHE.read_text(encoding="utf-8"))
+        real_items, swapped = swap_real(items, cache)
+        coverage = swapped / len(items) if items else 0.0
+        print(f"문서 {len(documents):,} / 캐시 {len(cache):,} / 실제분류로 덮음 {swapped:,}")
+        if coverage < 0.99:
+            print(
+                f"  ⚠️ 캐시 적용률 {coverage:.1%} — 나머지는 golden 으로 폴백된다.\n"
+                f"     real 열이 oracle 과 섞이므로 이번 실행에서는 real 을 뺀다."
+            )
+        else:
+            arms.append(("real", real_items))
+    else:
+        print(
+            f"문서 {len(documents):,} / 분류 캐시 없음 ({CACHE.name})\n"
+            "  → oracle 만 측정한다. real 을 보려면 재생성된 data/input 으로 분류를\n"
+            "     다시 돌려 캐시를 만들어야 한다(옛 캐시 재사용 금지 — item_id 는 같고\n"
+            "     텍스트만 바뀌어서 조용히 틀린 채점이 된다)."
+        )
 
     rows = []
     for name, keyfn in FAMILIES.items():
-        for label, its in (("oracle", items), ("real", real_items)):
+        for label, its in arms:
             r = await run_family(name, keyfn, its, documents, truth, ignored, label)
             rows.append(r)
             print(f"  ...{name}/{label} done  published={r['published']}")
