@@ -1532,3 +1532,24 @@ def test_callback_notice_still_lists_held_products(monthly_input) -> None:
     assert notice is not None
     assert "P090" in notice
     assert "보류상품 P090" in notice  # 상품명도 같이 — 코드만 있으면 셀러가 못 알아본다
+
+
+@pytest.mark.asyncio
+async def test_all_held_reports_why_not_just_that_it_failed() -> None:
+    """전 상품이 보류면 PDF 는 안 나가지만 **사유는 실어 보낸다**.
+
+    수록 0개 → FAILED_ERROR 는 계약이다(§5 status 표). 보류 페이지만 있는 PDF 를 SUCCESS
+    로 내보내면 메인이 "PDF 첨부 메일 발송"을 타서 분석이 한 건도 없는 문서가 셀러에게 간다.
+
+    ⚠️ 다만 "생성에 실패했다"만 가면 **데이터 파이프라인 고장과 구분이 안 된다** —
+       전 상품 표본 부족(신규 고객사 등)은 정상 동작이다. 어느 상품이 왜 빠졌는지 실어야 한다.
+    """
+    result = await compile_and_upload_monthly_book(
+        "2026-07", [], held_inputs=[_held_input("P090"), _held_input("P091")]
+    )
+
+    assert result.callback.status == CallbackStatus.FAILED_ERROR
+    assert result.callback.pdf_s3_meta is None
+    notice = result.callback.notice_message
+    assert "P090" in notice and "P091" in notice
+    assert "표본 부족" in notice

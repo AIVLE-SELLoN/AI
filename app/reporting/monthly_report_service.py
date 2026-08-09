@@ -339,13 +339,27 @@ async def compile_and_upload_monthly_book(
     trace_base = f"report_id={report_id}"
 
     if not items:
-        logger.error(f"[FAILED_ERROR] {trace_base} | 합본에 넣을 상품이 하나도 없습니다")
+        # ⚠️ 수록 상품이 0개면 PDF 를 만들지 않는다 — 계약이 그렇게 정해져 있다
+        #    (§5 status 표: "수록할 상품이 하나도 없음" → FAILED_ERROR).
+        #    보류 페이지만 있는 PDF 를 SUCCESS 로 내보내면 메인이 "링크 저장 + PDF 첨부
+        #    메일 발송" 을 타는데, 분석이 한 건도 없는 문서가 셀러에게 나간다.
+        #
+        #    다만 **왜 하나도 없는지는 반드시 실어 보낸다.** 전 상품이 표본 부족인 상황
+        #    (신규 고객사 등)에서 "생성에 실패했다"만 가면 데이터 파이프라인이 고장난 것과
+        #    구분이 안 된다 — 보류는 정상 동작이다.
+        logger.error(
+            f"[FAILED_ERROR] {trace_base} | 합본에 넣을 상품이 하나도 없습니다 "
+            f"(보류 {len(held_inputs or [])}건)"
+        )
+        excluded = _build_excluded_notice(held_inputs, failed_products)
         return GenerationResult(
             output=None,
             callback=build_monthly_callback(
                 status=CallbackStatus.FAILED_ERROR,
                 report_id=report_id,
-                notice_message="생성에 성공한 상품이 없어 월간 보고서를 만들지 못했습니다.",
+                notice_message=" ".join(
+                    filter(None, ["생성에 성공한 상품이 없어 월간 보고서를 만들지 못했습니다.", excluded])
+                ),
             ),
         )
 

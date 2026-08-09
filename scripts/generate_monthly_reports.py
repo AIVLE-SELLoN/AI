@@ -300,9 +300,14 @@ async def run_generate(args: argparse.Namespace) -> int:
             "published": False,
         }
 
-        # 발행은 **실패해도 배치를 죽이지 않는다.** PDF 는 이미 S3 에 올라갔고, 이벤트만
-        # 다시 쏘면 되는 상태다(멱등 키가 report_id 라 메인이 upsert 한다). 여기서 예외를
-        # 올리면 요약 파일조차 안 남아 무엇이 성공했는지 알 수 없게 된다.
+        # 발행 실패는 **여기서 예외를 올리지 않는다** — PDF 는 이미 S3 에 올라갔고 이벤트만
+        # 다시 쏘면 되는 상태다(멱등 키가 report_id 라 메인이 upsert 한다). 예외를 올리면
+        # 요약 파일조차 안 남아 무엇이 성공했는지 알 수 없게 된다.
+        #
+        # ⚠️ 다만 **종료코드는 반드시 비-0 이어야 한다**(아래 참고). "계속 도는 것"과
+        #    "성공으로 보고하는 것"은 다르다 — 발행이 실패하면 백엔드에 리포트 행이 안 생기고
+        #    셀러에게 메일이 안 나가는데, exit 0 이면 cron·k8s Job 이 성공으로 기록한다.
+        #    **월 1회 배치라 다음 기회가 한 달 뒤다.** (app/batch/daily.py 와 같은 규칙)
         trace_id = new_trace_id()
         try:
             await publish_report_generated(result.callback, args.month, trace_id)
@@ -339,11 +344,23 @@ async def run_generate(args: argparse.Namespace) -> int:
         size = book.get("file_size_bytes") or 0
         print(f" 합본 {book['status']}: {book.get('included_products')}개 수록 · {size / 1024:.0f}KB")
         print(f"       {book.get('s3_key')}")
+        # 발행 여부를 화면에도 낸다 — 로그 한 줄에만 있으면 사람이 못 본다
+        if book.get("published"):
+            print(" 발행 ai.report.generated: 완료")
+        else:
+            print(f" 발행 ai.report.generated: **실패** — {book.get('publish_error')}")
+            print("       PDF 는 S3 에 있으므로 이벤트만 재발행하면 된다")
     print(f" 총 {len(results)}건 → {_display_path(out)}")
     print("=============================================")
 
     # 합본이 실패했으면 그게 곧 배치 실패다(산출물이 없다).
     if book.get("status", "SKIPPED").startswith("FAILED"):
+        return 1
+    # ⚠️ 발행 실패도 배치 실패다. 여기서 0 을 돌려주면 화면엔 "합본 SUCCESS" 만 보이고
+    #    cron·k8s Job 이 성공으로 기록하는데, 정작 백엔드엔 리포트 행이 없고 셀러에게
+    #    메일이 안 나간다. 월 1회 배치라 다음 기회가 한 달 뒤다.
+    #    (SKIPPED·dry-run 은 "published" 키 자체가 없어 True 로 읽혀 통과한다)
+    if not book.get("published", True):
         return 1
     failed_products = sum(v for k, v in counts.items() if k.startswith("FAILED"))
     return 1 if failed_products else 0

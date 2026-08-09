@@ -553,10 +553,62 @@ def test_product_level_status_never_leaves_as_monthly_event(status):
         mq.build_report_payload(callback, "2026-07")
 
 
-def test_report_uses_report_id_as_idempotency_key(report_callback):
-    """멱등 키는 report_id — 같은 달을 다시 돌려도 메인이 upsert 한다."""
+def test_report_publisher_signature_matches_batch_call():
+    """배치 호출부와 시그니처가 어긋나지 않는지만 본다.
+
+    ⚠️ 이 테스트는 **발행 동작을 검증하지 않는다.** 이름이 그렇게 읽히지 않도록 바꿨다 —
+       예전 이름(`..._uses_report_id_as_idempotency_key`)은 멱등 키를 검증하는 것처럼
+       보였는데 실제로는 파라미터 이름만 봤다. 라우팅 키를 오타내도 통과했다.
+       실제 발행은 아래 `test_report_publish_sends_...` 가 본다.
+    """
     assert list(inspect.signature(mq.publish_report_generated).parameters) == [
         "callback",
         "report_month",
         "trace_id",
     ]
+
+
+@pytest.mark.asyncio
+async def test_report_publish_sends_envelope_on_the_right_routing_key(
+    report_callback, monkeypatch
+):
+    """전송 직전까지 태운다 — 라우팅 키·멱등 키·Envelope 이 전부 실물이다.
+
+    ⚠️ 시그니처만 보는 테스트로는 `REPORT_GENERATED` 오타를 못 잡는다. 오타가 나면
+       바인딩(`ai.#`)에는 걸려도 백엔드가 그 이벤트를 안 읽어 **리포트 행이 안 생기는데**,
+       배치는 발행 성공으로 보고 끝난다. 여기서 문자열을 직접 확인한다.
+    """
+    sent: dict = {}
+
+    class FakeExchange:
+        async def publish(self, message, routing_key, timeout=None):
+            sent["routing_key"] = routing_key
+            sent["body"] = message.body
+            return Basic.Ack(delivery_tag=1)
+
+    async def fake_get_exchange(_settings):
+        return FakeExchange()
+
+    monkeypatch.setattr(mq.get_settings(), "mq_enabled", True)
+    monkeypatch.setattr(mq.get_settings(), "mq_company_id", "SLN-test")
+    monkeypatch.setattr(mq, "_get_exchange", fake_get_exchange)
+
+    await mq.publish_report_generated(report_callback, "2026-07", "trace-rpt")
+
+    envelope = json.loads(sent["body"].decode("utf-8"))
+    assert sent["routing_key"] == "ai.report.generated"
+    assert envelope["eventType"] == "ai.report.generated"
+    assert envelope["traceId"] == "trace-rpt"
+    # 멱등 키는 report_id — 같은 달을 다시 돌려도 메인이 upsert 한다
+    assert envelope["payload"]["report_id"] == "RPT-202607"
+    assert envelope["payload"]["report_month"] == "2026-07"
+    assert "guideline_id" not in envelope["payload"]
+
+
+@pytest.mark.asyncio
+async def test_report_publish_blocked_when_mq_disabled(report_callback, monkeypatch):
+    """MQ_ENABLED=false 는 no-op 이 아니다 — 다른 두 발행 함수와 같은 규칙."""
+    monkeypatch.setattr(mq.get_settings(), "mq_enabled", False)
+
+    with pytest.raises(MqDisabledError):
+        await mq.publish_report_generated(report_callback, "2026-07", "trace-1")
