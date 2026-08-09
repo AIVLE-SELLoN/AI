@@ -245,7 +245,39 @@ def _get_detail_page_text(alert: DetectionAlert) -> str:
             ]
         },
     )
-    return detail_rows[0]["document"] if detail_rows else NO_DETAIL_TEXT
+    if detail_rows:
+        return detail_rows[0]["document"]
+
+    _log_detail_page_miss(alert, detail_pages)
+    return NO_DETAIL_TEXT
+
+
+def _log_detail_page_miss(alert: DetectionAlert, collection: Any) -> None:
+    """0건의 사유를 둘로 가른다 — 이 상품이 미등록인가, 컬렉션이 통째로 비었는가.
+
+    `.chroma/` 가 gitignore 라 각자 로컬은 시딩(`scripts/seed_vectordb.py`) 전까지
+    비어 있는데, 그 상태가 "상세페이지 미등록" 과 **같은 모양(조회 0건)** 으로 나와
+    구분이 안 됐다. 컬렉션이 0건이면 조회 조건과 무관하게 전건이 0건이므로 사유가
+    다르고, 조치도 다르다(상품 등록 vs 시딩 실행).
+
+    로그만 남기고 예외는 안 던진다 — 근거 0건의 처리는 `run()` 이 이미 한다
+    (개선안 미생성 + 경고). 여기서 막으면 그 경로가 두 벌이 된다.
+    """
+    if collection.count() == 0:
+        logger.warning(
+            "[상세페이지 컬렉션 비어 있음] 시딩이 안 된 환경일 수 있습니다 — "
+            "`python scripts/seed_vectordb.py` 확인. alert=%s",
+            alert.alert_id,
+        )
+        return
+
+    logger.info(
+        "[상세페이지 미등록] product_group_id=%s channel=%s aspect=%s alert=%s",
+        alert.product_group_id,
+        alert.channel.value,
+        alert.main_aspect.value,
+        alert.alert_id,
+    )
 
 
 def quotable_inquiries(inquiries: Sequence[LinkedCSInquiry]) -> list[LinkedCSInquiry]:
