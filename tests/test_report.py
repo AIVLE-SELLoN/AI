@@ -231,6 +231,40 @@ def cs_output() -> CSGuidelineOutput:
     )
 
 
+def _held_input(product_group_id: str, *, voc: int = 4) -> MonthlyReportInput:
+    """표본 부족으로 보류될 상품의 입력. 지면의 보류 페이지가 이 값을 찍는다.
+
+    채널쌍은 전부 보류로 둔다 — VOC 가 10건도 안 되는 상품은 채널쌍 판정도 설 수 없다.
+    """
+    return MonthlyReportInput(
+        report_month="2026-07",
+        start_date=date(2026, 7, 1),
+        end_date=date(2026, 7, 31),
+        product_group_id=product_group_id,
+        product_name=f"보류상품 {product_group_id}",
+        total_voc_count=voc,
+        aspect_distributions=[
+            {"aspect": a, "total_count": 1, "positive_ratio": 0.2,
+             "neutral_ratio": 0.3, "negative_ratio": 0.5}
+            for a in ("색상", "사이즈", "소재")
+        ],
+        sentiment_drifts=[
+            {"aspect": a, "drift_rate": 0.0, "status": "NORMAL"}
+            for a in ("색상", "사이즈", "소재")
+        ],
+        channel_divergence={
+            "calculated_at": datetime(2026, 8, 1, tzinfo=UTC),
+            "worst_pair": "COUPANG_VS_NAVER",
+            "is_crisis": None,
+            "pairs": [
+                {"comparison_pair": "COUPANG_VS_NAVER", "sample_size": voc,
+                 "hold_reason": "INSUFFICIENT_SAMPLE"}
+            ],
+        },
+        recommended_id=f"REC-202607-{product_group_id}",
+    )
+
+
 @pytest.fixture
 def monthly_input() -> MonthlyReportInput:
     """색상 부정 50%(드리프트 +8%p, RISK), worst_pair 는 CRISIS 단계."""
@@ -635,7 +669,7 @@ async def test_monthly_book_is_one_object_per_month(monthly_input, monthly_outpu
             file_size_bytes=497000,
         )
         result = await compile_and_upload_monthly_book(
-            "2026-07", items, held_products=["P099"]
+            "2026-07", items, held_inputs=[_held_input("P099")]
         )
 
     # 상품이 3개여도 PDF 는 한 번만 만들고 한 번만 올린다
@@ -1133,7 +1167,7 @@ async def test_book_notice_separates_held_and_failed(monthly_input, monthly_outp
             file_size_bytes=497000,
         )
         result = await compile_and_upload_monthly_book(
-            "2026-07", items, held_products=["P090"], failed_products=["P001"]
+            "2026-07", items, held_inputs=[_held_input("P090")], failed_products=["P001"]
         )
 
     notice = result.callback.notice_message
@@ -1441,3 +1475,60 @@ def test_upload_precheck_is_reusable_before_generation() -> None:
         pytest.raises(S3NotConfiguredError, match="S3_ENABLED=false"),
     ):
         s3_uploader.ensure_s3_ready(_COMPANY_ID)
+
+
+# ── 보류 상품 지면 노출 (2026-08-09) ──────────────────────────────────────
+
+
+def test_held_product_gets_its_own_page(monthly_input, monthly_output) -> None:
+    """보류 상품도 지면에 남는다 — 사유가 PDF 안에서 읽혀야 한다.
+
+    ⚠️ 예전에는 합본에서 통째로 빼고 콜백 notice_message 로만 알렸다. 표지도 목차도 없는
+       구조라 **PDF 만 받아보는 사람은 자기 상품이 왜 없는지 알 방법이 없었다** —
+       "빠졌다"는 사실 자체가 문서 어디에도 안 보인다.
+    """
+    context = build_book_context(
+        "2026-07",
+        [{"input": monthly_input.model_dump(mode="json"),
+          "report": monthly_output.model_dump(mode="json")}],
+        held=[_held_input("P090", voc=4).model_dump(mode="json")],
+    )
+
+    assert len(context["items"]) == 1
+    assert len(context["held"]) == 1
+    assert context["held"][0]["product_group_id"] == "P090"
+    assert context["hold_notice"] == constants.HOLD_IN_BOOK_NOTICE
+
+    from jinja2 import BaseLoader, Environment, select_autoescape
+
+    from app.reporting.pdf_compiler import MONTHLY_BOOK_HTML
+
+    env = Environment(loader=BaseLoader(), autoescape=select_autoescape(["html", "xml"]))
+    html = env.from_string(MONTHLY_BOOK_HTML).render(**context)
+
+    assert "보류상품 P090" in html
+    assert "리포트 생성 보류" in html
+    assert constants.HOLD_IN_BOOK_NOTICE in html
+    # 보류 페이지도 상품 페이지와 같은 단위로 쪽이 나뉜다
+    assert html.count('class="product-page') == 2
+
+
+def test_hold_notice_says_under_not_at_or_under() -> None:
+    """문구가 **미만**이어야 한다 — '이하'로 쓰면 정확히 10건인 상품을 잘못 안내한다.
+
+    보류 조건은 `total_voc_count < MIN_VOC_COUNT_FOR_REPORT` 라, 10건짜리 상품은
+    리포트가 정상 생성된다. 그 상품에 "10건 이하라 보류" 라고 적으면 문서가 거짓말을 한다.
+    """
+    assert f"{constants.MIN_VOC_COUNT_FOR_REPORT}건 미만" in constants.HOLD_IN_BOOK_NOTICE
+    assert "이하" not in constants.HOLD_IN_BOOK_NOTICE
+
+
+def test_callback_notice_still_lists_held_products(monthly_input) -> None:
+    """지면에 넣었다고 콜백 안내를 없애지 않는다 — 메인 화면은 PDF 를 열지 않는다."""
+    from app.reporting.monthly_report_service import _build_excluded_notice
+
+    notice = _build_excluded_notice([_held_input("P090")], None)
+
+    assert notice is not None
+    assert "P090" in notice
+    assert "보류상품 P090" in notice  # 상품명도 같이 — 코드만 있으면 셀러가 못 알아본다

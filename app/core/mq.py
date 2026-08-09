@@ -29,7 +29,12 @@ from typing import Any
 from app.config import get_settings
 from app.core.exceptions import MqConfigError, MqDisabledError, MqPublishError
 from app.core.ids import ALERT_ID_PREFIX, GUIDELINE_ID_PREFIX
-from app.core.schemas import DetectionAlert, GenerationCallback, Recommendation
+from app.core.schemas import (
+    CallbackStatus,
+    DetectionAlert,
+    GenerationCallback,
+    Recommendation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +43,7 @@ SOURCE = "ai-server"
 
 ANOMALY_ANALYZED = "ai.anomaly.analyzed"
 GUIDELINE_GENERATED = "ai.guideline.generated"
+REPORT_GENERATED = "ai.report.generated"
 """라우팅 키. `ai.#` 바인딩으로 `main.inbound` 에 꽂힌다(§2-1).
 
 ⚠️ `ai.anomaly.detected` 는 구 이름이다(2026-08-03 개명). 탐지만이 아니라 개선안까지
@@ -118,6 +124,58 @@ def build_guideline_payload(callback: GenerationCallback) -> dict:
     return payload
 
 
+MONTHLY_EVENT_STATUSES = frozenset(
+    {
+        CallbackStatus.SUCCESS.value,
+        CallbackStatus.FAILED_SIZE_EXCEEDED.value,
+        CallbackStatus.FAILED_ERROR.value,
+    }
+)
+"""`ai.report.generated` 에 실릴 수 있는 status **3종**(§5).
+
+`HOLD_INSUFFICIENT_DATA`·`FAILED_VALIDATION` 은 여기 못 온다 — 둘 다 **상품 단위** 판정인데
+이벤트는 월 단위이기 때문이다. 보류·검증실패 상품은 합본에서 빠지고 그 사실이
+`notice_message` 로 나간다. (두 상태는 `POST /api/v1/reports` 상품 1건 REST 에서는 살아 있다.)
+"""
+
+
+def build_report_payload(callback: GenerationCallback, report_month: str) -> dict:
+    """`ai.report.generated` payload(§5). 멱등 키는 `report_id` — **월 1건**이다.
+
+    ⚠️ `report_month` 를 인자로 받는 이유: `GenerationCallback` 에 없는 필드인데 §5 가
+       payload 에 요구한다. `report_id`(`RPT-202607`)에서 잘라 쓸 수도 있지만 그러지
+       않는다 — `_alert_id_of()` 주석과 같은 이유로, **정본이 손에 있으면 재구성하지
+       않는다.** 배치는 `args.month` 를 이미 들고 있다.
+
+    ⚠️ `source_payload` 는 싣지 않는다. 월간은 PDF 가 유일 산출물이라 콜백 자체가
+       그 필드를 안 채우지만(§3-2), 나중에 채워지더라도 이 이벤트로는 안 나가게 막는다.
+
+    Raises:
+        ValueError: `report_id` 가 없을 때(= CS 가이드라인 산출물), 또는 status 가 월 단위
+            이벤트에 올 수 없는 값일 때.
+    """
+    # `GenerationCallback` 스키마가 report_id / guideline_id 를 **배타**로 강제한다
+    # (정확히 하나). 그래서 이 검사 하나가 양방향을 다 막는다 — guideline_id 가 채워진
+    # 산출물은 report_id 가 None 이라 여기서 걸린다. 뒤바뀌면 백엔드가 엉뚱한 소비
+    # 동작(CS팀 메일 발송)을 타므로 반드시 막아야 한다(§6).
+    if callback.report_id is None:
+        raise ValueError(
+            "report_id 가 없습니다 — 월간 합본 콜백이 아닙니다. "
+            "guideline_id 가 있는 산출물은 ai.guideline.generated 로 발행할 것"
+        )
+    if callback.status.value not in MONTHLY_EVENT_STATUSES:
+        raise ValueError(
+            f"'{callback.status.value}' 는 월 단위 이벤트에 실을 수 없는 상태입니다"
+            f"(허용: {sorted(MONTHLY_EVENT_STATUSES)}) — 상품 단위 판정은 notice_message 로 나간다"
+        )
+
+    payload = callback.model_dump(mode="json")
+    payload.pop("guideline_id", None)  # 월간 payload 에 없는 필드(§5)
+    payload.pop("source_payload", None)  # 월간은 원본을 보관하지 않는다
+    payload["report_month"] = report_month
+    return payload
+
+
 def _alert_id_of(callback: GenerationCallback) -> str:
     """콜백에서 `alert_id` 를 얻는다. **정본이 있으면 재구성하지 않는다.**
 
@@ -186,6 +244,31 @@ async def publish_guideline_generated(
     await _publish(
         GUIDELINE_GENERATED, payload, trace_id, key=str(callback.guideline_id)
     )
+
+
+async def publish_report_generated(
+    callback: GenerationCallback,
+    report_month: str,
+    trace_id: str,
+) -> None:
+    """`ai.report.generated` 발행 — 월간 합본 1건. 멱등 키 `report_id`(`RPT-202607`).
+
+    **월 1건이다.** 상품별로 나가지 않는다 — PDF 가 전 상품을 합친 1개라 콜백도 이벤트도
+    월 단위다. 같은 달을 다시 돌려도 `report_id` 가 같아 메인이 upsert 하면 된다.
+
+    Args:
+        callback: `compile_and_upload_monthly_book()` 산출물. `report_id` 가 있어야 한다.
+        report_month: `YYYY-MM`. 콜백에 없는 값이라 배치가 넘긴다(`build_report_payload` 참고).
+        trace_id: 배치가 만든 값.
+
+    Raises:
+        ValueError: `report_id` 가 없거나 `guideline_id` 가 채워져 있을 때, 또는 상품 단위
+            상태(HOLD·FAILED_VALIDATION)를 실으려 할 때.
+        MqDisabledError: `MQ_ENABLED=false`.
+        MqPublishError: 접속·발행 실패.
+    """
+    payload = build_report_payload(callback, report_month)
+    await _publish(REPORT_GENERATED, payload, trace_id, key=str(callback.report_id))
 
 
 # ── 전송 ─────────────────────────────────────────────────────────

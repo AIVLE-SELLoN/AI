@@ -24,6 +24,7 @@ from app.core.schemas import (
     EvaluatorChecks,
     Evidence,
     GenerationCallback,
+    PdfS3Meta,
     Proposal,
     ProposalType,
     Recommendation,
@@ -464,3 +465,98 @@ async def test_declares_topology_only_when_told_to(monkeypatch):
     await mq.resolve_exchange(channel, settings)
 
     assert channel.calls == ["declare_exchange"]
+
+
+# ── ai.report.generated (§5) ─────────────────────────────────────
+
+
+@pytest.fixture
+def report_callback() -> GenerationCallback:
+    """월간 합본 성공 콜백. PDF 메타는 스키마가 SUCCESS 에 요구한다."""
+    return GenerationCallback(
+        report_id="RPT-202607",
+        status=CallbackStatus.SUCCESS,
+        pdf_s3_meta=PdfS3Meta(
+            company_id="c0ffee00-0000-4000-8000-000000000000",
+            s3_bucket_name="sellon-reports",
+            s3_file_path="reports/monthly-report/c0ffee00-0000-4000-8000-000000000000/2026/07/",
+            original_file_name="monthly-report_202607.pdf",
+            new_file_name="monthly-report_202607_a1b2.pdf",
+            s3_full_key=(
+                "reports/monthly-report/c0ffee00-0000-4000-8000-000000000000/2026/07/"
+                "monthly-report_202607_a1b2.pdf"
+            ),
+            created_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+            file_size_bytes=497000,
+            presigned_url="https://example.test/signed",
+        ),
+        notice_message="표본 부족으로 보류된 상품 2개: …",
+    )
+
+
+def test_report_payload_shape(report_callback):
+    """§5 표대로 — report_id·report_month 는 있고, guideline_id·source_payload 는 없다."""
+    payload = mq.build_report_payload(report_callback, "2026-07")
+
+    assert payload["report_id"] == "RPT-202607"
+    assert payload["report_month"] == "2026-07"
+    assert payload["status"] == "SUCCESS"
+    assert payload["pdf_s3_meta"] is not None
+    assert "guideline_id" not in payload
+    assert "source_payload" not in payload
+    # SUCCESS 인데도 notice_message 가 실린다 — 소비 측이 무시하면 안 되는 값이다
+    assert payload["notice_message"]
+
+
+def test_report_month_is_passed_not_derived(report_callback):
+    """report_month 는 인자로 받는다 — report_id 에서 잘라 쓰지 않는다.
+
+    ⚠️ `RPT-202607` → `2026-07` 로 되돌릴 수 있어 보이지만, 정본이 손에 있는데 재구성하는
+       패턴은 alert_id 에서 이미 문제가 됐다(`_alert_id_of` 주석). 인자로 준 값이
+       그대로 실리는지 고정한다.
+    """
+    payload = mq.build_report_payload(report_callback, "2026-05")
+
+    assert payload["report_month"] == "2026-05"  # report_id 는 202607 이지만 인자가 이긴다
+
+
+def test_guideline_callback_rejected_on_report_key(guideline_callback):
+    """guideline_id 가 있는 산출물을 월간 키로 실으면 안 된다.
+
+    `build_guideline_payload` 의 역방향 가드와 짝이다. 둘이 뒤바뀌면 백엔드가 엉뚱한
+    소비 동작(CS팀 메일 발송)을 탄다.
+
+    ⚠️ 스키마가 report_id / guideline_id 를 **배타**로 강제하므로(정확히 하나),
+       가이드라인 콜백은 report_id 가 None 이라 그 검사에서 걸린다. 검사가 하나여도
+       양방향이 다 막힌다는 것을 이 테스트가 고정한다.
+    """
+    assert guideline_callback.report_id is None  # 배타 제약의 결과
+
+    with pytest.raises(ValueError, match="ai.guideline.generated 로 발행"):
+        mq.build_report_payload(guideline_callback, "2026-07")
+
+
+@pytest.mark.parametrize(
+    "status", [CallbackStatus.HOLD_INSUFFICIENT_DATA, CallbackStatus.FAILED_VALIDATION]
+)
+def test_product_level_status_never_leaves_as_monthly_event(status):
+    """상품 단위 판정은 월 단위 이벤트에 실을 수 없다(§5).
+
+    보류·검증실패는 상품 하나의 결과인데 이벤트는 월 1건이다. 실어 보내면 백엔드가
+    "이번 달 리포트 전체가 보류됐다"로 읽는다 — 실제로는 나머지 상품이 정상 발행됐는데도.
+    """
+    callback = GenerationCallback(
+        report_id="RPT-202607", status=status, notice_message="상품 단위 판정"
+    )
+
+    with pytest.raises(ValueError, match="월 단위 이벤트"):
+        mq.build_report_payload(callback, "2026-07")
+
+
+def test_report_uses_report_id_as_idempotency_key(report_callback):
+    """멱등 키는 report_id — 같은 달을 다시 돌려도 메인이 upsert 한다."""
+    assert list(inspect.signature(mq.publish_report_generated).parameters) == [
+        "callback",
+        "report_month",
+        "trace_id",
+    ]

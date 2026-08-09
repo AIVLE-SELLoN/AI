@@ -61,6 +61,7 @@ from typing import Any
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core import constants
+from app.core.mq import close_mq, new_trace_id, publish_report_generated
 from app.core.schemas import CallbackStatus, MonthlyReportInput
 from app.reporting.monthly_aggregator import aggregate_monthly_inputs
 from app.reporting.monthly_report_service import (
@@ -204,6 +205,8 @@ async def _generate_one(
             "report_id": report_id,
             "product_group_id": input_data.product_group_id,
             "status": CallbackStatus.HOLD_INSUFFICIENT_DATA.value,
+            # 합본이 보류 페이지에 상품명·VOC 건수를 찍어야 해서 입력을 통째로 넘긴다
+            "input": input_data,
         }
 
     if dry_run:
@@ -270,17 +273,19 @@ async def run_generate(args: argparse.Namespace) -> int:
             if r["status"] == CallbackStatus.SUCCESS.value and r.get("output")
         ]
         items.sort(key=lambda i: i["input"].product_group_id)
+        # 보류는 **입력 객체**로 넘긴다 — 합본이 보류 페이지에 상품명·VOC 건수를 찍는다.
         held = [
-            r["product_group_id"] for r in results
-            if r["status"] == CallbackStatus.HOLD_INSUFFICIENT_DATA.value
+            r["input"] for r in results
+            if r["status"] == CallbackStatus.HOLD_INSUFFICIENT_DATA.value and r.get("input")
         ]
+        held.sort(key=lambda i: i.product_group_id)
         failed = [r["product_group_id"] for r in results if r["status"].startswith("FAILED")]
 
         logger.info(f"[BOOK] 합본 생성 시작 — 수록 {len(items)}개 / 보류 {len(held)} / 실패 {len(failed)}")
         result = await compile_and_upload_monthly_book(
             args.month,
             [{"input": i["input"], "report": i["output"]} for i in items],
-            held_products=held,
+            held_inputs=held,
             failed_products=failed,
         )
         book = {
@@ -292,7 +297,25 @@ async def run_generate(args: argparse.Namespace) -> int:
                 result.callback.pdf_s3_meta.file_size_bytes if result.callback.pdf_s3_meta else None
             ),
             "notice_message": result.callback.notice_message,
+            "published": False,
         }
+
+        # 발행은 **실패해도 배치를 죽이지 않는다.** PDF 는 이미 S3 에 올라갔고, 이벤트만
+        # 다시 쏘면 되는 상태다(멱등 키가 report_id 라 메인이 upsert 한다). 여기서 예외를
+        # 올리면 요약 파일조차 안 남아 무엇이 성공했는지 알 수 없게 된다.
+        trace_id = new_trace_id()
+        try:
+            await publish_report_generated(result.callback, args.month, trace_id)
+            book["published"] = True
+            logger.info(f"[PUBLISH] {result.callback.report_id} 발행 완료 (trace={trace_id})")
+        except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
+            book["publish_error"] = f"{type(exc).__name__}: {exc}"
+            logger.error(
+                f"[PUBLISH FAILED] {result.callback.report_id} — {exc}. "
+                f"PDF 는 S3 에 있으므로 이벤트만 재발행하면 된다 (trace={trace_id})"
+            )
+        finally:
+            await close_mq()
 
     summary = {
         "report_month": args.month,
@@ -361,4 +384,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # ⚠️ 출력보다 먼저. 이 스크립트의 로그·도움말에 `—`(U+2014)가 들어 있는데 cp949 에는
+    #    없어서, 한국어 윈도우 콘솔에서는 `--help` 조차 UnicodeEncodeError 로 죽는다.
+    #    발행 실패 로그도 같은 문자를 쓰므로, 인코딩 때문에 **실패 사유가 안 보이는**
+    #    상황이 된다. (app/core/console.py — PR #36 이 배치 요약에서 겪은 것과 같은 문제)
+    from app.core.console import force_utf8_output
+
+    force_utf8_output()
     main()

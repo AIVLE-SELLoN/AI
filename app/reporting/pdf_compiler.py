@@ -7,6 +7,7 @@ from typing import Any
 
 from jinja2 import BaseLoader, Environment, select_autoescape
 
+from app.core import constants
 from app.reporting.charts import (
     render_divergence_gauge,
     render_sentiment_donut,
@@ -112,6 +113,13 @@ _BASE_CSS = """
                     line-height: 1.35; }
     .note-card li { margin-bottom: 0.5mm; }
     .note-card li:last-child { margin-bottom: 0; }
+
+    /* 보류 상품 페이지 — 사유만 적는다. 수록 상품과 같은 머리글을 써서 같은 책으로 읽힌다 */
+    .hold-box { border: 1px solid #ffe3e3; background: #fff5f5; border-radius: 3mm;
+                padding: 8mm 10mm; margin-top: 4mm; text-align: center; }
+    .hold-title { font-size: 11pt; font-weight: bold; color: #f03e3e; margin-bottom: 3mm; }
+    .hold-msg { font-size: 10pt; color: #212529; line-height: 1.6; }
+    .hold-sub { font-size: 8.5pt; color: #868e96; margin-top: 3mm; line-height: 1.5; }
 
     /* 합본: 상품마다 새 페이지 — 첫 상품 페이지를 화면 미리보기로 쓴다 */
     .product-page { page-break-before: always; }
@@ -273,7 +281,25 @@ MONTHLY_BOOK_HTML = (
             pair_label=item.pair_label, analysis_by_pair=item.analysis_by_pair,
             brand_sentiment=item.brand_sentiment %}"""
     + _MONTHLY_SECTION_HTML
-    + """{% endwith %}</section>{% endfor %}</body></html>"""
+    + """{% endwith %}</section>{% endfor %}"""
+    # 보류 상품 — 사유만 적은 페이지. 수록 상품 뒤에 이어 붙인다(2026-08-09).
+    # ⚠️ 이 페이지가 없으면 PDF 만 받아보는 사람은 자기 상품이 왜 빠졌는지 알 수 없다.
+    #    표지도 목차도 없는 구조라 "빠졌다"는 사실 자체가 안 보인다.
+    + """
+{% for input in held %}<section class="product-page{% if loop.first and not items %} first{% endif %}">
+    <h1>{{ input.product_name }} <span style="color:#868e96">({{ input.product_group_id }})</span></h1>
+    <div class="meta">
+        {{ report_month }} 월간 분석 · {{ input.start_date }} ~ {{ input.end_date }}
+    </div>
+    <div class="hold-box">
+        <div class="hold-title">리포트 생성 보류</div>
+        <div class="hold-msg">{{ hold_notice }}</div>
+        <div class="hold-sub">
+            이번 달 수집된 VOC {{ '{:,}'.format(input.total_voc_count) }}건 —
+            데이터가 쌓이면 다음 호부터 분석이 재개됩니다.
+        </div>
+    </div>
+</section>{% endfor %}</body></html>"""
 )
 
 def _build_monthly_chart_context(context: dict[str, Any]) -> dict[str, Any]:
@@ -342,17 +368,22 @@ def _build_monthly_chart_context(context: dict[str, Any]) -> dict[str, Any]:
 def build_book_context(
     report_month: str,
     items: list[dict[str, Any]],
+    held: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """월간 합본(상품별 섹션) 컨텍스트.
 
     items 원소는 `{"input": MonthlyReportInput.model_dump(mode="json"),
                    "report": MonthlyReportOutput.model_dump(mode="json")}`.
+    held  원소는 `MonthlyReportInput.model_dump(mode="json")` — 표본 부족으로 보류된 상품.
 
     ⚠️ 총합 요약(표지) 페이지는 만들지 않는다 (2026-08-04 확정). 표지가 쓰던 값
-       (전사 합계·상품 목록·기간·생성 시각·보류/실패 목록)은 **계산까지 함께 지웠다** —
-       렌더링하지 않는 값을 컨텍스트에 남겨두면 나중에 본문과 어긋난 채로 되살아난다.
-       보류·실패 상품 안내는 컨텍스트가 아니라 콜백 notice_message 로 나간다
-       (`monthly_report_service._build_excluded_notice`).
+       (전사 합계·상품 목록·기간·생성 시각)은 **계산까지 함께 지웠다** — 렌더링하지 않는
+       값을 컨텍스트에 남겨두면 나중에 본문과 어긋난 채로 되살아난다.
+
+    ⚠️ 보류 상품은 **지면에도 남긴다**(2026-08-09). 예전에는 합본에서 통째로 빼고 콜백
+       `notice_message` 로만 알렸는데, 표지도 목차도 없는 구조라 **PDF 만 받아보는 사람은
+       자기 상품이 왜 없는지 알 방법이 없었다.** 콜백 안내는 그대로 두고(메인 화면용),
+       지면에도 사유를 적어 문서 자체로 설명이 되게 한다.
     """
     # ⚠️ report_month 를 여기 담지 않는다 — 합본 템플릿이 읽지 않는다. 본문의
     #    {{ report.report_month }} 는 item.report 에서 오는 **별개 값**이다.
@@ -366,6 +397,9 @@ def build_book_context(
             }
             for item in items
         ],
+        "held": list(held or []),
+        "hold_notice": constants.HOLD_IN_BOOK_NOTICE,
+        "report_month": report_month,
     }
 
 

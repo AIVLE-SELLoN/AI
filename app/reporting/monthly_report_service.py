@@ -54,7 +54,10 @@ logger = logging.getLogger("MonthlyReportService")
 # 프롬프트 버전 — 매직스트링 방지. 교체 시 이 한 줄만 바꾼다(구버전 파일은 남겨둔다).
 # v4: 지시문 압축 + 데이터를 JSON → 파이프 표로 바꾼 토큰 절감판.
 # v5: 채널쌍별 원인·조치(channel_pair_analyses) 생성 추가 — 리포트가 게이지마다 따로 보여준다.
-PROMPT_VERSION = "monthly_report_v5"
+# v6: **글자 수 상한 명시**(항목당 80자, cause_title 40자) — 레이아웃이 상품 1건 = 1페이지라
+#     문장이 길어지면 그 상품만 두 장으로 갈린다. 스키마 max_length(200자)는 계약이라 그대로
+#     두고, 프롬프트로 실제 출력 길이를 잡는다(2026-08-09 확정).
+PROMPT_VERSION = "monthly_report_v6"
 
 
 def build_report_id(input_data: MonthlyReportInput) -> str:
@@ -270,19 +273,32 @@ async def generate_monthly_report_output(
     return None, CallbackStatus.FAILED_VALIDATION, last_errors
 
 
+def _label(input_data: MonthlyReportInput) -> str:
+    """안내 문구에 쓸 상품 표기. `미디 원피스(P001)` — 이름이 없으면 코드만."""
+    return (
+        f"{input_data.product_name}({input_data.product_group_id})"
+        if input_data.product_name
+        else input_data.product_group_id
+    )
+
+
 def _build_excluded_notice(
-    held_products: list[str] | None,
+    held_inputs: list[MonthlyReportInput] | None,
     failed_products: list[str] | None,
 ) -> str | None:
     """합본에서 빠진 상품 안내. 표지를 없앴으므로(2026-08-04) 이 정보는 콜백으로 나간다.
 
     보류와 실패를 **한 문장에 섞지 않는다** — VOC 500건짜리 상품이 '표본 부족'으로
     안내되면 셀러가 데이터가 없다고 오해한다.
+
+    ⚠️ 보류 상품은 이제 **지면에도 페이지가 생긴다**(2026-08-09). 이 문구는 그것과 별개로
+       유지한다 — 메인 화면은 PDF 를 열지 않고도 빠진 상품을 알아야 한다.
     """
     parts = []
-    if held_products:
+    if held_inputs:
         parts.append(
-            f"표본 부족으로 보류된 상품 {len(held_products)}개: {', '.join(held_products)} "
+            f"표본 부족으로 보류된 상품 {len(held_inputs)}개: "
+            f"{', '.join(_label(i) for i in held_inputs)} "
             f"— VOC {constants.MIN_VOC_COUNT_FOR_REPORT}건 미만이라 분석하지 않았습니다."
         )
     if failed_products:
@@ -297,18 +313,27 @@ async def compile_and_upload_monthly_book(
     report_month: str,
     items: list[dict[str, Any]],
     *,
-    held_products: list[str] | None = None,
+    held_inputs: list[MonthlyReportInput] | None = None,
     failed_products: list[str] | None = None,
 ) -> GenerationResult:
     """전 상품을 합친 **월 1개 PDF** 를 만들어 S3 에 올리고 콜백 1건을 낸다.
 
-    items 원소는 `{"input": MonthlyReportInput, "report": MonthlyReportOutput}`.
-    첫 페이지(표지)만 화면에 띄우고 전체는 presigned URL 로 내려받는 구조라
-    (2026-08-03 확정), 표지에 전사 요약과 상품 목록이 들어간다.
+    items       `{"input": MonthlyReportInput, "report": MonthlyReportOutput}` 목록.
+    held_inputs 표본 부족으로 보류된 상품의 **입력**. 지면에 보류 페이지를 만들고
+                콜백 안내 문구도 여기서 만든다.
+
+    ⚠️ 보류 상품도 **페이지를 만든다**(2026-08-09). 예전에는 합본에서 통째로 빼고 콜백
+       `notice_message` 로만 알렸는데, 표지도 목차도 없는 구조라 PDF 만 받아보는 사람은
+       자기 상품이 왜 없는지 알 방법이 없었다. 콜백 안내는 그대로 두고(메인 화면용)
+       지면에도 사유를 남긴다.
+
+    ⚠️ 보류는 `held_inputs`(입력 객체), 실패는 `failed_products`(코드 문자열)로 받는다 —
+       보류는 지면에 상품명·VOC 건수를 찍어야 해서 입력이 통째로 필요하고, 실패는 안내
+       문구에만 쓰여 코드면 충분하다.
 
     ⚠️ 상품 하나가 실패해도 합본은 나간다 — 나머지 상품의 리포트까지 막을 이유가 없다.
-       빠진 상품은 표지에 **보류(표본 부족)와 실패(검증 미통과)를 구분해서** 표기한다.
-       둘을 합치면 데이터가 멀쩡한 상품이 '표본 부족'으로 잘못 안내된다.
+       보류(표본 부족)와 실패(검증 미통과)는 **구분해서** 표기한다. 둘을 합치면 데이터가
+       멀쩡한 상품이 '표본 부족'으로 잘못 안내된다.
     """
     report_id = build_book_report_id(report_month)
     trace_base = f"report_id={report_id}"
@@ -334,6 +359,7 @@ async def compile_and_upload_monthly_book(
                 }
                 for item in items
             ],
+            held=[i.model_dump(mode="json") for i in (held_inputs or [])],
         )
         pdf_bytes = compile_monthly_book(context)
         pdf_s3_meta = await upload_pdf_to_s3(
@@ -385,6 +411,6 @@ async def compile_and_upload_monthly_book(
             status=CallbackStatus.SUCCESS,
             report_id=report_id,
             pdf_s3_meta=pdf_s3_meta,
-            notice_message=_build_excluded_notice(held_products, failed_products),
+            notice_message=_build_excluded_notice(held_inputs, failed_products),
         ),
     )
