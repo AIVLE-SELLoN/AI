@@ -6,6 +6,8 @@
 테스트마다 하나씩만 무너뜨린다.
 """
 
+import pytest
+
 from app.core.schemas import Proposal, ProposalType
 from app.recommendation import pipeline
 from app.recommendation.pipeline import evaluate
@@ -114,6 +116,29 @@ def test_image_guide_fails_when_no_cs_quotes_available(biased_alert):
 
     assert result.passed is False
     assert result.checks.grounding is False
+
+
+@pytest.mark.parametrize("proposal_type", [ProposalType.IMAGE_GUIDE, ProposalType.COPY_DRAFT])
+def test_quoting_no_detail_text_itself_never_passes(biased_alert, proposal_type):
+    """🔴 회귀 테스트 — 근거가 없을 때 "정보 없음"을 인용하면 통과하던 버그(PR #40 리뷰).
+
+    `has_evidence("정보 없음", "정보 없음")` 은 True 다. 그리고 프롬프트가 모델에게
+    **정확히 그 값을 쓰라고 지시**하고 있었다(copy_draft_v1.md, 구 image_guide_v2.md).
+    그래서 고객 문의 0건인데 `grounding=true` · 확신도 "높음" 인 개선안이 나왔다.
+
+    환각 케이스(`test_image_guide_fails_when_no_cs_quotes_available`)만으로는 이걸 못
+    잡는다 — 프롬프트가 모델을 몰아넣는 바로 그 값을 넣어봐야 한다.
+    """
+    proposal = _proposal(proposal_type, pipeline.NO_DETAIL_TEXT)
+    context = _context(
+        detail_text=pipeline.NO_DETAIL_TEXT, cs_quotes=pipeline.NO_DETAIL_TEXT
+    )
+
+    result = evaluate(proposal, biased_alert, context)
+
+    assert result.checks.grounding is False, "근거가 없는데 통과하면 확신도까지 올라간다"
+    assert result.passed is False
+    assert "근거 원문 자체가 없음" in result.failure_reason
 
 
 def test_fails_when_rationale_not_consistent_with_root_cause(biased_alert):

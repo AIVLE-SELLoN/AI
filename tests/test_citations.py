@@ -105,17 +105,40 @@ def test_citations_respect_the_same_cap_as_the_prompt():
     assert len(citations) == CS_QUOTE_TOP_N
 
 
-def test_collect_cs_quotes_drops_blank_and_caps():
+def test_collect_cs_quotes_filters_blanks_before_capping():
+    """빈 원문을 **거른 뒤에** 자른다 — 순서가 반대면 근거가 그만큼 줄어든다.
+
+    앞자리에 빈 게 하나 섞이면, 자르고 거를 경우 5건을 실을 수 있는데 4건만 간다.
+    """
     inquiries = [
         _inquiry("INQ-0", "   "),
         *[_inquiry(f"INQ-{i}", f"문의 {i}") for i in range(1, 9)],
     ]
 
     quotes = pipeline._collect_cs_quotes(inquiries)
+    lines = quotes.splitlines()
 
-    assert "문의 1" in quotes
-    # 빈 원문이 앞자리를 차지한 채 잘리지 않는지 — 잘린 뒤 빈 것만 남으면 근거가 사라진다.
-    assert quotes.count("\n") + 1 <= CS_QUOTE_TOP_N
+    assert len(lines) == CS_QUOTE_TOP_N, "빈 원문 때문에 근거가 줄면 안 된다"
+    assert "문의 1" in quotes and f"문의 {CS_QUOTE_TOP_N}" in quotes
+    assert all(line.strip() != "-" for line in lines), "빈 원문이 실리면 안 된다"
+
+
+def test_prompt_and_citations_see_the_same_inquiries():
+    """프롬프트에 실린 문의와 인용 후보가 같아야 한다 — 어긋나면 못 담는 인용이 생긴다.
+
+    한쪽은 자른 뒤 거르고 한쪽은 거른 뒤 자르면, 빈 원문이 앞에 섞였을 때
+    "프롬프트엔 실렸는데 citations 후보엔 없는" 문의가 나온다.
+    """
+    inquiries = [
+        _inquiry("INQ-blank", "   "),
+        *[_inquiry(f"INQ-{i}", _QUOTE) for i in range(1, CS_QUOTE_TOP_N + 2)],
+    ]
+
+    quotes = pipeline._collect_cs_quotes(inquiries)
+    citations = pipeline._build_citations(_proposal(), _evaluator(), inquiries)
+
+    assert len(quotes.splitlines()) == len(citations) == CS_QUOTE_TOP_N
+    assert "INQ-blank" not in {c.inquiry_id for c in citations}
 
 
 def test_collect_cs_quotes_returns_no_detail_text_when_empty():

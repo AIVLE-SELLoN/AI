@@ -47,6 +47,7 @@ from check_agent1_to_agent2 import DAY1, read
 # dry-run 스텁은 배치(app/batch/daily.py)와 **같은 것을 쓴다.** 복제하면 한쪽만
 # 고쳤을 때 두 도구의 실측 호출 수가 갈린다 (지인님 PR 리뷰, 2026-08-06).
 from app.batch.daily import STUB_CAUSE, CountingClient
+from app.core.inquiries import build_linked_inquiries
 from app.core.schemas import (
     AspectSentiment,
     ClassifiedItem,
@@ -215,18 +216,34 @@ def _enum_value(v: object) -> str:
     return getattr(v, "value", v)
 
 
-async def crosscheck_one(alert: DetectionAlert) -> bool:
-    """alert 1건을 Agent3 에 태우고 계약·근거·산출을 검사한다. 통과하면 True."""
+async def crosscheck_one(alert: DetectionAlert, documents: list[dict]) -> bool:
+    """alert 1건을 Agent3 에 태우고 계약·근거·산출을 검사한다. 통과하면 True.
+
+    ⚠️ **documents 를 받는 이유는 운영과 같은 경로를 타기 위해서다** — 배치는
+    `build_linked_inquiries()` 로 CS 원문을 만들어 Agent3 에 넘긴다. 안 넘기면
+    image_guide 근거가 0건이라 개선안이 아예 안 나오고, 그러면 이 스크립트가 재현
+    도구로서 가치가 없다(`build_items` docstring 의 분모 경로 얘기와 같은 이유).
+    """
     print(f"\n  ── Agent3: {alert.alert_id} ──")
 
+    inquiries = build_linked_inquiries(alert, documents)
+
     # ③ 근거: LLM 없이 Chroma 조회만 — 상세페이지를 진짜로 찾는지 먼저 본다
-    context = retrieve_context(alert)
+    context = retrieve_context(alert, inquiries)
     detail = context.get("detail_text", "")
     found = bool(detail) and detail != NO_DETAIL_TEXT
     print(f"    근거 detail_text : {'✅ 조회됨' if found else '⚠️  NO_DETAIL_TEXT'}")
     if found:
         print(f'        "{detail[:60]}{"…" if len(detail) > 60 else ""}"')
-    print(f"    근거 cs_summary  : {context.get('cs_summary', '')[:60]}")
+    quotes = context.get("cs_quotes", "")
+    has_quotes = quotes != NO_DETAIL_TEXT
+    print(
+        f"    근거 cs_quotes   : "
+        f"{f'✅ {len(inquiries)}건' if has_quotes else '⚠️  NO_DETAIL_TEXT (원문 조회 실패)'}"
+    )
+    if has_quotes:
+        print(f'        "{quotes.splitlines()[0][:60]}…"')
+    print(f"    맥락 cs_summary  : {context.get('cs_summary', '')[:60]}")
     print(
         f"    유사사례         : "
         f"{'있음' if context.get('similar_case') else '없음(컬렉션2 비어있음 — 정상)'}"
@@ -236,13 +253,17 @@ async def crosscheck_one(alert: DetectionAlert) -> bool:
     # 예외를 잡는 이유: 1건이 터져도 나머지 alert 검사는 계속돼야 하고, 무엇보다
     # 여기까지 쓴 LLM 비용을 스택트레이스로 날리면 안 된다.
     try:
-        rec = await run(alert)
+        rec = await run(alert, inquiries)
     except Exception as exc:  # noqa: BLE001 — 어떤 실패든 결과에 남겨야 한다
         print(f"    ❌ run() 예외: {type(exc).__name__}: {exc}")
         return False
 
     if rec is None:
-        print("    ❌ run() 이 None — 게이트에서 걸렸다(recommended_action 불일치)")
+        # None 사유가 둘이라 구분해서 찍는다 — 게이트는 정상, 근거 0건은 데이터 문제다.
+        if not should_generate(alert):
+            print("    ❌ run() 이 None — 게이트에서 걸렸다(recommended_action 불일치)")
+        else:
+            print("    ❌ run() 이 None — 근거 0건(상세페이지·CS 원문 둘 다 없음)")
         return False
 
     # 계약 검사를 성공 출력보다 먼저 한다 — 어긋났는데 ✅ 가 먼저 찍히면 안 된다.
@@ -355,6 +376,7 @@ async def main(args: argparse.Namespace) -> None:
         ea = expected[0]
         print(f"    ⛔ 발화했으나 게이트에서 막힘 (조치={ea.recommended_action.value})")
         # run() 은 게이트에서 바로 None 을 내므로 LLM 을 안 부른다 — 공짜 검증이다.
+        # inquiries 를 안 넘기는 게 맞다: 게이트가 근거 조회보다 먼저라 쓸 일이 없다.
         blocked = await run(ea)
         ok = "✅ None (정상 차단)" if blocked is None else f"❌ None 이 아님: {blocked}"
         print(f"       run() 반환: {ok}")
@@ -389,7 +411,7 @@ async def main(args: argparse.Namespace) -> None:
 
     passed = 0
     for alert in targets:
-        if await crosscheck_one(alert):
+        if await crosscheck_one(alert, documents):
             passed += 1
 
     print(f"\n{'=' * 60}")

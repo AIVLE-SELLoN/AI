@@ -86,9 +86,10 @@ async def test_run_generates_recommendation_for_biased_alert(
 
 
 @pytest.mark.asyncio
-async def test_run_leaves_citations_empty_without_cs_inquiries(monkeypatch, biased_alert):
-    """원문을 못 받으면 image_guide 는 근거가 없다 — fallback 으로 떨어지고 인용도 없다.
+async def test_run_returns_none_when_routed_evidence_is_missing(monkeypatch, biased_alert):
+    """image_guide 로 갔는데 CS 원문이 없으면 **개선안을 만들지 않는다**(2026-08-09).
 
+    근거 0건은 입력만 보고 아는 사실이라 생성을 태워봐야 일반론밖에 안 나온다.
     예전엔 통계 요약을 근거로 써서 이 경우에도 grounding=True 가 나왔다(자기참조).
     """
     fake_client = _FakeAgentLlmClient(
@@ -102,10 +103,37 @@ async def test_run_leaves_citations_empty_without_cs_inquiries(monkeypatch, bias
     monkeypatch.setattr(pipeline, "retrieve_context", _stub_context)
     monkeypatch.setattr(pipeline, "get_llm_client", lambda: fake_client)
 
-    result = await pipeline.run(biased_alert)
+    # inquiries 없음 → cs_quotes = NO_DETAIL_TEXT
+    assert await pipeline.run(biased_alert) is None
 
-    assert result.evaluator.checks.grounding is False
-    assert result.citations == []
+
+@pytest.mark.asyncio
+async def test_run_skips_routing_when_no_evidence_at_all(monkeypatch, biased_alert, caplog):
+    """근거가 둘 다 없으면 라우팅 LLM 도 안 부른다 — 어느 도구를 골라도 만들 게 없다."""
+
+    class _NeverCalled:
+        async def choose_tool(self, *a, **k):
+            raise AssertionError("근거가 0건인데 라우팅 LLM 을 불렀다")
+
+        async def complete_json(self, *a, **k):
+            raise AssertionError("근거가 0건인데 생성 LLM 을 불렀다")
+
+    monkeypatch.setattr(
+        pipeline,
+        "retrieve_context",
+        lambda alert, inquiries=(): {
+            "detail_text": pipeline.NO_DETAIL_TEXT,
+            "cs_quotes": pipeline.NO_DETAIL_TEXT,
+            "cs_summary": "무관",
+            "similar_case": None,
+        },
+    )
+    monkeypatch.setattr(pipeline, "get_llm_client", lambda: _NeverCalled())
+
+    assert await pipeline.run(biased_alert) is None
+    assert any("근거가 0건" in r.getMessage() for r in caplog.records), (
+        "조용히 넘기면 근거 파이프라인이 깨진 걸 아무도 모른다"
+    )
 
 
 class _FakeRecoveringClient:
