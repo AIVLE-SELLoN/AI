@@ -11,17 +11,34 @@
     python eval/run_recommendation_eval.py --routing-real # + 라우팅 정확도(실제 CS 201건), 실비용
 
 전제: scripts/seed_vectordb.py로 Chroma에 실데이터가 이미 시딩돼 있어야 함.
+
+⚠️ 2026-08-09부터 golden 15건 실험도 CS 코퍼스(input_cs_inquiries.csv·golden_cs_labels.csv)를
+읽는다. image_guide 의 근거가 통계 요약에서 **실제 CS 원문**으로 바뀌었기 때문에, 원문을
+안 넘기면 cs_quotes 가 "정보 없음"이 되어 라우팅이 copy_draft 로 쏠린다(운영과 다른 경로를
+재게 됨). 그래서 mock 재생성 시 상세페이지 기반 실험과 달리 **재측정이 필요하다.**
 """
 
 from __future__ import annotations
 
 import asyncio
 import csv
+import logging
 import sys
 from pathlib import Path
 
-sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.core.console import force_utf8_output
+
+# stdout 만 바꾸면 안 된다 — 로깅은 **stderr** 로 나가서 cp949 로 깨진다.
+# 라우팅 사유(한글)가 이 로그로 나오므로 진단이 통째로 못 읽는 글자가 된다.
+force_utf8_output()
+
+# 라우팅이 왜 그 도구를 골랐는지(pipeline.route_proposal_type 의 INFO 로그)를 보려면
+# 로거를 켜야 한다 — MISS 케이스 진단의 유일한 단서다.
+logging.basicConfig(level=logging.INFO, format="    · %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("openai").setLevel(logging.WARNING)
 
 from app.core.llm_client import get_llm_client
 from app.core.schemas import (
@@ -29,6 +46,7 @@ from app.core.schemas import (
     DetectionConfidence,
     DetectionStats,
     Evidence,
+    LinkedCSInquiry,
     ProposalType,
     Recommendation,
     RecommendedAction,
@@ -45,6 +63,22 @@ GOLDEN_PATH = (
 )
 INPUT_PATH = (
     Path(__file__).resolve().parents[1] / "data" / "input" / "input_detail_fields.csv"
+)
+
+CS_LABELS_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "golden" / "golden_cs_labels.csv"
+)
+CS_INQUIRIES_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "input" / "input_cs_inquiries.csv"
+)
+CHANNEL_PRODUCTS_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "data"
+    / "input"
+    / "input_channel_products.csv"
+)
+GOLDEN_MAPPING_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "golden" / "golden_mapping.csv"
 )
 
 NO_RAG_PROMPT = """당신은 이커머스 상세페이지 개선안을 작성하는 어시스턴트입니다.
@@ -135,6 +169,94 @@ def check_collection1_hit_rate() -> None:
             print(f"    실제: {m['retrieved']!r}")
 
 
+def _load_csv(path: Path) -> list[dict]:
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def load_negative_cs_by_product() -> dict[tuple[str, str, str], list[dict]]:
+    """실제 부정 CS 를 {(golden_group_id, channel, aspect): [문의…]} 로 모은다.
+
+    조인은 `build_alerts_from_real_cs_data()` 가 쓰는 체인을 **거꾸로** 탄 것이다:
+    channel_product_id → variant_row_id → golden_group_id.
+
+    쓰는 곳은 `attach_cs_inquiries()` — synthetic alert 에 그 상품의 진짜 CS 원문을
+    달아주기 위해서다. 상품과 무관하게 aspect 만 맞는 남의 CS 를 쓰면 운영과 다른
+    걸 재게 된다(운영은 그 상품의 CS 를 넣는다).
+
+    ⚠️ 이 함수 때문에 golden 15건 실험이 CS 코퍼스에 묶인다 — mock 재생성하면 뽑히는
+    문장이 바뀔 수 있다. 상세페이지 기반인 다른 실험과 달리 **재측정이 필요하다.**
+    """
+    labels = {r["inquiry_id"]: r for r in _load_csv(CS_LABELS_PATH)}
+    golden_mapping = {
+        r["variant_row_id"]: r["golden_group_id"] for r in _load_csv(GOLDEN_MAPPING_PATH)
+    }
+    channel_product_to_group = {}
+    for row in _load_csv(CHANNEL_PRODUCTS_PATH):
+        group_id = golden_mapping.get(row["variant_row_id"])
+        if group_id:
+            channel_product_to_group[(row["channel"], row["channel_product_id"])] = group_id
+
+    buckets: dict[tuple[str, str, str], list[dict]] = {}
+    for row in _load_csv(CS_INQUIRIES_PATH):
+        group_id = channel_product_to_group.get((row["channel"], row["channel_product_id"]))
+        label = labels.get(row["inquiry_id"])
+        if not group_id or not label or label["true_sentiment"] != "-1":
+            continue
+        key = (group_id, row["channel"], label["true_aspect"])
+        buckets.setdefault(key, []).append(
+            {
+                "inquiry_id": row["inquiry_id"],
+                "content": row["content"],
+                "inquired_at": row["inquired_at"],
+                "cause": label["true_cause"].strip(),
+            }
+        )
+    return buckets
+
+
+def attach_cs_inquiries(
+    alerts: list[DetectionAlert],
+    buckets: dict[tuple[str, str, str], list[dict]],
+) -> list[tuple[DetectionAlert, list[LinkedCSInquiry]]]:
+    """alert 마다 그 상품의 실제 CS 원문을 붙이고, evidence.inquiry_ids 도 맞춰 준다.
+
+    **evidence 를 같이 고치는 게 중요하다.** 안 그러면 citations 가 evidence 밖의
+    문의를 인용한 꼴이 되어 `validate_citations_grounded()` 가 잡는다 — 운영에서는
+    애초에 evidence 로부터 원문을 조회하므로 어긋날 수 없는 관계다.
+
+    우선순위는 원인 라벨 일치 → 같은 aspect 부정 CS. 원인까지 맞는 문의가 있으면
+    그걸 쓰는 게 운영에 가깝다(탐지가 원인별로 evidence 를 모아 준다).
+    """
+    attached = []
+    for alert in alerts:
+        key = (alert.product_group_id, alert.channel.value, alert.main_aspect.value)
+        rows = buckets.get(key, [])
+        label = alert.root_cause.label if alert.root_cause else None
+        preferred = [r for r in rows if label and r["cause"] == label] or rows
+        picked = preferred[: pipeline.CS_QUOTE_TOP_N]
+
+        inquiries = [
+            LinkedCSInquiry(
+                item_id=r["inquiry_id"],
+                raw_text=r["content"],
+                created_at=r["inquired_at"],
+            )
+            for r in picked
+        ]
+        if inquiries:
+            alert = alert.model_copy(
+                update={
+                    "evidence": Evidence(
+                        inquiry_ids=[q.item_id for q in inquiries],
+                        linked_change_id=alert.evidence.linked_change_id,
+                    )
+                }
+            )
+        attached.append((alert, inquiries))
+    return attached
+
+
 def check_collection2_status() -> None:
     count = get_rejection_reasons().count()
     if count == 0:
@@ -197,11 +319,11 @@ def build_synthetic_alerts() -> list[DetectionAlert]:
 
 
 async def check_grounding_precision() -> list[tuple[DetectionAlert, Recommendation]]:
-    alerts = build_synthetic_alerts()
+    alerts = attach_cs_inquiries(build_synthetic_alerts(), load_negative_cs_by_product())
 
     grounded_cases = []
-    for alert in alerts:
-        recommendation = await pipeline.run(alert)
+    for alert, inquiries in alerts:
+        recommendation = await pipeline.run(alert, inquiries)
         if recommendation is None:
             continue
         grounded_cases.append((alert, recommendation))
@@ -257,6 +379,53 @@ def report_evaluator_quality(
     print(
         "재시도(attempts) 분포:", {k: attempts_hist[k] for k in sorted(attempts_hist)}
     )
+    report_citation_coverage(cases)
+
+
+def report_citation_coverage(
+    cases: list[tuple[DetectionAlert, Recommendation]],
+) -> None:
+    """image_guide 가 실제로 CS 문의를 인용했는가(§4-3 citations).
+
+    분모를 image_guide 로 한정하는 이유: copy_draft 는 상세페이지를 인용하므로 CS
+    인용이 0건인 게 정상이다. 여기에 섞으면 커버리지가 이유 없이 낮아 보인다.
+
+    같이 찍는 두 값이 해석의 핵심이다:
+      - fallback 건수(attempts 소진 + grounding=False) — 근거를 못 찾아 일반 가이드로
+        떨어진 것. citations 가 비는 게 당연한 케이스라 분모에서 갈라 봐야 한다.
+      - evidence 이탈 — citations 가 evidence.inquiry_ids 밖을 가리키면 계약 위반이다
+        (`validate_citations_grounded`). 0 이 아니면 즉시 버그다.
+    """
+    image_guide = [
+        (a, r) for a, r in cases if r.proposal and r.proposal.type == ProposalType.IMAGE_GUIDE
+    ]
+    if not image_guide:
+        print("\nCitation 커버리지: N/A (image_guide 라우팅 0건)")
+        return
+
+    grounded = [(a, r) for a, r in image_guide if r.evaluator.checks.grounding]
+    with_citations = [(a, r) for a, r in grounded if r.citations]
+    quotes = sum(len(r.citations) for _, r in grounded)
+
+    escaped = 0
+    for alert, rec in image_guide:
+        allowed = set(alert.evidence.inquiry_ids)
+        escaped += sum(1 for c in rec.citations if c.inquiry_id not in allowed)
+
+    print(f"\nCitation 커버리지(image_guide {len(image_guide)}건 기준)")
+    print(f"  grounding 통과      : {len(grounded)}/{len(image_guide)}")
+    print(
+        f"  인용 1건 이상 확보  : {len(with_citations)}/{len(grounded)}"
+        f" (총 {quotes}건 인용)"
+    )
+    print(f"  evidence 이탈       : {escaped}건 (0이어야 정상)")
+
+    for alert, rec in image_guide:
+        if rec.evaluator.checks.grounding and not rec.citations:
+            print(
+                f"  ⚠️ grounding 통과인데 인용 0건 — {alert.alert_id}"
+                f" current_text={rec.proposal.current_text[:40]!r}"
+            )
 
 
 async def check_rag_baseline_comparison(
@@ -310,23 +479,37 @@ async def check_rag_baseline_comparison(
     print("Grounding precision — (B) RAG 있음(2단계 결과): 4/4 (100%)")
 
 
-async def check_routing_accuracy(alerts: list[DetectionAlert], *, label: str) -> None:
+async def check_routing_accuracy(
+    alerts: list[tuple[DetectionAlert, list[LinkedCSInquiry]]], *, label: str
+) -> None:
     """§4-3 도구선택표 대조 — LLM의 choose_tool() 판단이 팀 정답표와 얼마나 일치하는가.
 
     SCOPE_LIMIT·원인 미지정 등 EXPECTED_TOOL_BY_ROOT_CAUSE에 없는 원인은 정답 자체가
     없어 제외. golden 15건 기반(synthetic)과 실제 CS 데이터 기반 둘 다 이 함수를
     공유한다 — label로 어느 쪽 결과인지만 구분.
+
+    🔴 **CS 원문을 반드시 같이 넘긴다.** 안 넘기면 cs_quotes 가 "정보 없음"이 되고,
+    라우팅 프롬프트의 "CS 원문이 없으면 copy_draft 쪽에 무게" 지시가 발동해 결과가
+    copy_draft 로 쏠린다. 그건 모델 성능이 아니라 **하네스가 근거를 안 준 것**이라
+    숫자를 그대로 읽으면 안 된다(2026-08-09).
     """
     targets = [
-        a
-        for a in alerts
+        (a, q)
+        for a, q in alerts
         if a.root_cause and a.root_cause.label in EXPECTED_TOOL_BY_ROOT_CAUSE
     ]
     print(f"\n라우팅 정확도 대상({label}): {len(targets)}건")
 
+    missing_quotes = [a.alert_id for a, q in targets if not q]
+    if missing_quotes:
+        print(
+            f"  ⚠️ CS 원문을 못 붙인 alert {len(missing_quotes)}건 — 이 건들은 근거 없이"
+            f" 라우팅되므로 결과 해석에서 빼야 한다: {missing_quotes[:3]}…"
+        )
+
     hits = 0
-    for alert in targets:
-        context = pipeline.retrieve_context(alert)
+    for alert, inquiries in targets:
+        context = pipeline.retrieve_context(alert, inquiries)
         actual = await pipeline.route_proposal_type(alert, context)
         expected = EXPECTED_TOOL_BY_ROOT_CAUSE[alert.root_cause.label]
         is_hit = actual == expected
@@ -343,45 +526,25 @@ async def check_routing_accuracy(alerts: list[DetectionAlert], *, label: str) ->
     )
 
 
-CS_LABELS_PATH = (
-    Path(__file__).resolve().parents[1] / "data" / "golden" / "golden_cs_labels.csv"
-)
-CS_INQUIRIES_PATH = (
-    Path(__file__).resolve().parents[1] / "data" / "input" / "input_cs_inquiries.csv"
-)
-CHANNEL_PRODUCTS_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "data"
-    / "input"
-    / "input_channel_products.csv"
-)
-GOLDEN_MAPPING_PATH = (
-    Path(__file__).resolve().parents[1] / "data" / "golden" / "golden_mapping.csv"
-)
-
-
-def build_alerts_from_real_cs_data() -> list[DetectionAlert]:
+def build_alerts_from_real_cs_data() -> list[
+    tuple[DetectionAlert, list[LinkedCSInquiry]]
+]:
     """실제 CS 문의(golden_cs_labels.csv, true_cause 있는 건)를 DetectionAlert로 변환.
 
     조인 경로: inquiry_id(golden_cs_labels) → channel_product_id(input_cs_inquiries)
     → variant_row_id(input_channel_products) → golden_group_id(golden_mapping).
+
+    alert 1건 = 문의 1건이라, 그 문의의 원문을 `LinkedCSInquiry` 로 같이 돌려준다 —
+    운영에서 `app/core/inquiries.py` 가 `evidence.inquiry_ids` 로 채우는 그 자리다.
     """
-
-    def load(path: Path) -> list[dict]:
-        with path.open(encoding="utf-8-sig", newline="") as f:
-            return list(csv.DictReader(f))
-
-    cs_labels = load(CS_LABELS_PATH)
-    inq_to_cpid = {
-        r["inquiry_id"]: (r["channel"], r["channel_product_id"])
-        for r in load(CS_INQUIRIES_PATH)
-    }
+    cs_labels = _load_csv(CS_LABELS_PATH)
+    inquiry_rows = {r["inquiry_id"]: r for r in _load_csv(CS_INQUIRIES_PATH)}
     cpid_to_vrid = {
         (r["channel"], r["channel_product_id"]): r["variant_row_id"]
-        for r in load(CHANNEL_PRODUCTS_PATH)
+        for r in _load_csv(CHANNEL_PRODUCTS_PATH)
     }
     vrid_to_ggid = {
-        r["variant_row_id"]: r["golden_group_id"] for r in load(GOLDEN_MAPPING_PATH)
+        r["variant_row_id"]: r["golden_group_id"] for r in _load_csv(GOLDEN_MAPPING_PATH)
     }
 
     alerts = []
@@ -389,42 +552,53 @@ def build_alerts_from_real_cs_data() -> list[DetectionAlert]:
         cause = r["true_cause"].strip()
         if cause not in EXPECTED_TOOL_BY_ROOT_CAUSE:
             continue
-        ch_cpid = inq_to_cpid.get(r["inquiry_id"])
+        inquiry_row = inquiry_rows.get(r["inquiry_id"])
+        ch_cpid = (
+            (inquiry_row["channel"], inquiry_row["channel_product_id"])
+            if inquiry_row
+            else None
+        )
         vrid = cpid_to_vrid.get(ch_cpid) if ch_cpid else None
         ggid = vrid_to_ggid.get(vrid) if vrid else None
         if not ggid:
             continue
 
-        alerts.append(
-            DetectionAlert(
-                alert_id=f"ALT-REAL-{r['inquiry_id']}",
-                detected_at="2026-07-28T00:00:00",
-                product_group_id=ggid,
-                channel=ch_cpid[0],
-                window_start="2026-07-21",
-                window_end="2026-07-28",
-                verdict=Verdict.BIASED,
-                significant_channels=[ch_cpid[0]],
-                main_aspect=r["true_aspect"],
-                stats=DetectionStats(
-                    source="cs",
-                    cur_rate=0.13,
-                    past_rate=0.05,
-                    delta=0.08,
-                    p_value=0.00013,
-                    bh_significant=True,
-                    cur_total=200,
-                ),
-                source_signals=SourceSignals(
-                    cs=True, review=False, interpretation="실제 CS 데이터 기반 eval"
-                ),
-                root_cause=RootCause(label=cause, count=14, total=20, consistent=True),
-                detection_confidence=DetectionConfidence.HIGH,
-                scope_in=True,
-                recommended_action=RecommendedAction.GENERATE_RECOMMENDATION,
-                evidence=Evidence(inquiry_ids=[r["inquiry_id"]]),
+        inquiries = [
+            LinkedCSInquiry(
+                item_id=r["inquiry_id"],
+                raw_text=inquiry_row["content"],
+                created_at=inquiry_row["inquired_at"],
             )
+        ]
+        alert = DetectionAlert(
+            alert_id=f"ALT-REAL-{r['inquiry_id']}",
+            detected_at="2026-07-28T00:00:00",
+            product_group_id=ggid,
+            channel=ch_cpid[0],
+            window_start="2026-07-21",
+            window_end="2026-07-28",
+            verdict=Verdict.BIASED,
+            significant_channels=[ch_cpid[0]],
+            main_aspect=r["true_aspect"],
+            stats=DetectionStats(
+                source="cs",
+                cur_rate=0.13,
+                past_rate=0.05,
+                delta=0.08,
+                p_value=0.00013,
+                bh_significant=True,
+                cur_total=200,
+            ),
+            source_signals=SourceSignals(
+                cs=True, review=False, interpretation="실제 CS 데이터 기반 eval"
+            ),
+            root_cause=RootCause(label=cause, count=14, total=20, consistent=True),
+            detection_confidence=DetectionConfidence.HIGH,
+            scope_in=True,
+            recommended_action=RecommendedAction.GENERATE_RECOMMENDATION,
+            evidence=Evidence(inquiry_ids=[r["inquiry_id"]]),
         )
+        alerts.append((alert, inquiries))
     return alerts
 
 
@@ -452,7 +626,12 @@ def main() -> None:
 
     if run_routing:
         asyncio.run(
-            check_routing_accuracy(build_synthetic_alerts(), label="golden 15건")
+            check_routing_accuracy(
+                attach_cs_inquiries(
+                    build_synthetic_alerts(), load_negative_cs_by_product()
+                ),
+                label="golden 15건",
+            )
         )
     else:
         print("(라우팅 정확도는 --routing 플래그로 별도 실행 — 실비용 발생)")

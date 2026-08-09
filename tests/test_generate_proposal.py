@@ -29,7 +29,12 @@ class _FakeLlmClient:
 
 
 def _context(**overrides):
-    base = {"detail_text": "아이보리 컬러", "cs_summary": "CS 20건 중 14건이 '사진_색감_오차' 관련 언급", "similar_case": None}
+    base = {
+        "detail_text": "아이보리 컬러",
+        "cs_quotes": "- 사진이랑 색이 너무 달라요",
+        "cs_summary": "CS 20건 중 14건이 '사진_색감_오차' 관련 언급",
+        "similar_case": None,
+    }
     base.update(overrides)
     return base
 
@@ -73,7 +78,7 @@ async def test_copy_draft_marks_ungrounded_when_no_detail_text(monkeypatch, bias
 async def test_image_guide_builds_proposal_using_image_guide_prompt(monkeypatch, biased_alert):
     fake_client = _FakeLlmClient(
         {
-            "current_text": "CS 20건 중 14건이 '사진_색감_오차' 관련 언급",
+            "current_text": "사진이랑 색이 너무 달라요",
             "proposed_text": "자연광에서 재촬영을 진행하세요.",
             "rationale": "원인 분류: 사진_색감_오차",
         }
@@ -83,10 +88,33 @@ async def test_image_guide_builds_proposal_using_image_guide_prompt(monkeypatch,
     proposal = await pipeline.generate_proposal(biased_alert, ProposalType.IMAGE_GUIDE, _context())
 
     assert proposal.type == ProposalType.IMAGE_GUIDE
-    assert proposal.current_text == "CS 20건 중 14건이 '사진_색감_오차' 관련 언급"
+    assert proposal.current_text == "사진이랑 색이 너무 달라요"
     assert proposal.detailpage_grounded is False, "image_guide는 상세페이지 근거가 아니므로 항상 False"
+    assert "촬영" in fake_client.last_prompt, "image_guide_v2.md 고유 문구 — copy_draft 프롬프트와 구분"
+
+
+@pytest.mark.asyncio
+async def test_image_guide_prompt_carries_quotes_and_summary_separately(monkeypatch, biased_alert):
+    """프롬프트에 원문과 통계가 **둘 다, 서로 구분된 슬롯으로** 들어가야 한다.
+
+    합쳐서 하나로 주면 모델이 통계 문장을 인용해도 되는 줄 알고, evaluate()는 그걸
+    실패로 판정한다 — 재시도만 태우고 fallback 으로 떨어지는 낭비가 된다.
+    """
+    fake_client = _FakeLlmClient(
+        {
+            "current_text": "사진이랑 색이 너무 달라요",
+            "proposed_text": "자연광에서 재촬영을 진행하세요.",
+            "rationale": "원인 분류: 사진_색감_오차",
+        }
+    )
+    monkeypatch.setattr(pipeline, "get_llm_client", lambda: fake_client)
+
+    await pipeline.generate_proposal(biased_alert, ProposalType.IMAGE_GUIDE, _context())
+
+    assert "사진이랑 색이 너무 달라요" in fake_client.last_prompt
     assert "CS 20건 중 14건" in fake_client.last_prompt
-    assert "촬영" in fake_client.last_prompt, "image_guide_v1.md 고유 문구 — copy_draft 프롬프트와 구분"
+    assert "인용은 여기서만" in fake_client.last_prompt
+    assert "인용 대상 아님" in fake_client.last_prompt
 
 
 @pytest.mark.asyncio

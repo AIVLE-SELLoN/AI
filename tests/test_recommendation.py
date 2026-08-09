@@ -40,20 +40,23 @@ class _FakeAgentLlmClient:
         return self._generation_response
 
 
-def _stub_context(alert):
+def _stub_context(alert, inquiries=()):
     return {
         "detail_text": "아이보리 컬러",
+        "cs_quotes": "\n".join(f"- {q.raw_text}" for q in inquiries) or pipeline.NO_DETAIL_TEXT,
         "cs_summary": "CS 20건 중 14건이 '사진_색감_오차' 관련 언급",
         "similar_case": None,
     }
 
 
 @pytest.mark.asyncio
-async def test_run_generates_recommendation_for_biased_alert(monkeypatch, biased_alert):
+async def test_run_generates_recommendation_for_biased_alert(
+    monkeypatch, biased_alert, linked_inquiries
+):
     fake_client = _FakeAgentLlmClient(
         tool_name="use_image_guide",
         generation_response={
-            "current_text": "CS 20건 중 14건이 '사진_색감_오차' 관련 언급",
+            "current_text": "사진이랑 색이 너무 달라요",
             "proposed_text": "자연광 촬영 이미지 추가를 검토하세요.",
             "rationale": "원인 분류: 사진_색감_오차",
         },
@@ -61,7 +64,7 @@ async def test_run_generates_recommendation_for_biased_alert(monkeypatch, biased
     monkeypatch.setattr(pipeline, "retrieve_context", _stub_context)
     monkeypatch.setattr(pipeline, "get_llm_client", lambda: fake_client)
 
-    result = await pipeline.run(biased_alert)
+    result = await pipeline.run(biased_alert, linked_inquiries)
 
     assert isinstance(result, Recommendation)
     assert result.alert_id == biased_alert.alert_id
@@ -73,11 +76,64 @@ async def test_run_generates_recommendation_for_biased_alert(monkeypatch, biased
     assert result.hitl_status == HitlStatus.PENDING
     assert result.hitl_feedback is None
     assert result.proposal is not None
-    # raw_text 조회 경로가 없어 진짜 CS 인용을 못 만든다 — 빈 자리를 채우는 가짜
-    # Citation(quote="") 대신 정직하게 빈 리스트(2026-07-27 수정, 이전엔 가짜였음).
-    assert result.citations == []
+
+    # 인용이 실제로 박제된다(2026-08-09). 인용문은 첫 번째 문의에만 있으므로 1건이어야
+    # 한다 — inquiries 전체를 그냥 싣는 구현이면 여기서 2건이 되어 걸린다.
+    assert [c.inquiry_id for c in result.citations] == ["INQ-000412"]
+    assert result.citations[0].quote == "사진이랑 색이 너무 달라요"
 
     validate_citations_grounded(result, biased_alert)
+
+
+@pytest.mark.asyncio
+async def test_run_returns_none_when_routed_evidence_is_missing(monkeypatch, biased_alert):
+    """image_guide 로 갔는데 CS 원문이 없으면 **개선안을 만들지 않는다**(2026-08-09).
+
+    근거 0건은 입력만 보고 아는 사실이라 생성을 태워봐야 일반론밖에 안 나온다.
+    예전엔 통계 요약을 근거로 써서 이 경우에도 grounding=True 가 나왔다(자기참조).
+    """
+    fake_client = _FakeAgentLlmClient(
+        tool_name="use_image_guide",
+        generation_response={
+            "current_text": "사진이랑 색이 너무 달라요",
+            "proposed_text": "자연광 촬영 이미지 추가를 검토하세요.",
+            "rationale": "원인 분류: 사진_색감_오차",
+        },
+    )
+    monkeypatch.setattr(pipeline, "retrieve_context", _stub_context)
+    monkeypatch.setattr(pipeline, "get_llm_client", lambda: fake_client)
+
+    # inquiries 없음 → cs_quotes = NO_DETAIL_TEXT
+    assert await pipeline.run(biased_alert) is None
+
+
+@pytest.mark.asyncio
+async def test_run_skips_routing_when_no_evidence_at_all(monkeypatch, biased_alert, caplog):
+    """근거가 둘 다 없으면 라우팅 LLM 도 안 부른다 — 어느 도구를 골라도 만들 게 없다."""
+
+    class _NeverCalled:
+        async def choose_tool(self, *a, **k):
+            raise AssertionError("근거가 0건인데 라우팅 LLM 을 불렀다")
+
+        async def complete_json(self, *a, **k):
+            raise AssertionError("근거가 0건인데 생성 LLM 을 불렀다")
+
+    monkeypatch.setattr(
+        pipeline,
+        "retrieve_context",
+        lambda alert, inquiries=(): {
+            "detail_text": pipeline.NO_DETAIL_TEXT,
+            "cs_quotes": pipeline.NO_DETAIL_TEXT,
+            "cs_summary": "무관",
+            "similar_case": None,
+        },
+    )
+    monkeypatch.setattr(pipeline, "get_llm_client", lambda: _NeverCalled())
+
+    assert await pipeline.run(biased_alert) is None
+    assert any("근거가 0건" in r.getMessage() for r in caplog.records), (
+        "조용히 넘기면 근거 파이프라인이 깨진 걸 아무도 모른다"
+    )
 
 
 class _FakeRecoveringClient:

@@ -87,15 +87,24 @@ def _recommendation() -> Recommendation:
 
 @pytest.mark.asyncio
 async def test_returns_recommendation_on_success(monkeypatch):
-    """정상 경로는 run() 결과를 그대로 돌려준다."""
-    expected = _recommendation()
+    """정상 경로는 run() 결과를 그대로 돌려주고, **inquiries 를 그대로 넘긴다**.
 
-    async def fake_run(alert):
+    전달을 같이 고정하는 이유: 배선이 끊겨도 결과 객체는 똑같이 나오는데, 실제로는
+    image_guide 가 근거를 잃어 전건 fallback 이 된다(조용한 열화). 아래
+    `test_never_raises_whatever_run_throws` 는 무엇이든 흡수하므로 이 끊김을 못 잡는다.
+    """
+    expected = _recommendation()
+    inquiries = _inquiries()
+    seen: dict = {}
+
+    async def fake_run(alert, passed_inquiries=()):
+        seen["inquiries"] = passed_inquiries
         return expected
 
     monkeypatch.setattr(pipeline, "run", fake_run)
 
-    assert await pipeline.generate_for_alert(_alert(), _inquiries()) is expected
+    assert await pipeline.generate_for_alert(_alert(), inquiries) is expected
+    assert seen["inquiries"] == inquiries
 
 
 @pytest.mark.asyncio
@@ -133,7 +142,7 @@ async def test_never_raises_whatever_run_throws(monkeypatch, error, caplog):
     사유는 로그로 남겨야 추적이 된다(배치 요약엔 "개선안 없음"으로만 보인다).
     """
 
-    async def fake_run(alert):
+    async def fake_run(alert, inquiries=()):
         raise error
 
     monkeypatch.setattr(pipeline, "run", fake_run)
@@ -150,7 +159,7 @@ async def test_cancellation_is_not_swallowed(monkeypatch):
     이건 사고가 아니라 의도이므로 고정해 둔다.
     """
 
-    async def fake_run(alert):
+    async def fake_run(alert, inquiries=()):
         raise asyncio.CancelledError()
 
     monkeypatch.setattr(pipeline, "run", fake_run)

@@ -110,6 +110,15 @@ quote와 source_text 정규화 문자열 사이 최장 연속 일치 구간 길�
 SIMILAR_CASE_TOP_N = 3
 """컬렉션2(과거·반려 사례) 유사도 조회 상위 건수. 개선안 로직 §4-2."""
 
+CS_QUOTE_TOP_N = 5
+"""image_guide 근거로 프롬프트에 싣는 CS 원문 건수 상한. 개선안 로직 §4-3.
+
+`evidence.inquiry_ids` 는 알림 1건당 `root_cause.total` 건까지 오는데, 전부 실으면
+프롬프트가 길어지는 것보다 **인용 대상이 흩어지는 게 문제다** — LLM 이 어느 문의를
+인용했는지 흐려지고 citations 대조도 그만큼 느슨해진다. 앞에서부터 자른다(순서는
+`evidence.inquiry_ids` 를 따르므로 탐지가 정한 우선순위가 유지된다).
+"""
+
 # --- 문서 생성 (reporting / 용준) — 문서 생성 스키마(확정) §1·§3·§4 ---
 
 MONTHLY_ASPECT_COUNT = 3

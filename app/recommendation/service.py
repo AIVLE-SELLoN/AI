@@ -16,6 +16,15 @@ from app.recommendation import pipeline
 async def generate_recommendation(alert: DetectionAlert) -> Recommendation | None:
     """DetectionAlert → Recommendation | None (트리거 미충족 시 None).
 
+    ⚠️ **CS 원문을 안 넘긴다 — 그래서 image_guide 로 라우팅되면 개선안이 안 나온다.**
+    원문은 `alert.evidence.inquiry_ids` 로 조회해야 하는데(`app/core/inquiries.py`),
+    이 REST 엔드포인트는 body 로 alert 만 받아서 조회 입력이 없다. 근거가 0건이면
+    `run()` 이 None 을 돌려주므로(§4-3), image_guide 케이스는 여기서 항상 None 이다.
+
+    운영 경로가 아니라서 그대로 둔다 — 개선안은 탐지 배치가 `generate_for_alert(alert,
+    inquiries)` 로 선생성해 `ai.anomaly.analyzed` payload 에 실어 보낸다. 이 엔드포인트는
+    재현·디버깅용이다. **copy_draft 케이스 디버깅에만 쓸 것.**
+
     # TODO: LangGraph 이식 후 pipeline.run(alert) → graph.ainvoke(초기 상태) 로 교체.
     """
     return await pipeline.run(alert)

@@ -28,6 +28,7 @@ class _FakeToolChoosingClient:
 def _context():
     return {
         "detail_text": "아이보리 컬러",
+        "cs_quotes": "- 사진이랑 색이 너무 달라요",
         "cs_summary": "CS 20건 중 14건이 '사진_색감_오차' 관련 언급",
         "similar_case": None,
     }
@@ -55,7 +56,11 @@ async def test_maps_use_image_guide_tool_to_image_guide_type(monkeypatch, biased
 
 @pytest.mark.asyncio
 async def test_offers_both_tools_and_includes_both_evidence_in_prompt(monkeypatch, biased_alert):
-    """판단이 규칙이 아니라 LLM 몫이라는 증거 — 두 tool·두 근거를 다 보여줘야 한다."""
+    """판단이 규칙이 아니라 LLM 몫이라는 증거 — 두 tool·두 근거를 다 보여줘야 한다.
+
+    CS 쪽은 **원문(cs_quotes)이 들어가야 한다.** 통계 요약만 보여주면 원인이 뭐든 항상
+    같은 모양이라, 모델이 "이 알림에 CS 근거가 실제로 쓸 만한가"를 판단할 수 없다.
+    """
     fake_client = _FakeToolChoosingClient("use_copy_draft")
     monkeypatch.setattr(pipeline, "get_llm_client", lambda: fake_client)
 
@@ -64,6 +69,7 @@ async def test_offers_both_tools_and_includes_both_evidence_in_prompt(monkeypatc
     tool_names = {tool["function"]["name"] for tool in fake_client.last_tools}
     assert tool_names == {"use_copy_draft", "use_image_guide"}
     assert "아이보리 컬러" in fake_client.last_prompt
+    assert "사진이랑 색이 너무 달라요" in fake_client.last_prompt
     assert "CS 20건 중 14건" in fake_client.last_prompt
 
 

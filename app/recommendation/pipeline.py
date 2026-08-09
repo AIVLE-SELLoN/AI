@@ -24,16 +24,18 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from langsmith import traceable
 
-from app.core.constants import MAX_RETRY, SIMILAR_CASE_TOP_N
+from app.core.constants import CS_QUOTE_TOP_N, MAX_RETRY, SIMILAR_CASE_TOP_N
 from app.core.exceptions import EvidenceNotFoundError, LlmParseError
 from app.core.llm_client import get_llm_client
 from app.core.schemas import (
+    Citation,
     DetectionAlert,
     DetectionConfidence,
     Evaluator,
@@ -65,9 +67,39 @@ ACTIONABLE_TEXT_MARKERS = ("하세요", "해보세요", "바랍니다", "권장"
 
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 COPY_DRAFT_PROMPT_PATH = PROMPTS_DIR / "copy_draft_v1.md"
-IMAGE_GUIDE_PROMPT_PATH = PROMPTS_DIR / "image_guide_v1.md"
-ROUTING_PROMPT_PATH = PROMPTS_DIR / "route_proposal_type_v1.md"
+IMAGE_GUIDE_PROMPT_PATH = PROMPTS_DIR / "image_guide_v2.md"
+ROUTING_PROMPT_PATH = PROMPTS_DIR / "route_proposal_type_v2.md"
 FALLBACK_GUIDE_PROMPT_PATH = PROMPTS_DIR / "fallback_guide_v1.md"
+
+PROMPT_HEADER_SEPARATOR = "---"
+"""프롬프트 파일의 머리말(개발자용)과 본문(모델에게 보낼 것)을 가르는 줄."""
+
+
+def load_prompt(path: Path) -> str:
+    """프롬프트 파일에서 **모델에게 보낼 본문만** 잘라낸다.
+
+    프롬프트 md 는 맨 위에 개발자용 머리말을 둔다 — 제목, "구버전 삭제 금지" 관례,
+    v1 대비 무엇이 왜 바뀌었는지. 파일을 통째로 읽어 보내면 그게 다 지시문에 섞인다.
+
+    실제로 두 가지가 문제였다:
+      1. 토큰. `route_proposal_type_v2.md` 는 머리말이 전체의 45% 다.
+      2. **더 나쁜 건 내용이다.** 변경 이력에 "예전엔 요약을 되풀이하면 통과했다"
+         같은 과거 결함 설명이 들어가는데, 그건 모델에게 우회로를 알려주는 것이다.
+
+    그래서 첫 `---` 줄을 경계로 앞은 버린다. 구분선이 없으면 전체를 보낸다(안전한
+    쪽) — 새 프롬프트를 머리말 없이 써도 깨지지 않게 하기 위해서다.
+
+    ⚠️ 첫 번째 구분선만 본다. 본문 안에 `---` 를 또 쓰면 그 뒤만 남는 게 아니라
+    **첫 줄 기준으로만 잘리므로** 본문은 온전하다. 다만 머리말 안에 `---` 를 두 번
+    쓰면 첫 번째에서 잘려 나머지 머리말이 본문으로 딸려 들어간다.
+    """
+    raw = path.read_text(encoding="utf-8")
+    lines = raw.splitlines()  # CRLF 체크아웃에서도 동작해야 한다
+    for index, line in enumerate(lines):
+        if line.strip() == PROMPT_HEADER_SEPARATOR:
+            return "\n".join(lines[index + 1 :]).strip()
+    return raw.strip()
+
 
 COPY_DRAFT_TOOL: dict[str, Any] = {
     "type": "function",
@@ -153,7 +185,10 @@ def should_generate(alert: DetectionAlert) -> bool:
     return alert.recommended_action == RecommendedAction.GENERATE_RECOMMENDATION
 
 
-def retrieve_context(alert: DetectionAlert) -> dict:
+def retrieve_context(
+    alert: DetectionAlert,
+    inquiries: Sequence[LinkedCSInquiry] = (),
+) -> dict:
     """근거 조회 — copy_draft/image_guide 후보 근거를 둘 다 미리 가져온다.
 
     라우팅이 LLM 몫(route_proposal_type)이라, retrieve_context는 어느 쪽이 뽑힐지
@@ -161,13 +196,22 @@ def retrieve_context(alert: DetectionAlert) -> dict:
 
     - detail_text: 컬렉션1(상세페이지) get(정확 필터) — 임베딩 안 거침. 미등록
       SKU/빈 값이면 NO_DETAIL_TEXT(§4-5).
-    - cs_summary: image_guide용 근거. raw_text 조회 경로가 아직 없어(분류 워커·
-      ClassifiedItem 연동 전) root_cause 통계로 만든 요약으로 대체.
+    - cs_quotes: image_guide 의 **근거 원문**. `evidence.inquiry_ids` 로 조회한 실제
+      고객 문의다. 없으면 NO_DETAIL_TEXT.
+    - cs_summary: root_cause 통계 한 줄. **근거가 아니라 맥락**이다.
+
+    🔴 **cs_quotes 와 cs_summary 를 한 문자열로 합치지 말 것.** cs_summary 는 우리가
+    f-string 으로 만든 문장이라, 그걸 grounding 대조 대상에 넣으면 LLM 이 그 문장을
+    되풀이하는 것만으로 통과한다 — 2026-07-27 에 detail_text 쪽에서 잡았던
+    current_text 자기참조 버그와 같은 모양이다(그때 cs_summary 는 raw_text 경로가
+    없어 플레이스홀더로 남아 있었고, 이 구멍만 살아남았다). **evaluate() 가 대조하는
+    건 cs_quotes 하나뿐이다.**
 
     컬렉션2(과거·반려 사례)는 공통, 0건이면 similar_case=None(§4-2 — 반려 적재
     전엔 항상 0건이라 정상 상태).
     """
     detail_text = _get_detail_page_text(alert)
+    cs_quotes = _collect_cs_quotes(inquiries)
     cs_summary = _summarize_cs_evidence(alert)
 
     rejection_reasons = get_rejection_reasons()
@@ -180,7 +224,12 @@ def retrieve_context(alert: DetectionAlert) -> dict:
     )
     similar_case = similar_rows[0]["document"] if similar_rows else None
 
-    return {"detail_text": detail_text, "cs_summary": cs_summary, "similar_case": similar_case}
+    return {
+        "detail_text": detail_text,
+        "cs_quotes": cs_quotes,
+        "cs_summary": cs_summary,
+        "similar_case": similar_case,
+    }
 
 
 def _get_detail_page_text(alert: DetectionAlert) -> str:
@@ -199,11 +248,58 @@ def _get_detail_page_text(alert: DetectionAlert) -> str:
     return detail_rows[0]["document"] if detail_rows else NO_DETAIL_TEXT
 
 
-def _summarize_cs_evidence(alert: DetectionAlert) -> str:
-    """image_guide용 근거 — CS 원문 대신 root_cause 통계로 만든 요약(§4-3).
+def quotable_inquiries(inquiries: Sequence[LinkedCSInquiry]) -> list[LinkedCSInquiry]:
+    """프롬프트에 실을 문의 = 인용 후보. **두 곳이 반드시 같은 목록을 봐야 한다.**
 
-    raw_text 조회 경로가 아직 없다(분류 워커·ClassifiedItem 연동 전). 있으면 이
-    함수만 실제 CS 원문 인용으로 교체하면 되고, 그 외 코드는 안 건드려도 된다.
+    `_collect_cs_quotes`(모델에게 보여줄 것)와 `_build_citations`(인용을 역추적할 것)가
+    서로 다르게 고르면 "프롬프트엔 실렸는데 인용 대상엔 없는" 문의가 생긴다. 원래는
+    양쪽에 같은 슬라이스를 복붙해 뒀을 뿐이라 한쪽만 고치면 조용히 갈라졌다 —
+    한 곳으로 묶어서 갈라질 수 없게 한다.
+
+    원문이 빈 항목은 버린다 — 빈 문자열은 근거로도 인용으로도 쓸 수 없다.
+    자르는 건 거른 **뒤**다. 순서를 바꾸면 앞 5건에 빈 게 섞였을 때 근거가 그만큼 준다.
+    """
+    return [inquiry for inquiry in inquiries if inquiry.raw_text.strip()][:CS_QUOTE_TOP_N]
+
+
+def evidence_for(proposal_type: ProposalType, context: dict) -> str:
+    """도구별 근거 원문을 고른다 — copy_draft→상세페이지 / image_guide→CS 원문(§4-3).
+
+    `generate_proposal`(무엇을 보여줄지)·`evaluate`(무엇과 대조할지)·`run`(근거가
+    있는지)이 **같은 함수를 쓴다.** 셋이 각자 슬롯을 고르면 "프롬프트엔 A 를 주고
+    검증은 B 와 하는" 어긋남이 생기는데, 그게 바로 이번에 고친 자기참조 버그의 모양이다.
+
+    ⚠️ image_guide 는 `cs_quotes`(고객 원문)다. `cs_summary`(우리가 만든 통계 문장)를
+    돌려주면 안 된다 — retrieve_context docstring 참고.
+    """
+    return context["detail_text"] if proposal_type == ProposalType.COPY_DRAFT else context["cs_quotes"]
+
+
+def _collect_cs_quotes(inquiries: Sequence[LinkedCSInquiry]) -> str:
+    """image_guide 의 근거 원문 — 실제 고객 문의를 그대로 이어 붙인다(§4-3).
+
+    앞에서부터 CS_QUOTE_TOP_N 건까지만 싣는다. 원문이 빈 항목은 버린다 — 빈 문자열은
+    grounding 대조에서 "아무거나 통과"로 작동한다(`has_evidence` 가 빈 source 를
+    False 로 막지만, 다른 원문과 섞여 있으면 경계가 흐려진다).
+
+    한 건도 없으면 NO_DETAIL_TEXT 를 돌려준다. 그러면 `run()` 이 개선안 생성을 아예
+    건너뛰고 None 을 돌려준다 — **근거가 없는데 있는 척하지 않는 게 의도된 동작이다.**
+    """
+    quotable = quotable_inquiries(inquiries)
+    if not quotable:
+        return NO_DETAIL_TEXT
+    return "\n".join(f"- {inquiry.raw_text.strip()}" for inquiry in quotable)
+
+
+def _summarize_cs_evidence(alert: DetectionAlert) -> str:
+    """root_cause 통계 한 줄 요약 — **근거가 아니라 맥락이다**(§4-3).
+
+    프롬프트에 "몇 건 중 몇 건" 이라는 규모를 보여주는 용도이고, 컬렉션2 적재
+    (`record_hitl_outcome`)의 검색용 텍스트에도 쓴다.
+
+    🔴 **grounding 대조 대상으로 쓰지 말 것.** 이 문자열은 우리가 만든 문장이라
+    LLM 이 그대로 되풀이하면 무조건 통과한다. 대조는 `_collect_cs_quotes()` 가
+    만든 실제 원문(cs_quotes)하고만 한다.
     """
     if alert.root_cause is None:
         return NO_DETAIL_TEXT
@@ -220,10 +316,11 @@ async def route_proposal_type(alert: DetectionAlert, context: dict) -> ProposalT
     후퇴한다.
     """
     root_cause_label = alert.root_cause.label if alert.root_cause else "미상"
-    prompt = ROUTING_PROMPT_PATH.read_text(encoding="utf-8").format(
+    prompt = load_prompt(ROUTING_PROMPT_PATH).format(
         aspect=alert.main_aspect.value,
         root_cause_label=root_cause_label,
         detail_text=context["detail_text"],
+        cs_quotes=context["cs_quotes"],
         cs_summary=context["cs_summary"],
     )
 
@@ -235,6 +332,16 @@ async def route_proposal_type(alert: DetectionAlert, context: dict) -> ProposalT
         raise LlmParseError(
             f"모델이 알 수 없는 tool을 호출함: {tool_name!r} [alert_id={alert.alert_id}]"
         )
+
+    # 라우팅은 Agent3 의 유일한 자율 판단 지점이라, 왜 그 도구를 골랐는지가 남아야
+    # 나중에 이상한 선택을 추적할 수 있다. 트레이싱이 꺼져 있어도 남는 유일한 단서다.
+    logger.info(
+        "라우팅 alert=%s 원인=%s → %s (사유: %s)",
+        alert.alert_id,
+        root_cause_label,
+        tool_name,
+        (result.get("arguments") or {}).get("reason", "-"),
+    )
     return _TOOL_NAME_TO_PROPOSAL_TYPE[tool_name]
 
 
@@ -264,15 +371,20 @@ async def generate_proposal(
     anomaly = f"{alert.channel.value} · {alert.main_aspect.value} 이상 (원인: {root_cause_label})"
     rejection_reasons = context.get("similar_case") or "없음"
 
+    evidence_text = evidence_for(proposal_type, context)
+
     if proposal_type == ProposalType.COPY_DRAFT:
-        evidence_text = context["detail_text"]
-        prompt = COPY_DRAFT_PROMPT_PATH.read_text(encoding="utf-8").format(
+        prompt = load_prompt(COPY_DRAFT_PROMPT_PATH).format(
             anomaly=anomaly, detail_pages=evidence_text, rejection_reasons=rejection_reasons
         )
     else:
-        evidence_text = context["cs_summary"]
-        prompt = IMAGE_GUIDE_PROMPT_PATH.read_text(encoding="utf-8").format(
-            anomaly=anomaly, cs_summary=evidence_text, rejection_reasons=rejection_reasons
+        # 근거는 cs_quotes(실제 원문) 하나뿐이다. cs_summary 는 규모를 알려주는 맥락으로
+        # 같이 넘기지만 grounding 대조 대상이 아니다(retrieve_context docstring 참고).
+        prompt = load_prompt(IMAGE_GUIDE_PROMPT_PATH).format(
+            anomaly=anomaly,
+            cs_quotes=evidence_text,
+            cs_summary=context["cs_summary"],
+            rejection_reasons=rejection_reasons,
         )
 
     if previous_failure:
@@ -309,7 +421,7 @@ async def generate_fallback_proposal(alert: DetectionAlert, proposal_type: Propo
     root_cause_label = alert.root_cause.label if alert.root_cause else "미상"
     anomaly = f"{alert.channel.value} · {alert.main_aspect.value} 이상 (원인: {root_cause_label})"
 
-    prompt = FALLBACK_GUIDE_PROMPT_PATH.read_text(encoding="utf-8").format(anomaly=anomaly)
+    prompt = load_prompt(FALLBACK_GUIDE_PROMPT_PATH).format(anomaly=anomaly)
     response = await get_llm_client().complete_json(prompt, trace_key=f"alert_id={alert.alert_id}")
 
     return Proposal(
@@ -377,24 +489,36 @@ def evaluate(proposal: Proposal, alert: DetectionAlert, context: dict, attempt: 
     """Evaluator 검증 — 3기준 실제 판정(§2·§4-3).
 
     - grounding: proposal.current_text(LLM이 "이게 근거다"라고 주장한 인용)가 실제
-      근거(context["detail_text"] 또는 context["cs_summary"], §4-3 도구별 분리)에
+      근거(context["detail_text"] 또는 context["cs_quotes"], §4-3 도구별 분리)에
       있는지 grounding.py로 대조. 없는 내용을 인용했다고 우기면 실패한다.
+      ⚠️ image_guide 쪽 대조 대상은 **cs_quotes(고객 원문)이지 cs_summary가 아니다.**
+      cs_summary는 우리가 만든 문장이라 그걸 대조하면 LLM이 되풀이만 해도 통과한다.
     - consistency: rationale이 실제 원인 라벨(alert.root_cause.label)을 근거로
       삼고 있는지 — grounding은 통과했는데 사유가 엉뚱한 경우를 잡는다.
     - actionability: proposed_text가 행동 지시 형태인지 키워드로 확인.
 
     attempt는 run()의 재시도 루프가 몇 번째 시도인지 넘겨준다(1부터 시작).
     """
-    evidence_text = context["detail_text"] if proposal.type == ProposalType.COPY_DRAFT else context["cs_summary"]
+    evidence_text = evidence_for(proposal.type, context)
 
     failure_reasons: list[str] = []
 
-    try:
-        verify_grounding(proposal.current_text, evidence_text)
-        grounding_ok = True
-    except EvidenceNotFoundError as exc:
+    if evidence_text == NO_DETAIL_TEXT:
+        # 🔴 근거가 없으면 무조건 실패다. 대조할 원문이 없는데 통과시키면 "검증했다"는
+        # 거짓 기록이 남는다. 이 가드가 없으면 프롬프트가 current_text 에 "정보 없음"을
+        # 쓰라고 지시하므로(copy_draft_v1.md·구 image_guide_v2.md) has_evidence 가
+        # "정보 없음" 끼리 대조해 **통과해버린다** — 고객 문의 0건인데 확신도 높음.
+        # run() 이 이 상황을 미리 걸러 여기까지 오지 않는 게 정상이지만, evaluate() 를
+        # 직접 부르는 호출부(테스트·LangGraph 이식 후)까지 막는 최후 방어선이다.
         grounding_ok = False
-        failure_reasons.append(str(exc))
+        failure_reasons.append("근거 원문 자체가 없음(NO_DETAIL_TEXT) — 대조 대상 없음")
+    else:
+        try:
+            verify_grounding(proposal.current_text, evidence_text)
+            grounding_ok = True
+        except EvidenceNotFoundError as exc:
+            grounding_ok = False
+            failure_reasons.append(str(exc))
 
     consistency_ok = _is_consistent_with_root_cause(proposal.rationale, alert)
     if not consistency_ok:
@@ -500,11 +624,53 @@ def score_confidence(
     return final, reason, final != raw_base
 
 
+def _build_citations(
+    proposal: Proposal,
+    evaluator: Evaluator,
+    inquiries: Sequence[LinkedCSInquiry],
+) -> list[Citation]:
+    """`current_text` 가 실제로 인용한 CS 문의를 역추적한다(§4-3).
+
+    `evidence.inquiry_ids` 전체를 싣지 않는 이유는 `citations` 의 정의가 "근거가 된
+    문의 목록"이 아니라 **"실제로 인용한 문의"** 이기 때문이다. 전부 실으면 인용하지도
+    않은 문의가 인용된 것처럼 보인다 — 예전에 `quote=""` 로 채워두던 것과 같은
+    종류의 거짓이다.
+
+    그래서 grounding 판정에 쓴 것과 **같은 함수**(`has_evidence`)로 문의 하나하나와
+    대조해, 맞는 것만 담는다. 판정 기준이 갈리면 "grounding 은 통과했는데 citations
+    는 비어 있다"가 생긴다.
+
+    담기는 조건은 셋 다다:
+      - proposal.type == image_guide — copy_draft 는 상세페이지를 인용하므로 CS
+        인용이 없는 게 정상이다(빈 리스트가 정직한 값).
+      - evaluator.checks.grounding — 검증에 실패한 인용을 기록하면 안 된다.
+        fallback_guide·scope_limit 경로가 여기서 걸러진다(둘 다 grounding=False).
+      - has_evidence(current_text, inquiry.raw_text) — 그 문의에 실제로 있는가.
+
+    `quote` 에는 **LLM 이 인용한 문구(current_text)** 를 넣는다. 원문 전체가 아니라
+    인용한 부분이 인용문이다.
+
+    ⚠️ 그래서 같은 문구가 여러 문의에 있으면 **quote 가 동일한 Citation 이 N 개** 나온다
+    (mock CS 는 템플릿 생성이라 흔하다). 의도된 동작이지만, 집계에서 "인용 N 건"을
+    **"고객 N 명이 그렇게 말했다"로 읽으면 안 된다** — 문구는 하나고 그 문구가 등장한
+    문의가 N 건이라는 뜻이다.
+    """
+    if proposal.type != ProposalType.IMAGE_GUIDE or not evaluator.checks.grounding:
+        return []
+
+    return [
+        Citation(inquiry_id=inquiry.item_id, quote=proposal.current_text)
+        for inquiry in quotable_inquiries(inquiries)
+        if has_evidence(proposal.current_text, inquiry.raw_text)
+    ]
+
+
 def assemble(
     alert: DetectionAlert,
     proposal: Proposal,
     evaluator: Evaluator,
     context: dict,
+    inquiries: Sequence[LinkedCSInquiry] = (),
 ) -> Recommendation:
     """단계 결과 조립 → Recommendation. hitl은 항상 대기 상태로 시작."""
     confidence, confidence_reason, capped = score_confidence(proposal, context, alert, evaluator)
@@ -516,11 +682,9 @@ def assemble(
         alert_id=alert.alert_id,
         created_at=datetime.now(timezone.utc),
         proposal=proposal,
-        # citations는 CS 원문 인용용이다(evidence.inquiry_ids 중 실제로 인용한 문의).
-        # 빈 리스트가 정직한 값 — quote=""인 Citation은 "인용이 있다"는 오해를 만든다.
-        # TODO(2026-08-03): 조회 경로는 원본 DB(cs·reviews) 직접 읽기로 확정.
-        # item_id ↔ cs/reviews PK 연결만 확인되면 실제 인용으로 채울 것(§4-3).
-        citations=[],
+        # evidence.inquiry_ids 중 current_text가 실제로 인용한 문의만 담긴다.
+        # copy_draft·fallback·scope_limit 경로는 빈 리스트가 정직한 값이다(_build_citations).
+        citations=_build_citations(proposal, evaluator, inquiries),
         evaluator=evaluator,
         similar_case=context.get("similar_case"),
         recommendation_confidence=confidence,
@@ -532,9 +696,29 @@ def assemble(
 
 
 @traceable
-async def run(alert: DetectionAlert) -> Recommendation | None:
+async def run(
+    alert: DetectionAlert,
+    inquiries: Sequence[LinkedCSInquiry] = (),
+) -> Recommendation | None:
     """오케스트레이터: 트리거 게이트 → 근거조회 → 라우팅(LLM) → (생성→검증) 최대 3회
     → (그래도 실패하면) 근거없음 경로 → 조립.
+
+    inquiries 는 `alert.evidence.inquiry_ids` 에 해당하는 CS 원문이다(배치가
+    `app/core/inquiries.py` 로 만들어 넘긴다). image_guide 의 근거이자 citations 의
+    출처다.
+
+    🔴 **근거가 없으면 개선안을 만들지 않고 None 을 돌려준다(2026-08-09).** 근거 0건은
+    입력만 보고 결정론적으로 아는 사실이고 모델이 만들어낼 수 있는 게 아니라서,
+    생성을 태워봐야 일반론밖에 안 나온다 — SCOPE_LIMIT 을 LLM 없이 처리하는 것과 같은
+    이유다. 셀러에겐 알림만 나가고 개선안 카드가 안 붙는다(`recommendation: null` 은
+    조치 6종에서 이미 정상값이다). 배치는 이걸 실패로 집계해 종료코드에 반영한다
+    (`daily.py`) — 근거 파이프라인이 깨진 걸 조용히 넘기지 않기 위해서다.
+
+    **fallback_guide 는 남는다. 성격이 다르다:**
+      - 근거가 아예 없음        → None (여기)
+      - 근거는 있는데 LLM 이 MAX_ATTEMPTS 번 다 인용에 실패 → fallback_guide
+    후자는 셀러가 제대로 된 개선안을 받을 수 **있었는데** 우리가 못 만든 경우라,
+    일반 가이드로라도 떨어뜨리는 게 맞다.
 
     route_proposal_type()은 alert 하나당 1회만 — 재시도는 "같은 도구로 다시 생성"이지
     "도구를 바꿔서 다시 판단"이 아니다. MAX_ATTEMPTS를 다 써도 grounding이 안 되면
@@ -561,8 +745,26 @@ async def run(alert: DetectionAlert) -> Recommendation | None:
         )
         return assemble(alert, proposal, evaluator, {"similar_case": None})
 
-    context = retrieve_context(alert)
+    context = retrieve_context(alert, inquiries)
+
+    # 두 근거가 다 없으면 어느 도구를 골라도 인용할 원문이 없다 — 라우팅조차 낭비다.
+    if context["detail_text"] == NO_DETAIL_TEXT and context["cs_quotes"] == NO_DETAIL_TEXT:
+        logger.warning(
+            "개선안 생략 alert=%s — 상세페이지·CS 원문이 둘 다 없어 근거가 0건입니다"
+            " (상세페이지 미등록이거나 evidence.inquiry_ids 조회가 실패했을 수 있습니다)",
+            alert.alert_id,
+        )
+        return None
+
     proposal_type = await route_proposal_type(alert, context)
+
+    if evidence_for(proposal_type, context) == NO_DETAIL_TEXT:
+        logger.warning(
+            "개선안 생략 alert=%s — %s 로 라우팅됐으나 그쪽 근거가 없습니다",
+            alert.alert_id,
+            proposal_type.value,
+        )
+        return None
 
     attempt = 1
     proposal = await generate_proposal(
@@ -597,7 +799,7 @@ async def run(alert: DetectionAlert) -> Recommendation | None:
             failure_reason=f"근거를 찾지 못해 일반 가이드로 대체(MAX_RETRY={MAX_RETRY} 소진)",
         )
 
-    return assemble(alert, proposal, evaluator, context)
+    return assemble(alert, proposal, evaluator, context, inquiries)
 
 
 async def generate_for_alert(
@@ -623,22 +825,22 @@ async def generate_for_alert(
         alert: 탐지 알림.
         inquiries: `alert.evidence.inquiry_ids` 에 해당하는 CS 원문
             (`app/core/inquiries.py` 가 만든다). 배치가 가이드라인과 **같은 리스트**를
-            넘긴다.
-            ⚠️ 지금은 받아만 두고 쓰지 않는다. 쓸 자리가 두 곳인데 둘 다 막혀 있다:
-            ① `citations` — `ClassifiedItem.item_id` 와 `cs`·`reviews` PK 연결이
-              미확인(백엔드 C4)이라 `Citation.inquiry_id` 를 정직하게 못 만든다.
-            ② `_summarize_cs_evidence()` — 여기에 실제 원문을 넣으면 image_guide 의
-              근거가 통계 요약에서 진짜 인용으로 바뀐다. 프롬프트와 grounding 대조
-              대상이 같이 바뀌는 **동작 변경**이라 LLM 실행 검증이 필요하다.
+            넘긴다. image_guide 의 근거 원문이자 `citations` 의 출처다 —
+            **빈 리스트로 넘기면 image_guide 근거가 0건이라 개선안이 안 만들어진다.**
 
     Returns:
-        개선안. 게이트가 닫혔거나 생성이 실패하면 None.
+        개선안. 아래 셋 중 하나면 None 이다:
+          1. 게이트 미충족(`recommended_action != "개선안 생성"`) — 정상, 조치 6종
+          2. **근거 0건** — 상세페이지 미등록이거나 CS 원문 조회 실패(run 참고)
+          3. 생성 중 예외 — 로그로 남긴다
+        호출부(`daily.py`)는 1번을 게이트로 미리 거르므로, 게이트를 통과했는데 None 이면
+        2번 아니면 3번이고 **둘 다 배치 실패로 집계된다.**
     """
     if not should_generate(alert):
         return None
 
     try:
-        return await run(alert)
+        return await run(alert, inquiries)
     except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
         # 배치 요약에는 "개선안 없음"으로만 남으므로 사유는 여기서 남겨야 추적된다.
         logger.warning(

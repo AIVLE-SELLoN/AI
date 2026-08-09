@@ -30,7 +30,9 @@ class GenerateRecommendationRequest(BaseModel):
 
 class GenerateRecommendationResponse(BaseModel):
     recommendation: Recommendation | None
-    """None이면 트리거 미충족(alert.recommended_action != "개선안 생성")."""
+    """None인 경우 둘 — ① 트리거 미충족(recommended_action != "개선안 생성")
+    ② 근거 0건. 이 엔드포인트는 CS 원문을 안 받아서 image_guide 는 항상 ②다
+    (`service.generate_recommendation` docstring 참고)."""
 
 
 @router.post("/recommendations/generate", response_model=GenerateRecommendationResponse)
