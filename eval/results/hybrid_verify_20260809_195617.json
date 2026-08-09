@@ -1,0 +1,3226 @@
+{
+  "relabel_300": {
+    "single": {
+      "n_sampled": 291,
+      "n_scored": 291,
+      "n_unanswered": 0,
+      "aspect_f1": 0.6875,
+      "aspect_f1_note": "대시보드·채널비교분석·개선리포트 소비 지표(중립 포함) — 탐지는 안 씀",
+      "aspect_precision": 0.6304,
+      "aspect_recall": 0.756,
+      "sentiment_accuracy": 0.8545,
+      "exact_match_rate": 0.4502,
+      "per_aspect": {
+        "기타": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "n_true": 0
+        },
+        "사이즈": {
+          "precision": 0.9062,
+          "recall": 0.5979,
+          "n_true": 97
+        },
+        "색상": {
+          "precision": 0.9506,
+          "recall": 0.8652,
+          "n_true": 89
+        },
+        "소재": {
+          "precision": 0.7456,
+          "recall": 0.8095,
+          "n_true": 105
+        },
+        "파손": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "n_true": 0
+        }
+      },
+      "negative_detection": {
+        "note": "탐지 분자를 결정하는 값 — 문의 단위 부정/비부정 2분류. precision·f1은 비부정 표본(fp+tn)이 0건이면 null(측정불가, 100%로 착각 금지)",
+        "precision": 0.7717,
+        "recall": 0.8659,
+        "f1": 0.8161,
+        "fpr": 0.1005,
+        "tp": 71,
+        "fp": 21,
+        "fn": 11,
+        "tn": 188,
+        "n_true_negative": 82,
+        "n_true_nonnegative": 209
+      },
+      "negative_scoped_aspect": {
+        "note": "골든이 부정인 문항만 대상 — aspect까지 맞아야 올바른 분자에 잡힘. PR 리뷰 반영: 단일 aspect 출력에서는 fp==fn이 구조적으로 성립해 precision=recall=F1이 항상 같은 값이라 accuracy 하나로 통합함 (multi_output_diagnostic.rate가 0%보다 커지면 이 등식이 깨지므로 그때 재분리)",
+        "accuracy": 0.72,
+        "tp": 72,
+        "fp": 28,
+        "fn": 10,
+        "n_true_negative": 82,
+        "n_true_negative_warning": "부정 표본이 82건뿐 — 신뢰구간이 넓을 수 있음. --only-negative 권장"
+      },
+      "multi_output_diagnostic": {
+        "note": "예측 측 다중 aspect 출력 건수 — explode 계약 근거 진단(정답 없어 recall 계산 불가)",
+        "rate": 0.2268,
+        "count": 66
+      },
+      "mismatches": [
+        {
+          "inquiry_id": "RELABEL-0001",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0002",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0003",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0004",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0010",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0012",
+          "true_aspect": "색상",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0013",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0014",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0016",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0017",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0018",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0019",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0020",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0021",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0024",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0030",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0035",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0039",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0045",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": -1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0047",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0048",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0051",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0052",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0056",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0058",
+          "true_aspect": "사이즈",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0059",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0061",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0064",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0067",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0069",
+          "true_aspect": "사이즈",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0072",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0075",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0077",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0078",
+          "true_aspect": "색상",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0081",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0086",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0091",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0092",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0094",
+          "true_aspect": "소재",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0097",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0098",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0100",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0101",
+          "true_aspect": "소재",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0102",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0104",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": []
+        },
+        {
+          "inquiry_id": "RELABEL-0105",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0106",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": []
+        },
+        {
+          "inquiry_id": "RELABEL-0108",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0109",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0110",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0112",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0113",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": []
+        },
+        {
+          "inquiry_id": "RELABEL-0114",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": []
+        },
+        {
+          "inquiry_id": "RELABEL-0115",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": []
+        },
+        {
+          "inquiry_id": "RELABEL-0116",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": []
+        },
+        {
+          "inquiry_id": "RELABEL-0117",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": []
+        },
+        {
+          "inquiry_id": "RELABEL-0118",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0120",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": []
+        },
+        {
+          "inquiry_id": "RELABEL-0123",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": []
+        },
+        {
+          "inquiry_id": "RELABEL-0124",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0125",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0126",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0127",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0128",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0129",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0130",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0131",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0132",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0133",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0134",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            },
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0135",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0136",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0137",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0138",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0139",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0140",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0141",
+          "true_aspect": "색상",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0142",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0143",
+          "true_aspect": "색상",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0146",
+          "true_aspect": "색상",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0147",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0148",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0149",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0150",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0151",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0154",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0156",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0161",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0162",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0163",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0165",
+          "true_aspect": "색상",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0166",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0168",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0171",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0172",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "파손",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0174",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0175",
+          "true_aspect": "소재",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0178",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0181",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0186",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0187",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0188",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0190",
+          "true_aspect": "사이즈",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0191",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0192",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0195",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0197",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0198",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0199",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0201",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0202",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0203",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0206",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0207",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0208",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0209",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0210",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0211",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0212",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0213",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0214",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0216",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0217",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0219",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0221",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0222",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0223",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0224",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            },
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0225",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0226",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0228",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0229",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0230",
+          "true_aspect": "소재",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0231",
+          "true_aspect": "사이즈",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0233",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0236",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0240",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0241",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0243",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0245",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0252",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0253",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0255",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0257",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0259",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0260",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0266",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0272",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0278",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0279",
+          "true_aspect": "소재",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0285",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0287",
+          "true_aspect": "소재",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0290",
+          "true_aspect": "소재",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0291",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0293",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0295",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0296",
+          "true_aspect": "소재",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0297",
+          "true_aspect": "사이즈",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            },
+            {
+              "aspect": "소재",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0298",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "RELABEL-0299",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        }
+      ],
+      "leak_filter": {
+        "note": "유출 태깅 안 됨(tag_leaked_rows 미호출) — leak_filter 정보 없음",
+        "applied": false
+      },
+      "mismatches_note": "AI Hub 71603 리뷰 원문(raw_text)은 이용정책상 저장소에 커밋하지 않는다(.gitignore의 review_eval_*.json 주석 참고). 원문이 필요하면 inquiry_id로 eval/eval_sets/relabel_300.csv 를 조회할 것."
+    },
+    "multi": {
+      "n": 9,
+      "n_scored": 9,
+      "n_unanswered": 0,
+      "full_row_accuracy": 0.3333,
+      "aspect_level_accuracy": 0.5263,
+      "note": "full_row_accuracy=모든 aspect 다 맞은 행 비율(explode 계약 핵심 지표), aspect_level_accuracy=개별 aspect+감성 조합 단위 정확도"
+    },
+    "n_total": 300,
+    "n_failed": 0
+  },
+  "llm_generated_700": {
+    "single": {
+      "n_sampled": 600,
+      "n_scored": 600,
+      "n_unanswered": 0,
+      "aspect_f1": 0.9795,
+      "aspect_f1_note": "대시보드·채널비교분석·개선리포트 소비 지표(중립 포함) — 탐지는 안 씀",
+      "aspect_precision": 0.963,
+      "aspect_recall": 0.9967,
+      "sentiment_accuracy": 0.8913,
+      "exact_match_rate": 0.8633,
+      "per_aspect": {
+        "기타": {
+          "precision": 0.9494,
+          "recall": 1.0,
+          "n_true": 150
+        },
+        "사이즈": {
+          "precision": 0.9615,
+          "recall": 1.0,
+          "n_true": 50
+        },
+        "색상": {
+          "precision": 0.7937,
+          "recall": 1.0,
+          "n_true": 50
+        },
+        "소재": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "n_true": 50
+        },
+        "오배송": {
+          "precision": 1.0,
+          "recall": 0.9867,
+          "n_true": 150
+        },
+        "파손": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "n_true": 150
+        }
+      },
+      "negative_detection": {
+        "note": "탐지 분자를 결정하는 값 — 문의 단위 부정/비부정 2분류. precision·f1은 비부정 표본(fp+tn)이 0건이면 null(측정불가, 100%로 착각 금지)",
+        "precision": 0.9761,
+        "recall": 0.9109,
+        "f1": 0.9424,
+        "fpr": 0.0662,
+        "tp": 409,
+        "fp": 10,
+        "fn": 40,
+        "tn": 141,
+        "n_true_negative": 449,
+        "n_true_nonnegative": 151
+      },
+      "negative_scoped_aspect": {
+        "note": "골든이 부정인 문항만 대상 — aspect까지 맞아야 올바른 분자에 잡힘. PR 리뷰 반영: 단일 aspect 출력에서는 fp==fn이 구조적으로 성립해 precision=recall=F1이 항상 같은 값이라 accuracy 하나로 통합함 (multi_output_diagnostic.rate가 0%보다 커지면 이 등식이 깨지므로 그때 재분리)",
+        "accuracy": 0.9592,
+        "tp": 447,
+        "fp": 19,
+        "fn": 2,
+        "n_true_negative": 449,
+        "n_true_negative_warning": null
+      },
+      "multi_output_diagnostic": {
+        "note": "예측 측 다중 aspect 출력 건수 — explode 계약 근거 진단(정답 없어 recall 계산 불가)",
+        "rate": 0.0333,
+        "count": 20
+      },
+      "mismatches": [
+        {
+          "inquiry_id": "GEN-0012",
+          "raw_text": "안녕하세요. 최근에 주문한 상품을 받았는데, 포장 상태가 조금 엉망이라 걱정이 되네요. 혹시 파손된 상태로 배송될 경우 어떻게 처리해야 하는지 궁금합니다. 상품이 무사히 도착했으면 좋겠네요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0014",
+          "raw_text": "상품을 받았는데 포장이 아주 꼼꼼해서 안심하고 받았어요. 혹시나 파손되는 경우에는 어떻게 보상받는지 궁금합니다.",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0016",
+          "raw_text": "상품이 도착했는데 포장이 뜯어진 상태라 매우 불안해요. 혹시 파손된 것 아닌지 걱정이 됩니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0018",
+          "raw_text": "안녕하세요, 이번에 주문한 상품이 잘 도착했어요. 포장 상태도 좋았고, 제품 자체도 문제없이 멀쩡하네요. 그런데 혹시 파손되면 어떻게 해결해 주시는지 궁금해요. 이런 경우에 대한 정책이 따로 있나요?",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0021",
+          "raw_text": "상품이 파손되면 어떻게 보상받나요? 이번에도 파손된 제품이 오는 것 아닐까 걱정이 됩니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0025",
+          "raw_text": "어제 주문한 상품이 오늘 도착했는데, 포장이 정말 허술하더군요. 혹시 파손된 상태로 올까 봐 걱정했는데, 다행히 제품은 괜찮았어요. 하지만 이렇게 계속 불안하게 쇼핑해야 하는게 너무 스트레스입니다. 앞으로는 좀 더 신경 써주세요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0029",
+          "raw_text": "안녕하세요. 방금 주문한 제품이 도착했는데, 포장 상태가 좀 불안해 보여서요. 혹시 파손될까 걱정이 되는데, 이런 경우엔 어떻게 하나요? 다른 분들 후기 보니까 파손된 경우가 많더라고요. 제 건 잘 왔으면 좋겠어요ㅠㅠ",
+          "true_aspect": "파손",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0030",
+          "raw_text": "오늘 상품이 도착했는데, 포장이 좀 찢어져 있었어요. 확인해보니 물품은 다행히 괜찮았지만, 다음에 파손될까봐 걱정이에요. 혹시 파손되면 교환이나 환불은 어떻게 진행되나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0032",
+          "raw_text": "주문한 상품이 방금 도착했는데, 포장이 좀 찢어져 있더라고요. 물건을 확인해보니 다행히 파손은 없었지만, 다음에는 파손되면 어떻게 해결되는지 궁금합니다. 혹시 주의사항 같은 게 있으면 미리 알려주시면 좋겠어요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0033",
+          "raw_text": "안녕하세요. 최근에 주문한 상품이 도착했는데, 포장을 열어보니 일부 품목이 파손되어 있는 것 같습니다. 이런 경우에는 어떻게 처리해야 하는지 궁금합니다. 또한, 앞으로 배송되는 상품들이 손상 없이 잘 올 수 있을지 걱정이 되네요. 확인 부탁드립니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0034",
+          "raw_text": "상품이 파손되지 않고 잘 도착하면 좋았을 텐데, 불량은 아닌지 걱정입니다. 혹시 파손이 발생하면 어떻게 처리되는지 알려주실 수 있을까요?",
+          "true_aspect": "파손",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0038",
+          "raw_text": "상품이 파손되지 않고 잘 왔어요.",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0039",
+          "raw_text": "안녕하세요. 주문한 상품이 도착했는데 포장이 좀 찌그러져 있었어요. 괜찮을까 걱정되네요. 혹시 파손된 경우 어떻게 처리하나요? 확인 부탁드립니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            },
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0049",
+          "raw_text": "상품 잘 받았는데 파손 없이 온 것 같아서 기뻐! 혹시 파손되면 어떻게 알아봐야 해?",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0059",
+          "raw_text": "상품이 도착했는데 박스가 찌그러져 있더라고요. 내용물은 다행히 이상이 없었지만, 오는 동안 파손될까 걱정이 정말 많이 들었습니다. 만약 상품이 손상되면 어떻게 보상받을 수 있는지 알고 싶어요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0063",
+          "raw_text": "상품 파손 없이 잘 왔어!👍",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0072",
+          "raw_text": "상품을 주문했는데 혹시 파손이나 불량이 올까 걱정이에요. 택배를 받을 때마다 포장이 잘 되어 있는지 확인하는 편인데, 파손된 경우에는 어떻게 해줘야 하나요? 이전에 주문했던 상품은 무사히 왔지만, 이번에는 조금 불안하네요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0073",
+          "raw_text": "배송받은 상품의 포장이 매우 헐거워서 중간에 파손되지 않을까 걱정이 되네요. 혹시 파손되면 교환이나 환불이 가능한지 알고 싶어요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0074",
+          "raw_text": "상품이 도착했는데 포장 상태가 불안해요. 만약 파손 상태로 오면 어떻게 처리하나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0078",
+          "raw_text": "안녕하세요. 최근에 주문한 상품이 도착했는데, 포장 상태가 불안정하게 보였습니다. 혹시 배송 중에 파손이 발생하면 어떻게 처리해야 하는지 궁금합니다. 과거에 다른 상품을 주문했을 때 파손된 경험이 있어서 조금 걱정이 되네요. 좋은 상품을 기대하고 있었는데, 혹시 문제가 생기지 않을까 걱정이 됩니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0080",
+          "raw_text": "상품 도착했는데 포장이 망가졌어요. 파손된 건 아닌지 걱정되네요, 빨리 확인 부탁해요!",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0082",
+          "raw_text": "상품이 도착했는데 포장이 엉망이네요. 혹시 파손될 위험은 없을까요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0084",
+          "raw_text": "안녕하세요. 최근에 주문한 상품이 잘 도착했는데, 포장 상태가 정말 좋았어요. 하지만 혹시나 파손될 경우 어떻게 대응해야 하는지 궁금해서 문의 드립니다. 특히, 제가 구매한 저렴한 가전제품은 뚜렷한 손상 없이 잘 도착했는데, 만약 문제가 생기면 교환이나 환불이 가능할까요?",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0088",
+          "raw_text": "상품이 도착했는데 포장이 다 찌그러져서 걱정이에요. 이렇게 상태가 안 좋으면 교환은 어떻게 하나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0089",
+          "raw_text": "안녕하세요, 최근에 주문한 상품이 도착했는데 포장이 조금 찌그러져 있었습니다. 다행히 내부 제품에는 큰 이상이 없었지만, 혹시 파손된 채로 배송되면 어떻게 처리해야 할지 궁금합니다. 앞으로 배송 시 좀 더 안전하게 포장해 주시면 좋겠다는 생각도 들었습니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0090",
+          "raw_text": "상품이 파손되지 않고 잘 도착했어요, 감사합니다!",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0092",
+          "raw_text": "상품이 도착했는데 겉박스가 찢어져 있어서 혹시 안에 있는 것도 파손된 건 아닌지 걱정이에요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0094",
+          "raw_text": "상품을 받았는데 포장이 엉망이라 불안해요. 파손된 건 아닐지 걱정입니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0098",
+          "raw_text": "택배가 도착했는데 포장 상태가 좋지 않더라고요. 혹시 파손된 상품이 오면 어떻게 대처해야 하나요?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0109",
+          "raw_text": "배송된 상품 상태가 아주 좋네요! 혹시 파손되면 어떻게 처리하나요?",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0111",
+          "raw_text": "상품이 이상하게 왔는데, 혹시 파손된 건 아닐까 걱정돼 😟 이거 교환이나 환불 가능해?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0126",
+          "raw_text": "상품 왔는데 포장이 좀 찢어졌어, 괜찮은 건가?",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0128",
+          "raw_text": "안녕하세요, 얼마 전에 주문한 상품이 오늘 도착했는데, 포장이 정말 허술하게 되어 있어서 걱정이 되더라고요. 혹시 배송 과정에서 파손될 가능성은 없는지, 예를 들어 깨지거나 고장이 날 경우에는 어떻게 처리가 되는지 궁금합니다. 그리고 다른 분들 리뷰를 보니 파손된 경우가 종종 있다고 해서, 저도 그런 일이 생길까봐 불안해서 문의 드립니다.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0137",
+          "raw_text": "주문한 상품이 오늘 무사히 도착했습니다. 다행히 파손 없이 잘 왔고, 상태도 좋아서 기분이 좋네요. 혹시 상품이 파손되면 어떻게 대응해야 하는지 궁금해서 문의 드립니다. 보내드린 팩킹 상태가 마음에 들어서 더 신경 써 주시면 좋을 것 같아요.",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0139",
+          "raw_text": "안녕하세요. 최근에 주문한 상품이 도착했는데, 포장이 약간 찌그러져 있었어요. 다행히 내부 상품은 손상되지 않았지만, 만약 파손된 경우에는 어떻게 처리해야 하는지 궁금합니다. 혹시 교환이나 환불 절차가 따로 있는지 알고 싶어요.",
+          "true_aspect": "파손",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0149",
+          "raw_text": "안녕하세요, 최근에 주문한 상품이 무사히 도착했습니다. 포장이 아주 안전하게 되어 있어서 파손 없이 잘 받을 수 있었네요. 혹시 파손이 발생했을 때에는 어떤 절차로 교환이나 환불을 요청해야 하는지 궁금합니다. 미리 알아두고 싶어서 문의 드립니다. 항상 좋은 서비스 감사드립니다.",
+          "true_aspect": "파손",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "파손",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0151",
+          "raw_text": "안녕하세요. 제가 지난주에 주문한 상품이 오늘 배송되었는데, 확인해보니 제가 요청한 색상이 아닌 다른 색상으로 왔습니다. 주문할 때 상세히 체크했는데 이렇게 잘못 오니 많이 실망스럽네요. 혹시 잘못 배송된 상품을 교환할 수 있는 방법이 있는지 궁금합니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0152",
+          "raw_text": "안녕하세요, 방금 배송받은 상품이 제가 주문한 것과 완전 달라요. 원래는 블랙색 상의를 주문했는데, 배송된 건 화이트색으로 왔어요😭 혹시 옵션 변경 같은 거 가능한가요? 이거 어떻게 처리해야 할지 모르겠어요.",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0160",
+          "raw_text": "오늘 배송 온 거 보고 깜짝 놀랐어, 이거 내가 주문한 게 아니잖아😟 뭐가 문제인지 좀 알아봐줘!",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0176",
+          "raw_text": "주문한 상품 대신 전혀 다른 제품이 왔습니다. 확인해보니 색상도 다르고 사이즈도 맞지 않아서 정말 실망스럽습니다. 이런 경우 어떻게 처리해야 하나요? 잘못 온 상품을 교환해 주실 수 있는지 궁금합니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0184",
+          "raw_text": "안녕하세요. 오늘 주문한 상품이 아닌 다른 게 왔어요. 제가 주문한 건 블루색 티셔츠인데, 배송된 건 레드색으로 왔어요. 🙁 이거 교환 가능할까요? 옵션 변경 같은 건 할 수 있는 건지도 궁금해요.",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0187",
+          "raw_text": "안녕하세요, 저는 지난주에 주문한 상품에 대한 문의 드립니다. 제가 주문한 것은 블루 계열의 여름 티셔츠였는데, 오늘 배송된 상품은 전혀 다른 색상의 긴팔 상의여서 좀 당황스러웠어요. 혹시 잘못 배송된 것인지 확인해 주실 수 있을까요? 아니면 옵션 변경이 가능한지도 궁금합니다. 이전에 주문했을 때는 문제가 없어서 이번에도 잘 올 줄 알았는데, 확인 부탁드립니다!",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0194",
+          "raw_text": "안녕하세요! 주문한 상품이랑 다른 게 왔어요. 원래는 블랙 색상으로 주문했는데, 흰색이 왔더라고요. 혹시 잘못된 건지 확인해 주실 수 있나요? 교환이 가능한지도 궁금해요. 그리고 주문한 대로 정확히 배송되면 좋을 것 같아요!",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0196",
+          "raw_text": "제가 주문한 블루 원피스 대신 흰색 블라우스가 왔는데, 혹시 옵션 변경이 가능한지 궁금합니다. 주문한 대로 정확히 왔습니다라는 메시지를 받았는데, 그건 아닌 것 같아요.",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0214",
+          "raw_text": "이번에 주문한 신발이 도착했는데, 색상이 제가 선택한 것과 달라서 확인이 필요합니다. 혹시 잘못 온 건지, 아니면 다른 색상으로 변경할 수 있는 방법이 있는지 궁금해요. 제가 원했던 색상을 다시 받을 수 있을까요?",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0230",
+          "raw_text": "아주 만족스럽게 주문했는데, 혹시 잘못 온 건 아닌지 확인 부탁드려요!",
+          "true_aspect": "오배송",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0251",
+          "raw_text": "안녕하세요. 이번에 주문한 상품이 도착했는데, 제가 원했던 색상과 전혀 다른 색상의 제품이 왔습니다. 사실 주문할 때 색상 옵션을 잘 확인했는데 이렇게 잘못 온 건 정말 실망스럽네요. 혹시 반품 절차를 안내해 주실 수 있을까요?",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0253",
+          "raw_text": "안녕하세요, 최근에 주문한 상품이 잘못 배송된 것 같아서 문의 드립니다. 제가 주문한 것은 블루컬러의 티셔츠였는데, 대신에 그린컬러의 티셔츠가 왔습니다. 이럴 경우에는 교환이 가능한지, 혹은 환불이 가능한지 알고 싶습니다. 빠른 답변 부탁드립니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0257",
+          "raw_text": "안녕하세요, 최근에 주문한 상품이 도착했는데 확인해보니 제가 주문한 것과 전혀 다른 제품이 왔습니다. 주문한 상품과 어떤 차이가 있는지 궁금하고, 혹시 교환이 가능한지 안내해주시면 감사하겠습니다. 이전에 같은 브랜드의 제품을 구매했을 때는 문제가 없었는데, 이번에는 정말 실망스럽습니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            },
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0258",
+          "raw_text": "제가 주문한 블루 색상의 티셔츠 대신 빨간색이 왔는데, 이거 어떻게 해결해야 하나요? 또는 다른 옵션으로 변경할 수 있는지 궁금합니다.",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            },
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0267",
+          "raw_text": "주문한 제품과 전혀 다른 상품이 배송되었어요. 제가 주문한 것은 검정색 티셔츠였는데, 옷이 회색으로 오고 사이즈도 맞지 않네요. 혹시 반품 절차에 대해 안내해 주실 수 있나요?",
+          "true_aspect": "오배송",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "오배송",
+              "sentiment": -1
+            },
+            {
+              "aspect": "사이즈",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0302",
+          "raw_text": "주문한 상품의 배송이 예상보다 지연되고 있는 것 같습니다. 확인 부탁드리겠습니다.",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0305",
+          "raw_text": "주문한 상품이 아직 배송되지 않았는데, 언제쯤 받을 수 있을까요? 배송 상태를 확인해주실 수 있나요?",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0309",
+          "raw_text": "주문한 상품이 아직 배송되지 않았습니다. 배송 일정에 대한 확인 부탁드립니다.",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0313",
+          "raw_text": "주문한 상품이 아직 배송되지 않아 문의 드립니다.",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0314",
+          "raw_text": "주문한 상품이 아직 배송되지 않아 궁금합니다. 배송 상황을 확인해 주실 수 있을까요?",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0317",
+          "raw_text": "주문한 상품이 아직 도착하지 않았는데, 확인 부탁드립니다.",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0322",
+          "raw_text": "주문한 상품의 배송이 예상보다 늦어지고 있는데, 언제 도착할지 알 수 있을까요?",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0325",
+          "raw_text": "주문한 상품이 아직 도착하지 않아서 확인 부탁드립니다.",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0337",
+          "raw_text": "주문한 상품이 아직 도착하지 않았는데, 배송 상태가 궁금합니다. 예상 배송일을 알려주실 수 있나요?",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0340",
+          "raw_text": "최근에 주문한 상품이 배송되지 않아 문의드립니다. 배송 상태를 확인해 주실 수 있을까요?",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0347",
+          "raw_text": "배송이 지연되고 있는데, 언제 도착하나요?",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0348",
+          "raw_text": "배송 추적 번호가 잘못된 것 같아요.",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0352",
+          "raw_text": "배송이 좀 늦어지는 것 같은데 확인해줄 수 있어?",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0359",
+          "raw_text": "결제가 잘 안 되는데 뭐가 문제일까?",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0377",
+          "raw_text": "주문한 상품의 배송이 언제 도착할지 궁금해요. 배송 추적이 잘 안되네요.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0378",
+          "raw_text": "결제는 정상적으로 됐는데 상품이 언제 도착하는지 너무 궁금해요.",
+          "true_aspect": "기타",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0400",
+          "raw_text": "주문한 상품이 아직 안 왔는데 확인 가능할까요?",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0407",
+          "raw_text": "주문한 상품이 아직 도착하지 않아서요.",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0447",
+          "raw_text": "상품이 아직 배송되지 않았는데 배송 상황이 궁금해요. 언제쯤 받을 수 있을까요?",
+          "true_aspect": "기타",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "기타",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0454",
+          "raw_text": "안녕하세요! 이번에 주문한 티셔츠 색상이 웹사이트에서 본 것과 좀 다른 것 같아. 핑크색이라고 했는데, 생각보다 더 밝은 느낌이에요. 혹시 색상 관련해서 조정할 수 있는 방법이 있을까요? 아니면 재입고될 때 색상이 더 정확하게 나올지 궁금해요!",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0469",
+          "raw_text": "색상이랑 다른데 교환 가능한가요?",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0470",
+          "raw_text": "색상이랑 이미지랑 너무 다른데 이거 반품해도 돼?",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0471",
+          "raw_text": "이번에 구매한 제품 색상이 맘에 들어서 재구매할까 하는데, 다른 색상도 있나요? 재입고 일정도 궁금해요.",
+          "true_aspect": "색상",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0472",
+          "raw_text": "이 상품 색상이 사진이랑 다르네요, 확인 가능할까요?",
+          "true_aspect": "색상",
+          "true_sentiment": -1,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0491",
+          "raw_text": "안녕하세요. 제가 어제 주문한 니트 스웨터의 색상이 화면에서 본 것과 조금 다르게 느껴지네요. 화면에서는 밝은 핑크색으로 보였는데 실제로는 조금 어두운 톤이라 아쉽습니다. 혹시 제가 주문한 색상에 대한 다른 고객님의 후기가 있다면 참고하고 싶습니다.",
+          "true_aspect": "색상",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "색상",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0502",
+          "raw_text": "사이즈가 잘 맞아서 너무 기분이 좋은데, 혹시 다른 스타일도 사이즈가 비슷한지 궁금해요.",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0524",
+          "raw_text": "사이즈가 너무 잘 맞아요! 그런데 다른 색상으로 바꾸고 싶은데, 사이즈 변동은 없나요?",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0527",
+          "raw_text": "이번에 산 옷 사이즈가 딱 맞아서 너무 좋아! 혹시 다른 색상도 같은 핏으로 나오는지 궁금해~",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 1
+            },
+            {
+              "aspect": "색상",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0529",
+          "raw_text": "안녕하세요! 최근에 귀사의 쇼핑몰에서 사이즈 M의 블라우스를 구매했는데, 딱 맞는 핏이라서 정말 마음에 들었어요. 그런데 다음에 구매할 때는 혹시 L 사이즈로도 시도해볼까 하는 고민이 들어서요. M 사이즈가 잘 맞긴 했지만, L 사이즈는 좀 더 여유 있는 핏으로 입을 수 있을지 궁금해서 문의 드립니다.",
+          "true_aspect": "사이즈",
+          "true_sentiment": 1,
+          "predicted": [
+            {
+              "aspect": "사이즈",
+              "sentiment": 0
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0582",
+          "raw_text": "구매한 원단이 생각보다 많이 늘어나서 아쉬워요.",
+          "true_aspect": "소재",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        },
+        {
+          "inquiry_id": "GEN-0592",
+          "raw_text": "이 원단 스판기가 생각보다 약한데, 이런 건가요?",
+          "true_aspect": "소재",
+          "true_sentiment": 0,
+          "predicted": [
+            {
+              "aspect": "소재",
+              "sentiment": -1
+            }
+          ]
+        }
+      ],
+      "leak_filter": {
+        "note": "이번 표본에 유출 few-shot과 겹치는 문항이 0건",
+        "applied": true,
+        "n_excluded_rows_in_sample": 0
+      }
+    },
+    "multi": {
+      "n": 100,
+      "n_scored": 100,
+      "n_unanswered": 0,
+      "full_row_accuracy": 0.6,
+      "aspect_level_accuracy": 0.76,
+      "note": "full_row_accuracy=모든 aspect 다 맞은 행 비율(explode 계약 핵심 지표), aspect_level_accuracy=개별 aspect+감성 조합 단위 정확도"
+    },
+    "n_total": 700,
+    "n_failed": 0
+  }
+}

@@ -50,3 +50,11 @@ Thumbs.db
 # 저장소에 원문을 커밋하면 위반 소지가 있어 통째로 제외한다. 집계 점수만 필요하면
 # eval/run_review_eval.py 실행 시 콘솔 출력을 따로 저장해 공유할 것.
 eval/results/review_eval_*.json
+# 재라벨링 스크립트가 만드는 원본 백업 — 되돌리기용 로컬 파일이라 커밋 안 함.
+# 어떤 라벨이 왜 바뀌었는지의 근거는 eval/eval_sets/relabel_runs/ 와
+# relabel_manual_review.csv 가 갖고 있다(그쪽은 커밋 대상).
+eval/eval_sets/*.csv.bak*
+
+# 재라벨 검토 큐 — 실행할 때마다 새로 생성되는 중간 산출물이라 커밋 안 함.
+# 실제 반영 근거는 relabel_runs/(3회 실행)와 relabel_manual_review.csv(손검토 확정).
+eval/eval_sets/relabel_queue_generated_sentiment.csv
