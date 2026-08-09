@@ -204,6 +204,12 @@ class CountingClient:
     프롬프트에 박힌 cs_id 를 그대로 되돌려준다 — 개수를 맞춰야 `root_cause.total` 이
     현실적인 크기로 나오고, 그래야 `recommended_action` 이 실제와 비슷하게 산출된다.
     비우면 원인이 '미특정'으로 빠져 게이트 통과 수를 실제보다 적게 잡는다.
+
+    돌려주는 필드는 **`diagnose_cause` 가 실제로 읽는 3개**(`cs_id`·`cause`·
+    `aspect_match`)뿐이다. 프롬프트3 스키마엔 `confidence`·`evidence` 도 있지만 우리
+    코드는 어느 쪽도 안 읽으므로(`app/detection/cause.py`), 스텁이 채우면 흉내낸 값이
+    실측처럼 보이기만 한다. `confidence` 는 실험⑥에서 판정 기준 2개(단조증가·0.5~0.8
+    분포)를 다 못 넘겨 미사용으로 확정된 필드다.
     """
 
     def __init__(self) -> None:
@@ -224,8 +230,6 @@ class CountingClient:
                 {
                     "cs_id": cs_id,
                     "cause": STUB_CAUSE,
-                    "confidence": 0.9,
-                    "evidence": "",
                     "aspect_match": True,
                 }
                 for cs_id in cs_ids
