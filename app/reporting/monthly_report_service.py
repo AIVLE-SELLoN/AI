@@ -293,20 +293,36 @@ def _build_excluded_notice(
 
     ⚠️ 보류 상품은 이제 **지면에도 페이지가 생긴다**(2026-08-09). 이 문구는 그것과 별개로
        유지한다 — 메인 화면은 PDF 를 열지 않고도 빠진 상품을 알아야 한다.
+
+    ⚠️ 이름 나열은 `NOTICE_MAX_LISTED_PRODUCTS` 개까지다. 상한이 없으면 길이가 상품 수에
+       비례해 자라는데(보류 42건 = 631자), `notice_message` 에는 스키마 max_length 가 없어
+       우리 쪽에서 안 걸린다. 백엔드 컬럼이 짧으면 조용히 잘리거나 INSERT 가 터진다.
     """
     parts = []
     if held_inputs:
         parts.append(
             f"표본 부족으로 보류된 상품 {len(held_inputs)}개: "
-            f"{', '.join(_label(i) for i in held_inputs)} "
+            f"{_summarize([_label(i) for i in held_inputs])} "
             f"— VOC {constants.MIN_VOC_COUNT_FOR_REPORT}건 미만이라 분석하지 않았습니다."
         )
     if failed_products:
         parts.append(
             f"생성에 실패해 이번 호에서 빠진 상품 {len(failed_products)}개: "
-            f"{', '.join(failed_products)} — 데이터는 정상이며 운영자가 확인 중입니다."
+            f"{_summarize(failed_products)} — 데이터는 정상이며 운영자가 확인 중입니다."
         )
     return " ".join(parts) or None
+
+
+def _summarize(labels: list[str]) -> str:
+    """앞에서 몇 개만 나열하고 나머지는 "외 N개" 로 접는다.
+
+    전부 나열하면 문구 길이가 상품 수에 비례해 자란다 — 42건이면 631자다. 상세는 합본
+    PDF 의 보류 페이지에 상품마다 있으므로, 여기서는 "무엇이 몇 개" 만 알리면 된다.
+    """
+    cap = constants.NOTICE_MAX_LISTED_PRODUCTS
+    if len(labels) <= cap:
+        return ", ".join(labels)
+    return f"{', '.join(labels[:cap])} 외 {len(labels) - cap}개"
 
 
 async def compile_and_upload_monthly_book(

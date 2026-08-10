@@ -61,6 +61,7 @@ from typing import Any
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core import constants
+from app.core.console import force_utf8_output
 from app.core.mq import close_mq, new_trace_id, publish_report_generated
 from app.core.schemas import CallbackStatus, MonthlyReportInput
 from app.reporting.monthly_aggregator import aggregate_monthly_inputs
@@ -370,6 +371,18 @@ async def run_generate(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
+    # ⚠️ **출력보다 먼저, 그리고 `main()` 안에서** 부른다.
+    #
+    #    이 스크립트의 로그·도움말·요약 print 에 `—`(U+2014)가 들어 있는데 cp949 에는
+    #    없어서, 한국어 윈도우 콘솔에서는 `--help` 조차 UnicodeEncodeError 로 죽는다.
+    #
+    #    `if __name__ == "__main__"` 이 아니라 여기 두는 이유: 거기 두면 **배선을 테스트로
+    #    고정할 수 없다.** 호출 한 줄이 빠져도 아무것도 안 깨지는데, 하필 이 인코딩이
+    #    필요한 줄들은 실패 경로에 몰려 있어 로컬에서 가장 안 밟힌다.
+    #    (app/batch/daily.py 가 같은 이유로 main() 안에서 부르고
+    #     tests/test_batch_daily.py::test_main_switches_encoding_before_printing 이 고정한다)
+    force_utf8_output()
+
     parser = argparse.ArgumentParser(description="월간 리포트 일괄 생성 (집계/생성 2단계)")
     parser.add_argument(
         "--stage", choices=["aggregate", "generate", "all"], default="all", help="실행 단계"
@@ -401,11 +414,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # ⚠️ 출력보다 먼저. 이 스크립트의 로그·도움말에 `—`(U+2014)가 들어 있는데 cp949 에는
-    #    없어서, 한국어 윈도우 콘솔에서는 `--help` 조차 UnicodeEncodeError 로 죽는다.
-    #    발행 실패 로그도 같은 문자를 쓰므로, 인코딩 때문에 **실패 사유가 안 보이는**
-    #    상황이 된다. (app/core/console.py — PR #36 이 배치 요약에서 겪은 것과 같은 문제)
-    from app.core.console import force_utf8_output
-
-    force_utf8_output()
     main()

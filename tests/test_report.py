@@ -1553,3 +1553,45 @@ async def test_all_held_reports_why_not_just_that_it_failed() -> None:
     notice = result.callback.notice_message
     assert "P090" in notice and "P091" in notice
     assert "표본 부족" in notice
+
+
+def test_notice_length_is_bounded_regardless_of_product_count() -> None:
+    """안내 문구 길이가 상품 수에 비례해 자라지 않는다.
+
+    ⚠️ `notice_message` 에는 스키마 max_length 가 없어 **우리 쪽에서 안 걸린다.** 전부
+       나열하면 보류 42건에 631자, 보류+실패 동시면 742자였다(2026-08-09 실측).
+       백엔드 컬럼이 짧으면 조용히 잘리거나 INSERT 가 터지고, 어느 쪽이든 셀러는 자기
+       상품이 왜 빠졌는지 못 본다.
+
+    상세는 합본 PDF 의 보류 페이지에 상품마다 있으므로 문구는 "무엇이 몇 개" 면 된다.
+    """
+    from app.reporting.monthly_report_service import _build_excluded_notice
+
+    few = _build_excluded_notice([_held_input(f"P{i:03d}") for i in range(3)], None)
+    many = _build_excluded_notice([_held_input(f"P{i:03d}") for i in range(42)], None)
+    worst = _build_excluded_notice(
+        [_held_input(f"P{i:03d}") for i in range(42)],
+        [f"P{i:03d}" for i in range(42)],
+    )
+
+    # 상품이 14배로 늘어도 길이는 나열 상한(5개)에서 멈춘다.
+    # 상한이 없다면 42건은 600자를 넘었다.
+    assert len(many) < 200, f"{len(many)}자 — 나열 상한이 안 걸렸다"
+    assert len(many) - len(few) < 50, "상품 수에 비례해 자라고 있다"
+    assert "외 37개" in many
+    assert "42개" in many  # 총 개수는 그대로 알린다
+    # 보류·실패가 동시에 최악이어도 짧게 유지된다
+    assert len(worst) < 300, f"최악 문구가 {len(worst)}자다 — 백엔드 컬럼 상한을 확인할 것"
+
+
+def test_notice_lists_every_product_when_under_cap() -> None:
+    """상한 이하면 전부 나열한다 — 몇 개 안 될 때까지 접으면 정보만 잃는다."""
+    from app.core import constants
+    from app.reporting.monthly_report_service import _build_excluded_notice
+
+    n = constants.NOTICE_MAX_LISTED_PRODUCTS
+    notice = _build_excluded_notice([_held_input(f"P{i:03d}") for i in range(n)], None)
+
+    assert "외 " not in notice
+    for i in range(n):
+        assert f"P{i:03d}" in notice
