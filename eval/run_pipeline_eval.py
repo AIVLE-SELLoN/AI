@@ -134,6 +134,15 @@ SOURCE_SPEC = {
 CHUNK_SIZE = 20
 CONCURRENCY = 4
 
+RETRY_WITHIN_RUN = 2
+"""무응답 건을 **그 회차 안에서** 다시 부르는 횟수.
+
+⚠️ 회차는 LLM 흔들림을 평균 내려고 나눈 것이라 **서로 독립이어야 한다.** 무응답을
+   다음 회차로 미루면 앞 회차가 뒤 회차 실행 때 채워져서, 앞 회차일수록 커버리지가
+   좋아진다. 그러면 ± 가 흔들림이 아니라 커버리지 비대칭을 잰다.
+   (2026-08-04 내가 넣은 구조인데 before 가 편차 0 이라 안 보였고, 프롬프트 개선으로
+    케이스가 컷오프 근처로 올라오면서 드러났다 — 회차 1 이 60% → 84%)"""
+
 MODE_BATCH = "batch"
 MODE_PER_ITEM = "per_item"
 
@@ -338,23 +347,35 @@ async def _run_batch(
     다만 결과를 전부 모아 마지막에 한 번에 돌려주므로 중간에 죽으면 다 날아간다.
     그래서 CONCURRENCY 청크씩만 넘기고 **그 묶음마다 캐시를 저장**한다.
     """
-    done = failed = 0
+    done = 0
+    pending = list(todo)
     group = CHUNK_SIZE * concurrency
-    for start in range(0, len(todo), group):
-        part = todo[start : start + group]
-        rows = [{"inquiry_id": d["id"], "raw_text": d["text"]} for d in part]
-        predictions, failed_ids = await run_batch_chunks(rows, CHUNK_SIZE, concurrency)
+    for attempt in range(1, RETRY_WITHIN_RUN + 2):
+        leftover: list[dict] = []
+        for start in range(0, len(pending), group):
+            part = pending[start : start + group]
+            rows = [{"inquiry_id": d["id"], "raw_text": d["text"]} for d in part]
+            predictions, failed_ids = await run_batch_chunks(rows, CHUNK_SIZE, concurrency)
 
-        for item_id, aspects in predictions.items():
-            cache[item_id] = aspects or _cs_fallback_aspects(item_id)
-        save()
+            for item_id, aspects in predictions.items():
+                cache[item_id] = aspects or _cs_fallback_aspects(item_id)
+            save()
 
-        done += len(predictions)
-        # 무응답 건은 **캐시에 넣지 않는다** — 다음 회차 실행이 그것만 다시 부르고,
-        # 그때까지는 커버리지 검사가 잡아서 그 슬롯을 검정에서 뺀다(조용한 왜곡 방지).
-        failed += len(failed_ids)
-        print(f"    누적 {done:,}/{len(todo):,}건 (무응답 {failed:,})")
-    return done, failed
+            done += len(predictions)
+            missed = set(failed_ids)
+            leftover.extend(d for d in part if d["id"] in missed)
+            print(f"    누적 {done:,}/{len(todo):,}건 (남은 무응답 {len(leftover):,})")
+
+        pending = leftover
+        if not pending or attempt > RETRY_WITHIN_RUN:
+            break
+        print(f"    ↻ 무응답 {len(pending):,}건 재시도 ({attempt}/{RETRY_WITHIN_RUN})")
+
+    # 재시도를 다 쓰고도 남은 건은 캐시에 안 넣는다 — 커버리지 검사가 그 슬롯을 검정에서
+    # 뺀다(조용한 왜곡 방지). **다음 회차로 미루지 않는 것이 핵심이다** — 미루면 앞 회차가
+    # 뒤 회차 실행에서 채워져 커버리지가 회차마다 달라지고, ± 가 LLM 흔들림이 아니라
+    # 커버리지 비대칭을 재게 된다. (2026-08-10 실측에서 회차 1 이 60% → 84% 로 움직였다)
+    return done, len(pending)
 
 
 async def _run_per_item(
