@@ -613,6 +613,15 @@ def apply_manual(infile: Path, review_file: Path) -> None:
 
     print(f"손검토 파일 {len(reviewed)}행 읽음 — {review_file}")
     print(f"  반영 {changed}건 / final 이 gold 와 같아 변화 없음 {unchanged}건")
+
+    # 🔴 순환논리 가드를 반영 시점에도 보이게 한다 (2026-08-09 PR 리뷰 반영).
+    # decided_by 가 비어 있으면 "사람이 봤는지 모르는 행"이다. 기록만 해두고 조용히
+    # 넘어가면 컬럼을 둔 의미가 없다.
+    by = Counter((r.get("decided_by") or "(빈칸)").strip() or "(빈칸)" for r in reviewed)
+    print(f"  라벨 출처(decided_by): {dict(by)}")
+    if by.get("(빈칸)"):
+        print(f"  ⚠️ decided_by 가 비어 있는 행 {by['(빈칸)']}건 — 사람이 확인했는지 알 수 없습니다.")
+        print("     확인한 행은 'human', 모델 프리필을 그대로 둔 행은 'model_majority' 로 채워주세요.")
     print(f"  비어 있어 건너뜀 {blank}건 / 형식 오류 {invalid}건")
     for msg in problems[:10]:
         print(f"    ⚠️ {msg}")
