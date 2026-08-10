@@ -91,6 +91,9 @@ async def test_run_returns_none_when_routed_evidence_is_missing(monkeypatch, bia
 
     근거 0건은 입력만 보고 아는 사실이라 생성을 태워봐야 일반론밖에 안 나온다.
     예전엔 통계 요약을 근거로 써서 이 경우에도 grounding=True 가 나왔다(자기참조).
+
+    ⚠️ **사유는 NO_EVIDENCE 가 아니다** — 반대쪽(상세페이지)엔 근거가 있었는데 모델이
+    빈 쪽을 골라 버린 것이라, 데이터 갭이 아니라 배치가 실패로 세야 하는 건이다.
     """
     fake_client = _FakeAgentLlmClient(
         tool_name="use_image_guide",
@@ -104,6 +107,13 @@ async def test_run_returns_none_when_routed_evidence_is_missing(monkeypatch, bia
     monkeypatch.setattr(pipeline, "get_llm_client", lambda: fake_client)
 
     # inquiries 없음 → cs_quotes = NO_DETAIL_TEXT
+    outcome = await pipeline.run_with_outcome(biased_alert)
+
+    assert outcome.recommendation is None
+    assert outcome.reason is pipeline.SkipReason.ROUTED_WITHOUT_EVIDENCE
+    assert not outcome.is_evidence_gap, (
+        "쓸 수 있던 근거를 버린 건이라 데이터 갭으로 세면 안 된다"
+    )
     assert await pipeline.run(biased_alert) is None
 
 
@@ -130,7 +140,12 @@ async def test_run_skips_routing_when_no_evidence_at_all(monkeypatch, biased_ale
     )
     monkeypatch.setattr(pipeline, "get_llm_client", lambda: _NeverCalled())
 
-    assert await pipeline.run(biased_alert) is None
+    outcome = await pipeline.run_with_outcome(biased_alert)
+
+    assert outcome.recommendation is None
+    # 배치가 이걸 실패로 세면 상시 종료코드 1 이 된다(2026-08-10) — 사유를 값으로 고정한다.
+    assert outcome.reason is pipeline.SkipReason.NO_EVIDENCE
+    assert outcome.is_evidence_gap
     assert any("근거가 0건" in r.getMessage() for r in caplog.records), (
         "조용히 넘기면 근거 파이프라인이 깨진 걸 아무도 모른다"
     )

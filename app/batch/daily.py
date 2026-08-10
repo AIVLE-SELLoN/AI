@@ -45,6 +45,7 @@ from collections import Counter
 from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from pydantic import ValidationError
@@ -139,7 +140,7 @@ except ImportError as exc:  # pragma: no cover - 인프라 도입 전
 
 try:  # pragma: no cover
     from app.recommendation.pipeline import (
-        generate_for_alert,  # type: ignore[attr-defined]
+        generate_outcome_for_alert,  # type: ignore[attr-defined]
     )
 
     RECOMMENDATION_AVAILABLE = True
@@ -148,9 +149,13 @@ except ImportError as exc:  # pragma: no cover
         raise
     RECOMMENDATION_AVAILABLE = False
 
-    async def generate_for_alert(alert: Any, inquiries: Any) -> Any:
+    async def generate_outcome_for_alert(alert: Any, inquiries: Any) -> Any:
         logger.info("[Agent3 미연결] 개선안 생성 생략 alert=%s", alert.alert_id)
-        return None
+        # 아래 루프가 읽는 필드만 흉내낸다. is_evidence_gap=False 라 미연결 상태가
+        # 데이터 갭으로 둔갑하지 않고 실패로 남는다 — Agent3 가 없는 건 갭이 아니다.
+        return SimpleNamespace(
+            recommendation=None, is_evidence_gap=False, detail="Agent3 미연결"
+        )
 
 
 try:  # pragma: no cover
@@ -445,6 +450,9 @@ async def run_batch(
     targets = alerts if max_alerts is None else alerts[:max_alerts]
     failures: list[dict] = []
     counts: Counter[str] = Counter()
+    # 근거 0건으로 개선안을 못 만든 건수. **실패가 아니라 데이터 갭이다** — 루프 안
+    # 주석 참고. failures 와 분리해 두는 이유는 종료코드에 안 실리게 하기 위해서다.
+    evidence_gaps = 0
     # ⚠️ **발행에 성공한 것만** 캐시에 넣는다. save_published docstring 참고.
     delivered: list[DetectionAlert] = []
 
@@ -478,9 +486,10 @@ async def run_batch(
             rec = guideline = None
             if wants_recommendation:
                 try:
-                    rec = await generate_for_alert(alert, inquiries)
-                    counts["개선안"] += 1
+                    outcome = await generate_outcome_for_alert(alert, inquiries)
+                    rec = outcome.recommendation
                 except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
+                    counts["개선안"] += 1
                     failures.append(
                         {
                             "alert_id": alert.alert_id,
@@ -489,20 +498,32 @@ async def run_batch(
                         }
                     )
                 else:
-                    # ⚠️ `generate_for_alert` 는 **계약상 예외를 안 던지고** 실패를 None 으로
-                    #    돌려준다. 위 except 만 두면 실패가 요약에도 종료코드에도 안 남아서,
-                    #    개선안이 하나도 안 붙은 배치가 "성공"으로 끝난다. 게이트를 통과한
-                    #    알림인데 None 이면 그건 실패다 — 사유는 pipeline 이 로그로 남긴다.
-                    #    else 인 이유: except 와 둘 다 타면 실패 1건이 요약에 2건으로 잡혀
-                    #    배치 요약의 실패 건수를 못 믿게 된다.
-                    if rec is None:
-                        failures.append(
-                            {
-                                "alert_id": alert.alert_id,
-                                "stage": "개선안",
-                                "error": "생성 실패 — 사유는 app.recommendation.pipeline 로그 참고",
-                            }
-                        )
+                    # ⚠️ `generate_outcome_for_alert` 는 **계약상 예외를 안 던지고** 실패를
+                    #    개선안 없는 결과로 돌려준다. 위 except 만 두면 실패가 요약에도
+                    #    종료코드에도 안 남아서, 개선안이 하나도 안 붙은 배치가 "성공"으로
+                    #    끝난다. else 인 이유: except 와 둘 다 타면 실패 1건이 요약에 2건으로
+                    #    잡혀 배치 요약의 실패 건수를 못 믿게 된다.
+                    #
+                    # 🔴 **개선안이 없는 사유 두 가지를 가른다 (2026-08-10).**
+                    #    근거 0건(상세페이지 미등록 + CS 원문 없음)은 파이프라인이 정상인
+                    #    **데이터 갭**이고 흔하다 — 그걸 실패로 세면 배치가 상시 종료코드 1로
+                    #    끝나서 진짜 장애 신호가 무뎌진다. 그래서 건수로만 세고 실패엔 안 넣는다.
+                    #    어떤 사유가 갭인지는 pipeline 이 정한다(`RecommendationOutcome`) —
+                    #    여기서 사유를 다시 판정하면 사유가 늘 때 두 곳이 갈린다.
+                    if outcome.is_evidence_gap:
+                        # 라우팅 전에 걸러지므로 LLM 호출은 0회다 — 개선안 카운트에 안 넣는다.
+                        evidence_gaps += 1
+                    else:
+                        counts["개선안"] += 1
+                        if rec is None:
+                            failures.append(
+                                {
+                                    "alert_id": alert.alert_id,
+                                    "stage": "개선안",
+                                    "error": outcome.detail
+                                    or "생성 실패 — 사유는 app.recommendation.pipeline 로그 참고",
+                                }
+                            )
 
             try:
                 guideline = await generate_guideline(alert, inquiries)
@@ -573,6 +594,9 @@ async def run_batch(
         "delivered": len(delivered),
         "llm_calls": dict(counts),
         "cause_calls": stub.calls if stub else None,
+        # 근거 0건으로 개선안을 생략한 건수. failures 와 **별개**다 — 데이터 갭이라
+        # 종료코드에 안 실린다. 이 숫자가 계속 크면 상세페이지 시딩·CS 원문 조회를 볼 것.
+        "no_evidence": evidence_gaps,
         "failures": failures,
         "state_cached": cached,
     }
@@ -604,6 +628,11 @@ def print_summary(summary: dict) -> None:
                 f"  ↳ 캐시에 안 넣음 {summary['published'] - summary['delivered']}건"
                 " (상한으로 잘렸거나 발행 실패) — 다음 배치에서 다시 시도됩니다"
             )
+    if summary.get("no_evidence"):
+        print(
+            f"  개선안 생략   {summary['no_evidence']}건  ← 근거 0건(상세페이지 미등록·CS"
+            " 원문 없음). 실패 아님"
+        )
     if summary["dry_run"]:
         print("\n  [dry-run] LLM 호출 0회. 실제로 돌리면:")
         print(
@@ -621,7 +650,7 @@ def print_summary(summary: dict) -> None:
         name
         for name, ok in [
             ("RabbitMQ(app.core.mq)", MQ_AVAILABLE),
-            ("Agent3(generate_for_alert)", RECOMMENDATION_AVAILABLE),
+            ("Agent3(generate_outcome_for_alert)", RECOMMENDATION_AVAILABLE),
             ("가이드라인(generate_guideline)", GUIDELINE_AVAILABLE),
         ]
         if not ok

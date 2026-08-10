@@ -25,7 +25,9 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -728,27 +730,79 @@ def assemble(
     )
 
 
+class SkipReason(str, Enum):
+    """개선안이 안 나온 사유. **호출부가 데이터 갭과 고장을 가르는 근거다.**
+
+    `run()`·`generate_for_alert()` 는 아래 사유 전부에 똑같이 `None` 을 돌려주는데
+    성격이 전혀 다르다 — `NO_EVIDENCE` 는 "입력에 근거가 없다"는 사실이고 파이프라인은
+    정상이며, `ERROR` 는 고장이다. 배치가 이걸 로그 문자열로 되짚지 않도록 값으로
+    돌려준다(`RecommendationOutcome`).
+    """
+
+    GATE_CLOSED = "게이트_미충족"
+    """`recommended_action` 이 '개선안 생성' 이 아님 — 조치 6종의 정상값."""
+
+    NO_EVIDENCE = "근거_0건"
+    """상세페이지 미등록 + CS 원문 0건. **데이터 갭이라 배치 실패가 아니다** —
+    이것까지 실패로 세면 배치가 상시 종료코드 1로 끝나 진짜 장애 신호가 무뎌진다."""
+
+    ROUTED_WITHOUT_EVIDENCE = "라우팅_근거없음"
+    """근거가 한쪽엔 있었는데 모델이 **빈 쪽** 도구를 골랐다. 쓸 수 있던 근거를 버린
+    것이라 데이터 갭이 아니라 실패로 남긴다(2026-08-09 라우팅 미스 항목). 라우팅
+    프롬프트를 손볼 근거가 여기서 나온다."""
+
+    ERROR = "생성_예외"
+    """생성 중 예외. 사유는 `detail` 에 `repr(exc)` 로 담긴다."""
+
+
+@dataclass(frozen=True)
+class RecommendationOutcome:
+    """개선안 + **없을 때의 사유.** `recommendation` 이 None 이면 `reason` 이 항상 있다.
+
+    `run()`·`generate_for_alert()` 의 `Recommendation | None` 계약은 그대로 두고
+    (팀 확정 시그니처, 2026-08-06), 사유가 필요한 배치만 이 객체를 받는다.
+    """
+
+    recommendation: Recommendation | None = None
+    reason: SkipReason | None = None
+    detail: str | None = None
+    """사람이 읽을 한 줄. 배치 요약의 실패 사유로 그대로 나간다."""
+
+    @property
+    def is_evidence_gap(self) -> bool:
+        """근거가 없어서 안 만든 것인가 — **배치가 실패로 세지 않는 유일한 사유.**
+
+        판정을 여기 두는 이유: "어떤 사유가 실패인가"가 호출부마다 갈리면, 사유를
+        하나 추가할 때 배치·테스트·모니터링이 따로 놀게 된다.
+        """
+        return self.reason is SkipReason.NO_EVIDENCE
+
+
 @traceable
-async def run(
+async def run_with_outcome(
     alert: DetectionAlert,
     inquiries: Sequence[LinkedCSInquiry] = (),
-) -> Recommendation | None:
+) -> RecommendationOutcome:
     """오케스트레이터: 트리거 게이트 → 근거조회 → 라우팅(LLM) → (생성→검증) 최대 3회
     → (그래도 실패하면) 근거없음 경로 → 조립.
+
+    `run()` 과 같은 일을 하고 **결과에 사유가 붙는다.** 개선안이 필요 없거나 만들 수
+    없을 때 그게 데이터 갭인지 고장인지를 배치가 구분해야 하기 때문이다(`SkipReason`).
 
     inquiries 는 `alert.evidence.inquiry_ids` 에 해당하는 CS 원문이다(배치가
     `app/core/inquiries.py` 로 만들어 넘긴다). image_guide 의 근거이자 citations 의
     출처다.
 
-    🔴 **근거가 없으면 개선안을 만들지 않고 None 을 돌려준다(2026-08-09).** 근거 0건은
-    입력만 보고 결정론적으로 아는 사실이고 모델이 만들어낼 수 있는 게 아니라서,
-    생성을 태워봐야 일반론밖에 안 나온다 — SCOPE_LIMIT 을 LLM 없이 처리하는 것과 같은
-    이유다. 셀러에겐 알림만 나가고 개선안 카드가 안 붙는다(`recommendation: null` 은
-    조치 6종에서 이미 정상값이다). 배치는 이걸 실패로 집계해 종료코드에 반영한다
-    (`daily.py`) — 근거 파이프라인이 깨진 걸 조용히 넘기지 않기 위해서다.
+    🔴 **근거가 없으면 개선안을 만들지 않는다(2026-08-09).** 근거 0건은 입력만 보고
+    결정론적으로 아는 사실이고 모델이 만들어낼 수 있는 게 아니라서, 생성을 태워봐야
+    일반론밖에 안 나온다 — SCOPE_LIMIT 을 LLM 없이 처리하는 것과 같은 이유다. 셀러에겐
+    알림만 나가고 개선안 카드가 안 붙는다(`recommendation: null` 은 조치 6종에서 이미
+    정상값이다). 그때 `reason=NO_EVIDENCE` 가 붙고, **배치는 이걸 실패로 세지 않는다**
+    (2026-08-10) — 상세페이지 미등록은 흔한 데이터 갭이라 실패로 세면 배치가 상시
+    종료코드 1로 끝나 진짜 장애 신호가 무뎌진다. 대신 요약에 건수로 남는다.
 
     **fallback_guide 는 남는다. 성격이 다르다:**
-      - 근거가 아예 없음        → None (여기)
+      - 근거가 아예 없음        → recommendation=None + NO_EVIDENCE (여기)
       - 근거는 있는데 LLM 이 MAX_ATTEMPTS 번 다 인용에 실패 → fallback_guide
     후자는 셀러가 제대로 된 개선안을 받을 수 **있었는데** 우리가 못 만든 경우라,
     일반 가이드로라도 떨어뜨리는 게 맞다.
@@ -762,7 +816,7 @@ async def run(
     바로 조립한다 — LLM한테 물어봐도 답이 안 바뀌는 케이스라 호출 자체를 안 한다.
     """
     if not should_generate(alert):
-        return None
+        return RecommendationOutcome(reason=SkipReason.GATE_CLOSED)
 
     if alert.root_cause and alert.root_cause.label in SCOPE_LIMIT_LABELS:
         proposal = _build_scope_limit_proposal(alert)
@@ -776,7 +830,9 @@ async def run(
             ),
             failure_reason="스코프 한계 원인이라 근거 검증 대상 자체가 없음(§4-3)",
         )
-        return assemble(alert, proposal, evaluator, {"similar_case": None})
+        return RecommendationOutcome(
+            assemble(alert, proposal, evaluator, {"similar_case": None})
+        )
 
     context = retrieve_context(alert, inquiries)
 
@@ -787,7 +843,10 @@ async def run(
             " (상세페이지 미등록이거나 evidence.inquiry_ids 조회가 실패했을 수 있습니다)",
             alert.alert_id,
         )
-        return None
+        return RecommendationOutcome(
+            reason=SkipReason.NO_EVIDENCE,
+            detail="상세페이지·CS 원문이 둘 다 없어 근거 0건 — 라우팅 전에 생략",
+        )
 
     proposal_type = await route_proposal_type(alert, context)
 
@@ -797,7 +856,12 @@ async def run(
             alert.alert_id,
             proposal_type.value,
         )
-        return None
+        # ⚠️ 여기는 NO_EVIDENCE 가 아니다 — 반대쪽엔 근거가 있었는데 모델이 빈 쪽을
+        #    골라 버린 것이라, 데이터 갭이 아니라 우리가 놓친 건이다(배치 실패로 남는다).
+        return RecommendationOutcome(
+            reason=SkipReason.ROUTED_WITHOUT_EVIDENCE,
+            detail=f"{proposal_type.value} 로 라우팅됐으나 그쪽 근거가 없음",
+        )
 
     attempt = 1
     proposal = await generate_proposal(
@@ -832,27 +896,75 @@ async def run(
             failure_reason=f"근거를 찾지 못해 일반 가이드로 대체(MAX_RETRY={MAX_RETRY} 소진)",
         )
 
-    return assemble(alert, proposal, evaluator, context, inquiries)
+    return RecommendationOutcome(assemble(alert, proposal, evaluator, context, inquiries))
+
+
+async def run(
+    alert: DetectionAlert,
+    inquiries: Sequence[LinkedCSInquiry] = (),
+) -> Recommendation | None:
+    """`run_with_outcome()` 에서 개선안만 꺼낸다 — 사유가 필요 없는 호출부용.
+
+    REST(`service.py`)·eval 하네스처럼 "만들어졌나 아닌가"만 보면 되는 쪽이 쓴다.
+    **배치는 `generate_outcome_for_alert()` 를 쓴다** — 근거 0건(데이터 갭)과 고장을
+    구분해야 하는데 `None` 하나로는 못 가른다.
+    """
+    return (await run_with_outcome(alert, inquiries)).recommendation
+
+
+async def generate_outcome_for_alert(
+    alert: DetectionAlert,
+    inquiries: list[LinkedCSInquiry],
+) -> RecommendationOutcome:
+    """배치 진입점 — 알림 1건에 개선안 1건. `run_with_outcome()` 을 감싸고 실패를 흡수한다.
+
+    `generate_for_alert()` 와 같은 일을 하고 **개선안이 없을 때 사유가 붙는다.**
+    배치가 데이터 갭(근거 0건)을 실패로 세지 않으려면 그 구분이 필요하다.
+
+    Returns:
+        `recommendation` 이 None 이면 `reason` 이 넷 중 하나다:
+          1. `GATE_CLOSED` — 조치 6종. 정상이고 LLM 을 안 부른다.
+          2. `NO_EVIDENCE` — 근거 0건. **데이터 갭이라 배치 실패가 아니다.**
+          3. `ROUTED_WITHOUT_EVIDENCE` — 모델이 빈 쪽 도구를 골랐다. 실패로 센다.
+          4. `ERROR` — 예외. `detail` 에 `repr(exc)`.
+    """
+    if not should_generate(alert):
+        return RecommendationOutcome(reason=SkipReason.GATE_CLOSED)
+
+    try:
+        return await run_with_outcome(alert, inquiries)
+    except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
+        # 배치 요약에는 한 줄로만 남으므로 스택은 여기서 남겨야 추적된다.
+        logger.warning(
+            "개선안 생성 실패 alert=%s — recommendation 없이 발행합니다: %r",
+            alert.alert_id,
+            exc,
+        )
+        return RecommendationOutcome(reason=SkipReason.ERROR, detail=repr(exc))
 
 
 async def generate_for_alert(
     alert: DetectionAlert,
     inquiries: list[LinkedCSInquiry],
 ) -> Recommendation | None:
-    """배치 진입점 — 알림 1건에 개선안 1건. `run()`을 감싸고 실패를 흡수한다.
+    """배치 진입점(팀 확정 시그니처, 2026-08-06) — `generate_outcome_for_alert()` 에서
+    개선안만 꺼낸다.
 
-    `run()`과 달리 **예외를 던지지 않는다.** 배치가 알림 20건을 도는 중이라, 개선안
-    1건의 실패가 밖으로 나가면 그 알림의 **발행까지 막힌다** — 셀러는 개선안이 아니라
-    이상 알림 자체를 못 받게 된다. 실패하면 None 을 돌려주고 payload 의
-    `recommendation` 이 null 로 나간다(조치 6종에서 이미 정상인 값이다).
+    **예외를 던지지 않는다.** 배치가 알림 20건을 도는 중이라, 개선안 1건의 실패가 밖으로
+    나가면 그 알림의 **발행까지 막힌다** — 셀러는 개선안이 아니라 이상 알림 자체를 못
+    받게 된다. 실패하면 None 을 돌려주고 payload 의 `recommendation` 이 null 로 나간다
+    (조치 6종에서 이미 정상인 값이다).
 
     게이트(`recommended_action != "개선안 생성"`)면 LLM 을 부르지 않고 None 이다.
     호출부가 `should_generate()`로 미리 걸러도 되고(배치 dry-run 이 그렇게 센다),
     안 걸러도 결과는 같다.
 
-    ⚠️ **`asyncio.CancelledError` 는 삼키지 않는다.** BaseException 이라 아래 `except
-    Exception` 에 안 걸리는데, 이게 의도다 — 배치를 중단시켰는데 취소가 "개선안 실패"로
-    둔갑해 루프가 계속 돌면 안 된다.
+    ⚠️ **`asyncio.CancelledError` 는 삼키지 않는다.** BaseException 이라
+    `generate_outcome_for_alert()` 의 `except Exception` 에 안 걸리는데, 이게 의도다 —
+    배치를 중단시켰는데 취소가 "개선안 실패"로 둔갑해 루프가 계속 돌면 안 된다.
+
+    ⚠️ **None 의 사유 4가지가 여기선 구분이 안 된다.** 근거 0건(데이터 갭)과 고장을
+    가르려면 `generate_outcome_for_alert()` 를 쓸 것 — `daily.py` 가 그렇게 한다.
 
     Args:
         alert: 탐지 알림.
@@ -860,28 +972,8 @@ async def generate_for_alert(
             (`app/core/inquiries.py` 가 만든다). 배치가 가이드라인과 **같은 리스트**를
             넘긴다. image_guide 의 근거 원문이자 `citations` 의 출처다 —
             **빈 리스트로 넘기면 image_guide 근거가 0건이라 개선안이 안 만들어진다.**
-
-    Returns:
-        개선안. 아래 셋 중 하나면 None 이다:
-          1. 게이트 미충족(`recommended_action != "개선안 생성"`) — 정상, 조치 6종
-          2. **근거 0건** — 상세페이지 미등록이거나 CS 원문 조회 실패(run 참고)
-          3. 생성 중 예외 — 로그로 남긴다
-        호출부(`daily.py`)는 1번을 게이트로 미리 거르므로, 게이트를 통과했는데 None 이면
-        2번 아니면 3번이고 **둘 다 배치 실패로 집계된다.**
     """
-    if not should_generate(alert):
-        return None
-
-    try:
-        return await run(alert, inquiries)
-    except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
-        # 배치 요약에는 "개선안 없음"으로만 남으므로 사유는 여기서 남겨야 추적된다.
-        logger.warning(
-            "개선안 생성 실패 alert=%s — recommendation 없이 발행합니다: %r",
-            alert.alert_id,
-            exc,
-        )
-        return None
+    return (await generate_outcome_for_alert(alert, inquiries)).recommendation
 
 
 def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -> None:

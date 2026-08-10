@@ -28,6 +28,7 @@ from app.core.schemas import (
     SourceSignals,
     Verdict,
 )
+from app.recommendation.pipeline import RecommendationOutcome, SkipReason
 
 
 def _alert(alert_id: str, window_end: date, action=RecommendedAction.LOGISTICS_CHECK):
@@ -230,18 +231,20 @@ async def test_cs_inquiries_are_built_once_and_shared(tmp_path, monkeypatch):
 
     async def fake_recommendation(alert, inquiries):
         seen["개선안"] = inquiries
-        # None 을 돌려주면 "생성 실패"로 잡힌다(그건 아래 별도 테스트가 본다).
-        return Recommendation(
-            recommendation_id="REC-000000000001",
-            alert_id=alert.alert_id,
-            created_at=datetime(2026, 8, 28, 9, 0, tzinfo=timezone.utc),
-            evaluator=Evaluator(
-                passed=True,
-                attempts=1,
-                checks=EvaluatorChecks(
-                    grounding=True, consistency=True, actionability=True
+        # 개선안 없이 돌려주면 "생성 실패"로 잡힌다(그건 아래 별도 테스트가 본다).
+        return RecommendationOutcome(
+            Recommendation(
+                recommendation_id="REC-000000000001",
+                alert_id=alert.alert_id,
+                created_at=datetime(2026, 8, 28, 9, 0, tzinfo=timezone.utc),
+                evaluator=Evaluator(
+                    passed=True,
+                    attempts=1,
+                    checks=EvaluatorChecks(
+                        grounding=True, consistency=True, actionability=True
+                    ),
                 ),
-            ),
+            )
         )
 
     async def fake_guideline(alert, inquiries, *, product_name=None):
@@ -251,7 +254,7 @@ async def test_cs_inquiries_are_built_once_and_shared(tmp_path, monkeypatch):
         return None
 
     monkeypatch.setattr(daily, "should_generate", lambda _alert: True)
-    monkeypatch.setattr(daily, "generate_for_alert", fake_recommendation)
+    monkeypatch.setattr(daily, "generate_outcome_for_alert", fake_recommendation)
     monkeypatch.setattr(daily, "generate_guideline", fake_guideline)
     monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
 
@@ -268,19 +271,22 @@ async def test_cs_inquiries_are_built_once_and_shared(tmp_path, monkeypatch):
 async def test_silent_recommendation_failure_still_shows_up(tmp_path, monkeypatch):
     """⚠️ 개선안이 조용히 실패해도 요약·종료코드에 남는다.
 
-    `generate_for_alert` 는 계약상 예외를 안 던지고 None 을 돌려준다. except 만 믿으면
-    개선안이 하나도 안 붙은 배치가 "성공"으로 끝나서 아무도 못 알아챈다.
+    `generate_outcome_for_alert` 는 계약상 예외를 안 던지고 개선안 없는 결과를 돌려준다.
+    except 만 믿으면 개선안이 하나도 안 붙은 배치가 "성공"으로 끝나서 아무도 못 알아챈다.
     알림 자체는 그대로 발행된다 — 개선안 없는 것과 알림이 안 가는 건 다르다.
     """
 
     async def always_fails(alert, inquiries):
-        return None
+        return RecommendationOutcome(
+            reason=SkipReason.ROUTED_WITHOUT_EVIDENCE,
+            detail="image_guide 로 라우팅됐으나 그쪽 근거가 없음",
+        )
 
     async def sent(alert, rec, trace_id):
         return None
 
     monkeypatch.setattr(daily, "should_generate", lambda _alert: True)
-    monkeypatch.setattr(daily, "generate_for_alert", always_fails)
+    monkeypatch.setattr(daily, "generate_outcome_for_alert", always_fails)
     monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
 
     summary = await daily.run_batch(
@@ -289,6 +295,42 @@ async def test_silent_recommendation_failure_still_shows_up(tmp_path, monkeypatc
 
     assert summary["failures"], "조용한 실패가 요약에 남아야 한다"
     assert all(f["stage"] == "개선안" for f in summary["failures"])
+    assert "라우팅" in summary["failures"][0]["error"], (
+        "사유를 값으로 받았으니 요약에도 그대로 남아야 한다"
+    )
+    assert summary["no_evidence"] == 0, "이건 데이터 갭이 아니다"
+    assert summary["delivered"] >= 1, "개선안이 없어도 알림은 발행된다"
+
+
+@pytest.mark.asyncio
+async def test_no_evidence_is_counted_but_not_a_failure(tmp_path, monkeypatch):
+    """🔴 근거 0건은 **실패가 아니다** — 건수로만 세고 종료코드에 안 싣는다 (2026-08-10).
+
+    상세페이지 미등록은 흔한 데이터 갭이라(mock 기준 504행 중 489행이 "정보 없음"),
+    이걸 실패로 세면 배치가 상시 종료코드 1 로 끝나 **진짜 장애 신호가 무뎌진다.**
+    반대로 아예 안 세면 근거 파이프라인이 통째로 끊긴 걸 아무도 못 본다.
+    """
+
+    async def no_evidence(alert, inquiries):
+        return RecommendationOutcome(
+            reason=SkipReason.NO_EVIDENCE, detail="상세페이지·CS 원문이 둘 다 없음"
+        )
+
+    async def sent(alert, rec, trace_id):
+        return None
+
+    monkeypatch.setattr(daily, "should_generate", lambda _alert: True)
+    monkeypatch.setattr(daily, "generate_outcome_for_alert", no_evidence)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json", load_inputs=_stub_inputs
+    )
+
+    assert summary["failures"] == [], "데이터 갭은 배치 실패가 아니다"
+    assert summary["no_evidence"] == summary["processed"]
+    # 라우팅 전에 걸러지므로 LLM 은 한 번도 안 돈다 — 비용 집계에 넣으면 과대추정이다.
+    assert summary["llm_calls"].get("개선안", 0) == 0
     assert summary["delivered"] >= 1, "개선안이 없어도 알림은 발행된다"
 
 
@@ -296,7 +338,7 @@ async def test_silent_recommendation_failure_still_shows_up(tmp_path, monkeypatc
 async def test_raised_recommendation_failure_is_counted_once(tmp_path, monkeypatch):
     """⚠️ 실패 1건이 요약에 1건으로 잡힌다.
 
-    `generate_for_alert` 는 계약상 안 던지지만 던지는 날엔, except 와 뒤따르는
+    `generate_outcome_for_alert` 는 계약상 안 던지지만 던지는 날엔, except 와 뒤따르는
     `rec is None` 검사가 **둘 다** 타서 실패가 2배로 보고됐다. 그러면 배치 요약의
     실패 건수를 못 믿게 된다. (2026-08-07 재검토)
     """
@@ -308,7 +350,7 @@ async def test_raised_recommendation_failure_is_counted_once(tmp_path, monkeypat
         return None
 
     monkeypatch.setattr(daily, "should_generate", lambda _alert: True)
-    monkeypatch.setattr(daily, "generate_for_alert", blows_up)
+    monkeypatch.setattr(daily, "generate_outcome_for_alert", blows_up)
     monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
 
     summary = await daily.run_batch(
