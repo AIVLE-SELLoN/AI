@@ -282,8 +282,12 @@ def _label(input_data: MonthlyReportInput) -> str:
     )
 
 
-def _summarize(labels: list[str]) -> str:
+def _summarize(labels: list[str], budget: int) -> str:
     """앞에서 몇 개만 나열하고 나머지는 "외 N개" 로 접는다. 기준은 **개수가 아니라 길이**다.
+
+    **`len(반환값) <= budget` 을 보장한다.** 호출부가 이 보장 위에서 전체 길이를 계산하므로
+    깨뜨리면 안 된다. "외 N개" 꼬리도 예산 **안에** 들어간다 — 밖에 두면 접힐 때마다
+    예산을 넘긴다.
 
     ⚠️ 개수로 자르면 상품명이 길 때 상한이 안 지켜진다. `product_name` 은 커머스 노출명
        (`products.channel_product_name`)이라 원래 길다 — 38자짜리 이름이면 5개만 나열해도
@@ -294,22 +298,31 @@ def _summarize(labels: list[str]) -> str:
     하나가 예산보다 길면 **이름 자체를 자른다.** 안 자르면 이름 하나가 상한을 통째로
     무너뜨린다(노출명에 길이 제한이 없어서 얼마든지 길 수 있다).
     """
-    if not labels:
+    if not labels or budget <= 0:
         return ""
 
-    budget = constants.NOTICE_MAX_LIST_CHARS
+    full = ", ".join(labels)
+    if len(full) <= budget:
+        return full
+
+    # 접어야 한다. 꼬리 자릿수는 접힌 개수에 따라 변하니 **최악**(전부 접힘)으로 잡아
+    # 자리를 먼저 빼둔다 — 실제 꼬리는 이보다 짧거나 같으므로 예산을 넘길 수 없다.
+    room = budget - len(f" 외 {len(labels)}개")
     shown: list[str] = []
     used = 0
     for label in labels:
-        # 두 번째부터는 ", " 구분자도 예산에 넣는다
-        cost = len(label) + (2 if shown else 0)
-        if shown and used + cost > budget:
+        if not shown:
+            # 첫 항목은 반드시 하나 싣는다 — room 보다 길면 잘라서라도.
+            text = label if len(label) <= room else label[: max(1, room - 1)] + "…"
+            shown.append(text)
+            used = len(text)  # 자른 **뒤** 길이를 센다
+            continue
+        cost = len(label) + 2  # ", " 구분자
+        if used + cost > room:
             break
-        shown.append(label if len(label) <= budget else label[: budget - 1] + "…")
+        shown.append(label)
         used += cost
 
-    if len(shown) == len(labels):
-        return ", ".join(shown)
     return f"{', '.join(shown)} 외 {len(labels) - len(shown)}개"
 
 
@@ -325,23 +338,40 @@ def _build_excluded_notice(
     ⚠️ 보류 상품은 이제 **지면에도 페이지가 생긴다**(2026-08-09). 이 문구는 그것과 별개로
        유지한다 — 메인 화면은 PDF 를 열지 않고도 빠진 상품을 알아야 한다.
 
-    ⚠️ 이름 나열은 `NOTICE_MAX_LIST_CHARS` **글자**까지다(개수가 아니다). `notice_message`
-       에는 스키마 max_length 가 없어 우리 쪽에서 안 걸리고, 백엔드 컬럼이 짧으면 조용히
-       잘리거나 INSERT 가 터진다. 자세한 근거는 그 상수 docstring 참고.
+    ⚠️ 상한은 **조립된 최종 문자열**에 건다(`NOTICE_MAX_CHARS`). 구절마다 따로 예산을 주면
+       구절 수·고정 문구 길이만큼 천장이 같이 올라가서 상한이 안 지켜진다 — 구절당 70자로
+       주던 때 실측 천장이 **260자**였다(2026-08-10 리뷰). 그래서 여기서 고정 문구가 쓸
+       자리를 먼저 빼고, 남은 것을 구절들이 **나눠 쓴다.**
+
+           총길이 = 고정 문구 + 구분자 + Σ(나열)  ≤  고정 문구 + 구분자 + n × 나열예산
+                                                 ≤  NOTICE_MAX_CHARS
+
+       `_summarize` 가 `len <= budget` 을 보장하므로 이 부등식이 성립한다.
     """
-    parts = []
+    # (머리말, 나열할 라벨, 꼬리말) — 머리말·꼬리말이 고정 문구다.
+    sections: list[tuple[str, list[str], str]] = []
     if held_inputs:
-        parts.append(
-            f"표본 부족으로 보류된 상품 {len(held_inputs)}개: "
-            f"{_summarize([_label(i) for i in held_inputs])} "
-            f"— VOC {constants.MIN_VOC_COUNT_FOR_REPORT}건 미만이라 분석하지 않았습니다."
-        )
+        sections.append((
+            f"표본 부족으로 보류된 상품 {len(held_inputs)}개: ",
+            [_label(i) for i in held_inputs],
+            f" — VOC {constants.MIN_VOC_COUNT_FOR_REPORT}건 미만이라 분석하지 않았습니다.",
+        ))
     if failed_products:
-        parts.append(
-            f"생성에 실패해 이번 호에서 빠진 상품 {len(failed_products)}개: "
-            f"{_summarize(failed_products)} — 데이터는 정상이며 운영자가 확인 중입니다."
-        )
-    return " ".join(parts) or None
+        sections.append((
+            f"생성에 실패해 이번 호에서 빠진 상품 {len(failed_products)}개: ",
+            list(failed_products),
+            " — 데이터는 정상이며 운영자가 확인 중입니다.",
+        ))
+    if not sections:
+        return None
+
+    # 고정 문구는 못 줄인다(개수 자릿수까지 포함해 여기서 확정된다). 남은 것을 나눠 쓴다.
+    fixed = sum(len(head) + len(tail) for head, _, tail in sections) + (len(sections) - 1)
+    listing_budget = (constants.NOTICE_MAX_CHARS - fixed) // len(sections)
+
+    return " ".join(
+        f"{head}{_summarize(labels, listing_budget)}{tail}" for head, labels, tail in sections
+    )
 
 
 async def compile_and_upload_monthly_book(

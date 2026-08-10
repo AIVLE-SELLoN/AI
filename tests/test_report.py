@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import tempfile
 from collections.abc import Generator
@@ -1568,6 +1569,17 @@ async def test_all_held_reports_why_not_just_that_it_failed() -> None:
 #    (2026-08-09 리뷰 실측). 길이 검증은 반드시 **긴 이름**으로 한다.
 _REAL_LENGTH_NAME = "2026 신상 봄가을 여성 미디 원피스 데일리 롱 A라인 5color"
 
+# SEO 키워드가 붙은 노출명. 커머스 노출명은 이 정도 길이가 흔하다.
+#
+# ⚠️ 38자와 82자는 **서로 다른 것을 잰다.** 38자 이름은 라벨이 45자라 두 번째가 예산에
+#    안 들어가 45자에서 멈추지만, 긴 이름은 예산 끝까지 잘려 들어와 **예산을 꽉 채운다.**
+#    그래서 38자로만 재면 천장을 못 본다 — 구절당 70자를 주던 시절 실측으로
+#    38자는 226자였는데 82자는 256자로 255를 넘겼다(2026-08-10 리뷰).
+_KEYWORD_STUFFED_NAME = (
+    "2026 신상 봄가을 여성 미디 원피스 데일리 롱 A라인 5color "
+    "빅사이즈 하객룩 데이트룩 오피스룩 무료배송 당일출고 인기상품"
+)
+
 
 def test_notice_length_is_bounded_even_with_real_product_names() -> None:
     """안내 문구 길이가 상품 수에도, **상품명 길이에도** 비례해 자라지 않는다.
@@ -1578,25 +1590,62 @@ def test_notice_length_is_bounded_even_with_real_product_names() -> None:
        상품이 왜 빠졌는지 못 본다.
 
     ⚠️ 상한을 **개수**로 걸면 안 된다. 상품명이 길면 5개만 나열해도 넘는다 — 실측으로
-       목 이름(7자) 223자 / 실제 노출명(38자) **368자**. 그래서 `_summarize` 는 누적
-       **글자 수**로 자르고, 이 테스트는 긴 이름으로 그걸 확인한다.
+       목 이름(7자) 223자 / 실제 노출명(38자) **368자**(2026-08-09).
     """
+    from app.core import constants
     from app.reporting.monthly_report_service import _build_excluded_notice
 
-    def held(n: int) -> list:
-        return [_held_input(f"P{i:03d}", name=_REAL_LENGTH_NAME) for i in range(n)]
+    def held(n: int, name: str) -> list:
+        return [_held_input(f"P{i:03d}", name=name) for i in range(n)]
 
-    few = _build_excluded_notice(held(3), None)
-    many = _build_excluded_notice(held(42), None)
-    worst = _build_excluded_notice(held(42), [f"P{i:03d}" for i in range(42)])
+    many = _build_excluded_notice(held(42, _REAL_LENGTH_NAME), None)
+    far_more = _build_excluded_notice(held(504, _REAL_LENGTH_NAME), None)
 
-    # 상품이 14배로 늘어도 길이는 나열 예산에서 멈춘다(상한이 없으면 42건에 600자 넘었다)
-    assert len(many) < 150, f"{len(many)}자 — 나열 예산이 안 걸렸다"
-    assert len(many) - len(few) < 30, "상품 수에 비례해 자라고 있다"
-    assert "외 41개" in many
+    # 전부 나열하면 42건 × 45자 = 1,890자다. 상한이 걸려 그 근처도 안 간다.
+    assert len(many) <= constants.NOTICE_MAX_CHARS, f"{len(many)}자 — 나열 예산이 안 걸렸다"
+
+    # 포화 뒤에는 상품이 12배로 늘어도 길이가 그대로다. 늘어나는 건 개수 자릿수뿐이라
+    # 한 자릿수당 몇 글자에 그친다 — 상품 수에 **비례**하지 않는다는 뜻이다.
+    assert abs(len(far_more) - len(many)) <= 10, (
+        f"상품 수에 비례해 자라고 있다: 42건 {len(many)}자 → 504건 {len(far_more)}자"
+    )
+
+    # 접혀도 셈이 맞아야 한다: 나열한 것 + "외 N개" = 총 개수.
+    # ⚠️ "외 41개" 처럼 접힌 수를 박아 두면 예산이 바뀔 때마다 깨진다 — 몇 개가 들어가는지는
+    #    상한과 이름 길이에 달렸고, 계약은 "합이 맞는다" 쪽이다.
+    shown = many.count("(P")
+    folded = int(re.search(r"외 (\d+)개", many).group(1))
+    assert shown + folded == 42, f"나열 {shown} + 접힘 {folded} 가 총 42 와 안 맞는다"
     assert "42개" in many  # 총 개수는 그대로 알린다
-    # 보류·실패가 동시에 최악이어도 VARCHAR(255) 안에 들어간다
-    assert len(worst) <= 255, f"최악 문구가 {len(worst)}자다 — 백엔드 컬럼 상한을 확인할 것"
+
+
+def test_notice_length_is_bounded_at_every_scale() -> None:
+    """상품 수·이름 길이를 **천장까지** 밀어도 `NOTICE_MAX_CHARS` 를 넘지 않는다.
+
+    ⚠️ 한 조합(42/42)만 재면 못 잡는다. 구절당 예산을 주던 시절 42/42 는 252자로 통과했지만
+       150/150 은 256자, 자릿수를 최대로 올리면 260자였다(2026-08-10 리뷰 실측).
+
+    두 축이 동시에 길이를 밀어올린다:
+      · **이름 길이** — 예산을 넘는 이름은 예산 끝까지 잘려 들어와 예산을 꽉 채운다.
+      · **개수 자릿수** — 양쪽 구절의 "상품 N개"·"외 N개" 네 곳에 들어간다. 2자리→3자리면
+        +4자다. 카탈로그가 504개라 보류 3자리는 정상 범위다.
+    """
+    from app.core import constants
+    from app.reporting.monthly_report_service import _build_excluded_notice
+
+    names = ("원피스", _REAL_LENGTH_NAME, _KEYWORD_STUFFED_NAME, "초장문 상품명 " * 30)
+    counts = ((1, 0), (0, 1), (3, 3), (42, 42), (150, 150), (504, 504), (99_999, 99_999))
+
+    for name in names:
+        for n_held, n_failed in counts:
+            notice = _build_excluded_notice(
+                [_held_input(f"P{i:03d}", name=name) for i in range(n_held)],
+                [f"P{i:03d}" for i in range(n_failed)],
+            )
+            assert len(notice) <= constants.NOTICE_MAX_CHARS, (
+                f"이름 {len(name)}자 · 보류 {n_held} · 실패 {n_failed} 에서 "
+                f"{len(notice)}자 — 상한 {constants.NOTICE_MAX_CHARS} 초과"
+            )
 
 
 def test_notice_stays_bounded_when_one_name_is_absurdly_long() -> None:
@@ -1605,6 +1654,7 @@ def test_notice_stays_bounded_when_one_name_is_absurdly_long() -> None:
     최소 1개는 나열해야 셀러가 무엇인지 아는데, 노출명에는 길이 제한이 없어서 그 하나가
     상한을 통째로 무너뜨릴 수 있다. `_summarize` 가 이름 자체를 자르는 이유다.
     """
+    from app.core import constants
     from app.reporting.monthly_report_service import _build_excluded_notice
 
     absurd = "초장문 상품명 " * 30  # 240자
@@ -1612,19 +1662,31 @@ def test_notice_stays_bounded_when_one_name_is_absurdly_long() -> None:
 
     worst = _build_excluded_notice(held, [f"P{i:03d}" for i in range(42)])
 
-    assert len(worst) <= 255, f"이름 하나가 상한을 넘겼다: {len(worst)}자"
+    assert len(worst) <= constants.NOTICE_MAX_CHARS, f"이름 하나가 상한을 넘겼다: {len(worst)}자"
     assert "…" in worst, "긴 이름이 잘리지 않았다"
     assert "42개" in worst  # 잘려도 총 개수는 알린다
 
 
 def test_notice_lists_every_product_when_budget_allows() -> None:
-    """예산 안이면 전부 나열한다 — 몇 개 안 될 때까지 접으면 정보만 잃는다."""
+    """예산 안이면 전부 나열한다 — 몇 개 안 될 때까지 접으면 정보만 잃는다.
+
+    ⚠️ 개수를 하드코딩하지 않는다. 상수에서 파생시켜야 `NOTICE_MAX_CHARS` 를 낮췄을 때
+       이 테스트가 "왜 접혔는지" 를 알려준다(2026-08-10 지적).
+    """
     from app.core import constants
     from app.reporting.monthly_report_service import _build_excluded_notice
 
-    # 짧은 이름 3건이면 예산(70자) 안에 다 들어간다
-    notice = _build_excluded_notice([_held_input(f"P{i:03d}", name="원피스") for i in range(3)], None)
+    # 상한의 1/4 만 쓰는 짧은 목록 — 고정 문구를 빼고도 남으므로 접힐 이유가 없다
+    name = "원피스"
+    label_len = len(name) + len("(P000)") + len(", ")
+    count = max(1, constants.NOTICE_MAX_CHARS // 4 // label_len)
 
-    assert "외 " not in notice, f"예산({constants.NOTICE_MAX_LIST_CHARS}자) 안인데 접혔다: {notice}"
-    for i in range(3):
+    notice = _build_excluded_notice(
+        [_held_input(f"P{i:03d}", name=name) for i in range(count)], None
+    )
+
+    assert "외 " not in notice, (
+        f"상한({constants.NOTICE_MAX_CHARS}자)의 1/4 인 {count}건인데 접혔다: {notice}"
+    )
+    for i in range(count):
         assert f"P{i:03d}" in notice

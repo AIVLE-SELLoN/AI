@@ -30,18 +30,18 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "generate_monthly_reports.py"
 
 
-def _run_in_cp949(*args: str) -> subprocess.CompletedProcess:
-    """진짜 cp949 콘솔에서 스크립트를 돌린다.
+def _run_script(*args: str, io_encoding: str) -> subprocess.CompletedProcess:
+    """자식 프로세스로 스크립트를 돌린다. stdout 인코딩을 지정한다.
 
-    `PYTHONIOENCODING=cp949` 로 자식 프로세스의 stdout 을 cp949 로 만든다 — 한국어
-    윈도우 기본 콘솔과 같은 상태다. 여기서는 `reconfigure` 가 살아 있어서
-    `force_utf8_output()` 이 실제로 일을 하고, 안 하면 진짜로 죽는다.
+    `PYTHONIOENCODING=cp949` 면 한국어 윈도우 기본 콘솔과 같은 상태다. 여기서는
+    `reconfigure` 가 살아 있어서 `force_utf8_output()` 이 실제로 일을 하고, 안 하면
+    진짜로 죽는다 — pytest 캡처 stdout 과 다른 점이 이것이다.
     """
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
         capture_output=True,
         cwd=str(ROOT),
-        env={**os.environ, "PYTHONIOENCODING": "cp949"},
+        env={**os.environ, "PYTHONIOENCODING": io_encoding},
         timeout=120,
         check=False,  # 종료코드 자체가 검증 대상이라 여기서 던지면 안 된다
     )
@@ -55,7 +55,7 @@ def test_help_survives_cp949_console():
        argparse 는 도움말을 stdout 으로 **바로** 쓰므로, 전환이 파싱보다 뒤면 그 시점에
        이미 늦다.
     """
-    result = _run_in_cp949("--help")
+    result = _run_script("--help", io_encoding="cp949")
 
     assert result.returncode == 0, (
         "cp949 콘솔에서 --help 가 죽었다. force_utf8_output() 이 "
@@ -64,39 +64,40 @@ def test_help_survives_cp949_console():
     )
 
 
-def test_missing_month_error_survives_cp949_console():
-    """인자 오류 경로도 cp949 에서 살아남는다.
+def test_help_output_actually_needs_the_switch():
+    """위 cp949 테스트의 **전제** — `--help` 출력에 cp949 로 못 내보내는 문자가 실린다.
 
-    argparse 의 usage 출력은 stderr 로 나가고 여기에도 같은 문자가 실린다. 종료코드는
-    2(인자 오류)가 정상이고, 인코딩으로 죽으면 1 이 된다 — 그 둘을 구분한다.
+    ⚠️ 이 전제가 깨지면 위 테스트가 조용히 무력해진다. 실제로 `--help` 출력에 실리는
+       cp949 밖 문자는 `--permutations` help 문구의 `—` **하나뿐**이라, 누가 그 문구만
+       다듬으면 `force_utf8_output()` 을 통째로 지워도 위 테스트가 통과한다
+       (2026-08-10 리뷰에서 실증). 나머지 20여 개는 docstring·주석이라 화면에 안 나온다.
+
+    그래서 소스 파일 전체가 아니라 **출력**을 본다. 파일을 재면 docstring 의 `—` 때문에
+    전제가 계속 참인 것처럼 보인다 — 정작 필요한 건 "`--help` 출력에 있나" 다.
     """
-    result = _run_in_cp949()  # --month 누락
+    result = _run_script("--help", io_encoding="utf-8")
+    assert result.returncode == 0
+
+    with pytest.raises(UnicodeEncodeError):
+        result.stdout.decode("utf-8").encode("cp949")
+
+
+def test_missing_required_arg_exits_with_argparse_code():
+    """필수 인자가 없으면 argparse 종료코드 2 로 끝난다 — 스크립트가 뜨고 파싱까지 간다.
+
+    ⚠️ **인코딩 배선과는 무관하다.** `force_utf8_output()` 을 통째로 지워도 통과한다
+       (2026-08-10 리뷰에서 확인). argparse 의 usage 와
+       `the following arguments are required: --month` 는 전부 ASCII 라 cp949 에서도
+       멀쩡하고, 그 경로에서는 로깅도 아직 안 돈다.
+
+    남겨 두는 이유는 **스모크**로서의 값이다 — import 가 깨지거나 파서 정의가 망가지면
+    2 가 아닌 코드로 끝난다. 인코딩은 위 두 테스트가 맡는다.
+    """
+    result = _run_script(io_encoding="cp949")  # --month 누락
 
     assert result.returncode == 2, (
-        "인자 오류(2)가 아니라 다른 코드로 끝났다 — 인코딩 크래시 의심:\n"
+        "argparse 인자 오류(2)가 아닌 코드로 끝났다:\n"
         + result.stderr.decode("utf-8", "replace")[-800:]
-    )
-    assert b"UnicodeEncodeError" not in result.stderr
-
-
-def test_summary_line_characters_are_from_the_source():
-    """요약 print 가 실제로 cp949 밖 문자를 쓰는지 **소스에서** 확인한다.
-
-    ⚠️ 문구를 테스트에 손으로 옮겨 적으면 원본이 바뀌어도 안 따라온다(2026-08-09 지적).
-       소스를 읽어서 확인해야 "이 파일에 cp949 로 못 내보내는 문자가 있다"는 전제가
-       계속 참인지 알 수 있다. 전제가 깨지면(모든 문자가 cp949 안에 들어오면) 위
-       서브프로세스 테스트가 아무것도 검증하지 못하는 상태가 되므로 여기서 잡는다.
-    """
-    source = SCRIPT.read_text(encoding="utf-8")
-
-    try:
-        source.encode("cp949")
-    except UnicodeEncodeError:
-        return  # 전제 성립 — 인코딩 전환이 실제로 필요하다
-
-    pytest.fail(
-        "스크립트 전체가 cp949 로 표현 가능해졌다. force_utf8_output() 이 더 이상 "
-        "필요 없어졌거나, 위 서브프로세스 테스트가 아무것도 못 잡는 상태다."
     )
 
 
