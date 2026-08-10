@@ -308,12 +308,19 @@ def _summarize(labels: list[str], budget: int) -> str:
     # 접어야 한다. 꼬리 자릿수는 접힌 개수에 따라 변하니 **최악**(전부 접힘)으로 잡아
     # 자리를 먼저 빼둔다 — 실제 꼬리는 이보다 짧거나 같으므로 예산을 넘길 수 없다.
     room = budget - len(f" 외 {len(labels)}개")
+    if room < 1:
+        # 꼬리조차 못 담는 예산. 호출부 계산상 여기까지 오지 않지만, `len <= budget` 은
+        # 호출부 산술이 기대는 불변식이라 어떤 입력에서도 지킨다. 이름을 못 실으므로
+        # 개수만 알린다.
+        summary = f"{len(labels)}개"
+        return summary[:budget]
+
     shown: list[str] = []
     used = 0
     for label in labels:
         if not shown:
             # 첫 항목은 반드시 하나 싣는다 — room 보다 길면 잘라서라도.
-            text = label if len(label) <= room else label[: max(1, room - 1)] + "…"
+            text = _truncate_label(label, room)
             shown.append(text)
             used = len(text)  # 자른 **뒤** 길이를 센다
             continue
@@ -323,7 +330,35 @@ def _summarize(labels: list[str], budget: int) -> str:
         shown.append(label)
         used += cost
 
-    return f"{', '.join(shown)} 외 {len(labels) - len(shown)}개"
+    # ⚠️ 접힌 게 없으면 꼬리를 붙이지 않는다. 여기까지 왔다는 건 "전부 나열하면 예산을
+    #    넘는다"는 뜻이지 "여러 건 중 일부만 실었다"는 뜻이 아니다 — 긴 이름 **1건**을
+    #    잘라 실은 경우가 그렇다. 그때 꼬리를 붙이면 "상품 1개: …이름… 외 0개" 가 되어
+    #    셀러 화면에 나간다(2026-08-10 리뷰에서 실측). 잘린 것과 접힌 것은 다르다.
+    folded = len(labels) - len(shown)
+    if not folded:
+        return ", ".join(shown)
+    return f"{', '.join(shown)} 외 {folded}개"
+
+
+def _truncate_label(label: str, room: int) -> str:
+    """`room` 글자에 맞춰 자른다. `이름(P001)` 꼴이면 **코드를 남기고 이름만** 줄인다.
+
+    ⚠️ 오른쪽부터 자르면 끝에 붙은 상품 코드가 가장 먼저 날아간다. 셀러가 관리 화면에서
+       상품을 특정하는 값은 노출명이 아니라 **코드**라, 같은 예산에서 코드를 남기는 쪽이
+       정보가 더 많다(2026-08-10 리뷰). 코드까지 넣을 자리도 없으면 그때는 통째로 자른다.
+    """
+    if len(label) <= room:
+        return label
+    if room <= 1:
+        return label[:room]  # "…" 를 넣을 자리도 없다
+
+    if label.endswith(")") and "(" in label:
+        code = label[label.rindex("(") :]  # "(P001)"
+        keep = room - len(code) - 1  # "…" 한 자리
+        if keep >= 1:
+            return f"{label[:keep]}…{code}"
+
+    return label[: room - 1] + "…"
 
 
 def _build_excluded_notice(

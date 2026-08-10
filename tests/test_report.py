@@ -1580,6 +1580,13 @@ _KEYWORD_STUFFED_NAME = (
     "빅사이즈 하객룩 데이트룩 오피스룩 무료배송 당일출고 인기상품"
 )
 
+# 나열 예산을 **확실히 넘는** 이름. 자르기 분기를 타게 하는 것이 목적이다.
+#
+# ⚠️ `_KEYWORD_STUFFED_NAME` 은 72자 = 라벨 78자로, 보류1+실패1 일 때의 예산(78자)과
+#    **정확히 같아서** 접히지 않고 지나간다. 경계에 딱 걸친 값만 쓰면 자르기 경로가
+#    한 번도 실행되지 않는다(2026-08-10 리뷰). 그래서 여유 있게 넘는 이름을 따로 둔다.
+_OVER_BUDGET_NAME = _KEYWORD_STUFFED_NAME + " 리뷰이벤트 사은품증정 한정수량"
+
 
 def test_notice_length_is_bounded_even_with_real_product_names() -> None:
     """안내 문구 길이가 상품 수에도, **상품명 길이에도** 비례해 자라지 않는다.
@@ -1633,8 +1640,17 @@ def test_notice_length_is_bounded_at_every_scale() -> None:
     from app.core import constants
     from app.reporting.monthly_report_service import _build_excluded_notice
 
-    names = ("원피스", _REAL_LENGTH_NAME, _KEYWORD_STUFFED_NAME, "초장문 상품명 " * 30)
-    counts = ((1, 0), (0, 1), (3, 3), (42, 42), (150, 150), (504, 504), (99_999, 99_999))
+    names = (
+        "원피스",
+        _REAL_LENGTH_NAME,
+        _KEYWORD_STUFFED_NAME,
+        _OVER_BUDGET_NAME,
+        "초장문 상품명 " * 30,
+    )
+    # ⚠️ (1, 1) 이 빠지면 안 된다. 구절이 **둘**이라야 예산이 반으로 갈려 긴 이름 1건이
+    #    잘리는 경로에 닿는다 — (1, 0) 은 구절이 하나라 예산이 넉넉해서 접히지도 않는다.
+    #    그 경로에서 "외 0개" 가 새어 나갔다(2026-08-10 리뷰).
+    counts = ((1, 0), (0, 1), (1, 1), (3, 3), (42, 42), (150, 150), (504, 504), (99_999, 99_999))
 
     for name in names:
         for n_held, n_failed in counts:
@@ -1642,10 +1658,49 @@ def test_notice_length_is_bounded_at_every_scale() -> None:
                 [_held_input(f"P{i:03d}", name=name) for i in range(n_held)],
                 [f"P{i:03d}" for i in range(n_failed)],
             )
+            where = f"이름 {len(name)}자 · 보류 {n_held} · 실패 {n_failed}"
             assert len(notice) <= constants.NOTICE_MAX_CHARS, (
-                f"이름 {len(name)}자 · 보류 {n_held} · 실패 {n_failed} 에서 "
-                f"{len(notice)}자 — 상한 {constants.NOTICE_MAX_CHARS} 초과"
+                f"{where} 에서 {len(notice)}자 — 상한 {constants.NOTICE_MAX_CHARS} 초과"
             )
+            # 길이만 재면 문구가 이상해도 통과한다. 내용도 본다.
+            assert "외 0개" not in notice, f"{where} 에서 '외 0개' 가 나갔다: {notice}"
+
+
+def test_single_held_product_does_not_say_folded_zero() -> None:
+    """보류 1건이면 "외 0개" 가 붙지 않는다 — 잘린 것과 접힌 것은 다르다.
+
+    ⚠️ 이름이 예산보다 길면 자르기 분기를 타는데, 거기서 꼬리를 무조건 붙이면
+       `len(labels) - len(shown)` 이 0 이라 **"상품 1개: …이름… 외 0개"** 가 셀러 화면에
+       나간다(2026-08-10 리뷰 실측). 1개라고 알린 바로 뒤에 "외 0개" 가 붙는 문구다.
+
+    구절이 **둘**이라야 예산이 반으로 갈려 이 경로에 닿는다 — 보류만 있으면 예산이
+    넉넉해서 접히지 않는다. 그래서 실패도 1건 같이 넣는다.
+    """
+    from app.reporting.monthly_report_service import _build_excluded_notice
+
+    notice = _build_excluded_notice(
+        [_held_input("P001", name=_OVER_BUDGET_NAME)], ["P900"]
+    )
+
+    assert "외 0개" not in notice, f"1건인데 '외 0개' 가 붙었다: {notice}"
+    assert "보류된 상품 1개" in notice
+
+
+def test_truncated_label_keeps_the_product_code() -> None:
+    """이름을 자를 때 상품 코드는 남긴다.
+
+    오른쪽부터 자르면 끝에 붙은 `(P001)` 이 가장 먼저 날아간다. 셀러가 관리 화면에서
+    상품을 특정하는 값은 노출명이 아니라 **코드**라, 같은 예산이면 코드를 남기는 쪽이
+    정보가 더 많다(2026-08-10 리뷰).
+    """
+    from app.reporting.monthly_report_service import _build_excluded_notice
+
+    notice = _build_excluded_notice(
+        [_held_input("P001", name=_OVER_BUDGET_NAME)], ["P900"]
+    )
+
+    assert "…" in notice, "예산을 넘는 이름인데 잘리지 않았다"
+    assert "(P001)" in notice, f"이름을 자르면서 상품 코드까지 날아갔다: {notice}"
 
 
 def test_notice_stays_bounded_when_one_name_is_absurdly_long() -> None:
