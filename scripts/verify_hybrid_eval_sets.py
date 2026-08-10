@@ -10,11 +10,23 @@ llm_generated_700이 부자연스럽게 더 잘 맞으면(10%p 이상 차이) �
 안 겹치는지도 확인한다 — 생성 시점에 few-shot을 안 봤다고 했지만, 우연히 비슷한
 문장이 나왔을 가능성은 별도로 검증해야 한다.
 
+평가셋 파일이 둘로 나뉘어 있는 이유 (2026-08-09)
+--------------------------------------------------
+AI Hub 71603 이용정책상 원문을 저장소에 두지 않는다. 그래서 relabel_300 은 두 파일이다.
+
+    eval/eval_sets/relabel_300_labels.csv   사람이 매긴 라벨 (커밋됨, 원문 없음)
+    eval/eval_sets/relabel_300.csv          AI Hub 원문 (gitignore, 로컬에만)
+
+채점할 때 `id`(RELABEL-####)로 조인한다. 원문 파일이 없으면 어떻게 준비하는지
+안내하고 종료한다(load_raw_texts 참고). 라벨은 사람 작업물이라 재생성이 안 되므로
+반드시 저장소에 남는다 — select_relabel_300.py 는 relabel_* 컬럼을 빈 값으로 낸다.
+
 사용법
 ------
-    python scripts/verify_hybrid_eval_sets.py \\
-        --relabel eval/eval_sets/relabel_300.csv \\
-        --generated eval/eval_sets/llm_generated_700.csv
+    # 로컬에 eval/eval_sets/relabel_300.csv 가 있으면 그대로
+    python scripts/verify_hybrid_eval_sets.py
+    # 원문이 다른 경로에 있으면
+    python scripts/verify_hybrid_eval_sets.py --relabel-text ~/aihub/relabel_300.csv
     python scripts/verify_hybrid_eval_sets.py --dry-run   # 비용 0, 표본 구성만 확인
 """
 
@@ -41,8 +53,41 @@ from eval.run_classify_eval import (  # noqa: E402
 import app.classification.service as classification_service  # noqa: E402
 
 
-def load_relabel_300(path: Path) -> tuple[list[dict], list[dict]]:
-    """relabel_300.csv 로드. relabel_aspect가 콤마 포함(다중aspect)이면 별도 리스트로 분리.
+def load_raw_texts(text_path: Path) -> dict[str, str]:
+    """AI Hub 원문을 `id → raw_text` 로 읽는다 (2026-08-09 분리).
+
+    `relabel_300_labels.csv` 에는 **사람이 매긴 라벨만** 있고 원문이 없다. AI Hub 71603
+    이용정책상 원문을 저장소에 두지 않기 때문이다(.gitignore 참고). 채점하려면 원문이
+    필요하므로 로컬 파일에서 `id` 로 조인한다.
+
+    로컬 파일은 `id`(RELABEL-####)와 `raw_text` 컬럼만 있으면 된다 — 예전
+    `relabel_300.csv` 를 그대로 쓰면 되고, 없으면 아래 안내대로 다시 만들면 된다.
+    """
+    if not text_path.exists():
+        raise SystemExit(
+            f"\n🔴 원문 파일이 없습니다: {text_path}\n"
+            "   relabel_300_labels.csv 에는 라벨만 있고 원문은 저장소에 두지 않습니다"
+            "(AI Hub 이용정책).\n"
+            "   채점하려면 로컬에 원문이 필요합니다. 둘 중 하나로 준비하세요.\n\n"
+            "   ① 예전에 받아둔 relabel_300.csv 가 있으면 그 경로를 넘기세요\n"
+            "      python scripts/verify_hybrid_eval_sets.py --relabel-text <경로>\n\n"
+            "   ② 없으면 AI Hub 71603 을 받아 같은 선정 규칙으로 다시 만드세요\n"
+            "      python scripts/select_relabel_300.py --data-dir ./aihub71603 \\\n"
+            "          --seed 11 --outfile eval/eval_sets/relabel_300.csv\n"
+            "      (선정 로직·seed 가 같으므로 id 가 동일하게 붙습니다. 이 파일의\n"
+            "       relabel_* 컬럼은 비어 있지만, 라벨은 labels 파일에서 오므로 상관없습니다)\n"
+        )
+    with text_path.open(encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    if not rows or "raw_text" not in rows[0] or "id" not in rows[0]:
+        raise SystemExit(f"🔴 {text_path} 에 id·raw_text 컬럼이 필요합니다.")
+    return {r["id"]: r["raw_text"] for r in rows}
+
+
+def load_relabel_300(path: Path, text_path: Path) -> tuple[list[dict], list[dict]]:
+    """relabel_300_labels.csv(라벨) + 로컬 원문을 id 로 조인해 로드.
+
+    relabel_aspect가 콤마 포함(다중aspect)이면 별도 리스트로 분리.
 
     Returns: (single_aspect_rows, multi_aspect_rows)
     둘 다 {"inquiry_id", "raw_text", "true_aspect", "true_sentiment"} 형태로 통일
@@ -50,6 +95,21 @@ def load_relabel_300(path: Path) -> tuple[list[dict], list[dict]]:
     """
     with path.open(encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
+
+    # 라벨 파일에 원문이 없으면(정상) 로컬 원문과 조인한다. 옛 relabel_300.csv 처럼
+    # raw_text 가 이미 들어 있으면 그대로 쓴다 — 두 형식을 모두 받는다.
+    if rows and "raw_text" in rows[0]:
+        texts = {r["id"]: r["raw_text"] for r in rows}
+    else:
+        texts = load_raw_texts(text_path)
+        missing = [r["id"] for r in rows if r["id"] not in texts]
+        if missing:
+            raise SystemExit(
+                f"🔴 원문에 없는 id {len(missing)}건: {missing[:5]}\n"
+                f"   {path.name} 과 {text_path.name} 의 선정 결과가 다릅니다"
+                " — seed·선정 규칙이 같은지 확인하세요."
+            )
+        print(f"원문 조인: {text_path} ({len(texts)}건)")
 
     single, multi = [], []
     for r in rows:
@@ -64,12 +124,12 @@ def load_relabel_300(path: Path) -> tuple[list[dict], list[dict]]:
                 print(f"⚠️ {r['id']}: aspect·sentiment 개수 불일치({aspect_raw} vs {sent_raw}) — 스킵")
                 continue
             multi.append({
-                "inquiry_id": r["id"], "raw_text": r["raw_text"],
+                "inquiry_id": r["id"], "raw_text": texts[r["id"]],
                 "true_aspect": aspects, "true_sentiment": sentiments,
             })
         else:
             single.append({
-                "inquiry_id": r["id"], "raw_text": r["raw_text"],
+                "inquiry_id": r["id"], "raw_text": texts[r["id"]],
                 "true_aspect": aspect_raw, "true_sentiment": int(float(sent_raw)),
             })
     return single, multi
@@ -279,7 +339,7 @@ def print_leak_check(generated_single: list[dict], generated_multi: list[dict], 
 
 
 async def main_async(args: argparse.Namespace) -> None:
-    relabel_single, relabel_multi = load_relabel_300(Path(args.relabel))
+    relabel_single, relabel_multi = load_relabel_300(Path(args.relabel), Path(args.relabel_text))
     generated_single, generated_multi = load_generated_700(Path(args.generated))
 
     print(f"relabel_300: 단일{len(relabel_single)}건 + 다중{len(relabel_multi)}건")
@@ -340,7 +400,10 @@ async def main_async(args: argparse.Namespace) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--relabel", default="eval/eval_sets/relabel_300.csv")
+    ap.add_argument("--relabel", default="eval/eval_sets/relabel_300_labels.csv",
+                    help="사람 재라벨링 결과(원문 없음). 저장소에 커밋되는 파일")
+    ap.add_argument("--relabel-text", default="eval/eval_sets/relabel_300.csv",
+                    help="AI Hub 원문(id·raw_text). 저장소에 없으니 로컬에 두고 경로를 넘길 것")
     ap.add_argument("--generated", default="eval/eval_sets/llm_generated_700.csv")
     ap.add_argument("--chunk-size", type=int, default=20)
     ap.add_argument("--concurrency", type=int, default=4)
