@@ -7,6 +7,10 @@
 > 양방향 검증까지 마쳤다. 다만 **운영 접속 정보(C1)와 `MQ_COMPANY_ID` 가 아직 없어
 > `MQ_ENABLED=false` 로 꺼둔 상태**다. 정본 스키마는 `app/core/schemas.py`.
 > 남은 항목은 §12 구현 현황 참고.
+>
+> ⚠️ **S3 버킷·Lifecycle 값(§5·§6)은 2026-08-10에 코드 기준으로 노션에 선반영**했고
+> **최용준님 확인 대기 중**(버킷이 정말 1개인지 · 실제 운영 버킷명 · Lifecycle 7일 여부).
+> 회신 오면 이 절들도 같이 갱신한다.
 
 ---
 
@@ -150,9 +154,10 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
 | `hitl_status` | enum | **발행 시점엔 항상 `대기`** |
 | `hitl_feedback` | object \| null | 발행 시점엔 null. §8 이벤트로 채워짐 |
 
-**⚠️ `citations`는 현재 항상 빈 배열이다.** 인용 원문을 채우려면 원본 DB의 `cs`·`reviews`를
-`evidence.inquiry_ids`로 재조회해야 하는데, `ClassifiedItem.item_id`와 두 테이블 PK의 연결이
-아직 확인 안 됐다. 가짜로 채우지 않고 비워 둔다.
+**`citations`는 `image_guide` 타입에서만 채워진다** (PR #40, 2026-08-09). 실제 CS 원문과
+문자 그대로 대조해 인용에 성공한 문의만 담는다 — `evidence.inquiry_ids` 밖은 들어갈 수 없다.
+`copy_draft`·fallback_guide·SCOPE_LIMIT 경로는 인용할 원문이 없거나 대조 대상이 아니라
+**빈 배열이 정직한 값**이다(버그 아님).
 
 ### 4.3 예시
 
@@ -293,11 +298,19 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
 
 ### `pdf_s3_meta`
 
+**버킷은 1개다.** 월간·CS 가이드라인이 같은 버킷을 쓰고 prefix로 구분한다
+(`monthly-report` / `cs-guideline`) — S3 Lifecycle이 prefix 단위로만 걸리기 때문
+(2026-08-05 확정, 2026-08-10 문서 반영). 예전 `sellon-reports`/`sellon-temp-reports`
+두 버킷 서술은 폐기됐다.
+
 | 필드 | 설명 |
 |---|---|
-| `s3_bucket_name` | `sellon-reports` (월간 전용, 6개월 보존) |
-| `s3_file_path` / `new_file_name` / `s3_full_key` | `s3_full_key = s3_file_path + new_file_name` (스키마가 강제) |
-| `file_extension` / `file_size_bytes` | 상한 10MB |
+| `s3_bucket_name` | 월간·CS가 공유하는 단일 버킷명 |
+| `s3_file_path` / `new_file_name` / `s3_full_key` | `s3_full_key = s3_file_path + new_file_name` (스키마가 강제). 경로 형식 `reports/{report_type}/{company_id}/{yyyy}/{mm}/` — `{yyyy}/{mm}`은 업로드 시각이 아니라 **보고 대상 기간**. `report_type`이 `company_id`보다 **위**다(Lifecycle이 리터럴 prefix 완전일치만 지원해서, 회사가 위면 문서 종류별 보존 규칙을 못 건다) |
+| `company_id` | **필수.** 경로에 쓰인 고객사 식별자 — 메인이 S3 키를 파싱하지 않고 바로 어느 회사 것인지 알 수 있다 |
+| `company_name` | **선택.** 표시용 고객사명. **경로에는 쓰지 않는다**(회사명이 바뀌면 경로가 갈라져 이전 산출물을 못 찾는다) |
+| ~~`file_extension`~~ | **삭제됨.** 확장자는 파일명에 `.pdf`로 고정 포함한다 — 파일명에 이미 있는 값을 별도 컬럼으로 한 번 더 들면 둘이 어긋날 수 있다 |
+| `file_size_bytes` | 상한 10MB |
 | `original_file_name` | 원본·표시용 파일명 |
 | `presigned_url` | 다운로드·미리보기 URL |
 | `presigned_expires_at` | 링크 만료 = 발급 +**7일**. 만료 후 `s3_full_key`로 백엔드가 재발급 (SigV4 상한이 7일이라 영구 링크 불가) |
@@ -328,8 +341,8 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
 | `guideline_id` | string | **멱등 키.** `alert_id`의 `ALT-` 접두어를 `GD-`로 바꾼 값 — 예: `ALT-20260528-P001-COUPANG` → `GD-20260528-P001-COUPANG`. 알림과 **1:1**이라 재생성해도 같은 ID<br>⚠️ 백엔드 문서의 `GD-{탐지일}-{상품그룹}`은 **폐기된 규칙**이다. 탐지가 (상품, aspect, 채널) 단위로 발화하므로 같은 날 같은 상품의 다른 알림이 전부 같은 ID가 됐고, 멱등 upsert 때문에 나중 가이드라인이 앞의 것을 조용히 덮어썼다 (PR #22에서 수정, `app/reporting/ids.py`) |
 | `alert_id` | string | 원본 알림 ID |
 | `status` | enum | §5와 동일. `HOLD_INSUFFICIENT_DATA`는 발생하지 않음 |
-| `pdf_s3_meta` | object \| null | 버킷 `sellon-temp-reports`, `object_expires_at` = 업로드 +**24시간**, `presigned_expires_at`도 동일 |
-| `source_payload` | object | **필수.** 입력 JSON + 출력 JSON 원본. 메인이 PostgreSQL JSONB에 영구 보관하며, PDF가 24시간 뒤 사라져도 이 원본으로 재컴파일한다 |
+| `pdf_s3_meta` | object \| null | **월간과 같은 버킷**을 prefix `cs-guideline`로 구분(§5 참고). `object_expires_at` = 업로드 +**7일**(2026-08-06 확정, 기존 24시간에서 연장), `presigned_expires_at`도 +7일 |
+| `source_payload` | object | **필수.** 입력 JSON + 출력 JSON 원본. 메인이 PostgreSQL JSONB에 영구 보관하며, PDF가 **7일** 뒤 사라져도 이 원본으로 재컴파일한다 |
 | `notice_message` | string \| null | 비 `SUCCESS`일 때 안내 문구 |
 | `validation_report` | object \| null | `FAILED_VALIDATION` 사유 |
 
@@ -465,6 +478,7 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
 | enum 동기화 확인 | §9 대조표 전달 완료, 백엔드 반영 확인 대기 |
 | Publisher Confirm(AI) · Manual ACK(양쪽) | ✅ AI 쪽 완료 (`publisher_confirms=True` · 컨슈머 Manual ACK) |
 | `MQ_COMPANY_ID` 실제 값 | **백엔드 대기** — 없으면 발행이 막힌다 |
+| S3 버킷·Lifecycle 값(§5·§6) | 코드 기준으로 노션에 선반영(2026-08-10) — **최용준님 확인 대기**(버킷 1개 여부·운영 버킷명·Lifecycle 7일 여부) |
 
 `ai.anomaly.analyzed` · `ai.guideline.generated` 두 발행 경로는 배치(`app/batch/daily.py`)에
 붙어 있다. REST 6개는 그대로 남아 재현·디버깅용으로 쓴다.
