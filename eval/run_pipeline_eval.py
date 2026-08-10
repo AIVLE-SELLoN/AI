@@ -921,8 +921,14 @@ def _slot_table(config_rows, oracle_m, real_m, want, title, run) -> None:
     )
     if want == "FALSE":
         print("      증가 = 역방향 오판이 채점 격자 안까지 들어온 것이다. 이게 오탐의 씨앗이다.")
+        print("      다만 '경로가 실재한다' 와 '지금 FPR 을 뒤집는다' 는 다르다 — 실측한")
+        print("      P024/색상/COUPANG/cs 는 past 40/800(5.0%) 대비 12→13/200 이고,")
+        print("      BH 컷오프(6.0e-04)를 넘으려면 25/200 이라 +12 건이 더 필요하다.")
         print("      리뷰 config 슬롯은 6개(전부 색상)뿐이라 역방향을 볼 자리 자체가 좁다 —")
         print("      FPR 0/8 을 안전성 근거로 쓸 수 없는 이유가 여기에도 있다.")
+        print("      ⚠️ 여기 74 는 intended_answer==FALSE 행이다. config 123행 =")
+        print("         FALSE 74 + TRUE 33 + 공란 16(scoring_included=N, SC-026·027·028·")
+        print("         036·037·038). '90' 은 FALSE 74 + 공란 16 을 합친 수다.")
 
 
 # ── 리포트 ───────────────────────────────────────────────────────

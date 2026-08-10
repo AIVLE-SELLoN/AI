@@ -35,8 +35,21 @@
 
 ## 목 데이터 재생성 — 2026-08-09
 
-`data/**` 는 전부 미커밋이라 **팀원마다 다른 데이터를 들고 있을 수 있다.** 아래 명령으로
+`data/**` 는 전부 미커밋이라 **팀원마다 다른 데이터를 들고 있을 수 있다.** 아래 순서로
 맞춘다. LLM 호출 0회다(`cause_text_cache.json` 이 14/14 커버).
+
+> 🔴 **`38c1074` 이상이 필요하다.** `--baseline-denominator` 는 그 커밋에서 생긴
+> 플래그다. main 에 머지되기 전에는 이 레시피가 "unrecognized arguments" 로 죽는다.
+> `git log --oneline | grep 38c1074` 로 확인할 것.
+
+**① 먼저 아카이브한다.** 아래 명령은 `--outdir data/input` 으로 **제자리 덮어쓰기**다.
+`data/**` 가 전부 미커밋이라 한 번 돌리면 이전 데이터는 복구할 수 없다.
+
+```bash
+cp -R data/input data/golden data/config data/_archive/$(date +%Y%m%d)/
+```
+
+**② 재생성한다.**
 
 ```bash
 python scripts/generate_cs_review_data.py \
@@ -49,6 +62,22 @@ python scripts/generate_cs_review_data.py \
     --baseline-denominator total
 ```
 
+**③ config 대조로 검산한다.** `verify_counts.py` 가 config 의
+`past_neg`/`past_total`/`cur_neg`/`cur_total` 을 생성 데이터 실제 건수와 맞춰본다.
+
+```bash
+IDS=$(python -c "import csv;print(','.join(sorted({r['case_id'] for r in csv.DictReader(open('data/config/config_anomaly.csv',encoding='utf-8-sig'))})))")
+python scripts/verify_counts.py \
+    --anomaly-config data/config/config_anomaly.csv \
+    --generated-dir data/input --golden-dir data/golden \
+    --mapping-dir data/input --golden-mapping-dir data/golden \
+    --anchor-date 2026-08-28 --case-ids "$IDS"
+```
+
+2026-08-09 재생성분 실측: **246 슬롯 전부 PASS · FAIL 0 · "전체 통과"**.
+행수가 96,531 → 96,524 로 움직였지만 케이스 슬롯 카운트는 config 그대로다 —
+케이스 경로가 정확 건수를 심고 배경 경로만 고쳤다는 증거다.
+
 맞았는지 확인하는 값:
 
 | | 값 |
@@ -57,6 +86,7 @@ python scripts/generate_cs_review_data.py \
 | `input_reviews.csv` | 31,639행 |
 | `golden_cs_labels.csv` 의 `true_sentiment == -1` | 23,950 |
 | 실험② `data_fingerprint` | `1fb05ed9` |
+| `verify_counts.py` | 246 슬롯 PASS · FAIL 0 |
 
 **왜 재생성했나** — 생성기 배경 경로가 `BASELINE_RATE` 를 aspect 내부 분모로 적용하고
 있었다. 확정 스펙(시나리오 정의서 §1, `config_anomaly` 의 `past_total`,
