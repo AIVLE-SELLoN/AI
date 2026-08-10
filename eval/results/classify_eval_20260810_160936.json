@@ -1,0 +1,498 @@
+{
+  "meta": {
+    "experiment": "③ 프롬프트1 aspect 분류 정확도",
+    "run_at": "2026-08-10T16:09:36",
+    "golden": "golden_cs_labels.csv",
+    "prompt_version": "classify_aspect_v5",
+    "prompt_hash": "4b0bbeb3d657",
+    "model": "gpt-4o-mini",
+    "seed": 42,
+    "limit": 300,
+    "chunk_size": 20,
+    "mode": "per_item",
+    "only_negative": false,
+    "leak_threshold": 0.75,
+    "few_shot_examples_checked": 49
+  },
+  "scores": {
+    "n_sampled": 300,
+    "n_scored": 300,
+    "n_unanswered": 0,
+    "aspect_f1": 0.9983,
+    "aspect_f1_note": "대시보드·채널비교분석·개선리포트 소비 지표(중립 포함) — 탐지는 안 씀",
+    "aspect_precision": 0.9967,
+    "aspect_recall": 1.0,
+    "sentiment_accuracy": 0.89,
+    "exact_match_rate": 0.8867,
+    "per_aspect": {
+      "기타": {
+        "precision": 0.9796,
+        "recall": 1.0,
+        "n_true": 48
+      },
+      "사이즈": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 52
+      },
+      "색상": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 53
+      },
+      "소재": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 50
+      },
+      "오배송": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 48
+      },
+      "파손": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "n_true": 49
+      }
+    },
+    "negative_detection": {
+      "note": "탐지 분자를 결정하는 값 — 문의 단위 부정/비부정 2분류. precision·f1은 비부정 표본(fp+tn)이 0건이면 null(측정불가, 100%로 착각 금지)",
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "fpr": 0.0,
+      "precision_operational": 1.0,
+      "precision_operational_p": 0.0737,
+      "precision_operational_lower": 0.8821,
+      "precision_operational_note": "⚠️ 환산값입니다 — 직접 측정한 게 아니라, 균형표본(50:50)의 recall·FPR을 베이즈 정리로 실제 운영 부정비율(p=0.07372761081932229)에 맞춰 재계산한 것. p는 골든 전량에서 실측한 값이라 골든이 바뀌면 같이 움직인다. 위 'precision'(표본기준)과 절대 혼동하지 말 것 — FPR이 0%에 가까울 땐 둘이 비슷해 보이지만, FPR이 조금만 올라도 크게 벌어짐(예: FPR5%→표본95% vs 운영60%). fp==0이면 환산값이 무조건 100%로 나오는데 그건 '오탐이 없다'가 아니라 '이 표본에서 못 봤다'는 뜻이라, precision_operational_lower(rule of three, FPR 95% 상한 3/n 기준 하한)를 같이 본다. null이면 fp>0이라 하한이 불필요한 것.",
+      "tp": 18,
+      "fp": 0,
+      "fn": 0,
+      "tn": 282,
+      "n_true_negative": 18,
+      "n_true_nonnegative": 282
+    },
+    "negative_scoped_aspect": {
+      "note": "골든이 부정인 문항만 대상 — aspect까지 맞아야 올바른 분자에 잡힘. PR 리뷰 반영: 단일 aspect 출력에서는 fp==fn이 구조적으로 성립해 precision=recall=F1이 항상 같은 값이라 accuracy 하나로 통합함 (multi_output_diagnostic.rate가 0%보다 커지면 이 등식이 깨지므로 그때 재분리)",
+      "accuracy": 0.9474,
+      "tp": 18,
+      "fp": 1,
+      "fn": 0,
+      "n_true_negative": 18,
+      "n_true_negative_warning": "부정 표본이 18건뿐 — 신뢰구간이 넓을 수 있음. --only-negative 권장"
+    },
+    "multi_output_diagnostic": {
+      "note": "예측 측 다중 aspect 출력 건수 — explode 계약 근거 진단(정답 없어 recall 계산 불가)",
+      "rate": 0.0033,
+      "count": 1
+    },
+    "mismatches": [
+      {
+        "inquiry_id": "INQ-019503",
+        "true_aspect": "오배송",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-023703",
+        "true_aspect": "오배송",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-040592",
+        "true_aspect": "사이즈",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-030599",
+        "true_aspect": "사이즈",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-000886",
+        "true_aspect": "오배송",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-008117",
+        "true_aspect": "파손",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "파손",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-049053",
+        "true_aspect": "오배송",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-014507",
+        "true_aspect": "파손",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "파손",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-052075",
+        "true_aspect": "사이즈",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-007118",
+        "true_aspect": "오배송",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-011704",
+        "true_aspect": "파손",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "파손",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-040873",
+        "true_aspect": "파손",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "파손",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-049287",
+        "true_aspect": "파손",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "파손",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-044136",
+        "true_aspect": "오배송",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-009915",
+        "true_aspect": "오배송",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-055004",
+        "true_aspect": "파손",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "파손",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-049080",
+        "true_aspect": "오배송",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-049922",
+        "true_aspect": "사이즈",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-007501",
+        "true_aspect": "오배송",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-005326",
+        "true_aspect": "파손",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "파손",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-006475",
+        "true_aspect": "파손",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "파손",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-019083",
+        "true_aspect": "파손",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "파손",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-039476",
+        "true_aspect": "사이즈",
+        "true_sentiment": -1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1
+          },
+          {
+            "aspect": "기타",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-034238",
+        "true_aspect": "오배송",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-053486",
+        "true_aspect": "오배송",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-031858",
+        "true_aspect": "사이즈",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-010433",
+        "true_aspect": "파손",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "파손",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-007509",
+        "true_aspect": "오배송",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-023649",
+        "true_aspect": "파손",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "파손",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-010285",
+        "true_aspect": "오배송",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-048475",
+        "true_aspect": "오배송",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-050489",
+        "true_aspect": "오배송",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-042366",
+        "true_aspect": "오배송",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "오배송",
+            "sentiment": 0
+          }
+        ]
+      },
+      {
+        "inquiry_id": "INQ-007338",
+        "true_aspect": "사이즈",
+        "true_sentiment": 1,
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0
+          }
+        ]
+      }
+    ],
+    "leak_filter": {
+      "note": "제외 후(leak_excluded_*)는 clean_rows만으로 재집계한 값 — LLM 재호출 없음",
+      "applied": true,
+      "threshold_used": 0.75,
+      "n_excluded_unique_templates": 3,
+      "n_excluded_rows_in_sample": 31,
+      "excluded_pct_of_sample": 0.1033,
+      "excluded_examples": [
+        [
+          "배송 조회가 안 되는데 확인 부탁드려요.",
+          1.0
+        ],
+        [
+          "이 색상 재입고 예정 있나요?",
+          0.8824
+        ],
+        [
+          "실측 사이즈 문의드려요, 표기랑 차이나는 것 같아서요.",
+          0.7931
+        ]
+      ],
+      "leak_excluded_aspect_f1": 0.9981,
+      "leak_excluded_sentiment_accuracy": 0.8773,
+      "leak_excluded_exact_match_rate": 0.8736,
+      "leak_excluded_n_scored": 269
+    },
+    "mismatches_note": "raw_text 는 제거했다 — 이 파일은 커밋되므로 원문을 남기면 few-shot 유출 경로가 된다(mock data 정의서 §672, eval/README §②). inquiry_id 로 data/input/input_cs_inquiries.csv 와 조인하면 로컬에서 그대로 복원된다."
+  }
+}

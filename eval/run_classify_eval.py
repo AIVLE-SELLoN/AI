@@ -545,10 +545,41 @@ def score(
     # 골든 재생성에 안 따라가서 조용히 틀리는 사고가 있었다 — 그 함수의 주석 참고.
     # 안 넘어오면 **추정하지 않고 None**을 낸다. 못 재는 걸 그럴듯한 숫자로 채우면
     # 아무도 안 본다(위 neg_precision_reported 와 같은 원칙).
+    # ⚠️ **반올림 전 값으로 계산한다** (서영님 리뷰 2026-08-10). neg_recall·neg_fpr 은
+    #    보고용으로 4자리 반올림돼 있는데, FPR 이 작을수록 그 반올림이 환산값을 크게
+    #    흔든다 — FPR 0.00004 가 0.0 으로 접히면 환산 precision 이 100%로 튄다.
     p_operational = operational_rate
-    neg_precision_operational = round(
-        (p_operational * neg_recall) / (p_operational * neg_recall + (1 - p_operational) * neg_fpr), 4
-    ) if (neg_fpr is not None and p_operational is not None) else None
+    raw_recall = neg_tp / (neg_tp + neg_fn) if (neg_tp + neg_fn) else 0.0
+    raw_fpr = neg_fp / (neg_fp + neg_tn) if has_nonneg_sample else None
+
+    # ⚠️ **분모가 0이면 None** (서영님 리뷰 2026-08-10). recall 과 FPR 이 둘 다 0이면
+    #    — 모델이 부정을 하나도 안 낸 상태 — 분모가 0이 돼 ZeroDivisionError 로 죽었다.
+    #    이 계산이 JSON 쓰기 **전**에 있어서, 터지면 그 회차 LLM 비용이 통째로 날아간다.
+    #    가드가 `is not None` 뿐이라 값이 0 인 건 안 걸렸다.
+    neg_precision_operational = None
+    if raw_fpr is not None and p_operational is not None:
+        denom = p_operational * raw_recall + (1 - p_operational) * raw_fpr
+        if denom > 0:
+            neg_precision_operational = round(p_operational * raw_recall / denom, 4)
+
+    # fp==0 이면 환산값이 무조건 100%로 나온다. 그건 "오탐이 없다"가 아니라 **이 표본에서
+    # 오탐을 못 봤다**는 뜻이고, 환산식은 FPR 0 근처에서 극도로 민감하다. 표본이 30건이든
+    # 3,000건이든 똑같이 100%로 찍히면 읽는 사람이 구분할 방법이 없다.
+    # 그래서 rule of three(0 관측 시 95% 상한 ≈ 3/n)로 FPR 상한을 잡아 **precision 하한**을
+    # 같이 낸다. 100% 를 지우지 않고 "표본이 이만큼일 때 최소 이 값"을 옆에 붙이는 방식이다.
+    neg_precision_operational_lower = None
+    if (
+        neg_precision_operational is not None
+        and neg_fp == 0
+        and (neg_fp + neg_tn) > 0
+        and raw_recall > 0
+    ):
+        fpr_upper = 3 / (neg_fp + neg_tn)
+        neg_precision_operational_lower = round(
+            (p_operational * raw_recall)
+            / (p_operational * raw_recall + (1 - p_operational) * fpr_upper),
+            4,
+        )
 
     neg_asp_precision, _, _ = _prf1(neg_aspect_tp, neg_aspect_fp, neg_aspect_fn)
     n_true_negative = neg_tp + neg_fn  # 골든상 부정인 문항 수(표본 크기 확인용)
@@ -583,12 +614,16 @@ def score(
             # 어느 p로 환산했는지 JSON에 남긴다 — 골든이 바뀌면 p도 바뀌므로, 이게 없으면
             # 옛 결과 JSON과 새 결과 JSON을 나란히 놓고 비교할 수 없다.
             "precision_operational_p": round(p_operational, 4) if p_operational is not None else None,
+            "precision_operational_lower": neg_precision_operational_lower,
             "precision_operational_note": (
                 "⚠️ 환산값입니다 — 직접 측정한 게 아니라, 균형표본(50:50)의 recall·FPR을 "
                 f"베이즈 정리로 실제 운영 부정비율(p={p_operational})에 맞춰 재계산한 것. "
                 "p는 골든 전량에서 실측한 값이라 골든이 바뀌면 같이 움직인다. "
                 "위 'precision'(표본기준)과 절대 혼동하지 말 것 — FPR이 0%에 가까울 땐 둘이 "
-                "비슷해 보이지만, FPR이 조금만 올라도 크게 벌어짐(예: FPR5%→표본95% vs 운영60%)."
+                "비슷해 보이지만, FPR이 조금만 올라도 크게 벌어짐(예: FPR5%→표본95% vs 운영60%). "
+                "fp==0이면 환산값이 무조건 100%로 나오는데 그건 '오탐이 없다'가 아니라 "
+                "'이 표본에서 못 봤다'는 뜻이라, precision_operational_lower(rule of three, "
+                "FPR 95% 상한 3/n 기준 하한)를 같이 본다. null이면 fp>0이라 하한이 불필요한 것."
             ),
             "tp": neg_tp, "fp": neg_fp, "fn": neg_fn, "tn": neg_tn,
             "n_true_negative": n_true_negative, "n_true_nonnegative": n_true_nonnegative,
@@ -687,7 +722,10 @@ def report(result: dict) -> None:
     print(f"    🆕 FPR(오탐률) = {fpr_str}  — eval/README.md가 경고한 '부정 강화하면 FPR 상승' 여부를 실제로 보는 값")
     p_op = nd.get("precision_operational_p")
     p_label = f"p={p_op:.1%}" if p_op is not None else "p 미지정"
-    print(f"    🆕 P(운영환산, {p_label}) = {p_op_str}  — ⚠️ 위 P(표본기준)와 다른 값, 실제 트래픽에 붙였을 때 기대되는 precision")
+    lower = nd.get("precision_operational_lower")
+    # fp==0 이면 점추정이 무조건 100% 라, 하한을 같이 안 찍으면 표본 크기가 안 보인다.
+    lower_str = f"  (fp=0 — 표본 n={nd['n_true_nonnegative']} 기준 하한 {lower:.1%})" if lower is not None else ""
+    print(f"    🆕 P(운영환산, {p_label}) = {p_op_str}{lower_str}  — ⚠️ 위 P(표본기준)와 다른 값, 실제 트래픽에 붙였을 때 기대되는 precision")
     print(f"    tp={nd['tp']} fp={nd['fp']} fn={nd['fn']} tn={nd['tn']}  (골든 부정 n={nd['n_true_negative']}, 비부정 n={nd['n_true_nonnegative']})")
     print(f"★★★ [대표지표] ② 부정 한정 aspect 정확도(탐지 분자 위치 결정)  accuracy={na['accuracy']:.1%}  (tp={na['tp']} fp={na['fp']} fn={na['fn']})")
     print(f"    골든 부정 표본 n={na['n_true_negative']}" + (f"  ⚠️ {na['n_true_negative_warning']}" if na["n_true_negative_warning"] else ""))

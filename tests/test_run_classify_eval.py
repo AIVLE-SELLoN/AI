@@ -11,6 +11,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 # eval/은 app/과 달리 패키지가 아니라 스크립트 폴더라 경로를 직접 추가해야 임포트된다.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -114,6 +116,56 @@ class TestNegativeDetectionFPR:
         assert nd["fpr"] is not None, "FPR은 계산돼야 한다 — None인 건 p 쪽 사유여야 함"
         assert nd["precision_operational"] is None
         assert nd["precision_operational_p"] is None
+
+    def test_no_zero_division_when_model_predicts_no_negative(self):
+        """모델이 부정을 하나도 안 내면 recall·FPR 이 둘 다 0 → 분모 0 (서영님 리뷰 2026-08-10).
+
+        전엔 여기서 ZeroDivisionError 로 죽었다. 이 계산이 결과 JSON 쓰기 **전**이라,
+        터지면 그 회차 LLM 비용이 통째로 날아간다. 값이 아니라 None 을 낸다.
+        """
+        rows = [_row(f"N{i}", "색상", -1) for i in range(3)] + [_row(f"P{i}", "색상", 0) for i in range(3)]
+        predictions = {r["inquiry_id"]: _pred("색상", 0) for r in rows}  # 전부 중립 예측
+
+        nd = score(rows, predictions, operational_rate=0.248)["negative_detection"]
+        assert nd["recall"] == 0.0 and nd["fpr"] == 0.0, "분모가 0이 되는 조건 자체를 먼저 확인"
+        assert nd["precision_operational"] is None, "0/0 을 숫자로 내면 안 된다"
+        assert nd["precision_operational_lower"] is None
+
+    def test_operational_lower_bound_when_no_false_positive(self):
+        """fp==0 이면 환산값이 무조건 100% — rule of three 하한을 같이 낸다.
+
+        100% 는 '오탐이 없다'가 아니라 '이 표본에서 못 봤다'는 뜻이고, 환산식은 FPR 0
+        근처에서 극도로 민감하다. 표본 크기가 안 보이면 30건이든 3,000건이든 똑같이
+        100% 로 찍힌다. (서영님 리뷰 2026-08-10)
+        """
+        rows = [_row(f"N{i}", "색상", -1) for i in range(10)] + [_row(f"P{i}", "색상", 0) for i in range(30)]
+        predictions = {r["inquiry_id"]: _pred("색상", r["true_sentiment"]) for r in rows}
+
+        nd = score(rows, predictions, operational_rate=0.248)["negative_detection"]
+        assert nd["fp"] == 0 and nd["precision_operational"] == 1.0
+        # FPR 상한 3/30 = 0.1 → 0.248/(0.248 + 0.752*0.1) = 0.767
+        assert nd["precision_operational_lower"] == pytest.approx(0.767, abs=0.002)
+        assert nd["precision_operational_lower"] < nd["precision_operational"], (
+            "하한이 점추정보다 낮아야 의미가 있다"
+        )
+
+    def test_operational_uses_unrounded_recall_and_fpr(self):
+        """반올림 전 값으로 환산한다 (서영님 리뷰 2026-08-10).
+
+        neg_recall·neg_fpr 은 보고용 4자리 반올림이다. FPR 이 작을수록 그 반올림이
+        환산값을 크게 흔든다 — 여기선 fp=1/tn=9999 라 FPR 이 1e-4 다.
+        """
+        rows = [_row(f"N{i}", "색상", -1) for i in range(100)] + [
+            _row(f"P{i}", "색상", 0) for i in range(10_000)
+        ]
+        predictions = {r["inquiry_id"]: _pred("색상", r["true_sentiment"]) for r in rows}
+        predictions["P0"] = _pred("색상", -1)  # 오탐 1건 → FPR = 1/10000 = 0.0001
+
+        nd = score(rows, predictions, operational_rate=0.248)["negative_detection"]
+        p, r, f = 0.248, 1.0, 1 / 10_000
+        expected = round(p * r / (p * r + (1 - p) * f), 4)
+        assert nd["precision_operational"] == expected
+        assert nd["fp"] == 1, "표본 구성이 의도대로인지 먼저 확인"
 
     def test_operational_rate_counts_population_not_sample(self):
         """p는 골든 전량에서 센다 — 층화 표본의 비율이 아니다.
@@ -258,13 +310,15 @@ class TestFewShotLeakFilter:
           22-3  포장 결함 관측 + 가정형 → -1 (22-2와 대비)
           24-1  담백한 오배송 서술 → -1
 
-        46 → 48: v5 4차 수정(2026-08-10, 실험② 오차분해)에서 대비 예시 2개 추가.
+        46 → 49: v5 4차 수정(2026-08-10, 실험② 오차분해)에서 대비 예시 3개 추가.
           27-1  게시 정보 누락 지적(소재) → -1 (27 의 "일반 질문은 0" 과 대비)
-          29-1  상세페이지 언급하되 정확성은 안 따짐 → 0 (29 를 -1 로 정정하며 대비)
-        ⚠️ 예시 29 는 개수가 아니라 **라벨**이 0 → -1 로 바뀐 건이라 이 카운트엔 안 잡힌다.
+          29-1  상세페이지 언급하되 아무 주장 없음 → 0
+          29-2  같은 사진 얘기라도 "다르다"고 주장하면 → -1 (29 와 대비)
+        ⚠️ 예시 29 는 0 유지다 — 초안에서 -1 로 뒤집었다가 실험③ FPR 이 0.0 → 1.8% 로
+           올라 되돌렸다. 갈림길은 "비교했는가"가 아니라 "다르다고 말했는가"였다.
         """
         texts = parse_few_shot_examples("classify_aspect_v5")
-        assert len(texts) == 48
+        assert len(texts) == 49
         assert "배송 조회가 안 되는데 확인 부탁드려요." in texts
 
     def test_similarity_reproduces_notion_reported_numbers(self):
