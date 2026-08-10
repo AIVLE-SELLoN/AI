@@ -111,6 +111,7 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
 | `verdict` | enum | 정상 \| 편중형 \| 전역형 \| 잠정 전역형 \| 구분불가 |
 | `significant_channels` | string[] | 유의 판정된 채널 |
 | `excluded_channels` | string[] | 표본 부족(<10)으로 판정 제외된 채널 |
+| `channel_rates` | object[] | `[{channel, rate, excluded}]`. 탐지 당시 `stats.source`·`main_aspect`·현재 7일 기준 채널별 부정률(0~1). 관측 표본이 없으면 rate는 null |
 | `main_aspect` | enum | 색상 \| 사이즈 \| 소재 \| 파손 \| 오배송 \| 기타 |
 | `sub_aspects` | object[] | `[{aspect, delta, recommended_action}]`. 없으면 `[]` |
 | `stats` | object | `{source, cur_rate, past_rate, delta, p_value, bh_significant, cur_total}` |
@@ -173,6 +174,11 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
     "verdict": "편중형",
     "significant_channels": ["COUPANG"],
     "excluded_channels": [],
+    "channel_rates": [
+      { "channel": "COUPANG", "rate": 0.13, "excluded": false },
+      { "channel": "NAVER", "rate": 0.05, "excluded": false },
+      { "channel": "ZIGZAG", "rate": null, "excluded": true }
+    ],
     "main_aspect": "색상",
     "sub_aspects": [
       { "aspect": "파손", "delta": 0.07, "recommended_action": "물류 점검 권장" }

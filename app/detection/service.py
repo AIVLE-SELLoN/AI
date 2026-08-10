@@ -56,6 +56,7 @@ from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
 from app.core.schemas import (
     Aspect,
     Channel,
+    ChannelRate,
     ClassifiedItem,
     DetectionAlert,
     DetectionStats,
@@ -82,6 +83,9 @@ ALL_ASPECTS: list[str] = [a.value for a in Aspect]
 
 # 알림을 내지 않는 판정 — [3] 이 '정상'이면 애초에 발행 대상이 아니다.
 _NO_ALERT_VERDICTS = frozenset({Verdict.NORMAL})
+
+_SNAPSHOT_CHANNELS = (Channel.COUPANG, Channel.NAVER, Channel.ZIGZAG)
+"""payload 채널별 비율의 고정 순서. 집계용 가상 채널 ALL 은 포함하지 않는다."""
 
 
 # ── 요청/응답 모델 ───────────────────────────────────────────────
@@ -278,6 +282,13 @@ def _build_candidates(
             # 이 alert 에도 "표본 부족"으로 병기돼 셀러에게 거짓 정보가 나간다.
             # (past_total==0 폴백은 aspect 슬롯별로 걸려서 실제로 aspect 마다 다를 수 있다.)
             "excluded_channels": main_result["held"],
+            "channel_rates": _build_channel_rates(
+                counts,
+                product,
+                main,
+                source,
+                excluded_channels=main_result["held"],
+            ),
             "stats": _build_stats(tests, counts, product, main, stats_channel, source),
             "sub_aspects": [
                 SubAspectAction(
@@ -296,6 +307,40 @@ def _build_candidates(
             "fired": True,
         }
     return candidates
+
+
+def _build_channel_rates(
+    counts: dict,
+    product: str,
+    aspect: str,
+    source: str,
+    *,
+    excluded_channels: list[str],
+) -> list[ChannelRate]:
+    """이미 집계한 현재 윈도우 counts를 채널별 비율 스냅샷으로 보존한다.
+
+    알림의 ``stats.source``와 같은 source, ``main_aspect``와 같은 aspect 기준이다.
+    관측 문서가 전혀 없는 채널은 비율을 만들 수 없으므로 ``rate=None``이며 판정에서도
+    제외된 것으로 표시한다. rate는 퍼센트가 아닌 기존 ``stats.cur_rate``와 같은 0~1 값이다.
+    """
+    excluded = set(excluded_channels)
+    snapshots: list[ChannelRate] = []
+
+    for channel in _SNAPSHOT_CHANNELS:
+        channel_counts = counts.get((product, aspect, channel.value, source))
+        if channel_counts is None:
+            rate = None
+            is_excluded = True
+        else:
+            cur_neg, cur_total, _past_neg, _past_total = channel_counts
+            rate = cur_neg / cur_total if cur_total else None
+            is_excluded = channel.value in excluded or cur_total == 0
+
+        snapshots.append(
+            ChannelRate(channel=channel, rate=rate, excluded=is_excluded)
+        )
+
+    return snapshots
 
 
 def _representative_delta(

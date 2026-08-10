@@ -128,6 +128,14 @@ class DetectionStats(BaseModel):
     cur_total: int
 
 
+class ChannelRate(BaseModel):
+    """탐지 시점의 채널별 현재 윈도우 부정률 스냅샷."""
+
+    channel: Channel
+    rate: float | None
+    excluded: bool
+
+
 class SourceSignals(BaseModel):
     cs: bool | None
     review: bool | None
@@ -159,6 +167,7 @@ class DetectionAlert(BaseModel):
     verdict: Verdict
     significant_channels: list[Channel] = Field(default_factory=list)
     excluded_channels: list[Channel] = Field(default_factory=list)
+    channel_rates: list[ChannelRate] = Field(default_factory=list)
 
     main_aspect: Aspect
     sub_aspects: list[SubAspectAction] = Field(default_factory=list)

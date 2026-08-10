@@ -46,6 +46,11 @@ def alert() -> DetectionAlert:
         window_end=date(2026, 8, 28),
         verdict=Verdict.BIASED,
         significant_channels=[Channel.COUPANG],
+        channel_rates=[
+            {"channel": "COUPANG", "rate": 0.13, "excluded": False},
+            {"channel": "NAVER", "rate": 0.05, "excluded": False},
+            {"channel": "ZIGZAG", "rate": None, "excluded": True},
+        ],
         main_aspect=Aspect.COLOR,
         stats=DetectionStats(
             source=Source.CS,
@@ -180,6 +185,11 @@ def test_anomaly_payload_carries_alert_fields_and_recommendation(alert, recommen
     assert payload["alert_id"] == "ALT-20260828-P001-COUPANG"
     assert payload["channel"] == "COUPANG"
     assert payload["main_aspect"] == "색상"  # enum 은 한글 값으로 실린다(§9)
+    assert payload["channel_rates"] == [
+        {"channel": "COUPANG", "rate": 0.13, "excluded": False},
+        {"channel": "NAVER", "rate": 0.05, "excluded": False},
+        {"channel": "ZIGZAG", "rate": None, "excluded": True},
+    ]
     assert payload["recommendation"]["recommendation_id"] == "REC-a1b2c3d4e5f6"
     assert payload["recommendation"]["hitl_status"] == "대기"  # 발행 시점엔 항상 대기
 
