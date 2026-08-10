@@ -606,13 +606,29 @@ def predict_with_counts(
 # ── 진단 (LLM 0회 — 캐시만 읽는다) ───────────────────────────────
 
 
+def _golden_labels(negatives_only: bool = True) -> dict[str, tuple[str, str]]:
+    """{문서 id: (true_aspect, true_sentiment)} — **CS·리뷰 둘 다.**
+
+    ⚠️ 리뷰가 빠져 있었다(2026-08-09). 오차 분해가 CS 만 돌아서, 리뷰 config 슬롯
+       35건이 분해에 안 들어갔다. 역방향 오판이 CS 의 50배인 곳이 정확히 거기다.
+       (현진님 리뷰 §3)
+    """
+    out: dict[str, tuple[str, str]] = {}
+    for spec in SOURCE_SPEC.values():
+        for r in read(spec["golden"]):
+            rid = r.get(spec["id_col"])
+            aspect, sent = r.get("true_aspect"), r.get("true_sentiment")
+            if not rid or not aspect:
+                continue
+            if negatives_only and sent != "-1":
+                continue
+            out[rid] = (aspect, sent)
+    return out
+
+
 def _golden_negatives() -> dict[str, tuple[str, str]]:
-    """{inquiry_id: (true_aspect, true_sentiment)} — 부정으로 라벨된 CS 문의만."""
-    return {
-        r["inquiry_id"]: (r["true_aspect"], r["true_sentiment"])
-        for r in read(GOLDEN_CS_LABELS)
-        if r.get("true_aspect") and r.get("true_sentiment") == "-1"
-    }
+    """부정 라벨만. 하위호환 별칭."""
+    return _golden_labels(negatives_only=True)
 
 
 def config_slots(config_rows: list[dict]) -> set:
@@ -751,11 +767,17 @@ def diagnose(documents, config_rows, products, golden, tag, mode, runs,
     print(f"{'=' * 72}")
 
     if sources != "all":
+        # ⚠️ config_rows 를 거르면 안 된다. build_combinations 는 격자를 항상 두 source
+        #    로 도는데, config 에서 빠진 슬롯은 BASELINE_RATE x BG_VOLUME 합성값이 되고
+        #    cur rate == past rate 라 **구조적으로 100% 미탐**이 된다. 실제로 그렇게 짰다가
+        #    SC-035/review(TRUE, 14/70)가 통째로 미탐 처리돼 4.0%p 가 그 한 건이었다.
+        #    (현진님 리뷰 §1, 2026-08-09. m 은 1,464 로 불변이고 바뀌는 건 BH 의 기각 수 k 다)
+        #    measured 키만 걸러야 그 슬롯이 config(oracle) 값으로 떨어져,
+        #    de6600c 이전(=리뷰 oracle) 동작을 정확히 재현한다.
         n0 = len(documents)
         documents = [d for d in documents if d["source"] == sources]
-        config_rows = [r for r in config_rows if r["source"] == sources]
         print(f"\n⚠️ 채점 범위 {sources} 로 좁힘 — 문서 {n0:,} → {len(documents):,}"
-              " (캐시는 전체 집합 것을 그대로 쓴다)")
+              f"\n   (다른 source 슬롯은 config oracle 값으로 떨어진다. 캐시는 전체 집합 것)")
 
     slots = config_slots(config_rows)
     both: dict[str, Counter] = {"전체": Counter(), "config 슬롯 내": Counter()}
@@ -791,7 +813,10 @@ def diagnose(documents, config_rows, products, golden, tag, mode, runs,
         rates = []
         for source in (cache, restored):
             rows = build_rows(documents, _to_items(documents, source))
-            pred = predict_with_counts(config_rows, products, measure(rows, config_rows))
+            m = measure(rows, config_rows)
+            if sources != "all":
+                m = {k: v for k, v in m.items() if k[3] == sources}
+            pred = predict_with_counts(config_rows, products, m)
             rates.append(_rate(score(golden, pred)["recall"]))
         print(f"    {run:<6d} {rates[0]:>8.1%} {rates[1]:>10.1%}  ({n:,}건)")
 
@@ -811,30 +836,30 @@ def reverse_flips(documents: list[dict], caches: list) -> None:
        깨끗한 채 분자만 움직인다. 즉 ②의 FPR 0% 는 설계의 산물이지 분류 오차의
        성질이 아니다. 운영은 과거 윈도우도 LLM 분류라 양쪽이 같이 움직인다.
     """
-    gold_all = {}
-    for spec in SOURCE_SPEC.values():
-        for r in read(spec["golden"]):
-            rid = r.get("inquiry_id") or r.get("review_id")
-            gold_all[rid] = (r["true_aspect"], r["true_sentiment"])
+    gold_all = _golden_labels(negatives_only=False)
 
     print("\n■ 역방향 — 골든 비부정(0/1)이 부정(-1)으로 뒤집힌 건수")
-    print("    (오탐을 만들 수 있는 유일한 방향. ②의 FPR 0% 는 설계상 이걸 못 잡는다)")
+    print("    오탐을 만들 수 있는 유일한 방향이다. ②의 FPR 0% 는 현재 윈도우만 실제")
+    print("    분류로 갈고 과거·배경은 oracle 인 설계의 산물이라 이걸 못 잡는다.")
     for run, cache in caches:
-        flips = Counter()
-        base = 0
+        flips: Counter = Counter()
+        base: Counter = Counter()
         for doc in documents:
             label = gold_all.get(doc["id"])
             if label is None or label[1] == "-1":
                 continue
-            base += 1
+            base[doc["source"]] += 1
             if any(p["sentiment"] == -1 for p in cache.get(doc["id"], [])):
                 flips[doc["source"]] += 1
-        total = sum(flips.values())
-        detail = " · ".join(f"{s} {flips[s]:,}" for s in SOURCE_SPEC if flips[s])
-        print(
-            f"    회차 {run}: {total:,}/{base:,}건 ({total / base:.2%})"
-            + (f"  [{detail}]" if detail else "")
-        )
+        parts = [
+            f"{src} {flips[src]:,}/{base[src]:,} ({flips[src] / base[src]:.2%})"
+            for src in SOURCE_SPEC
+            if base[src]
+        ]
+        print(f"    회차 {run}: " + "  ·  ".join(parts))
+    print("    ⚠️ 리뷰 분모는 골든 비부정만 센 것이다(부정 79건 제외). 리뷰 오판률이")
+    print("       CS 의 수십 배면, 지금 FPR 0/8 은 안전성이 아니라 표본 크기(n=70)의")
+    print("       결과일 수 있다 — SC-034/review 가 그 정상 8슬롯 중 하나다.")
 
 
 def missed_slot_table(documents, config_rows, products, golden, caches) -> None:
@@ -850,12 +875,24 @@ def missed_slot_table(documents, config_rows, products, golden, caches) -> None:
     oracle_m = measure(oracle_rows, config_rows)
     real_m = measure(real_rows, config_rows)
 
+    for want, title in (("TRUE", "TRUE 슬롯"), ("FALSE", "정상(FALSE) 슬롯")):
+        _slot_table(config_rows, oracle_m, real_m, want, title, _run)
+
+
+def _slot_table(config_rows, oracle_m, real_m, want, title, run) -> None:
+    """oracle 대비 실측 cur_neg. TRUE 는 미탐 원인, FALSE 는 오탐 여지를 본다.
+
+    FALSE 쪽을 같이 찍는 이유: ②의 FPR 0% 가 "분류 오차가 오탐을 안 만든다" 인지
+    "정상 슬롯의 n 이 작아 아직 안 터졌다" 인지 가른다. 역방향 오판률이 높은 소스가
+    이 표에 있으면 후자 쪽이다. (현진님 리뷰 §2)
+    """
     truth = {
         (r["golden_group_id"], r["aspect"], r["channel"], r["source"])
         for r in config_rows
-        if r.get("intended_answer", "").strip().upper() == "TRUE"
+        if r.get("intended_answer", "").strip().upper() == want
     }
-    print(f"\n■ TRUE 슬롯의 현재 윈도우 부정 수 — oracle vs 실측 (회차 {_run})")
+    print(f"\n■ {title}의 현재 윈도우 부정 수 — oracle vs 실측 (회차 {run})"
+)
     print(f"    {'슬롯':38s} {'oracle':>12s} {'실측':>12s} {'차':>6s}")
     shrunk = 0
     for key in sorted(truth):
@@ -869,7 +906,8 @@ def missed_slot_table(documents, config_rows, products, golden, caches) -> None:
             f"    {name:38s} {o[0]:>5d}/{o[1]:<6d} {r[0]:>5d}/{r[1]:<6d}"
             f" {r[0] - o[0]:>+6d}"
         )
-    print(f"    → 부정 수가 깎인 TRUE 슬롯 {shrunk}/{len(truth)}개")
+    verb = "깎인" if want == "TRUE" else "달라진"
+    print(f"    → 부정 수가 {verb} 슬롯 {shrunk}/{len(truth)}개")
 
 
 # ── 리포트 ───────────────────────────────────────────────────────
