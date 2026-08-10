@@ -893,8 +893,16 @@ def intended_slots(config_rows: list[dict], want: str) -> set:
 def extra_aspect(documents, config_rows, caches, slots) -> None:
     """골든 **부정** 문서에 없던 aspect 를 부정으로 추가한 건수.
 
-    ⚠️ 세 번째 경로다. classify_errors 는 골든 aspect 만 보고, reverse_flips 는 골든
-       비부정만 본다 — 둘 다 이걸 안 센다. 그런데 **채점 격자 안에서 부정 수를 실제로
+    ⚠️ 세 번째 경로는 **'추가' 쪽만**이다. 골든 aspect 를 유지한 채 다른 aspect 를
+       덧붙인 건 classify_errors 가 "정답 (부정 유지)" 로, reverse_flips 는 골든 부정
+       문서라 제외 — 둘 다 안 센다. 반면 골든 aspect 를 놓치고 다른 데로 간 '대체' 는
+       classify_errors 가 이미 세고 있다. 두 개를 안 가르면 읽는 사람이 그 버킷과
+       더해서 볼 위험이 있다. (현진님 리뷰 7차)
+
+       ⚠️ '대체' 는 "다른 aspect 로" 와 **같은 수가 아니라 부분집합**이다. 그쪽은
+          골든 aspect 를 안 낸 문서 전부(회차당 약 20건)인데, 여기 대체는 그중
+          **다른 aspect 를 부정으로 낸 것**만 센다(실측 14건). 나머지는 다른 aspect 를
+          중립으로만 내서 분자를 안 건드린다. 그런데 **채점 격자 안에서 부정 수를 실제로
        늘린 유일한 기전이 이거였다.** 2026-08-09 실측에서 역방향은 격자 안 0건인데
        FALSE 슬롯 P024/색상/COUPANG 이 12 → 13 이었고, 원인이 INQ-033753 이다 —
        골든은 오배송:-1 인데 모델이 색상:-1 을 같이 냈다.
@@ -909,12 +917,17 @@ def extra_aspect(documents, config_rows, caches, slots) -> None:
     for run, cache in caches:
         docs = 0
         bump: Counter = Counter()  # 슬롯 → 이 경로로 늘어난 부정 수
+        added = replaced = 0
         for doc in documents:
             g = gold.get(doc["id"])
             if g is None:
                 continue
+            preds = cache.get(doc["id"], [])
+            keeps_gold = any(
+                p["sentiment"] == -1 and p["aspect"] == g[0] for p in preds
+            )
             hit = False
-            for pred in cache.get(doc["id"], []):
+            for pred in preds:
                 if pred["sentiment"] != -1 or pred["aspect"] == g[0]:
                     continue
                 hit = True
@@ -922,12 +935,17 @@ def extra_aspect(documents, config_rows, caches, slots) -> None:
                 if key in slots:
                     bump[key] += 1
             docs += hit
+            if hit:
+                added += keeps_gold
+                replaced += not keeps_gold
         n_t = sum(v for k, v in bump.items() if k in true_slots)
         n_f = sum(v for k, v in bump.items() if k in false_slots)
         s_t = sum(1 for k in bump if k in true_slots)
         s_f = sum(1 for k in bump if k in false_slots)
         print(
-            f"    회차 {run}: {docs:,}건 · 격자 안 {sum(bump.values()):,}건/{len(bump)}슬롯"
+            f"    회차 {run}: 추가 {added:,}건(골든 aspect 유지)"
+            f" · 대체 {replaced:,}건('다른 aspect 로' 의 부분집합)"
+            f"\n              격자 안 {sum(bump.values()):,}건/{len(bump)}슬롯"
             f"  (TRUE {n_t}건/{s_t}슬롯 · FALSE {n_f}건/{s_f}슬롯)"
         )
     print("    ⚠️ FALSE 슬롯 수는 아래 표 '증가' 의 **상한**이다 — 같은 슬롯에서 감성")
