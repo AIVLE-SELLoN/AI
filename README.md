@@ -31,7 +31,7 @@ CS 문의 · 리뷰 원문
 | `recommendation` (Agent3) | 지인 | ✅ 구현 — `POST /api/v1/recommendations/generate`, `/hitl` |
 | `reporting` | 용준 | 🚧 서비스 로직은 작성됨, 라우터는 아직 `501` |
 
-- 테스트 **163개 / 22파일** (`pytest`)
+- 테스트 **521개 / 38파일** (`pytest`)
 - ⚠️ **CI 워크플로는 아직 없습니다.** `tests/` 는 현재 로컬에서 수동 실행합니다.
 
 ## 정량 실험 하이라이트
@@ -122,7 +122,7 @@ app/                   # 실제 서비스 코드 (운영 컨테이너에 포함�
 ├── recommendation/    # 지인 (Agent3) — 개선안 생성 (pipeline.py 가 본체)
 └── reporting/         # 용준 — 월간 리포트 + CS 답변 초안
 
-tests/                 # pytest 163개 — 비용 0
+tests/                 # pytest — 비용 0
 └── fixtures/          # 개발용 소규모 계약 예시 — golden 아님, 정답 없음
 
 eval/                  # 정량 실험 ①~⑥ — 사람이 수동 실행, LLM 과금, CI 금지
@@ -176,7 +176,6 @@ data/
   백엔드 upsert vs 결정론적 ID 파생 중 미확정.
 - **CS 원문(`raw_text`) 조회 경로** — 인용(`Citation`)을 채우려면 원문이 필요한데,
   목서버 온디맨드 조회로 방침만 정하고 엔드포인트는 대기 중입니다.
-- **탐지 결과 Kafka 토픽 이름** — 즉시 처리 방식은 확정, 토픽명만 남았습니다.
 - **CI 워크플로 부재** — `tests/` 가 자동으로 돌지 않습니다.
 
 ## 문서

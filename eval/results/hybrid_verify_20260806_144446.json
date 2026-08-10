@@ -67,7 +67,6 @@
       "mismatches": [
         {
           "inquiry_id": "RELABEL-0001",
-          "raw_text": "배송도 빠르고 옷 입어보구 집사람이 좋아하네요~~가벼워서 입구다니기 좋구 그라데이션이라 색도 예쁘네요~~감사합니다~~^^",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -79,7 +78,6 @@
         },
         {
           "inquiry_id": "RELABEL-0002",
-          "raw_text": "색상이 이쁘고 배송도 빨라서 좋아요. 신축성도 좋아서 운동할때 입기 좋을것 같아요^^",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -95,7 +93,6 @@
         },
         {
           "inquiry_id": "RELABEL-0003",
-          "raw_text": "신축성 좋고 입기 편하네요 다만 사이즈 좀 넉넉해 보일수는 있어요 한치수작게 입어도 충분할듯 해요",
           "true_aspect": "사이즈",
           "true_sentiment": -1,
           "predicted": [
@@ -111,7 +108,6 @@
         },
         {
           "inquiry_id": "RELABEL-0004",
-          "raw_text": "오래 걸려 받았어요  162, 62 체형 길이도 허리도 잘 맛고 디자인도 예뻐요  주름이 펴지는 일은 없기를 바라요",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -123,7 +119,6 @@
         },
         {
           "inquiry_id": "RELABEL-0009",
-          "raw_text": "큰 기대 없이 주문했는데 전부 다 색상도 예쁘고 도톰해서 겨울에도 입을 수 있겠습니다. 배둘레햄인 분들도 티안나고 편하게 입을 수 있어요^^",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -139,7 +134,6 @@
         },
         {
           "inquiry_id": "RELABEL-0010",
-          "raw_text": "색상및 촉감이아주좋아요.두벌구매했어요",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -151,7 +145,6 @@
         },
         {
           "inquiry_id": "RELABEL-0012",
-          "raw_text": "집에서 입기 가볍워서 그냥 입기로 했는대,가격대비 좀 싸구려느낌 입니다. 색상도 화면과는 좀 다르게 허접힌? 그런느낌입니다.  외출복으로는 적당하지 안은듯 합니다.",
           "true_aspect": "색상",
           "true_sentiment": -1,
           "predicted": [
@@ -167,7 +160,6 @@
         },
         {
           "inquiry_id": "RELABEL-0013",
-          "raw_text": "배송도빠르고 색감도좋네요 피부닿는촉감이좋아요",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -183,7 +175,6 @@
         },
         {
           "inquiry_id": "RELABEL-0014",
-          "raw_text": "색 별로 맞춰입기 좋아요 감촉좋고 비침없으면서 시원함",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -199,7 +190,6 @@
         },
         {
           "inquiry_id": "RELABEL-0017",
-          "raw_text": "가격도 너무 착하고 핏도 예뻐요 올겨울 따뜻하게 지낼것같내요 많이 파세요~",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -211,7 +201,6 @@
         },
         {
           "inquiry_id": "RELABEL-0018",
-          "raw_text": "넘가볍고 핏도 좋아요 원피스 한벌값으로 네벌을  살수있다니 넘좋네요",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -223,7 +212,6 @@
         },
         {
           "inquiry_id": "RELABEL-0019",
-          "raw_text": "바지 봉제가 이상하게 된건지 핏이 정말 어정쩡하고 밑단처리가 실밥도 풀려있어요 입으면 와이존부분이 좁아서 이상해요;; 잘 선택하세요",
           "true_aspect": "사이즈",
           "true_sentiment": -1,
           "predicted": [
@@ -239,7 +227,6 @@
         },
         {
           "inquiry_id": "RELABEL-0020",
-          "raw_text": "싸고 좋아요....막입으려고 삿는데 가성비 짱입니다...치수가 약간 큰것 같기도하고....",
           "true_aspect": "사이즈",
           "true_sentiment": -1,
           "predicted": [
@@ -255,7 +242,6 @@
         },
         {
           "inquiry_id": "RELABEL-0021",
-          "raw_text": "셔츠 4장에 이가격  정말 착하네요 배송도  빠르구요 받자마자  입어보구  세탁기 돌렸는데  빨리  건조되구 좋은데요",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -267,7 +253,6 @@
         },
         {
           "inquiry_id": "RELABEL-0024",
-          "raw_text": "착한가격에 옷감도 괜찮은듯 하네요. 편안하게 입을수 있을것 같아요~",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -279,7 +264,6 @@
         },
         {
           "inquiry_id": "RELABEL-0026",
-          "raw_text": "촌스러울까봐 걱정했는데 색상이 화사하니 예쁘네요 얇아서 시원해요",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -295,7 +279,6 @@
         },
         {
           "inquiry_id": "RELABEL-0027",
-          "raw_text": "색상도 이쁘고 너무 길지 않아서 좋아요 잘 입을게요 감사합니다  ^~*",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -311,7 +294,6 @@
         },
         {
           "inquiry_id": "RELABEL-0030",
-          "raw_text": "구김은 있으나  바지는 디자인 예뻐요 ~",
           "true_aspect": "소재",
           "true_sentiment": -1,
           "predicted": [
@@ -323,7 +305,6 @@
         },
         {
           "inquiry_id": "RELABEL-0035",
-          "raw_text": "신축성과 색상까지 좋고 편하게 잘 입을것같아 맘에들어요",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -339,7 +320,6 @@
         },
         {
           "inquiry_id": "RELABEL-0039",
-          "raw_text": "이상품은 믿고사셔도 됩니다 저논 계절마다 사는데요  입으면 핏이 예뻐보이고  항상 입기 편하고 디자인이 고급져보여 추천할수있는   상품이라 적극적으로 추천드립니다",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -351,7 +331,6 @@
         },
         {
           "inquiry_id": "RELABEL-0045",
-          "raw_text": "바지는 입으니 편해요~다만 흰백바지 밑단에 얼룩이 있어서 별하나 빼요~세가지다 신축성도 좋고 편해요~ 색상 디자인 다 맘에 들어요~ 이번 여름에 요걸로 지내면 되겠어요~",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -371,7 +350,6 @@
         },
         {
           "inquiry_id": "RELABEL-0047",
-          "raw_text": "딱.원하던바지네요.일자핏에.허리까지길이도.착용후.맞춤같이.움직임도편하네요.겨울용나오면구매하고싶네요^^",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -383,7 +361,6 @@
         },
         {
           "inquiry_id": "RELABEL-0051",
-          "raw_text": "가격도 저렴하고 핏도 이쁘게 빠져서 아주 만족합니다",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -395,7 +372,6 @@
         },
         {
           "inquiry_id": "RELABEL-0052",
-          "raw_text": "봄ㆍ가을 편하게잘빕을수있겠네요 소제가차가운소제라 쌀쌀한날씨에인어로",
           "true_aspect": "소재",
           "true_sentiment": -1,
           "predicted": [
@@ -407,7 +383,6 @@
         },
         {
           "inquiry_id": "RELABEL-0056",
-          "raw_text": "심플한 디자인, 부드러운 가죽 질감 넘 마음에 들어요. 색상도 예쁩니다 ",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -423,7 +398,6 @@
         },
         {
           "inquiry_id": "RELABEL-0058",
-          "raw_text": "배송빨라서 좋네요 기사님도 친철하시구요~^^ 66사이즈 했는데 키가작아서 그런가 기장이 좀길어요~ 바지은 핏이 괜찮아요~ 예쁜게 잘입을께요~~ 수고하세요~^^",
           "true_aspect": "사이즈",
           "true_sentiment": 0,
           "predicted": [
@@ -435,7 +409,6 @@
         },
         {
           "inquiry_id": "RELABEL-0059",
-          "raw_text": "제가 홈쇼핑에서 산것중에 두번째로 잘 산갓같아요 탄력이 뛰어나고 색상도 이쁘고 특히 체크는 어디에나 어울려요  허리밴드또한 폭이 넓어서 거들효과가 나네요. 강추입니다!.",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -451,7 +424,6 @@
         },
         {
           "inquiry_id": "RELABEL-0061",
-          "raw_text": "한철입을거 생각하고 샀어요..품질이 생각보다 괜찮네요..제일 큰 사이즈 구매했는데 사이즈가 크게 나오진 않았습니다..",
           "true_aspect": "사이즈",
           "true_sentiment": -1,
           "predicted": [
@@ -463,7 +435,6 @@
         },
         {
           "inquiry_id": "RELABEL-0062",
-          "raw_text": "충전재가 보기 안좋을 정도로 빠져 나와요ㅜ 카라,소매 부분에 먼지가 많이 붙네요  !!!!!",
           "true_aspect": "소재",
           "true_sentiment": -1,
           "predicted": [
@@ -475,7 +446,6 @@
         },
         {
           "inquiry_id": "RELABEL-0064",
-          "raw_text": "얇아서 좋고 스판이 짱짱하고 핏도 예쁘고 무더운 올여름 잘입고 다닐것같아요. ",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -487,7 +457,6 @@
         },
         {
           "inquiry_id": "RELABEL-0067",
-          "raw_text": "기대이상이에요 핏도이쁘고 세일해서 이가격에 만족합니다",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -499,7 +468,6 @@
         },
         {
           "inquiry_id": "RELABEL-0069",
-          "raw_text": "밝은 청은 사이즈가 내몸에 딱 맞춘듯 잘 맞습니다 그러다 진청 흰색바지는 한치수 큰것같고 .. 바지 하나 사면서 육만 얼마 쓴 기분입니다 ..",
           "true_aspect": "사이즈",
           "true_sentiment": 0,
           "predicted": [
@@ -511,7 +479,6 @@
         },
         {
           "inquiry_id": "RELABEL-0072",
-          "raw_text": "핏도 너무 이쁘고.  품질이 넘 좋아요",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -523,7 +490,6 @@
         },
         {
           "inquiry_id": "RELABEL-0073",
-          "raw_text": "가격대비  아주 질 좋은  코트네요ㆍ칼라도  맘에들구요ㆍ잘입을께요",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -539,7 +505,6 @@
         },
         {
           "inquiry_id": "RELABEL-0075",
-          "raw_text": "가볍고 핏이 이뻐요 가성비 좋네요 핑크도 구매하려는데 매진이네요 ㅠ 남성용도 구매하려구요 ",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -551,7 +516,6 @@
         },
         {
           "inquiry_id": "RELABEL-0077",
-          "raw_text": "바지 편하고 따뜻하네여.. 색상두 이쁘구여.. 세탁하면 기장이 줄어든다고 어떤분이 하길래 설마? 했는데 세탁하니 기장이 약간은 줄었네여..",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -563,7 +527,6 @@
         },
         {
           "inquiry_id": "RELABEL-0078",
-          "raw_text": "다 맘에 안드네요 칼라가 네이비가 좀 탁하네여 곤색에  녹색 섞인 느낌? 디자인도 안예뻐요",
           "true_aspect": "색상",
           "true_sentiment": -1,
           "predicted": [
@@ -579,7 +542,6 @@
         },
         {
           "inquiry_id": "RELABEL-0081",
-          "raw_text": "디자인 색상 넘 이쁜데 반짝이 가루가  눈에 보이게 떨어져 있네요",
           "true_aspect": "색상",
           "true_sentiment": 0,
           "predicted": [
@@ -591,7 +553,6 @@
         },
         {
           "inquiry_id": "RELABEL-0086",
-          "raw_text": "163에 55키로라 20년째 66을 입고 있는데 너무 작아서 꽉 끼네요 품질도 별루요",
           "true_aspect": "사이즈",
           "true_sentiment": -1,
           "predicted": [
@@ -607,7 +568,6 @@
         },
         {
           "inquiry_id": "RELABEL-0087",
-          "raw_text": "걷기운동할때 입으싴다해서 한치수큰걸로 구입해드렸는데 시원하고 디자인이 좋으시다고 하네요  다른분들ㄷㅎ 구입하신다고 했데요  색도 마음에 들어서 다음에 아빠도 구입해달라고 하셨옹ㅅ ",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -623,7 +583,6 @@
         },
         {
           "inquiry_id": "RELABEL-0088",
-          "raw_text": "구김이 잘가는 재질은 않은데..마니 구겨져서 왔네요..싼맛에 그냥 집에서나 입어야겠어요",
           "true_aspect": "소재",
           "true_sentiment": -1,
           "predicted": [
@@ -635,7 +594,6 @@
         },
         {
           "inquiry_id": "RELABEL-0091",
-          "raw_text": "6벌대비 가격도저렴하고 핏감도 좋습니다",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -647,7 +605,6 @@
         },
         {
           "inquiry_id": "RELABEL-0092",
-          "raw_text": "배송 받자마자 세탁 후 입었는데 매우 가볍고 시원함.  색상도 골고루 여서  다른 옷과  잘 어울림.",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -663,7 +620,6 @@
         },
         {
           "inquiry_id": "RELABEL-0094",
-          "raw_text": "가격대비저렴하지만 좀더양모가 도톰했으면좋겠어요",
           "true_aspect": "소재",
           "true_sentiment": 0,
           "predicted": [
@@ -675,7 +631,6 @@
         },
         {
           "inquiry_id": "RELABEL-0095",
-          "raw_text": "너무 예쁘고 고급스럽우며 우아함을 지닌 색상의 양모 코트를 저렴하게 구매할 수 있어 감사해요.멋지고 기품있게 잘 입을께요. 다가올 겨울을잘 기대해 봅니다.",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -687,7 +642,6 @@
         },
         {
           "inquiry_id": "RELABEL-0096",
-          "raw_text": "옷이 색상이 너무예쁘구 디자인이 고급스럽습니다  너무 좋다고 난리에요 예쁘게잘입을께요",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -703,7 +657,6 @@
         },
         {
           "inquiry_id": "RELABEL-0097",
-          "raw_text": "사이즈도  만족하고 디자인이 멋스러움 까지... 모두 만족해서 지인한테도 추천했습니다. 넘~~ 넘~~~좋아요.",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -719,7 +672,6 @@
         },
         {
           "inquiry_id": "RELABEL-0098",
-          "raw_text": "넘 편하고 색상이 예뻐요 가격도 착하구요 씻어봤는데 옷 트러짐  전혀없구요 감사합니다^^",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -735,7 +687,6 @@
         },
         {
           "inquiry_id": "RELABEL-0100",
-          "raw_text": "색상다양하고 촉감좋고 길이도길어서 따듯하게 나눠입어요",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -751,7 +702,6 @@
         },
         {
           "inquiry_id": "RELABEL-0101",
-          "raw_text": "브라운.블랙 두개 주문. 충전재 약간 빈약. 가볍고  디자인 맘에 들어요",
           "true_aspect": "소재",
           "true_sentiment": 0,
           "predicted": [
@@ -767,7 +717,6 @@
         },
         {
           "inquiry_id": "RELABEL-0102",
-          "raw_text": "시원한 두께감 색상도 모두무 난해서 마음에들어요",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -783,7 +732,6 @@
         },
         {
           "inquiry_id": "RELABEL-0105",
-          "raw_text": "색상은 맘에 들어요. 길이가 좀 짧은듯~",
           "true_aspect": "사이즈",
           "true_sentiment": -1,
           "predicted": [
@@ -799,7 +747,6 @@
         },
         {
           "inquiry_id": "RELABEL-0106",
-          "raw_text": "무거워서 부담가는것도많은데 가벼우면서도 부피도 작은게 좋아요",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -811,7 +758,6 @@
         },
         {
           "inquiry_id": "RELABEL-0109",
-          "raw_text": "일단 이 가격에 리얼 휘메일밍크를 사서 좋구요 색상과 디자인도 다좋아요 다만 컬러때문인지 약간 나이있어 보이긴해요ㅎㅎ",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -823,7 +769,6 @@
         },
         {
           "inquiry_id": "RELABEL-0110",
-          "raw_text": "너무 맘에 들어요. 디자인이 몸매도 가려주고 편하네요 린넨 특유에 칼라도 은은하고 한여름 잘 입을 거 같아요. 아주 맘에 듭니다",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -835,7 +780,6 @@
         },
         {
           "inquiry_id": "RELABEL-0115",
-          "raw_text": "다양하게 색깔별로3가지 의 청바지를받아 좋으네요~ 라이크라로 입어보니 편하네요 잘입겠어요~",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -847,7 +791,6 @@
         },
         {
           "inquiry_id": "RELABEL-0116",
-          "raw_text": "초딩  딸래미 키가커서 청바지  기대없이 샀는데..너무 좋아라 해서 제것도 샀어요^^ 정말 괜찮아요. 스판력좋고 허리 고무처리되있고..색상 잘입어지는 3가지라 더 좋아요~",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -863,7 +806,6 @@
         },
         {
           "inquiry_id": "RELABEL-0120",
-          "raw_text": "핏이 예뻐요. 따뜻하구여^^ 가격두 착하구 디자인두 영햐보여서 좋네요",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -875,7 +817,6 @@
         },
         {
           "inquiry_id": "RELABEL-0125",
-          "raw_text": "그동안 홈쇼핑 구입 청바지를 실패해서 이번에도 실패하면 어쩌나 고민이 많이 됐는데 요번건 대만족 이네요 날씬해보이고 편해서 좋아요",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -887,7 +828,6 @@
         },
         {
           "inquiry_id": "RELABEL-0128",
-          "raw_text": "사이즈도 딱 맞구 가성비 정말 좋네요 가격도 착한데 5종이라니 너무 좋아요",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -903,7 +843,6 @@
         },
         {
           "inquiry_id": "RELABEL-0130",
-          "raw_text": "가격대비 품질 좋고 가볍고 구김이 적어 좋았고 빠른배송 최곱니다",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -915,7 +854,6 @@
         },
         {
           "inquiry_id": "RELABEL-0131",
-          "raw_text": "너무. 맘에들고 편해요  색상이 맘에 들어 구입했는데   디자인이 너무 이쁘다고들하네요  가볍고. 부드러워. 입으니 느낌 좋아요  신축성도. 있어서. 편해요",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -931,7 +869,6 @@
         },
         {
           "inquiry_id": "RELABEL-0132",
-          "raw_text": "너무 너무 좋아요 부드럽고 착용감 재질 다 맘에 듭니다",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -943,7 +880,6 @@
         },
         {
           "inquiry_id": "RELABEL-0133",
-          "raw_text": "몸에 딱맞고 착용감이 좋아요. 갯수가 많아서 선물할수있어 좋아요",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -959,7 +895,6 @@
         },
         {
           "inquiry_id": "RELABEL-0134",
-          "raw_text": "면 니트라 가볍고 보플이 잘 안생길듯 해서 좋고  색상이 좀 진했음 좋겟습니다",
           "true_aspect": "색상",
           "true_sentiment": 0,
           "predicted": [
@@ -971,7 +906,6 @@
         },
         {
           "inquiry_id": "RELABEL-0135",
-          "raw_text": "따뜻하고 촉감이 부드럽고 색상이 예쁘네요.",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -987,7 +921,6 @@
         },
         {
           "inquiry_id": "RELABEL-0136",
-          "raw_text": "친정 엄마 사 드렸는데 색상도 맘에 들고 편하고 디자인 예쁘다고 하십니다 ",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -1003,7 +936,6 @@
         },
         {
           "inquiry_id": "RELABEL-0137",
-          "raw_text": "배송이 다음날 바로 왔어요! 주문하자마자 품절되서 늦게 했으면 못 살뻔 했네용 지블링된 원단도 예쁘고 코디하기 쉬울거 같아요 :)",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -1015,7 +947,6 @@
         },
         {
           "inquiry_id": "RELABEL-0139",
-          "raw_text": "다 좋은데 허리 밴드가 너무 타이트해서 수선해서 입어야 겠어요 그리고 밑단 바는질이 너무 허술해요.",
           "true_aspect": "사이즈",
           "true_sentiment": -1,
           "predicted": [
@@ -1031,7 +962,6 @@
         },
         {
           "inquiry_id": "RELABEL-0140",
-          "raw_text": "색상광디자인은예쁜데소매기장이조금기네요",
           "true_aspect": "사이즈",
           "true_sentiment": -1,
           "predicted": [
@@ -1043,7 +973,6 @@
         },
         {
           "inquiry_id": "RELABEL-0143",
-          "raw_text": "맘에드는상품였는데 가격이 비싸서 못 사고 있다가 세일해서 구입했습니다. 원하던 베이지는 아니었는데 그래도 너무 따뜻하고 가볍고 디자인도 예쁩니다 계속 좋은 상품 소개해 주세요",
           "true_aspect": "색상",
           "true_sentiment": -1,
           "predicted": [
@@ -1059,7 +988,6 @@
         },
         {
           "inquiry_id": "RELABEL-0146",
-          "raw_text": "몸에 닿는부분들이 까슬거리지않아 좋아요 단지 아쉬운점을 찿는다면 색상 배합이  조금 아쉬워요",
           "true_aspect": "색상",
           "true_sentiment": -1,
           "predicted": [
@@ -1075,7 +1003,6 @@
         },
         {
           "inquiry_id": "RELABEL-0148",
-          "raw_text": "나에게 주는 생일선물로 구매했습니다. 가격도 좋은데 적립금도 주고, 작년부터 사고싶었는데 너무 잘산거 같아요~ 가볍고 길이도 딱좋고 몸에 잘맞네요~ 겨울 금방 오겠죠~ㅋㅋ",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -1087,7 +1014,6 @@
         },
         {
           "inquiry_id": "RELABEL-0149",
-          "raw_text": "사진같은 핏 안나오고요, 발목부분이 디자인 싼티나요. 방송과 다른 상품 인가요? 반품할려다 귀찮아 동네복으로 입을려고요.",
           "true_aspect": "사이즈",
           "true_sentiment": -1,
           "predicted": [
@@ -1103,7 +1029,6 @@
         },
         {
           "inquiry_id": "RELABEL-0150",
-          "raw_text": "색상디자인예뻐요 뒷모습은셔링으로 아무옷이나 잘어울립니다 부드러워요 조금무거운느낌 젊은분들이 입으면더욱더 멋있을것같아요~ 가격대비 좋아요!",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -1119,7 +1044,6 @@
         },
         {
           "inquiry_id": "RELABEL-0151",
-          "raw_text": "많이 두껍진 않지만 색이 예쁘고 느낌도 부드럽네요",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -1135,7 +1059,6 @@
         },
         {
           "inquiry_id": "RELABEL-0154",
-          "raw_text": "블랙이 다른 유색 레깅스 두가지에 비해 좀 타이트 한편이나 착용시 편하고 좋은거같아 구매확정합니다",
           "true_aspect": "사이즈",
           "true_sentiment": -1,
           "predicted": [
@@ -1147,7 +1070,6 @@
         },
         {
           "inquiry_id": "RELABEL-0156",
-          "raw_text": "디자인 예쁘고 시원해서 좋은데 다림질이 필요한게  종 아쉽네요",
           "true_aspect": "소재",
           "true_sentiment": -1,
           "predicted": [
@@ -1159,7 +1081,6 @@
         },
         {
           "inquiry_id": "RELABEL-0161",
-          "raw_text": "정사이즈 하나작게사두 될거같아요 나 170이라 그런지  길이감 아주 조타",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -1171,7 +1092,6 @@
         },
         {
           "inquiry_id": "RELABEL-0165",
-          "raw_text": "디자인 안예뻐요 색상도 별로고요 주말빼고 배송이 너무 느리고 입어보니 디자인 너무 촌스럽고 맘에 안들어요. 올겨울 외출복으로는 빵점",
           "true_aspect": "색상",
           "true_sentiment": -1,
           "predicted": [
@@ -1187,7 +1107,6 @@
         },
         {
           "inquiry_id": "RELABEL-0166",
-          "raw_text": "품질은 좋은데 허리가 좀 커서 내려갑니다 25사이즈도 판매해주시면 하는 바램이 있습니다",
           "true_aspect": "사이즈",
           "true_sentiment": -1,
           "predicted": [
@@ -1203,7 +1122,6 @@
         },
         {
           "inquiry_id": "RELABEL-0168",
-          "raw_text": "생각 했던 것 보다 별로네요 그냥  막 입는.. 평소 55입는데 사이즈도 안 맞네요 봄에 입지도 못할 것 같아요",
           "true_aspect": "사이즈",
           "true_sentiment": -1,
           "predicted": [
@@ -1219,7 +1137,6 @@
         },
         {
           "inquiry_id": "RELABEL-0172",
-          "raw_text": "세가지 스커트 모두 활용도가 좋아서 만족합니다 색상도 예쁩니다 다만 파랑색 스터트 너무 구겨져와서 세탁소가서 다림질 해 왔어요",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -1235,7 +1152,6 @@
         },
         {
           "inquiry_id": "RELABEL-0174",
-          "raw_text": "타이트할까 싶어 고민하다가  한사이즈 워로 주문했는데 여유있네요.가성비 좋으나 구성품 무두 구김이 너무 심하네요.세탁을 했는데도 그대로네요...",
           "true_aspect": "소재",
           "true_sentiment": -1,
           "predicted": [
@@ -1251,7 +1167,6 @@
         },
         {
           "inquiry_id": "RELABEL-0175",
-          "raw_text": "입으면 촉감도 매끄럽고 찰랑이는 느낌도 있어 좋아요. 그리고 구김은 생기네요.",
           "true_aspect": "소재",
           "true_sentiment": 0,
           "predicted": [
@@ -1263,7 +1178,6 @@
         },
         {
           "inquiry_id": "RELABEL-0178",
-          "raw_text": "두께도 적당하고 부드럽고 통도 너무 넓지 않아서 좋아요. 가격대비 아주 좋아요.",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -1275,7 +1189,6 @@
         },
         {
           "inquiry_id": "RELABEL-0181",
-          "raw_text": "가격대비 재질도 좋고 색감도 예쁘네요. 편하게 잘 입을 것 같아요.",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -1291,7 +1204,6 @@
         },
         {
           "inquiry_id": "RELABEL-0186",
-          "raw_text": "착용감이 편안하고 가볍고 다림질 할 필요가 없네요",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -1303,7 +1215,6 @@
         },
         {
           "inquiry_id": "RELABEL-0187",
-          "raw_text": "색상 질감 다 맘에듭니다 신축성도 좋아 입고 벗기 편합니다",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -1319,7 +1230,6 @@
         },
         {
           "inquiry_id": "RELABEL-0188",
-          "raw_text": "여유있게 입을려고 한사이즈 업해서 주문. 따뜻해 보이고 색상이 깨끗하게 보여서 좋아요. 밝은색이라 조금 뚱뚱해 보이지만 디자인이 예쁘서 구매확정합니다.  ",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -1339,7 +1249,6 @@
         },
         {
           "inquiry_id": "RELABEL-0190",
-          "raw_text": "옷은편하고사이즈는크게나왔어요구입하실분참고스타일은구식복고풍이라고하기에는역부족싼게비지떡~",
           "true_aspect": "사이즈",
           "true_sentiment": 0,
           "predicted": [
@@ -1355,7 +1264,6 @@
         },
         {
           "inquiry_id": "RELABEL-0191",
-          "raw_text": "생각보다 품질이 좋았어요 핏도 괜찮았고, 가격대비 만족합니다",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -1367,7 +1275,6 @@
         },
         {
           "inquiry_id": "RELABEL-0195",
-          "raw_text": "색상 너무 맘에 들어요 입기에 편리하고 착용감이 좋음",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -1383,7 +1290,6 @@
         },
         {
           "inquiry_id": "RELABEL-0197",
-          "raw_text": "디자인이 무난하게 잘 입겠어요. 디자인이 각각 달라서  좋군요. 그중에 브릭핑크가 원픽^^*",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -1395,7 +1301,6 @@
         },
         {
           "inquiry_id": "RELABEL-0198",
-          "raw_text": "허리라인까지 올라가는 길이라 뱃살도 감춰주고 핏도 예쁨니다 홈쇼핑서 바지 구매후 처음으로  만족한 상품입니다",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -1407,7 +1312,6 @@
         },
         {
           "inquiry_id": "RELABEL-0199",
-          "raw_text": "가격이 엄청 저렴해서 혹시나 했는데 디자인도 엄청 깔끔하고 실밥처리도 완벽 옷감에 구겨짐은 있지만 스팀다리미로 살짝만 다려도 쫙 펴지네요. 득템^^~잘입을께요.",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -1419,7 +1323,6 @@
         },
         {
           "inquiry_id": "RELABEL-0201",
-          "raw_text": "저렴한 가격에 네벌이나 ㅋㅋ 적절하게 코디해서 멋좀 내야겠어요.  네이비가 화면이랑 약간 다르지만 괜찮을거 같아요  화이트도 사고싶지만소화하기가 힘들것 같네요        ",
           "true_aspect": "색상",
           "true_sentiment": 0,
           "predicted": [
@@ -1435,7 +1338,6 @@
         },
         {
           "inquiry_id": "RELABEL-0202",
-          "raw_text": "제가 살이있어서인지 아주어울리지는않네요.그래도 저렴한가격에 구입했으니잘입을께요",
           "true_aspect": "사이즈",
           "true_sentiment": -1,
           "predicted": [
@@ -1447,7 +1349,6 @@
         },
         {
           "inquiry_id": "RELABEL-0203",
-          "raw_text": "작년에 남편꺼 구입했는데 너무편하고 좋다고 잘입더라구요.올해는 저도 구입했습니다..역시 입기 편하고가볍고 핏도살고,좋네요^^",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -1459,7 +1360,6 @@
         },
         {
           "inquiry_id": "RELABEL-0206",
-          "raw_text": "추천하고 싶어요. 가성비 굿 이구요. 따뜻하고 색상도 예뻐요.",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -1471,7 +1371,6 @@
         },
         {
           "inquiry_id": "RELABEL-0208",
-          "raw_text": "아직 입어보진 않았지만 저렴한 가격에 잘 구입한거 같아요. 바지 핏도 맘에 들구요^^~",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -1483,7 +1382,6 @@
         },
         {
           "inquiry_id": "RELABEL-0210",
-          "raw_text": "색상도예쁘고 시원하고 부드러워서 좋아요",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -1499,7 +1397,6 @@
         },
         {
           "inquiry_id": "RELABEL-0211",
-          "raw_text": "재구매입니다~가볍고 구김도 없고..가격대비 완전 만족입니다..잘입을게요^^",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -1511,7 +1408,6 @@
         },
         {
           "inquiry_id": "RELABEL-0214",
-          "raw_text": "가성비 짱입니다  사이즈도 딱맞고 품질 도 좋고 너무너무 디자인이 맘에들어요",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -1531,7 +1427,6 @@
         },
         {
           "inquiry_id": "RELABEL-0219",
-          "raw_text": "배송은 좀늦었지만  가격대비   티는 부드럽고  시원한 재질이 좋아 만족하나  집업은  앞짚퍼  스테이치바느질이   좀지저분해   아쉬움",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -1547,7 +1442,6 @@
         },
         {
           "inquiry_id": "RELABEL-0221",
-          "raw_text": "간절기  입기  좋을것같아 구매했는데‥ 바느질엉망   쭈글쭈글  다링질도안된다고 하고  저렴한 이유가 있었네요 걍 집에서 입어야 할듯해요",
           "true_aspect": "소재",
           "true_sentiment": -1,
           "predicted": [
@@ -1563,7 +1457,6 @@
         },
         {
           "inquiry_id": "RELABEL-0226",
-          "raw_text": "받은지 꽤 됐는데 지금 작성합니다. 세 컬러 모구 디자인이 무난하도 핏도 무난합니다. 가격대비 좋습니다.",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -1575,7 +1468,6 @@
         },
         {
           "inquiry_id": "RELABEL-0228",
-          "raw_text": "7장 중 2장은 누가 입어본 옷을 보냈는지 구김이 있었지만 나머진 디자인이 괜찮아서 걍 입으려고요 그것만 빼면 착용감도 좋고 가성비도 좋네요.",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -1587,7 +1479,6 @@
         },
         {
           "inquiry_id": "RELABEL-0230",
-          "raw_text": "유행하는 스타일인 롱기장이라서 좋아묘 구김가지만 좋아요",
           "true_aspect": "소재",
           "true_sentiment": 0,
           "predicted": [
@@ -1599,7 +1490,6 @@
         },
         {
           "inquiry_id": "RELABEL-0231",
-          "raw_text": "여행가시는 엄마 사드렸는데 사이즈가 잘 맞았고 편하시다고 하시네요 77이었는데 바지길이가 약간 짤뚱한 느낌이라 그게 약간 아쉬웠다는... 가성비는 훌륭한 상품이에요",
           "true_aspect": "사이즈",
           "true_sentiment": 0,
           "predicted": [
@@ -1611,7 +1501,6 @@
         },
         {
           "inquiry_id": "RELABEL-0236",
-          "raw_text": "겉감이 좀 뻣뻣하긴하지만 가격대비 괜찬아여",
           "true_aspect": "소재",
           "true_sentiment": -1,
           "predicted": [
@@ -1623,7 +1512,6 @@
         },
         {
           "inquiry_id": "RELABEL-0240",
-          "raw_text": "구입시기는 겨울인데 입기엔 좀 얇은것같아   시기를 기다렸다 입어야할듯 색상은 예뻐요.",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -1635,7 +1523,6 @@
         },
         {
           "inquiry_id": "RELABEL-0241",
-          "raw_text": "정사이즈구요 바느질은 그럭저럭 괜찮아요. 화면에서는 길이가 짧아보였는데 키161인 저한테는 복숭아뼈 반 덮는 길이에요. 핏도 이쁘구요. 5종에 이가격이면 잘샀다고 봅니다.",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -1647,7 +1534,6 @@
         },
         {
           "inquiry_id": "RELABEL-0243",
-          "raw_text": "가성비 짱입니다  부드럽고 핏도 좋아용 감사합니다",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -1659,7 +1545,6 @@
         },
         {
           "inquiry_id": "RELABEL-0245",
-          "raw_text": "폭이 좁아서 방송보다 예쁘진 않네요 옆선이 울어서 스팀 다리미로 눌러봐야겠어요",
           "true_aspect": "사이즈",
           "true_sentiment": -1,
           "predicted": [
@@ -1671,7 +1556,6 @@
         },
         {
           "inquiry_id": "RELABEL-0252",
-          "raw_text": "기지도 괜찮아요 까슬까슬한원단이여서 몸에붙지않으니 좋은것같아요 가격이 저렴해서 구매했어요 올여릉 시원하게 보내겠네요",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -1683,7 +1567,6 @@
         },
         {
           "inquiry_id": "RELABEL-0253",
-          "raw_text": "갈색이 멋스러워요. 회색은 테일러드 카라의 아랫부분이 뭔지 모르게 어색하고 가격이 저렴해보입니다  ",
           "true_aspect": "색상",
           "true_sentiment": 0,
           "predicted": [
@@ -1695,7 +1578,6 @@
         },
         {
           "inquiry_id": "RELABEL-0255",
-          "raw_text": "천이 좀 두툼한게 좋은 듯 하구요~ 천이 구김 없는 천이었으면 더 좋았을텐데ᆢ 다림질 해서 잘~입겠습니다. 감사하니다 ^^",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -1707,7 +1589,6 @@
         },
         {
           "inquiry_id": "RELABEL-0257",
-          "raw_text": "편안하고 핏도 좋고 만족합니다..청바지 불편해서 잘 안입었는데 얘네들은 즐뎌 입을것 같네요..",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -1719,7 +1600,6 @@
         },
         {
           "inquiry_id": "RELABEL-0259",
-          "raw_text": "생각보다 편하고 큼직해서 여유있게 입을 수 있어 좋았어요 얊고 시원하네요 착한가격에 구매했어요",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -1731,7 +1611,6 @@
         },
         {
           "inquiry_id": "RELABEL-0260",
-          "raw_text": "배송도 빠르고 가격도 착하고 옷의 질감도 좋습니다. 딸아이와 두 장씩 입을 수 있어서 좋아요",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -1743,7 +1622,6 @@
         },
         {
           "inquiry_id": "RELABEL-0266",
-          "raw_text": "바지 색깔만 다르고 모양은 똑같은 줄 일았는데 모양도 다 다르네요.^^ 그래서 스타일이 더 예쁘고  스판 많이 들어가 있어서 착용시 정말 편해요 잘 입을게요^^",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -1755,7 +1633,6 @@
         },
         {
           "inquiry_id": "RELABEL-0267",
-          "raw_text": "비치지 않아 좋습니다.  한여름보다는 지금 입기 좋은듯~",
           "true_aspect": "소재",
           "true_sentiment": 1,
           "predicted": [
@@ -1767,7 +1644,6 @@
         },
         {
           "inquiry_id": "RELABEL-0272",
-          "raw_text": "슬럼하면서 시원하네요 디자인도 심플하고 아주 편합니다",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -1779,7 +1655,6 @@
         },
         {
           "inquiry_id": "RELABEL-0278",
-          "raw_text": "배송이 빨라요 오자 바로 입었는데 생각보다 많이 비쳐서 이너를 꼭 입어야 할듯 시원하게 입을수 있을것 같아요 ",
           "true_aspect": "소재",
           "true_sentiment": -1,
           "predicted": [
@@ -1791,7 +1666,6 @@
         },
         {
           "inquiry_id": "RELABEL-0279",
-          "raw_text": "재질도 맘에들고  디자인도 예쁘요 한가지 아쉬은점이 있다면  허리밴드가 짱짱했으면 좋겠어요 입고있으면 줄줄내려가서  수선집가서  3개  전부 수선했네요 수선비가 만오천원들었어요",
           "true_aspect": "소재",
           "true_sentiment": -1,
           "predicted": [
@@ -1803,7 +1677,6 @@
         },
         {
           "inquiry_id": "RELABEL-0287",
-          "raw_text": "얇고 가벼워서 좋다고 하시네요 기장도 키작녀들한테는 좋아요 다만 구김은 있는 스타일이네요",
           "true_aspect": "소재",
           "true_sentiment": 0,
           "predicted": [
@@ -1815,7 +1688,6 @@
         },
         {
           "inquiry_id": "RELABEL-0290",
-          "raw_text": "검은색 말고는 살짝 안이 비쳐서 슬립을 입어야 하네요. 거격대비 재질은 좋습니다.",
           "true_aspect": "소재",
           "true_sentiment": 0,
           "predicted": [
@@ -1827,7 +1699,6 @@
         },
         {
           "inquiry_id": "RELABEL-0291",
-          "raw_text": "부라우스3점  모두색상도  무난하고 디자인도  세련되어  너무잘입고  다녔어요.",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -1839,7 +1710,6 @@
         },
         {
           "inquiry_id": "RELABEL-0295",
-          "raw_text": "너무 가볍고 따뜻하고 가격 착하고. 조아조아요. 버건디 적당히 어두운 컬러도 좋고.",
           "true_aspect": "색상",
           "true_sentiment": 1,
           "predicted": [
@@ -1855,7 +1725,6 @@
         },
         {
           "inquiry_id": "RELABEL-0297",
-          "raw_text": "키가 커서 길이가 어중간하게 짧아요. 소재는 좋아요",
           "true_aspect": "사이즈",
           "true_sentiment": -1,
           "predicted": [
@@ -1871,7 +1740,6 @@
         },
         {
           "inquiry_id": "RELABEL-0298",
-          "raw_text": "간절기에 입기  좋을것 같네요 정사이즈  로~~  다른색도  구매하고  싶네요",
           "true_aspect": "사이즈",
           "true_sentiment": 1,
           "predicted": [
@@ -1883,7 +1751,6 @@
         },
         {
           "inquiry_id": "RELABEL-0299",
-          "raw_text": "디자인도 예쁜 정말 나무랄때 없는 좋은 상품 이예요~ 살짝 아쉬움이 있다면 색상 밝은 컬러를 하나쯤 더 있었으면 좋았을것 같아요~",
           "true_aspect": "색상",
           "true_sentiment": 0,
           "predicted": [

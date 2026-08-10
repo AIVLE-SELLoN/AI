@@ -67,8 +67,60 @@ BASELINE_RATE = {
     "기타": {"COUPANG": 0.03, "NAVER": 0.03, "ZIGZAG": 0.03},  # 회신 확정값
 }
 ASPECTS = list(BASELINE_RATE.keys())
+REVIEW_ASPECTS = ["색상", "사이즈", "소재"]
+"""리뷰는 프롬프트2 스코프만 — 파손·오배송·기타 없음.
+
+⚠️ **두 군데에 적지 말 것.** 이 목록의 길이가 `_negative_rate` 의 부정률 배수라,
+   갈리면 라벨이 조용히 틀려진다(라우팅만 갈리던 예전과 다르다)."""
 CHANNELS = ["COUPANG", "NAVER", "ZIGZAG"]
 SOURCES = ["cs", "review"]
+
+# ────────────────────────────────────────────────────────────────
+# BASELINE_RATE 의 분모 — `--baseline-denominator`
+# ────────────────────────────────────────────────────────────────
+# "total"  : (상품,채널,source) 총문의 중 해당 aspect 부정 비율. **확정 스펙이자 기본값.**
+# "aspect" : 그 aspect 로 배정된 문의 중 부정 비율. 2026-08-09 이전 배경 경로의 동작으로,
+#            옛 데이터를 재현할 때만 쓴다.
+#
+# 왜 total 이 스펙인가 — 세 곳이 이미 total 로 못박혀 있다.
+#   1. 「이상탐지 시나리오 정의서[확정]」 §1: 분모 = 해당 상품의 해당 채널 총 문의 수
+#      (최소표본 항목에 "(상품,채널) 총문의(= 분모, aspect 무관)" 라고 직접 적혀 있다)
+#   2. data/config/config_anomaly.csv: SC-001 쿠팡 색상 past_neg=40 / past_total=800.
+#      800 = 28일 x 28건/일 = CS 전체 볼륨이지 색상만의 분모가 아니다.
+#   3. app/detection/aggregate.py: 탐지 분모도 (product, channel, source) 총문의, aspect 무관.
+#
+# 즉 이건 정의 선택이 아니라 **구현이 확정 스펙을 어긴 결함**이다. 케이스 경로는
+# past_neg/past_total 로 전체 분모에 정확 건수를 심는데(build_rows_for_window_group),
+# 배경 경로만 aspect 내부 분모로 깔려서 한 파일 안에 규약이 두 개였다.
+#
+# 물증(2026-08-07 감사): TRUE config 33행 전부 past_rate == BASELINE_RATE 일치(33/33),
+# 평균 case-past 관측률 5.03% vs 평균 순수 배경 0.85% = 6.04배. 6.04 는 CS aspect 수(6)다.
+BASELINE_DENOMINATOR_TOTAL = "total"
+BASELINE_DENOMINATOR_ASPECT = "aspect"
+
+
+def _negative_rate(aspect: str, channel: str, n_aspects: int, denominator: str) -> float:
+    """이 문서 1건이 `aspect` 부정일 확률.
+
+    배경 경로는 문서를 aspect 로 먼저 쪼갠 뒤 그 안에서 뽑는다. 그래서 전체 분모 기준
+    비율을 맞추려면 aspect 수만큼 되돌려 곱해야 한다 — 그러지 않으면 전체 분모로 볼 때
+    `config / n_aspects` 로 희석된다(CS 1/6, 리뷰 1/3).
+
+    ⚠️ 1.0 을 넘으면 **조용히 자르지 않고 죽는다.** 잘라내면 그 aspect 만 요청보다 낮은
+       부정률로 생성되는데, 그게 정확히 이 함수가 고치려던 "명세와 구현이 조용히 갈리는"
+       문제다. 현재 표의 최대치는 사이즈/NAVER 0.09 x 6 = 0.54 라 여유가 있다.
+       (현진님 리뷰 5차)
+    """
+    rate = BASELINE_RATE[aspect][channel]
+    if denominator == BASELINE_DENOMINATOR_TOTAL:
+        rate *= n_aspects
+    if rate > 1.0:
+        raise ValueError(
+            f"부정률이 1을 넘는다: {aspect}/{channel} "
+            f"{BASELINE_RATE[aspect][channel]} x {n_aspects} = {rate:.3f}. "
+            "BASELINE_RATE 를 올렸거나 aspect 를 늘렸다면 표 자체를 재검토할 것."
+        )
+    return rate
 
 # 배경 상품 볼륨 (회신 확정값)
 BG_CS_CUR_TOTAL, BG_CS_PAST_TOTAL = 42, 168     # 일 6건 x 7일 / x28일
@@ -366,7 +418,8 @@ def group_anomaly_rows(anomaly_rows: list[dict]) -> dict:
     return groups
 
 def build_rows_for_window_group(rows: list[dict], rng: random.Random, pid_map: dict,
-                                 anchor_date: datetime, id_counters: dict, text_gen: "TextGenerator") -> tuple[list, list]:
+                                 anchor_date: datetime, id_counters: dict, text_gen: "TextGenerator",
+                                 baseline_denominator: str = BASELINE_DENOMINATOR_TOTAL) -> tuple[list, list]:
     """group_anomaly_rows()로 묶인 그룹(같은 상품·채널·source·윈도우, aspect만 다를 수 있음)
     → (문의/리뷰 행 리스트, 정답 행 리스트).
     SC-029(색상+파손 동시 편중)처럼 aspect가 2개 이상이어도, 창은 딱 한 번만 생성하고
@@ -464,14 +517,18 @@ def build_rows_for_window_group(rows: list[dict], rng: random.Random, pid_map: d
                 if item_aspect is None:
                     # 이 그룹의 모든 aspect 부정 몫을 다 채웠음 — 나머지는 배경(무관한 문의)
                     # ⚠️ 리뷰는 프롬프트2 스코프(색상·사이즈·소재)만 — 파손·오배송·기타 없음
-                    bg_aspect_pool = ["색상", "사이즈", "소재"] if source == "review" else ASPECTS
+                    bg_aspect_pool = REVIEW_ASPECTS if source == "review" else ASPECTS
                     item_aspect = rng.choice(bg_aspect_pool)
                     if item_aspect in group_aspects:
                         # ⚠️ 이 그룹에 속한 aspect는 이미 위에서 "정확 건수"로 부정 몫을 다 심었음
                         # (plant 원칙=결정론). 배경에서 또 -1이 나오면 안 됨.
+                        # ⚠️ 이 가드는 baseline_denominator 와 무관하게 유지해야 한다 —
+                        #    여기서 -1 이 새면 config 의 cur_neg/past_neg 가 깨져 intended_answer 가 흔들린다.
                         sentiment = rng.choice([0, 1])
                     else:
-                        item_rate = BASELINE_RATE[item_aspect][channel]
+                        item_rate = _negative_rate(
+                            item_aspect, channel, len(bg_aspect_pool), baseline_denominator
+                        )
                         sentiment = -1 if rng.random() < item_rate else rng.choice([0, 0, 1])
 
                 cfg = per_aspect.get(item_aspect)
@@ -559,7 +616,8 @@ def get_hot_channels(anomaly_groups: dict) -> dict[str, set[tuple]]:
 def build_rows_for_product_background(gid: str, rng: random.Random, pid_map: dict,
                                        anchor_date: datetime, id_counters: dict, text_gen: "TextGenerator",
                                        day_scope: dict[tuple, list[int]],
-                                       hot_channels: set[tuple] | None = None) -> tuple[list, list]:
+                                       hot_channels: set[tuple] | None = None,
+                                       baseline_denominator: str = BASELINE_DENOMINATOR_TOTAL) -> tuple[list, list]:
     """day_scope: {(channel, source): [day_no, ...]} — 이 상품의 이 채널·source에서
     baseline 수준으로 채워야 할 날짜 목록.
     - 순수 배경 상품(케이스 없음): 모든 채널×source에 대해 1~60일 전부가 여기 들어온다.
@@ -574,7 +632,6 @@ def build_rows_for_product_background(gid: str, rng: random.Random, pid_map: dic
     NORMAL_VOLUME = {"cs": 6, "review": 2}
     HOT_VOLUME = {"cs": 28, "review": 10}
     hot_channels = hot_channels or set()
-    REVIEW_ASPECTS = ["색상", "사이즈", "소재"]  # 프롬프트2 스코프 — 파손·오배송·기타 없음
 
     for (channel, source), days in day_scope.items():
         if not days:
@@ -587,7 +644,9 @@ def build_rows_for_product_background(gid: str, rng: random.Random, pid_map: dic
         for day_no in days:
             date = day_to_date(day_no, anchor_date)
             for aspect in aspects_for_source:
-                rate = BASELINE_RATE[aspect][channel]
+                rate = _negative_rate(
+                    aspect, channel, len(aspects_for_source), baseline_denominator
+                )
                 n = int(per_aspect_daily)
                 if rng.random() < (per_aspect_daily - n):
                     n += 1
@@ -667,7 +726,21 @@ def main():
                      help="golden_*.csv 출력 디렉토리(생략 시 --outdir와 동일 — 하위호환)")
     ap.add_argument("--anchor-date", required=True, help="Day 60에 해당하는 날짜, 예: 2026-08-28")
     ap.add_argument("--seed", type=int, default=11)
+    ap.add_argument(
+        "--baseline-denominator",
+        choices=[BASELINE_DENOMINATOR_TOTAL, BASELINE_DENOMINATOR_ASPECT],
+        default=BASELINE_DENOMINATOR_TOTAL,
+        help="BASELINE_RATE 의 분모. total=확정 스펙(기본), aspect=2026-08-09 이전 동작 재현용",
+    )
     args = ap.parse_args()
+
+    if args.baseline_denominator == BASELINE_DENOMINATOR_TOTAL:
+        print("배경 baseline 분모: total — (상품,채널,source) 총문의 기준 (확정 스펙)")
+    else:
+        print(
+            "⚠️ 배경 baseline 분모: aspect — 전체 분모로 보면 CS 1/6·리뷰 1/3 로 희석된다.\n"
+            "   2026-08-09 이전 동작 재현용이다. 새 측정에 쓰지 말 것."
+        )
 
     rng = random.Random(args.seed)
     anchor_date = datetime.strptime(args.anchor_date, "%Y-%m-%d")
@@ -697,7 +770,10 @@ def main():
     cs_data, cs_labels, review_data, review_labels = [], [], [], []
 
     for group_rows in anomaly_groups.values():
-        data_rows, label_rows = build_rows_for_window_group(group_rows, rng, pid_map, anchor_date, id_counters, text_gen)
+        data_rows, label_rows = build_rows_for_window_group(
+            group_rows, rng, pid_map, anchor_date, id_counters, text_gen,
+            baseline_denominator=args.baseline_denominator,
+        )
         if group_rows[0]["source"] == "cs":
             cs_data.extend(data_rows); cs_labels.extend(label_rows)
         else:
@@ -727,6 +803,7 @@ def main():
         data_rows, label_rows = build_rows_for_product_background(
             gid, rng, pid_map, anchor_date, id_counters, text_gen, day_scope,
             hot_channels=hot_channels_by_product.get(gid, set()),
+            baseline_denominator=args.baseline_denominator,
         )
         total_gap_filled += len(data_rows)
         for r in data_rows:

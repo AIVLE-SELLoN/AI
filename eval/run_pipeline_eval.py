@@ -86,6 +86,7 @@ from run_detection_eval import (  # ①과 배치·채점을 공유해야 비교
 
 from app.classification.service import (
     PROMPT_ASPECT_VERSION,
+    PROMPT_SENTIMENT_VERSION,
     ClassifyRequestItem,
     _cs_empty_fallback,
     classify_aspect,
@@ -100,14 +101,33 @@ from app.detection.statistics import run_detection
 from app.detection.verdict import run_verdict
 
 INPUT_INQUIRIES = ROOT / "data" / "input" / "input_cs_inquiries.csv"
+INPUT_REVIEWS = ROOT / "data" / "input" / "input_reviews.csv"
 INPUT_CHANNEL_PRODUCTS = ROOT / "data" / "input" / "input_channel_products.csv"
 GOLDEN_MAPPING = ROOT / "data" / "golden" / "golden_mapping.csv"
 GOLDEN_CS_LABELS = ROOT / "data" / "golden" / "golden_cs_labels.csv"
+GOLDEN_REVIEW_LABELS = ROOT / "data" / "golden" / "golden_review_labels.csv"
 CACHE_DIR = ROOT / "data" / "eval_cache"
 
 DAY1 = date(2026, 6, 30)  # Day 1 = 문의 데이터 첫날
 SOURCE_CS = "cs"
+SOURCE_REVIEW = "review"
 SOURCES = ("cs", "review")
+
+# source 별 원본·골든·날짜 컬럼. collect_documents 가 이 표만 보고 돈다.
+SOURCE_SPEC = {
+    SOURCE_CS: {
+        "input": INPUT_INQUIRIES,
+        "golden": GOLDEN_CS_LABELS,
+        "id_col": "inquiry_id",
+        "date_col": "inquired_at",
+    },
+    SOURCE_REVIEW: {
+        "input": INPUT_REVIEWS,
+        "golden": GOLDEN_REVIEW_LABELS,
+        "id_col": "review_id",
+        "date_col": "created_at",
+    },
+}
 
 # per_item: 넘긴 항목 수만큼 동시 호출이 뜬다(classify_aspect 내부 asyncio.gather).
 # batch:    청크 하나가 LLM 호출 1회. 청크 크기가 곧 실패 반경이다.
@@ -119,16 +139,48 @@ MODE_PER_ITEM = "per_item"
 
 
 def prompt_fingerprint() -> str:
-    """캐시 키에 넣을 프롬프트 지문 — 이름(버전) + **내용 해시**.
+    """캐시 키에 넣을 프롬프트 지문 — 프롬프트1·2 각각 이름(버전) + **내용 해시**.
+
+    ⚠️ 리뷰가 대상에 들어오면서 프롬프트2 도 결과를 좌우한다(2026-08-09). 프롬프트1 만
+       해싱하면 프롬프트2 를 고쳐도 캐시가 안 갈려 옛 리뷰 라벨을 조용히 재사용한다.
 
     버전 문자열만으로는 부족하다. Agent1 이 예시를 classify_aspect_v5.md 에 **그대로
     추가**하면 파일명이 안 바뀌어서, 캐시가 안 갈리고 옛 결과를 조용히 재사용한다.
     "고쳤는데 숫자가 안 변한다"가 되고, 캐시 탓인지 수정이 무효한 탓인지 못 가린다.
     내용 해시는 제자리 수정까지 잡는다. 이름을 같이 남기는 건 사람이 읽기 위해서다.
     """
-    body = load_llm_prompt("classification", PROMPT_ASPECT_VERSION)
-    digest = hashlib.sha256(body.encode("utf-8")).hexdigest()[:8]
-    return f"{PROMPT_ASPECT_VERSION}-{digest}"
+    parts = []
+    for version in (PROMPT_ASPECT_VERSION, PROMPT_SENTIMENT_VERSION):
+        body = load_llm_prompt("classification", version)
+        parts.append(f"{version}-{hashlib.sha256(body.encode('utf-8')).hexdigest()[:8]}")
+    return "_".join(parts)
+
+
+def data_fingerprint(documents: list[dict]) -> str:
+    """캐시 키에 넣을 **데이터 지문** — 분류 대상 문서의 (id, 본문) 해시.
+
+    위 prompt_fingerprint 와 정확히 같은 논리를 데이터로 확장한 것이다. 캐시는
+    `d["id"]` 로만 조회하는데(:todo 계산), mock 을 재생성하면 **같은 id 에 다른
+    텍스트**가 들어간다. 파일명이 안 갈리면 "신규 호출 0건" 으로 조용히 통과하면서
+    **옛 라벨로 새 문서를 채점한다.** 비용이 안 드는 것처럼 보이면서 결과만 틀리는,
+    제일 나쁜 형태의 실패다.
+
+    ⚠️ 수동 규칙("재생성하면 캐시 지우기")으로 막지 않는 이유: `data/` 가 gitignore 라
+       팀원마다 캐시가 따로 놀고, 한 명만 잊으면 틀린 숫자가 나온다. 기계가 막아야 한다.
+       (지인님 리뷰 조건 1, 2026-08-09 — 배경 baseline 재생성 직전에 지적됨)
+    """
+    h = hashlib.sha256()
+    for d in documents:  # 생성이 결정론이라 순서가 안정적이다
+        h.update(str(d["id"]).encode("utf-8"))
+        h.update(b"\x00")
+        h.update(str(d["text"]).encode("utf-8"))
+        h.update(b"\x1e")
+    return h.hexdigest()[:8]
+
+
+def cache_fingerprint(documents: list[dict]) -> str:
+    """캐시 파일명에 들어가는 지문 = 프롬프트 + 데이터. 둘 중 하나만 바뀌어도 갈린다."""
+    return f"{prompt_fingerprint()}-d{data_fingerprint(documents)}"
 
 
 # ── 대상 문의 수집 ───────────────────────────────────────────────
@@ -145,42 +197,53 @@ def _product_of() -> dict[tuple[str, str], str]:
     return out
 
 
-def collect_documents(config_rows: list[dict]) -> tuple[list[dict], dict[str, tuple]]:
-    """케이스 상품의 **현재 윈도우** CS 문의를 모은다 (분모의 출처).
+def collect_documents(config_rows: list[dict]) -> tuple[list[dict], dict[tuple, tuple]]:
+    """케이스 상품의 **현재 윈도우** 문서를 모은다 (분모의 출처). CS·리뷰 둘 다.
 
     Returns:
-        (documents, windows)  — windows 는 product → (cur_start, cur_end) 실제 날짜
+        (documents, windows)  — windows 는 (product, source) → (cur_start, cur_end)
+
+    ⚠️ **리뷰를 빼면 안 된다** (2026-08-09). 채점 단위 33건 중 리뷰가 2건이고
+       (SC-034/review FALSE, SC-035/review TRUE), 리뷰를 안 태우면 그 2건이 oracle
+       인 채로 점수에 들어가 (①−②)가 'CS 분류 오차'만 뜻하게 된다. 설계도 데모도
+       두 소스를 다 쓰는데(로직 §[8] combine_sources) 실험②만 CS 전용이던 것은
+       근거가 문서 어디에도 없었고, 실험③(프롬프트1·CS 배치) 경로를 재사용하면서
+       따라온 공백으로 보인다.
+
+    ⚠️ 윈도우 키가 (product, source) 다. 같은 상품이 CS·리뷰에서 다른 창을 가질 수
+       있으므로 product 단독 키로 두면 한쪽이 다른 쪽 창을 덮어쓴다. 현재 config 는
+       P034·P035 가 양쪽 같은 창이라 결과가 같지만, 키를 좁혀두면 config 가 바뀔 때
+       조용히 어긋나는 걸 막는다.
     """
-    windows: dict[str, tuple] = {}
+    windows: dict[tuple, tuple] = {}
     for r in config_rows:
-        if r["source"] != SOURCE_CS:
-            continue
         end = DAY1 + timedelta(days=int(r["window_end_day"]) - 1)
-        windows[r["golden_group_id"]] = (
+        windows[(r["golden_group_id"], r["source"])] = (
             end - timedelta(days=CURRENT_WINDOW_DAYS - 1),
             end,
         )
 
     product_of = _product_of()
     documents: list[dict] = []
-    for r in read(INPUT_INQUIRIES):
-        product = product_of.get((r["channel"], r["channel_product_id"]))
-        if product not in windows:
-            continue
-        created = datetime.fromisoformat(r["inquired_at"])
-        cur_start, cur_end = windows[product]
-        if not (cur_start <= created.date() <= cur_end):
-            continue
-        documents.append(
-            {
-                "id": r["inquiry_id"],
-                "product": product,
-                "channel": r["channel"],
-                "source": SOURCE_CS,
-                "created_at": created,
-                "text": r["content"],
-            }
-        )
+    for source, spec in SOURCE_SPEC.items():
+        for r in read(spec["input"]):
+            product = product_of.get((r["channel"], r["channel_product_id"]))
+            span = windows.get((product, source))
+            if span is None:
+                continue
+            created = datetime.fromisoformat(r[spec["date_col"]])
+            if not (span[0] <= created.date() <= span[1]):
+                continue
+            documents.append(
+                {
+                    "id": r[spec["id_col"]],
+                    "product": product,
+                    "channel": r["channel"],
+                    "source": source,
+                    "created_at": created,
+                    "text": r["content"],
+                }
+            )
     return documents, windows
 
 
@@ -368,9 +431,10 @@ async def classify_cached(
     안 변한다"가 생기는 걸 막는 게 목적이다.
     """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    # 대상이 CS 전용이라 프롬프트1 지문만 본다 (collect_documents 가 source=cs 만 모음).
+    # 지문 = 프롬프트1+2 이름·내용 해시 + 데이터 (id, 본문) 해시. 리뷰가 들어오면서
+    # 프롬프트2 도 결과에 영향을 주므로 둘 다 본다 (prompt_fingerprint 참고).
     cache_path = (
-        CACHE_DIR / f"pipeline_{tag}_{mode}_{prompt_fingerprint()}_run{run}.json"
+        CACHE_DIR / f"pipeline_{tag}_{mode}_{cache_fingerprint(documents)}_run{run}.json"
     )
     cache: dict = (
         json.loads(cache_path.read_text(encoding="utf-8"))
@@ -392,8 +456,22 @@ async def classify_cached(
         counter = _FallbackCounter()
         logging.getLogger("app.classification.service").addHandler(counter)
         try:
-            runner = _run_batch if mode == MODE_BATCH else _run_per_item
-            _done, failed = await runner(todo, cache, save, concurrency)
+            # ⚠️ 리뷰는 항상 per_item 이다. 배치 프롬프트 조립기
+            #    (run_classify_eval._build_batch_prompt)가 프롬프트1 전용이라
+            #    "## 분류 대상 CS 문의" 로 잘라 쓰는데, 프롬프트2 에는 그 구분자가
+            #    없어서 넣으면 프롬프트가 통째로 깨진다. per_item 은 source 를
+            #    ClassifyRequestItem 에 실어 보내 classify_item 이 알아서 분기한다.
+            cs_todo = [d for d in todo if d["source"] == SOURCE_CS]
+            rv_todo = [d for d in todo if d["source"] != SOURCE_CS]
+            failed = 0
+            if cs_todo:
+                runner = _run_batch if mode == MODE_BATCH else _run_per_item
+                _done, f = await runner(cs_todo, cache, save, concurrency)
+                failed += f
+            if rv_todo:
+                print(f"  리뷰 {len(rv_todo):,}건 — per_item (프롬프트2)")
+                _done, f = await _run_per_item(rv_todo, cache, save, concurrency)
+                failed += f
         finally:
             logging.getLogger("app.classification.service").removeHandler(counter)
 
@@ -410,8 +488,12 @@ async def classify_cached(
 
 
 def oracle_classified(documents: list[dict]) -> list[ClassifiedItem]:
-    """golden 라벨로 만든 ClassifiedItem — ①과 같은 입력. LLM 0회."""
+    """golden 라벨로 만든 ClassifiedItem — ①과 같은 입력. LLM 0회.
+
+    CS·리뷰 골든을 한 표로 합친다. id 체계가 INQ-/RVW- 로 갈려 충돌하지 않는다.
+    """
     labels = {r["inquiry_id"]: r for r in read(GOLDEN_CS_LABELS)}
+    labels.update({r["review_id"]: r for r in read(GOLDEN_REVIEW_LABELS)})
     aspects_of: dict[str, list] = {}
     for d in documents:
         label = labels.get(d["id"], {})
@@ -442,12 +524,10 @@ def measure(rows: list[dict], config_rows: list[dict]) -> dict:
     slots = {
         (r["golden_group_id"], r["aspect"], r["channel"], r["source"])
         for r in config_rows
-        if r["source"] == SOURCE_CS
     }
     expected_total = {
         (r["golden_group_id"], r["channel"], r["source"]): int(r["cur_total"])
         for r in config_rows
-        if r["source"] == SOURCE_CS
     }
     days = sorted({r["day"] for r in rows})
     if not days:
@@ -526,16 +606,56 @@ def predict_with_counts(
 # ── 진단 (LLM 0회 — 캐시만 읽는다) ───────────────────────────────
 
 
+def _golden_labels(negatives_only: bool = True) -> dict[str, tuple[str, str]]:
+    """{문서 id: (true_aspect, true_sentiment)} — **CS·리뷰 둘 다.**
+
+    ⚠️ 리뷰가 빠져 있었다(2026-08-09). 오차 분해가 CS 만 돌아서, 리뷰 config 슬롯
+       35건이 분해에 안 들어갔다. 역방향 오판이 CS 의 50배인 곳이 정확히 거기다.
+       (현진님 리뷰 §3)
+    """
+    out: dict[str, tuple[str, str]] = {}
+    for spec in SOURCE_SPEC.values():
+        for r in read(spec["golden"]):
+            rid = r.get(spec["id_col"])
+            aspect, sent = r.get("true_aspect"), r.get("true_sentiment")
+            if not rid or not aspect:
+                continue
+            if negatives_only and sent != "-1":
+                continue
+            out[rid] = (aspect, sent)
+    return out
+
+
 def _golden_negatives() -> dict[str, tuple[str, str]]:
-    """{inquiry_id: (true_aspect, true_sentiment)} — 부정으로 라벨된 CS 문의만."""
+    """부정 라벨만. 하위호환 별칭."""
+    return _golden_labels(negatives_only=True)
+
+
+def config_slots(config_rows: list[dict]) -> set:
+    """config 에 정의된 (상품, aspect, 채널, source) 슬롯.
+
+    **채점에 닿는 유일한 집합이다.** measure() 가 이 슬롯만 내고, 나머지는
+    build_combinations 의 합성값을 그대로 쓴다. 즉 슬롯 밖 문서의 분류 결과는
+    분자에도 분모에도 안 들어간다(분모는 build_rows 경유라 분류와 무관).
+
+    ⚠️ 이 구분이 없으면 --diagnose 숫자를 못 읽는다. 2026-08-09 배경 baseline
+       재생성으로 케이스 윈도우의 골든 부정이 1,618 → 3,367 로 늘었는데 config
+       슬롯 몫은 1,278 로 그대로다. 슬롯 내 비율이 79% → 38% 로 떨어져서, 필터
+       없이 세면 분모의 62% 가 채점과 무관한 문서다. (현진님 리뷰 §1)
+    """
     return {
-        r["inquiry_id"]: (r["true_aspect"], r["true_sentiment"])
-        for r in read(GOLDEN_CS_LABELS)
-        if r.get("true_aspect") and r.get("true_sentiment") == "-1"
+        (r["golden_group_id"], r["aspect"], r["channel"], r["source"])
+        for r in config_rows
     }
 
 
-def classify_errors(documents: list[dict], cache: dict) -> tuple[Counter, Counter]:
+def _in_slot(doc: dict, aspect: str, slots: set) -> bool:
+    return (doc["product"], aspect, doc["channel"], doc["source"]) in slots
+
+
+def classify_errors(
+    documents: list[dict], cache: dict, slots: set | None = None
+) -> tuple[Counter, Counter]:
     """골든 부정 문의가 실제 분류에서 어떻게 됐는지 분해한다.
 
     ②의 하락폭이 '어떤 종류의 분류 오차'에서 오는지 가르는 게 목적이다. aspect 를
@@ -554,6 +674,8 @@ def classify_errors(documents: list[dict], cache: dict) -> tuple[Counter, Counte
         if label is None:
             continue
         aspect, _ = label
+        if slots is not None and not _in_slot(doc, aspect, slots):
+            continue
         predicted = cache.get(doc["id"], [])
         same_aspect = [p for p in predicted if p["aspect"] == aspect]
 
@@ -569,7 +691,9 @@ def classify_errors(documents: list[dict], cache: dict) -> tuple[Counter, Counte
     return breakdown, flipped
 
 
-def restore_sentiment(documents: list[dict], cache: dict) -> tuple[dict, int]:
+def restore_sentiment(
+    documents: list[dict], cache: dict, slots: set | None = None
+) -> tuple[dict, int]:
     """감성만 골든으로 되돌린 캐시 사본을 만든다. **민감도 분석 전용.**
 
     ⚠️ 성능 주장이 아니다. 골든을 예측에 주입하므로 이 숫자는 '달성 가능한 성능'이
@@ -586,6 +710,8 @@ def restore_sentiment(documents: list[dict], cache: dict) -> tuple[dict, int]:
         if label is None:
             continue
         aspect, _ = label
+        if slots is not None and not _in_slot(doc, aspect, slots):
+            continue
         for entry in restored.get(doc["id"], []):
             if entry["aspect"] == aspect and entry["sentiment"] == 0:
                 entry["sentiment"] = -1
@@ -603,15 +729,25 @@ def _load_caches(tag: str, mode: str, fingerprint: str, runs: int) -> list[tuple
     return out
 
 
-def diagnose(documents, config_rows, products, golden, tag, mode, runs) -> None:
-    """캐시된 분류 결과로 ②의 하락 원인을 분해한다. LLM 호출 0회."""
-    fingerprint = prompt_fingerprint()
+def diagnose(documents, config_rows, products, golden, tag, mode, runs,
+             sources: str = "all") -> None:
+    """캐시된 분류 결과로 ②의 하락 원인을 분해한다. LLM 호출 0회.
+
+    ⚠️ `sources` 로 좁혀도 **캐시 조회는 전체 문서 집합의 지문으로 한다.** 캐시가
+       그 집합으로 만들어졌기 때문이다. 문서를 먼저 거르면 data_fingerprint 가 바뀌어
+       "캐시 없음 → 과거 실행 폴백" 으로 떨어진다(실제로 밟았다). 좁히기는 채점
+       단계에서만 한다 — 범위 몫과 프롬프트 몫을 분리해 보려는 것이 목적이므로,
+       분류 결과 자체는 같은 것을 써야 비교가 성립한다.
+    """
+    fingerprint = cache_fingerprint(documents)
     caches = _load_caches(tag, mode, fingerprint, runs)
 
     if not caches:
-        # 지금 프롬프트로 돌린 캐시가 없다. 과거 실행을 진단하는 건 정당한 용도지만
-        # (개선 전 대조군을 다시 뽑는 등), **어느 프롬프트 결과인지 반드시 밝힌다** —
+        # 지금 프롬프트·데이터로 돌린 캐시가 없다. 과거 실행을 진단하는 건 정당한 용도지만
+        # (개선 전 대조군을 다시 뽑는 등), **어느 실행 결과인지 반드시 밝힌다** —
         # 조용히 옛 캐시를 쓰면 캐시 키에 지문을 넣은 의미가 없어진다.
+        # ⚠️ mock 재생성 후에는 데이터 지문이 갈리므로 여기로 떨어진다. 그때 나오는
+        #    숫자는 **옛 데이터로 낸 것**이라 새 데이터의 성능이 아니다.
         stale = sorted(CACHE_DIR.glob(f"pipeline_{tag}_{mode}_*_run1.json"))
         if not stale:
             raise SystemExit(
@@ -621,40 +757,279 @@ def diagnose(documents, config_rows, products, golden, tag, mode, runs) -> None:
         fingerprint = stale[-1].stem.split(f"pipeline_{tag}_{mode}_")[1].rsplit("_run", 1)[0]
         caches = _load_caches(tag, mode, fingerprint, runs)
         print(
-            f"\n⚠️ 현재 프롬프트({prompt_fingerprint()})로 돌린 캐시가 없어"
-            f" **과거 실행({fingerprint})** 을 진단한다. 지금 코드의 성능이 아니다."
+            f"\n⚠️ 현재 프롬프트·데이터({cache_fingerprint(documents)})로 돌린 캐시가 없어"
+            f" **과거 실행({fingerprint})** 을 진단한다."
+            f"\n   지금 코드·데이터의 성능이 아니다. 지문의 -d 뒤가 다르면 다른 mock 이다."
         )
 
     print(f"\n{'=' * 72}")
     print(f"실험② 오차 분해 — {mode} · {fingerprint} · 캐시 {len(caches)}회차")
     print(f"{'=' * 72}")
 
-    total_breakdown: Counter = Counter()
+    if sources != "all":
+        # ⚠️ config_rows 를 거르면 안 된다. build_combinations 는 격자를 항상 두 source
+        #    로 도는데, config 에서 빠진 슬롯은 BASELINE_RATE x BG_VOLUME 합성값이 되고
+        #    cur rate == past rate 라 **구조적으로 100% 미탐**이 된다. 실제로 그렇게 짰다가
+        #    SC-035/review(TRUE, 14/70)가 통째로 미탐 처리돼 4.0%p 가 그 한 건이었다.
+        #    (현진님 리뷰 §1, 2026-08-09. m 은 1,464 로 불변이고 바뀌는 건 BH 의 기각 수 k 다)
+        #    measured 키만 걸러야 그 슬롯이 config(oracle) 값으로 떨어져,
+        #    de6600c 이전(=리뷰 oracle) 동작을 정확히 재현한다.
+        n0 = len(documents)
+        documents = [d for d in documents if d["source"] == sources]
+        print(f"\n⚠️ 채점 범위 {sources} 로 좁힘 — 문서 {n0:,} → {len(documents):,}"
+              f"\n   (다른 source 슬롯은 config oracle 값으로 떨어진다. 캐시는 전체 집합 것)")
+
+    slots = config_slots(config_rows)
+    both: dict[str, Counter] = {"전체": Counter(), "config 슬롯 내": Counter()}
     total_flipped: Counter = Counter()
     for _run, cache in caches:
-        breakdown, flipped = classify_errors(documents, cache)
-        total_breakdown.update(breakdown)
-        total_flipped.update(flipped)
+        for name, flt in (("전체", None), ("config 슬롯 내", slots)):
+            breakdown, flipped = classify_errors(documents, cache, flt)
+            both[name].update(breakdown)
+            if flt is not None:
+                total_flipped.update(flipped)
 
-    grand = sum(total_breakdown.values())
-    print(f"\n■ 골든 부정 CS 문의가 실제 분류에서 어떻게 됐나 ({len(caches)}회차 합산)")
-    for label, n in total_breakdown.most_common():
-        print(f"    {n:7,d} ({n / grand:5.1%})  {label}")
+    print(f"\n■ 골든 부정이 실제 분류에서 어떻게 됐나 ({len(caches)}회차 합산)")
+    print("    'config 슬롯 내' 만 채점에 닿는다 — measure() 가 그 슬롯만 내고,")
+    print("    밖은 build_combinations 합성값을 쓴다. 분자·분모 어느 쪽도 안 움직인다.")
+    labels = list(both["전체"].keys())
+    print(f"\n    {'':28s} {'전체':>16s} {'config 슬롯 내':>18s}")
+    for label in labels:
+        a, b = both["전체"][label], both["config 슬롯 내"][label]
+        ga, gb = sum(both["전체"].values()), sum(both["config 슬롯 내"].values())
+        print(f"    {label:28s} {a:7,d} ({a/ga:5.1%}) {b:9,d} ({b/gb:5.1%})")
+    ga, gb = sum(both["전체"].values()), sum(both["config 슬롯 내"].values())
+    print(f"    {'합계':28s} {ga:7,d}          {gb:9,d}   ({gb/ga:.0%})")
 
-    print("\n■ 감성이 부정→중립으로 뒤집힌 문장 (상위 10)")
+    print("\n■ 감성이 부정→중립으로 뒤집힌 문장 — config 슬롯 내만 (상위 10)")
     for (aspect, text), n in total_flipped.most_common(10):
         print(f"    {n:5,d}회 [{aspect}] {text[:58]}")
 
     print("\n■ 민감도 — 감성만 골든으로 되돌리면 (성능 주장 아님, 상한)")
     print(f"    {'회차':6s} {'현재':>8s} {'감성 복원':>10s}  (복원 건수)")
+    print("    복원 대상은 config 슬롯 내로 한정한다 — 밖은 복원해도 점수가 안 움직인다")
     for run, cache in caches:
-        restored, n = restore_sentiment(documents, cache)
+        restored, n = restore_sentiment(documents, cache, slots)
         rates = []
         for source in (cache, restored):
             rows = build_rows(documents, _to_items(documents, source))
-            pred = predict_with_counts(config_rows, products, measure(rows, config_rows))
+            m = measure(rows, config_rows)
+            if sources != "all":
+                m = {k: v for k, v in m.items() if k[3] == sources}
+            pred = predict_with_counts(config_rows, products, m)
             rates.append(_rate(score(golden, pred)["recall"]))
         print(f"    {run:<6d} {rates[0]:>8.1%} {rates[1]:>10.1%}  ({n:,}건)")
+
+    reverse_flips(documents, caches, slots)
+    extra_aspect(documents, config_rows, caches, slots)
+    missed_slot_table(documents, config_rows, products, golden, caches)
+
+
+def reverse_flips(documents: list[dict], caches: list, slots: set) -> None:
+    """골든 **비부정**이 부정으로 뒤집힌 건수 — 오탐을 만들 수 있는 유일한 방향.
+
+    classify_errors 는 골든 부정만 순회하므로 이 방향을 아예 안 센다. 그 상태로
+    "분류 오차는 탐지율만 깎고 오탐은 안 만든다"고 말하면, **측정하지 않은 것을
+    없다고 주장**하는 게 된다. (현진님 리뷰 §4, 2026-08-09)
+
+    ⚠️ 이 숫자가 0 이 아니어도 ②의 FPR 은 0 일 수 있다. ②는 현재 윈도우만 실제
+       분류로 갈고 과거 윈도우·배경은 oracle 이라(docstring 11~16행), 기준선이
+       깨끗한 채 분자만 움직인다. 즉 ②의 FPR 0% 는 설계의 산물이지 분류 오차의
+       성질이 아니다. 운영은 과거 윈도우도 LLM 분류라 양쪽이 같이 움직인다.
+    """
+    gold_all = _golden_labels(negatives_only=False)
+
+    print("\n■ 역방향 — 골든 비부정(0/1)이 부정(-1)으로 뒤집힌 건수")
+    print("    오탐을 만들 수 있는 유일한 방향이다. ②의 FPR 0% 는 현재 윈도우만 실제")
+    print("    분류로 갈고 과거·배경은 oracle 인 설계의 산물이라 이걸 못 잡는다.")
+    for run, cache in caches:
+        flips: Counter = Counter()
+        in_slot: Counter = Counter()
+        base: Counter = Counter()
+        kinds: dict = {s: set() for s in SOURCE_SPEC}   # 뒤집힌 **고유 문장**
+        pop: dict = {s: set() for s in SOURCE_SPEC}     # 모집단 고유 문장
+        for doc in documents:
+            label = gold_all.get(doc["id"])
+            if label is None or label[1] == "-1":
+                continue
+            base[doc["source"]] += 1
+            pop[doc["source"]].add(doc["text"])
+            # ⚠️ **어느 aspect 로 뒤집혔는지가 중요하다.** config 슬롯 밖 aspect 로
+            #    뒤집힌 건(예: 기타/-1) 채점 격자에 안 닿아 오탐을 만들 수 없다.
+            #    필터 없이 세면 '역방향 21건' 과 'FALSE 표 증가 1건' 이 따로 놀아
+            #    읽는 사람이 둘을 연결할 수 없다. (현진님 리뷰 5차)
+            hit = [p["aspect"] for p in cache.get(doc["id"], []) if p["sentiment"] == -1]
+            if hit:
+                flips[doc["source"]] += 1
+                kinds[doc["source"]].add(doc["text"])
+                if any(_in_slot(doc, a, slots) for a in hit):
+                    in_slot[doc["source"]] += 1
+        parts = [
+            f"{src} {flips[src]:,}/{base[src]:,} ({flips[src] / base[src]:.2%})"
+            f" · 격자 안 {in_slot[src]:,}"
+            f" · {len(kinds[src])}종/{len(pop[src])}종"
+            for src in SOURCE_SPEC
+            if base[src]
+        ]
+        print(f"    회차 {run}: " + "  ·  ".join(parts))
+    print("    '격자 안' = config 슬롯 aspect 로 뒤집힌 것. 그 밖은 채점에 안 닿는다.")
+    print("    ⚠️ 'N종/M종' 은 뒤집힌 고유 문장 / 모집단 고유 문장이다. 건수보다 이쪽을 볼 것 —")
+    print("       리뷰 비부정 모집단이 15종뿐이라 오판률이 문서당 확률이 아니라 특정 템플릿")
+    print("       몇 종의 문제다. 새 문장으로 일반화되지 않으므로 외삽하면 안 된다.")
+    print("       → ②의 FPR 0/8 은 안전성 근거가 아니다. 표본 크기 문제도 아니고,")
+    print("         리뷰 문장이 15종뿐인 **데이터의 결과**다. 운영 FPR 에 대해 ②는")
+    print("         아무 말도 못 한다. (현진님 리뷰 2026-08-09 3차)")
+
+
+def intended_slots(config_rows: list[dict], want: str) -> set:
+    """`intended_answer` 가 `want` 인 (상품, aspect, 채널, source) 슬롯."""
+    return {
+        (r["golden_group_id"], r["aspect"], r["channel"], r["source"])
+        for r in config_rows
+        if r.get("intended_answer", "").strip().upper() == want
+    }
+
+
+def extra_aspect(documents, config_rows, caches, slots) -> None:
+    """골든 **부정** 문서에 없던 aspect 를 부정으로 추가한 건수.
+
+    가르는 축은 "새 정보인가" 가 아니라 **슬롯 순증이냐 재분배냐** 다.
+
+        추가  골든 aspect 를 -1 로 유지 → 골든 슬롯 그대로 + 다른 슬롯 +1   (순증)
+        대체  골든 aspect 를 -1 로 못 냄 → 골든 슬롯 -1 + 다른 슬롯 +1      (재분배)
+
+    ⚠️ **양쪽 다 다른 슬롯을 +1 한다.** 그 이득 쪽을 세는 건 여기뿐이다 —
+       classify_errors 는 골든 aspect 만 보고 reverse_flips 는 골든 비부정만 본다.
+       '대체' 의 **손실 쪽**(골든 슬롯 -1)만 기존 버킷에 잡힌다.
+
+    ⚠️ '대체' 는 "다른 aspect 로" 의 부분집합이 **아니다**. keeps_gold 는 aspect + 감성
+       -1 을 요구하는데 classify_errors 의 same_aspect 는 aspect 존재만 보므로 한 칸
+       어긋난다 — 골든 aspect 를 중립으로 낸 건은 그쪽에서 "감성만 뒤집힘" 인데 여기선
+       대체다. 즉 대체 = "감성만 뒤집힘" ∪ "다른 aspect 로" 의 일부다.
+       (2026-08-10 이 데이터에서는 전자가 0건이라 우연히 겹쳐 보였다. 현진님 리뷰 8차)
+
+    2026-08-09 실측 — 역방향은 격자 안 0건인데 FALSE 슬롯 P024/색상/COUPANG 이
+    12 → 13 이었다. 원인이 INQ-033753 이고, 골든은 오배송:-1 인데 모델이 색상:-1 을
+    같이 냈다. 위 '추가' 경로다.
+    """
+    gold = _golden_negatives()
+    true_slots = intended_slots(config_rows, "TRUE")
+    false_slots = intended_slots(config_rows, "FALSE")
+
+    print("\n■ 추가 aspect — 골든 부정 문서에 없던 aspect 를 부정으로 낸 건수")
+    print("    역방향과 다른 경로다. 문서는 골든 부정이라 '비부정→부정' 에 안 잡히고,")
+    print("    골든 aspect 는 맞혔으니 '감성 뒤집힘' 에도 안 잡힌다.")
+    for run, cache in caches:
+        docs = 0
+        bump: Counter = Counter()  # 슬롯 → 이 경로로 늘어난 부정 수
+        added = replaced = 0
+        for doc in documents:
+            g = gold.get(doc["id"])
+            if g is None:
+                continue
+            preds = cache.get(doc["id"], [])
+            keeps_gold = any(
+                p["sentiment"] == -1 and p["aspect"] == g[0] for p in preds
+            )
+            hit = False
+            for pred in preds:
+                if pred["sentiment"] != -1 or pred["aspect"] == g[0]:
+                    continue
+                hit = True
+                key = (doc["product"], pred["aspect"], doc["channel"], doc["source"])
+                if key in slots:
+                    bump[key] += 1
+            docs += hit
+            if hit:
+                added += keeps_gold
+                replaced += not keeps_gold
+        n_t = sum(v for k, v in bump.items() if k in true_slots)
+        n_f = sum(v for k, v in bump.items() if k in false_slots)
+        s_t = sum(1 for k in bump if k in true_slots)
+        s_f = sum(1 for k in bump if k in false_slots)
+        print(
+            f"    회차 {run}: 추가 {added:,}건(골든 슬롯 유지 + 다른 슬롯 순증)"
+            f" · 대체 {replaced:,}건(골든 슬롯 -1 · 다른 슬롯 +1 재분배)"
+        )
+        print(
+            f"              격자 안 {sum(bump.values()):,}건/{len(bump)}슬롯"
+            f"  (TRUE {n_t}건/{s_t}슬롯 · FALSE {n_f}건/{s_f}슬롯)"
+        )
+    print("    '대체' 의 손실 쪽(골든 슬롯 -1)은 '감성만 뒤집힘'·'다른 aspect 로' 에 이미")
+    print("    잡힌다. 다만 **이득 쪽(다른 슬롯 +1)은 둘 다 안 세므로** 여기서만 보인다.")
+    print("    ⚠️ FALSE 슬롯 수는 아래 표 '증가' 의 **상한**이다 — 같은 슬롯에서 감성")
+    print("       뒤집힘으로 빠진 쪽이 더 크면 순증이 아니라 감소로 찍힌다.")
+
+
+def missed_slot_table(documents, config_rows, products, golden, caches) -> None:
+    """미탐 슬롯이 **왜** 안 울렸는지 — oracle 대비 실측 부정 수·delta·p 값.
+
+    "오차가 케이스 슬롯에 몰린다"와 "오차는 균일한데 케이스 창이 작아 몇 건만 빠져도
+    Fisher 가 못 낸다"는 처방이 다르다(문장 유형 고치기 vs 구조적 민감도). 캐시만으로
+    갈린다 — 미탐 슬롯의 cur_neg 가 얼마나 깎였는지 보면 된다. (현진님 리뷰 §5)
+    """
+    oracle_m = measure(build_rows(documents, oracle_classified(documents)), config_rows)
+
+    # TRUE 는 미탐 원인 진단이라 1회차로 충분하다. FALSE 는 FPR 근거라 전 회차를 본다 —
+    # 회차별 역방향이 29/34/29 로 달라서, 증가가 특정 회차에만 나오는지가 결론을 바꾼다.
+    # (현진님 리뷰 5차)
+    first = caches[0]
+    _slot_table(
+        config_rows,
+        oracle_m,
+        measure(build_rows(documents, _to_items(documents, first[1])), config_rows),
+        "TRUE", "TRUE 슬롯", first[0],
+    )
+    for run, cache in caches:
+        _slot_table(
+            config_rows,
+            oracle_m,
+            measure(build_rows(documents, _to_items(documents, cache)), config_rows),
+            "FALSE", "정상(FALSE) 슬롯", run, verbose=(run == caches[0][0]),
+        )
+
+
+def _slot_table(config_rows, oracle_m, real_m, want, title, run, verbose=True) -> None:
+    """oracle 대비 실측 cur_neg. TRUE 는 미탐 원인, FALSE 는 오탐 여지를 본다.
+
+    FALSE 쪽을 같이 찍는 이유: ②의 FPR 0% 가 "분류 오차가 오탐을 안 만든다" 인지
+    "정상 슬롯의 n 이 작아 아직 안 터졌다" 인지 가른다. 역방향 오판률이 높은 소스가
+    이 표에 있으면 후자 쪽이다. (현진님 리뷰 §2)
+    """
+    truth = intended_slots(config_rows, want)
+    print(f"\n■ {title}의 현재 윈도우 부정 수 — oracle vs 실측 (회차 {run})"
+)
+    print(f"    {'슬롯':38s} {'oracle':>12s} {'실측':>12s} {'차':>6s}")
+    changed = grown = skipped = 0
+    for key in sorted(truth):
+        o, r = oracle_m.get(key), real_m.get(key)
+        if not o or not r:
+            skipped += 1  # 커버리지 미달 등으로 측정 자체가 없는 슬롯
+            continue
+        if o[0] != r[0]:
+            changed += 1
+            grown += r[0] > o[0]
+        if verbose or r[0] != o[0]:
+            name = f"{key[0]}/{key[1]}/{key[2]}/{key[3]}"
+            print(
+                f"    {name:38s} {o[0]:>5d}/{o[1]:<6d} {r[0]:>5d}/{r[1]:<6d}"
+                f" {r[0] - o[0]:>+6d}"
+            )
+    print(
+        f"    → 달라진 슬롯 {changed}/{len(truth) - skipped}개"
+        f" (감소 {changed - grown} · 증가 {grown})"
+        f"  · config intended_answer=={want} 행 {len(truth)}개 중 측정 불가 {skipped}개 제외"
+    )
+    if want == "FALSE" and verbose:
+        print("      증가 = 역방향 오판이 채점 격자 안까지 들어온 것이다. 이게 오탐의 씨앗이다.")
+        print("      다만 '경로가 실재한다' 와 '지금 FPR 을 뒤집는다' 는 다르다 — 실측한")
+        print("      P024/색상/COUPANG/cs 는 past 40/800(5.0%) 대비 12→13/200 이고,")
+        print("      BH 컷오프(6.0e-04)를 넘으려면 25/200 이라 +12 건이 더 필요하다.")
+        print("      리뷰 config 슬롯은 6개(전부 색상)뿐이라 역방향을 볼 자리 자체가 좁다 —")
+        print("      FPR 0/8 을 안전성 근거로 쓸 수 없는 이유가 여기에도 있다.")
+        print("      ⚠️ 여기 74 는 intended_answer==FALSE 행이다. config 123행 =")
+        print("         FALSE 74 + TRUE 33 + 공란 16(scoring_included=N, SC-026·027·028·")
+        print("         036·037·038). '90' 은 FALSE 74 + 공란 16 을 합친 수다.")
 
 
 # ── 리포트 ───────────────────────────────────────────────────────
@@ -679,7 +1054,14 @@ def report(runs: list[dict], oracle: dict, mode: str = MODE_BATCH) -> None:
     print(f"\n{'=' * 72}")
     print("실험② 분류 오류 전파 — ①(oracle) vs ②(실제 분류)")
     print(f"{'=' * 72}")
-    print(f"분류 호출 방식: {mode} · 프롬프트 {prompt_fingerprint()} · {len(runs)}회 평균")
+    print(
+        f"분류 호출 방식: CS {mode} · 리뷰 per_item"
+        f" · 프롬프트 {prompt_fingerprint()} · {len(runs)}회 평균"
+    )
+    print(
+        "  ↳ ⚠️ 리뷰는 항상 per_item 이다(프롬프트2 에 배치 조립기가 없다). 아래 배치↔건당"
+        "\n     동등성 근거(실험③)는 프롬프트1·CS 에서 잰 것이라 리뷰엔 안 걸린다."
+    )
     if mode == MODE_BATCH:
         # 운영(워커)은 건당이라 조건이 다르다. 근거를 숫자와 함께 남겨야, 나중에
         # "왜 운영은 건당인데 실험은 배치냐"는 질문에 답이 있다.
@@ -715,14 +1097,21 @@ async def main_async(args) -> None:
     if args.limit > 0:
         documents = take_whole_products(documents, args.limit)
 
-    print(f"케이스 상품 {len(windows)}개 · 현재 윈도우 CS 문의 {len(documents):,}건")
-    print("과거 윈도우·배경 슬롯은 ①과 동일(oracle) — 차이는 현재 윈도우 분류뿐")
-    calls = (
-        -(-len(documents) // CHUNK_SIZE) if args.mode == MODE_BATCH else len(documents)
+    n_by_source = Counter(d["source"] for d in documents)
+    print(
+        f"케이스 상품 {len({p for p, _s in windows})}개 · 현재 윈도우 문서"
+        f" {len(documents):,}건"
+        f" (CS {n_by_source[SOURCE_CS]:,} · 리뷰 {n_by_source[SOURCE_REVIEW]:,})"
     )
+    print("과거 윈도우·배경 슬롯은 ①과 동일(oracle) — 차이는 현재 윈도우 분류뿐")
+    # 리뷰는 배치 프롬프트가 없어 항상 per_item 이다(_build_batch_prompt 가 프롬프트1
+    # 전용). 그래서 호출 수도 source 별로 따로 센다.
+    n_cs, n_rv = n_by_source[SOURCE_CS], n_by_source[SOURCE_REVIEW]
+    calls = (-(-n_cs // CHUNK_SIZE) if args.mode == MODE_BATCH else n_cs) + n_rv
     print(
         f"→ 분류 {len(documents):,}건 × {args.runs}회"
-        f" = LLM 호출 {calls * args.runs:,}회 [{args.mode}] (캐시 적중분 제외)"
+        f" = LLM 호출 {calls * args.runs:,}회"
+        f" [CS {args.mode} · 리뷰 per_item] (캐시 적중분 제외)"
     )
 
     if args.dry_run:
@@ -732,7 +1121,8 @@ async def main_async(args) -> None:
     tag = "full" if args.limit <= 0 else f"limit{args.limit}"
 
     if args.diagnose:
-        diagnose(documents, config_rows, products, golden, tag, args.mode, args.runs)
+        diagnose(documents, config_rows, products, golden, tag, args.mode,
+                 args.runs, args.sources)
         return
 
     # ① 기준선 — 같은 코드에 oracle 입력을 태운다. 채점 버그면 여기서 먼저 드러난다.
@@ -777,6 +1167,13 @@ def main() -> None:
         " 실제 건수는 --dry-run 으로 먼저 확인할 것.",
     )
     ap.add_argument("--dry-run", action="store_true", help="LLM 호출 없이 대상만 확인")
+    ap.add_argument(
+        "--sources",
+        default="all",
+        choices=["all", SOURCE_CS, SOURCE_REVIEW],
+        help="채점 범위. all=CS+리뷰(기본). 범위 몫과 프롬프트 몫을 분리해 볼 때 cs 로"
+        " 좁힌다 — 캐시를 그대로 쓰므로 LLM 호출은 없다.",
+    )
     ap.add_argument(
         "--diagnose",
         action="store_true",

@@ -25,20 +25,37 @@ BH 배치 범위 — **두 소스를 한 family 로 묶는다** (로직 §[2-B] 
   → eval/run_detection_eval.py 실측 배치도 1,464 로 일치한다(회귀 감시 지점).
 
 ──────────────────────────────────────────────────────────────────────────
-원인 분류 — 프롬프트3 (classify_cause_v1.md) 미결 / 주의
+원인 분류 — 프롬프트3 (classify_cause_v1.md) 판정 2 / 미결 2
 ──────────────────────────────────────────────────────────────────────────
-  - **confidence 캘리브레이션:** few-shot 예시의 confidence 가 "구체 후보=0.82~0.94 /
-    기타=0.3~0.4" 두 덩어리라 0.5~0.8 구간이 비어 있다. LLM 은 few-shot 을 강하게
-    모방하므로 confidence 가 사실상 `cause == 기타` 의 재표현이 될 수 있다.
-    판정 기준: ① 구간이 올라갈수록 정확도가 단조 증가하는가 ② 0.5~0.8 에도 분포하는가.
-    둘 중 하나라도 실패하면 confidence 를 버리고 aspect_match 만 쓴다.
-    → eval/run_cause_eval.py 가 이 두 기준을 리포트한다.
-  - **핏 흡수:** 사이즈 원인 후보 3종은 치수·표기 기준이라 순수 핏 불만("붕 뜬다")은
-    '기타'로 떨어진다. 기타 비율이 높으면 후보 추가를 검토할 것.
-  - **경계 혼동 모니터링:** 사진_색감 vs 조명, 표기_오타 vs 실측_표기_편차는 태생적으로
-    겹친다 → golden 라벨로 이 쌍의 혼동행렬을 별도 확인.
-  - **evidence 용도 미정:** 채점에도 후처리에도 안 쓰인다. 디버깅·데모용이면 그대로 두고,
-    아니면 빼서 토큰을 아낄 수 있다.
+  - **confidence 미사용 — 확정 (2026-08-09).** few-shot 예시의 confidence 가 "구체
+    후보=0.82~0.94 / 기타=0.3~0.4" 두 덩어리라 0.5~0.8 구간이 비어 있고, LLM 은 few-shot
+    을 강하게 모방하므로 confidence 가 사실상 `cause == 기타` 의 재표현이 될 수 있다.
+    이를 두 기준으로 판정했다.
+      ① 단조 증가: 0.0~0.5 49.1%(n=55) → 0.8~0.9 94.2%(n=120) → 0.9~1.01 92.4%(n=105)
+         — 마지막 구간에서 꺾인다. 실패.
+      ② 0.5~0.8 분포: n=0. 실패.
+    둘 다 실패이므로 규칙대로 **confidence 를 버리고 aspect_match 만 쓴다.**
+    cause.diagnose_cause 가 이미 그렇게 동작한다 — 프롬프트 출력에는 남아 있으나 코드는
+    읽지 않는다. 근거: eval/results/cause_eval_20260730_160255.json (n=280, gpt-4o).
+  - **evidence 유지 — 확정 (2026-08-09).** 채점에도 후처리에도 안 쓰이고 계약에도 없다.
+    (탐지 결과 스키마의 `evidence.inquiry_ids` 는 **다른 것**이다 — 알림 레벨 인용 경계.)
+    그래도 빼려면 재측정이 필요하다: 프롬프트 규칙 5 가 "원문에 실제로 존재하는 구절을
+    그대로 인용"을 요구하는 **grounding 제약**이라, 제거하면 원인 라벨 정확도가 같이
+    내려갈 수 있다(실험⑤ RAG 대조 0/4 → 4/4 가 같은 종류의 교훈이다).
+    → 토큰 절약 목적의 제거는 v2 를 만들어 실험⑥ v1 대비 비교로만 판단한다. 그전까지 유지.
+  - **핏 흡수 (미결).** 사이즈 원인 후보 3종은 치수·표기 기준이라 순수 핏 불만("붕 뜬다")은
+    '기타'로 떨어진다. 기타 비율이 높으면 후보 추가를 검토할 것. 비용이 실재한다 —
+    `기타`(consistent=true)는 개선안 확신도 **상한 중간**이다(출력 스키마 §6).
+    전제: 실험⑥ 재실행. 현재 저장된 결과에는 기타 비율이 없다.
+  - **경계 혼동 모니터링 (미결 — 대상 재조준 2026-08-09).** 출력 스키마 §6 이
+    root_cause.label 로 Agent3 의 도구를 정하므로, **도구가 갈리는 쌍만** 실질 위험이다.
+      · 감시 대상: 구체 후보 ↔ 실물_염색_편차 / 실제_원단_문제. image_guide ↔ copy_draft
+        강제 + 확신도 낮음 고정이라 처방이 정반대로 뒤집힌다. 소재 3후보는 copy_draft /
+        image_guide / 스코프 한계로 셋 다 갈리므로 전체가 감시 대상이다.
+      · 감시 제외: 사진_색감 vs 조명, 표기_오타 vs 실측_표기_편차 — 이전 판의 감시 대상
+        이었으나 **같은 도구로 수렴**해 셀러가 받는 결과가 같다.
+      실측이 이 조준과 맞는다: aspect 정확도가 사이즈 93.3%(후보 전부 copy_draft) >
+      소재 83.3% > 색상 81.9%(n=160) 순이다. 전제: 실험⑥ 재실행(혼동행렬).
 """
 
 from __future__ import annotations
@@ -56,6 +73,7 @@ from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
 from app.core.schemas import (
     Aspect,
     Channel,
+    ChannelRate,
     ClassifiedItem,
     DetectionAlert,
     DetectionStats,
@@ -82,6 +100,9 @@ ALL_ASPECTS: list[str] = [a.value for a in Aspect]
 
 # 알림을 내지 않는 판정 — [3] 이 '정상'이면 애초에 발행 대상이 아니다.
 _NO_ALERT_VERDICTS = frozenset({Verdict.NORMAL})
+
+_SNAPSHOT_CHANNELS = (Channel.COUPANG, Channel.NAVER, Channel.ZIGZAG)
+"""payload 채널별 비율의 고정 순서. 집계용 가상 채널 ALL 은 포함하지 않는다."""
 
 
 # ── 요청/응답 모델 ───────────────────────────────────────────────
@@ -278,6 +299,13 @@ def _build_candidates(
             # 이 alert 에도 "표본 부족"으로 병기돼 셀러에게 거짓 정보가 나간다.
             # (past_total==0 폴백은 aspect 슬롯별로 걸려서 실제로 aspect 마다 다를 수 있다.)
             "excluded_channels": main_result["held"],
+            "channel_rates": _build_channel_rates(
+                counts,
+                product,
+                main,
+                source,
+                excluded_channels=main_result["held"],
+            ),
             "stats": _build_stats(tests, counts, product, main, stats_channel, source),
             "sub_aspects": [
                 SubAspectAction(
@@ -296,6 +324,40 @@ def _build_candidates(
             "fired": True,
         }
     return candidates
+
+
+def _build_channel_rates(
+    counts: dict,
+    product: str,
+    aspect: str,
+    source: str,
+    *,
+    excluded_channels: list[str],
+) -> list[ChannelRate]:
+    """이미 집계한 현재 윈도우 counts를 채널별 비율 스냅샷으로 보존한다.
+
+    알림의 ``stats.source``와 같은 source, ``main_aspect``와 같은 aspect 기준이다.
+    관측 문서가 전혀 없는 채널은 비율을 만들 수 없으므로 ``rate=None``이며 판정에서도
+    제외된 것으로 표시한다. rate는 퍼센트가 아닌 기존 ``stats.cur_rate``와 같은 0~1 값이다.
+    """
+    excluded = set(excluded_channels)
+    snapshots: list[ChannelRate] = []
+
+    for channel in _SNAPSHOT_CHANNELS:
+        channel_counts = counts.get((product, aspect, channel.value, source))
+        if channel_counts is None:
+            rate = None
+            is_excluded = True
+        else:
+            cur_neg, cur_total, _past_neg, _past_total = channel_counts
+            rate = cur_neg / cur_total if cur_total else None
+            is_excluded = channel.value in excluded or cur_total == 0
+
+        snapshots.append(
+            ChannelRate(channel=channel, rate=rate, excluded=is_excluded)
+        )
+
+    return snapshots
 
 
 def _representative_delta(
