@@ -322,11 +322,22 @@ async def check_grounding_precision() -> list[tuple[DetectionAlert, Recommendati
     alerts = attach_cs_inquiries(build_synthetic_alerts(), load_negative_cs_by_product())
 
     grounded_cases = []
+    skipped: list[str] = []
     for alert, inquiries in alerts:
         recommendation = await pipeline.run(alert, inquiries)
         if recommendation is None:
+            # 미생성을 조용히 넘기면 **분모만 줄어 점수가 좋아 보인다.**
+            # run() 이 None 을 돌려주는 경로는 둘 다 근거 문제다(근거 0건 / 라우팅된
+            # 쪽 근거 없음) — 성능이 아니라 커버리지 결손이므로 따로 세서 드러낸다.
+            skipped.append(alert.alert_id)
             continue
         grounded_cases.append((alert, recommendation))
+
+    if skipped:
+        print(
+            f"\n⚠️ 개선안 미생성 {len(skipped)}/{len(alerts)}건 — 근거 부족(사유는"
+            f" pipeline 경고 로그). 아래 지표의 분모에서 빠진다: {skipped[:5]}"
+        )
 
     denom = [(a, r) for a, r in grounded_cases if r.proposal.detailpage_grounded]
 

@@ -7,12 +7,25 @@ retrieve_context는 어느 타입이 선택될지 모른 채 두 후보 근거(d
 실행해서 한다(tests=비용 0 원칙과 분리).
 """
 
+import logging
+
 from app.recommendation import pipeline
 
 
+class FakeCollection:
+    """Chroma 컬렉션 대역. `count()` 만 있으면 되는 이유는 pipeline 이 조회 0건일 때
+    "컬렉션이 통째로 비었는가"를 그것으로만 가르기 때문이다(_log_detail_page_miss)."""
+
+    def __init__(self, count: int = 1) -> None:
+        self._count = count
+
+    def count(self) -> int:
+        return self._count
+
+
 def test_returns_detail_text_when_found(monkeypatch, biased_alert):
-    monkeypatch.setattr(pipeline, "get_detail_pages", lambda: "detail-collection")
-    monkeypatch.setattr(pipeline, "get_rejection_reasons", lambda: "rejection-collection")
+    monkeypatch.setattr(pipeline, "get_detail_pages", FakeCollection)
+    monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
     monkeypatch.setattr(
         pipeline, "get_documents", lambda collection, where: [{"document": "아이보리 컬러"}]
     )
@@ -25,8 +38,8 @@ def test_returns_detail_text_when_found(monkeypatch, biased_alert):
 
 
 def test_falls_back_when_detail_page_missing(monkeypatch, biased_alert):
-    monkeypatch.setattr(pipeline, "get_detail_pages", lambda: "detail-collection")
-    monkeypatch.setattr(pipeline, "get_rejection_reasons", lambda: "rejection-collection")
+    monkeypatch.setattr(pipeline, "get_detail_pages", FakeCollection)
+    monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
     monkeypatch.setattr(pipeline, "get_documents", lambda collection, where: [])
     monkeypatch.setattr(pipeline, "query_documents", lambda collection, **kwargs: [])
 
@@ -35,10 +48,41 @@ def test_falls_back_when_detail_page_missing(monkeypatch, biased_alert):
     assert context["detail_text"] == pipeline.NO_DETAIL_TEXT
 
 
+def test_warns_when_detail_collection_is_empty(monkeypatch, biased_alert, caplog):
+    """컬렉션이 통째로 비면(시딩 누락) 조회 0건과 같은 모양이라 로그로 갈라줘야 한다.
+
+    `.chroma/` 가 gitignore 라 각자 로컬이 곧 환경이고, 시딩 전에는 전건이 0건으로
+    나온다 — 상품 등록 문제로 오진하면 엉뚱한 데를 파게 된다.
+    """
+    monkeypatch.setattr(pipeline, "get_detail_pages", lambda: FakeCollection(count=0))
+    monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
+    monkeypatch.setattr(pipeline, "get_documents", lambda collection, where: [])
+    monkeypatch.setattr(pipeline, "query_documents", lambda collection, **kwargs: [])
+
+    with caplog.at_level(logging.WARNING, logger=pipeline.logger.name):
+        context = pipeline.retrieve_context(biased_alert)
+
+    assert context["detail_text"] == pipeline.NO_DETAIL_TEXT
+    assert "seed_vectordb" in caplog.text
+
+
+def test_does_not_warn_when_only_this_product_is_unregistered(monkeypatch, biased_alert, caplog):
+    """컬렉션에 다른 상품이 들어 있으면 시딩은 된 것이다 — 경고 대상이 아니다."""
+    monkeypatch.setattr(pipeline, "get_detail_pages", lambda: FakeCollection(count=504))
+    monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
+    monkeypatch.setattr(pipeline, "get_documents", lambda collection, where: [])
+    monkeypatch.setattr(pipeline, "query_documents", lambda collection, **kwargs: [])
+
+    with caplog.at_level(logging.WARNING, logger=pipeline.logger.name):
+        pipeline.retrieve_context(biased_alert)
+
+    assert caplog.text == ""
+
+
 def test_always_includes_cs_summary_regardless_of_detail_page_result(monkeypatch, biased_alert):
     """라우팅 전이라 어느 타입이 뽑힐지 모른다 — cs_summary도 항상 같이 채워야 한다."""
-    monkeypatch.setattr(pipeline, "get_detail_pages", lambda: "detail-collection")
-    monkeypatch.setattr(pipeline, "get_rejection_reasons", lambda: "rejection-collection")
+    monkeypatch.setattr(pipeline, "get_detail_pages", FakeCollection)
+    monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
     monkeypatch.setattr(
         pipeline, "get_documents", lambda collection, where: [{"document": "아이보리 컬러"}]
     )
@@ -50,8 +94,8 @@ def test_always_includes_cs_summary_regardless_of_detail_page_result(monkeypatch
 
 
 def _stub_vectordb(monkeypatch):
-    monkeypatch.setattr(pipeline, "get_detail_pages", lambda: "detail-collection")
-    monkeypatch.setattr(pipeline, "get_rejection_reasons", lambda: "rejection-collection")
+    monkeypatch.setattr(pipeline, "get_detail_pages", FakeCollection)
+    monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
     monkeypatch.setattr(
         pipeline, "get_documents", lambda collection, where: [{"document": "아이보리 컬러"}]
     )
@@ -84,8 +128,8 @@ def test_cs_quotes_is_no_detail_text_without_inquiries(monkeypatch, biased_alert
 
 
 def test_returns_top_similar_case_when_found(monkeypatch, biased_alert):
-    monkeypatch.setattr(pipeline, "get_detail_pages", lambda: "detail-collection")
-    monkeypatch.setattr(pipeline, "get_rejection_reasons", lambda: "rejection-collection")
+    monkeypatch.setattr(pipeline, "get_detail_pages", FakeCollection)
+    monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
     monkeypatch.setattr(
         pipeline, "get_documents", lambda collection, where: [{"document": "아이보리 컬러"}]
     )

@@ -315,3 +315,9 @@ COLLECTION_DETAIL_PAGES = "detail_pages"
 
 COLLECTION_REJECTION_REASONS = "rejection_reasons"
 """컬렉션2 — 반려 사유. 다음 생성 시 참고 (B5 반려 → 적재)."""
+
+EMBEDDING_MODEL = "text-embedding-3-small"
+"""두 컬렉션 공통 임베딩 모델(다국어).
+
+⚠️ 이 값을 바꾸면 **두 컬렉션 다 재시딩해야 한다** — Chroma 가 컬렉션 설정에 임베딩
+함수를 저장해두고 불일치 시 열기를 거부한다(vectordb._get_collection)."""
