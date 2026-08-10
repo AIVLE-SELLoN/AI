@@ -22,8 +22,9 @@
     main.inbound  ← ai.#        (백엔드 큐의 대역 — 우리 발행이 여기 꽂힌다)
     ai.inbound    ← feedback.#  (우리 컨슈머가 읽는 큐, 계약과 같은 이름·바인딩)
 
-운영에서는 **둘 다 우리가 만들면 안 된다.** 그래서 `MQ_DECLARE_TOPOLOGY=true` 가 아니면
-아예 거부한다 — 실수로 운영 브로커를 향해 돌리는 걸 막는 유일한 방어선이다.
+운영에서는 **둘 다 우리가 만들면 안 된다.** 그래서 실행 전에 두 가지를 본다
+(`assert_local_broker`) — `MQ_DECLARE_TOPOLOGY=true` **그리고** 브로커 호스트가 로컬인지.
+플래그 하나만 보면 운영 접속정보를 넣은 채 플래그를 안 내린 순간 그대로 통과한다.
 """
 
 from __future__ import annotations
@@ -37,6 +38,48 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 MAIN_INBOUND = "main.inbound"
 AI_BINDING = "ai.#"
 
+LOCAL_BROKER_HOSTS = frozenset(
+    {"localhost", "127.0.0.1", "::1", "rabbitmq", "host.docker.internal"}
+)
+"""로컬로 인정하는 브로커 호스트.
+
+`rabbitmq` 는 docker-compose 서비스명, `host.docker.internal` 은 컨테이너 안에서 호스트를
+가리키는 이름이다. 그 밖은 전부 "우리 것이 아닐 수 있다" 로 본다 — **허용 목록이지
+차단 목록이 아니다.** 운영 호스트명을 미리 알 수 없으니 반대로는 못 막는다.
+"""
+
+
+def assert_local_broker(settings) -> None:
+    """로컬 브로커가 맞는지 확인한다. 아니면 아무것도 만들지 않고 멈춘다.
+
+    **두 가지를 다 본다.** 예전엔 `MQ_DECLARE_TOPOLOGY` 하나만 봤는데, 그 플래그는
+    "우리가 토폴로지를 만든다" 는 뜻이지 "여기가 로컬이다" 라는 뜻이 아니다. 운영
+    접속정보(C1)를 `.env` 에 넣으면서 플래그를 같이 안 내리면 그대로 통과해서 **운영
+    브로커에 우리 큐와 바인딩이 생긴다.** 그때 나는 사고는 조용하다 — 큐가 만들어지고
+    스크립트는 성공으로 끝나며, 백엔드가 나중에 정상 토폴로지를 올릴 때
+    `PRECONDITION_FAILED` 로 처음 드러난다.
+
+    Raises:
+        SystemExit: 로컬이 아니거나 플래그가 꺼져 있을 때.
+    """
+    if not settings.mq_declare_topology:
+        raise SystemExit(
+            "MQ_DECLARE_TOPOLOGY=false 입니다. 이 스크립트는 로컬 전용입니다.\n"
+            "운영 토폴로지는 백엔드 인프라가 소유하고, 우리가 큐를 만들면 "
+            "PRECONDITION_FAILED 로 거부당합니다 (docs/mq_events.md §2-1)."
+        )
+
+    host = (settings.mq_host or "").strip().lower()
+    if host not in LOCAL_BROKER_HOSTS:
+        raise SystemExit(
+            f"MQ_HOST={settings.mq_host!r} 는 로컬 브로커가 아닙니다. 중단합니다.\n"
+            "이 스크립트는 백엔드 소유 큐(main.inbound·ai.inbound)를 만들기 때문에, "
+            "운영 브로커에 돌리면 남의 토폴로지를 우리 인자로 선점하게 됩니다.\n"
+            f"로컬로 인정하는 호스트: {', '.join(sorted(LOCAL_BROKER_HOSTS))}\n"
+            "⚠️ 운영으로 전환할 때는 접속정보 4개만 바꾸면 안 됩니다 — "
+            "MQ_DECLARE_TOPOLOGY=false 와 MQ_VHOST 도 같이 맞추세요."
+        )
+
 
 async def setup() -> None:
     from aio_pika import connect_robust
@@ -46,14 +89,8 @@ async def setup() -> None:
     from app.core.mq_consumer import FEEDBACK_BINDING, INBOUND_QUEUE
 
     settings = get_settings()
-    if not settings.mq_declare_topology:
-        raise SystemExit(
-            "MQ_DECLARE_TOPOLOGY=false 입니다. 이 스크립트는 로컬 전용입니다.\n"
-            "운영 토폴로지는 백엔드 인프라가 소유하고, 우리가 큐를 만들면 "
-            "PRECONDITION_FAILED 로 거부당합니다 (docs/mq_events.md §2-1).\n"
-            "⚠️ 이 가드가 보는 건 MQ_HOST 가 아니라 이 플래그다 — 운영 브로커를 가리킨 채로"
-            " true 로 두면 운영에 큐를 만든다."
-        )
+    # ⚠️ **연결보다 먼저**. 확인이 연결 뒤에 있으면 운영 브로커에 접속은 이미 한 뒤다.
+    assert_local_broker(settings)
 
     connection = await connect_robust(
         host=settings.mq_host,
