@@ -1110,8 +1110,17 @@ def report(runs: list[dict], oracle: dict, mode: str = MODE_BATCH) -> None:
         spread = f" ±{(max(values) - min(values)) / 2:.1%}" if len(values) > 1 else ""
         print(f"{label:24s} {a:>10.1%} {b:>8.1%}{spread:<5s} {a - b:>+9.1%}")
 
+    if len(runs) > 1:
+        # ± 의 정의를 숫자 옆에 붙여둔다. 이 값만 떼서 노션·발표로 옮기면 읽는 쪽은
+        # 표준편차나 신뢰구간으로 읽는다. 반범위는 양 끝 두 점만 쓰고 가운데를 버리는
+        # 가장 거친 산포 측도이고, 범위는 표본이 커질수록 넓어져 구조적으로 과소추정이다.
+        print(
+            f"\n± 는 {len(runs)}회 **반범위** (max−min)/2 다 — 표준편차도 신뢰구간도 아니다."
+            "\n  회차를 늘리면 폭은 넓어지는 쪽으로 움직인다. '관측된 폭'으로만 읽을 것."
+        )
+
     per_run = " / ".join(f"{_rate(r['recall']):.1%}" for r in runs)
-    print(f"\n회차별 탐지율: {per_run}")
+    print(f"회차별 탐지율: {per_run}")
 
     only_in_pipeline = sorted({m for r in runs for m in r["misses"]})
     if only_in_pipeline:

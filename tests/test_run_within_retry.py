@@ -62,9 +62,16 @@ def test_batch_retries_within_run(monkeypatch):
 
 
 def test_batch_gives_up_after_limit(monkeypatch):
-    """재시도를 다 써도 안 오면 캐시에 넣지 않는다 — 커버리지 검사가 슬롯을 뺀다."""
+    """재시도를 다 써도 안 오면 캐시에 넣지 않는다 — 커버리지 검사가 슬롯을 뺀다.
+
+    호출 패스 수도 함께 고정한다. 최종 무응답 건수만 보면 `range(1, RETRY_WITHIN_RUN + 2)`
+    를 `+ 3` 으로 바꿔도 통과해서, 비용 근거가 걸려 있는 "정확히 2회"가 안 지켜진다.
+    """
+    calls: list[set] = []
+
     async def always_drop(rows, chunk_size, concurrency):
         ids = {r["inquiry_id"] for r in rows}
+        calls.append(ids)
         miss = max(ids)
         return {i: [] for i in ids - {miss}}, [miss]
 
@@ -74,6 +81,10 @@ def test_batch_gives_up_after_limit(monkeypatch):
 
     assert failed == 1
     assert "INQ-0002" not in cache, "무응답을 0 으로 세면 분자가 조용히 깎인다"
+    assert len(calls) == 1 + rpe.RETRY_WITHIN_RUN, (
+        f"1차 + 재시도 {rpe.RETRY_WITHIN_RUN}회 = {1 + rpe.RETRY_WITHIN_RUN} 패스여야 하는데"
+        f" {len(calls)} 패스다 — 오프바이원이면 비용이 예상과 달라진다"
+    )
 
 
 # ── 건당 경로 (리뷰가 쓰는 길) ───────────────────────────────────
@@ -116,9 +127,12 @@ def test_per_item_retries_within_run(monkeypatch):
 
 
 def test_per_item_gives_up_after_limit(monkeypatch):
-    """건당 경로도 재시도 소진 후에는 캐시에 안 넣는다."""
+    """건당 경로도 재시도 소진 후에는 캐시에 안 넣는다. 패스 수도 같이 고정한다."""
+    seen: list[list[str]] = []
+
     async def always_fail_last(items):
         ids = [i.item_id for i in items]
+        seen.append(ids)
         return [_Res() for _ in ids[:-1]] + [_Err("계속 실패")]
 
     monkeypatch.setattr(rpe, "classify_aspect", always_fail_last)
@@ -127,6 +141,9 @@ def test_per_item_gives_up_after_limit(monkeypatch):
 
     assert failed == 1
     assert "INQ-0002" not in cache
+    assert len(seen) == 1 + rpe.RETRY_WITHIN_RUN, (
+        f"1차 + 재시도 {rpe.RETRY_WITHIN_RUN}회여야 하는데 {len(seen)} 패스다"
+    )
 
 
 def test_retry_budget_is_bounded():
