@@ -53,6 +53,7 @@ from app.core.vectordb import (
     get_documents,
     get_rejection_reasons,
     query_documents,
+    upsert_documents,
 )
 from app.recommendation.grounding import has_evidence, verify_grounding
 
@@ -938,7 +939,8 @@ def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -
         if rejection_reason.reason_text is not None:
             metadata["rejection_reason_text"] = rejection_reason.reason_text
 
-    get_rejection_reasons().upsert(
+    upsert_documents(
+        get_rejection_reasons(),
         ids=[recommendation.recommendation_id],
         documents=[document],
         metadatas=[metadata],

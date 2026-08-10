@@ -6,11 +6,17 @@
     get 은 임베딩을 거치지 않아 정확하고 싸다. 키를 아는데 query 를 쓰지 말 것.
 
 임베딩 모델은 두 컬렉션 다 `EMBEDDING_MODEL` 로 명시 지정한다. Chroma 기본값
-(all-MiniLM-L6-v2)은 영어 모델이고 우리 코퍼스는 전부 한국어다. 실제로 임베딩을
-타는 건 컬렉션2(query) 한 곳이다.
+(all-MiniLM-L6-v2)은 영어 모델이고 우리 코퍼스는 전부 한국어다.
+
+**임베딩 API 를 타는 지점은 둘이다** — 조회는 `query()` 뿐이지만(`get()` 은 안 탄다),
+적재(`upsert()`)는 **두 컬렉션 모두** 문서를 임베딩한다. 즉 시딩과 반려사유 적재도
+네트워크와 유효한 키를 요구한다. 그 호출들은 `VectorDbError` 로 감싸서 내보낸다
+(`_embedding_backed`) — 감싸지 않으면 `openai.RateLimitError` 같은 공급자 예외가
+호출부를 그대로 뚫고 나가 REST 500·배치 중단으로 이어진다.
 """
 
 import logging
+from contextlib import contextmanager
 from functools import lru_cache
 from typing import Any
 
@@ -18,6 +24,7 @@ import chromadb
 from chromadb.api import ClientAPI
 from chromadb.errors import ChromaError
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+from openai import OpenAIError
 
 from app.config import get_settings
 from app.core.constants import (
@@ -113,16 +120,49 @@ def query_documents(
     Returns:
         `{"id", "document", "metadata", "distance"}` 리스트. distance 는 작을수록 유사.
     """
-    try:
+    with _embedding_backed("query"):
         result = collection.query(
             query_texts=[query_text],
             n_results=n_results,
             where=where,
         )
-    except ChromaError as exc:
-        raise VectorDbError(f"query 실패: {exc}") from exc
 
     return _flatten_query_result(result)
+
+
+@contextmanager
+def _embedding_backed(operation: str):
+    """임베딩 API 를 타는 Chroma 호출의 예외를 `VectorDbError` 로 통일한다.
+
+    `OpenAIError` 를 같이 잡는 이유: 임베딩 함수가 네트워크를 타면서 공급자 예외가
+    **Chroma 를 그대로 통과한다**(`isinstance(exc, ChromaError)` 가 False). 레이트리밋은
+    상시 발생 가능하고, 안 감싸면 `retrieve_context()` 를 뚫고 나가 REST 는 500,
+    배치는 그 알림의 개선안이 통째로 유실된다.
+    """
+    try:
+        yield
+    except ChromaError as exc:
+        raise VectorDbError(f"{operation} 실패: {exc}") from exc
+    except OpenAIError as exc:
+        raise VectorDbError(
+            f"{operation} 실패 — 임베딩 API 오류({EMBEDDING_MODEL}): {exc}"
+        ) from exc
+
+
+def upsert_documents(
+    collection: Any,
+    *,
+    ids: list[str],
+    documents: list[str],
+    metadatas: list[dict[str, Any]],
+) -> None:
+    """적재. **문서를 임베딩하므로 네트워크와 키가 필요하다.**
+
+    `collection.upsert()` 를 직접 부르지 말 것 — 그 경로는 공급자 예외가 안 감싸져
+    호출부에 raw 401/429 가 올라간다.
+    """
+    with _embedding_backed("upsert"):
+        collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
 
 
 def get_documents(

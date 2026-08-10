@@ -36,7 +36,8 @@ from app.core.constants import (
     COLLECTION_REJECTION_REASONS,
     EMBEDDING_MODEL,
 )
-from app.core.vectordb import get_client, get_detail_pages
+from app.core.exceptions import VectorDbError
+from app.core.vectordb import get_client, get_detail_pages, upsert_documents
 
 CSV_PATH = Path(__file__).resolve().parent.parent / "data" / "input" / "input_detail_fields.csv"
 
@@ -77,19 +78,28 @@ def main(reset: bool = False) -> None:
         print(f"임베딩 모델 = {EMBEDDING_MODEL} / 컬렉션 초기화")
         reset_collections()
 
+    # 적재는 문서를 임베딩하므로 네트워크와 유효한 키가 필요하다. 실패는
+    # `upsert_documents` 가 VectorDbError 로 감싸 사유를 알아볼 수 있게 준다.
     collection = get_detail_pages()
-    collection.upsert(
-        ids=[_make_id(entry) for entry in entries],
-        documents=[entry["detail_text"] for entry in entries],
-        metadatas=[
-            {
-                "product_group_id": entry["product_group_id"],
-                "channel": entry["channel"],
-                "aspect": entry["aspect"],
-            }
-            for entry in entries
-        ],
-    )
+    try:
+        upsert_documents(
+            collection,
+            ids=[_make_id(entry) for entry in entries],
+            documents=[entry["detail_text"] for entry in entries],
+            metadatas=[
+                {
+                    "product_group_id": entry["product_group_id"],
+                    "channel": entry["channel"],
+                    "aspect": entry["aspect"],
+                }
+                for entry in entries
+            ],
+        )
+    except VectorDbError as exc:
+        print(f"적재 실패: {exc}")
+        print("  .env 의 LLM_API_KEY 와 네트워크 연결을 확인하세요.")
+        raise SystemExit(1) from exc
+
     print(f"{len(entries)}건 적재 완료 → collection={collection.name}")
 
 
