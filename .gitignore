@@ -62,3 +62,17 @@ eval/eval_sets/*.csv.bak*
 # 재라벨 검토 큐 — 실행할 때마다 새로 생성되는 중간 산출물이라 커밋 안 함.
 # 실제 반영 근거는 relabel_runs/(3회 실행)와 relabel_manual_review.csv(손검토 확정).
 eval/eval_sets/relabel_queue_generated_sentiment.csv
+
+# AI Hub 71603 원문 — 저장소에 두지 않는다. 재현이 필요하면 AI Hub 에서 직접 내려받아
+# 같은 경로에 두면 된다(eval/run_classify_eval.py·scripts/select_relabel_300.py 가 참조).
+#
+# ⚠️ 이 파일만 막는다. 같은 폴더의 relabel_manual_review.csv·relabel_policy_sweep.csv·
+#    relabel_runs/ 는 전부 GEN-#### (LLM 생성물)이라 원문이 아니고, 라벨 변경 근거라
+#    커밋 대상이다. hybrid_verify_*.json 도 위 54~56행대로 스크럽 전제로 커밋한다.
+#    relabel_* 나 hybrid_verify_* 를 통째로 막으면 그 근거들이 같이 사라진다.
+eval/eval_sets/relabel_300.csv
+#
+# ⚠️ 사람이 한 재라벨링 300건(그중 40건이 AI Hub gold 와 불일치, 73건에 note)은
+#    relabel_300_labels.csv 에 원문 없이 남긴다. select_relabel_300.py 는 relabel_*
+#    컬럼을 빈 값으로 내보내므로(:153-155), AI Hub 에서 다시 받아도 그 판단은
+#    복구되지 않는다. 프로젝트의 유일한 실성능 기준선이라 반드시 보존해야 한다.
