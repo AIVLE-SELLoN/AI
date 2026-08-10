@@ -380,8 +380,52 @@ async def test_dry_run_skips_recommendation_when_gate_closed(tmp_path):
     assert summary["llm_calls"].get("개선안", 0) == 0, (
         "이 시나리오의 알림은 파손(물류 점검 권장)이라 Agent3 대상이 아니다"
     )
-    assert summary["llm_calls"].get("가이드라인", 0) == summary["processed"]
+    # 가이드라인도 게이트를 태운다 — 이 알림은 `evidence.inquiry_ids` 가 비어 있어
+    # (스코프 밖이라 [6] 원인분류를 안 탄다) `is_guideline_target()` 이 거르고 LLM 을
+    # 아예 안 부른다. 예전엔 알림 수만큼 세서 **비용 추정이 위로 어긋났다**(2026-08-10).
+    assert summary["llm_calls"].get("가이드라인", 0) == 0
     assert summary["state_cached"] == 0, "dry-run 은 캐시를 건드리지 않는다"
+
+
+@pytest.mark.asyncio
+async def test_guideline_not_counted_when_it_was_not_a_target(tmp_path, monkeypatch):
+    """실제 경로도 dry-run 과 **같은 것**을 센다 — `None`(대상 아님)은 안 센다.
+
+    두 경로가 다른 걸 세면 `--dry-run` 으로 잡은 비용 추정이 실제와 안 맞는다. 그게
+    dry-run 을 두는 이유 전부다. `None` 은 실패도 아니다(콜백을 돌려주는 FAILED_* 와 구분).
+    """
+
+    async def not_a_target(alert, inquiries, *, product_name=None):
+        return None
+
+    async def sent(alert, rec, trace_id):
+        return None
+
+    monkeypatch.setattr(daily, "generate_guideline", not_a_target)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json", load_inputs=_stub_inputs
+    )
+
+    assert summary["llm_calls"].get("가이드라인", 0) == 0
+    assert not summary["failures"], "생성 대상이 아닌 건 실패가 아니다"
+
+
+@pytest.mark.asyncio
+async def test_dry_run_counts_guideline_when_gate_open(tmp_path, monkeypatch):
+    """게이트를 통과하는 알림은 그대로 센다 — 위 테스트가 "항상 0" 으로 굳지 않게.
+
+    가이드라인은 발화한 알림 **거의 전부**에 돌아서 건수가 그대로 비용이다. 한쪽만
+    고정하면 세는 쪽이 통째로 죽어도 테스트가 통과한다.
+    """
+    monkeypatch.setattr(daily, "is_guideline_target", lambda _alert: True)
+
+    summary = await daily.run_batch(
+        dry_run=True, state_path=tmp_path / "state.json", load_inputs=_stub_inputs
+    )
+
+    assert summary["llm_calls"].get("가이드라인", 0) == summary["processed"] >= 1
 
 
 @pytest.mark.asyncio

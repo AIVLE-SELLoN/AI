@@ -162,8 +162,9 @@ except ImportError as exc:  # pragma: no cover
 
 
 try:  # pragma: no cover
-    from app.reporting.cs_reply_service import (
-        generate_guideline,  # type: ignore[attr-defined]
+    from app.reporting.cs_reply_service import (  # type: ignore[attr-defined]
+        generate_guideline,
+        is_guideline_target,
     )
 
     GUIDELINE_AVAILABLE = True
@@ -177,6 +178,11 @@ except ImportError as exc:  # pragma: no cover
     ) -> Any:
         logger.info("[가이드라인 미연결] 생성 생략 alert=%s", alert.alert_id)
         return None
+
+    def is_guideline_target(alert: Any) -> bool:
+        # 실물과 같은 규칙(빈 `evidence.inquiry_ids` 는 대상 아님). 폴백이 무조건 True 면
+        # 미연결 환경의 dry-run 추정이 실물보다 크게 나와 추정값을 못 믿게 된다.
+        return bool(alert.evidence.inquiry_ids)
 
 
 # [2] 개선안 생성 게이트. `recommended_action == "개선안 생성"` 인 alert 만 Agent3 로
@@ -691,7 +697,12 @@ async def run_batch(
                 # Agent3 비용이 크게 과대추정된다(조치 7종 중 1종만 해당).
                 if wants_recommendation:
                     counts["개선안"] += 1
-                counts["가이드라인"] += 1
+                # 가이드라인도 **게이트를 태워서** 센다. `evidence.inquiry_ids` 가 빈 알림
+                # (스코프 밖 — 파손·오배송)은 `is_guideline_target()` 이 걸러 LLM 을 아예
+                # 안 부르는데, 세면 그만큼 과대추정된다. 개선안과 달리 가이드라인은 발화한
+                # 알림 거의 전부에 돌아서 건수가 그대로 비용이다.
+                if is_guideline_target(alert):
+                    counts["가이드라인"] += 1
                 counts["발행:이상"] += 1
                 continue
 
@@ -746,7 +757,12 @@ async def run_batch(
 
             try:
                 guideline = await generate_guideline(alert, inquiries)
-                counts["가이드라인"] += 1
+                # ⚠️ `None` 은 **생성 대상이 아니라는 뜻**이지 실패가 아니다
+                #    (`is_guideline_target()` — `evidence.inquiry_ids` 가 빈 스코프 밖 알림).
+                #    그것까지 세면 dry-run 추정과 실제 집계가 서로 다른 것을 세게 되고,
+                #    비용 추정이 위로 어긋난다. 실패(FAILED_*)는 콜백을 돌려주므로 여기 든다.
+                if guideline is not None:
+                    counts["가이드라인"] += 1
             except Exception as exc:  # noqa: BLE001
                 failures.append(
                     {
