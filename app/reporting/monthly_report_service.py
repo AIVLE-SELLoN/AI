@@ -282,6 +282,85 @@ def _label(input_data: MonthlyReportInput) -> str:
     )
 
 
+def _summarize(labels: list[str], budget: int) -> str:
+    """앞에서 몇 개만 나열하고 나머지는 "외 N개" 로 접는다. 기준은 **개수가 아니라 길이**다.
+
+    **`len(반환값) <= budget` 을 보장한다.** 호출부가 이 보장 위에서 전체 길이를 계산하므로
+    깨뜨리면 안 된다. "외 N개" 꼬리도 예산 **안에** 들어간다 — 밖에 두면 접힐 때마다
+    예산을 넘긴다.
+
+    ⚠️ 개수로 자르면 상품명이 길 때 상한이 안 지켜진다. `product_name` 은 커머스 노출명
+       (`products.channel_product_name`)이라 원래 길다 — 38자짜리 이름이면 5개만 나열해도
+       구절 하나가 200자를 넘는다. 목 데이터 이름이 7자라 로컬에서는 안 밟힌다.
+       (2026-08-09 리뷰: 개수 상한으로 재면 223자, 실제 노출명으로 재면 368자)
+
+    최소 1개는 반드시 나열한다 — 하나도 없으면 셀러가 무엇인지 알 수 없다. 다만 그
+    하나가 예산보다 길면 **이름 자체를 자른다.** 안 자르면 이름 하나가 상한을 통째로
+    무너뜨린다(노출명에 길이 제한이 없어서 얼마든지 길 수 있다).
+    """
+    if not labels or budget <= 0:
+        return ""
+
+    full = ", ".join(labels)
+    if len(full) <= budget:
+        return full
+
+    # 접어야 한다. 꼬리 자릿수는 접힌 개수에 따라 변하니 **최악**(전부 접힘)으로 잡아
+    # 자리를 먼저 빼둔다 — 실제 꼬리는 이보다 짧거나 같으므로 예산을 넘길 수 없다.
+    room = budget - len(f" 외 {len(labels)}개")
+    if room < 1:
+        # 꼬리조차 못 담는 예산. 호출부 계산상 여기까지 오지 않지만, `len <= budget` 은
+        # 호출부 산술이 기대는 불변식이라 어떤 입력에서도 지킨다. 이름을 못 실으므로
+        # 개수만 알린다.
+        summary = f"{len(labels)}개"
+        return summary[:budget]
+
+    shown: list[str] = []
+    used = 0
+    for label in labels:
+        if not shown:
+            # 첫 항목은 반드시 하나 싣는다 — room 보다 길면 잘라서라도.
+            text = _truncate_label(label, room)
+            shown.append(text)
+            used = len(text)  # 자른 **뒤** 길이를 센다
+            continue
+        cost = len(label) + 2  # ", " 구분자
+        if used + cost > room:
+            break
+        shown.append(label)
+        used += cost
+
+    # ⚠️ 접힌 게 없으면 꼬리를 붙이지 않는다. 여기까지 왔다는 건 "전부 나열하면 예산을
+    #    넘는다"는 뜻이지 "여러 건 중 일부만 실었다"는 뜻이 아니다 — 긴 이름 **1건**을
+    #    잘라 실은 경우가 그렇다. 그때 꼬리를 붙이면 "상품 1개: …이름… 외 0개" 가 되어
+    #    셀러 화면에 나간다(2026-08-10 리뷰에서 실측). 잘린 것과 접힌 것은 다르다.
+    folded = len(labels) - len(shown)
+    if not folded:
+        return ", ".join(shown)
+    return f"{', '.join(shown)} 외 {folded}개"
+
+
+def _truncate_label(label: str, room: int) -> str:
+    """`room` 글자에 맞춰 자른다. `이름(P001)` 꼴이면 **코드를 남기고 이름만** 줄인다.
+
+    ⚠️ 오른쪽부터 자르면 끝에 붙은 상품 코드가 가장 먼저 날아간다. 셀러가 관리 화면에서
+       상품을 특정하는 값은 노출명이 아니라 **코드**라, 같은 예산에서 코드를 남기는 쪽이
+       정보가 더 많다(2026-08-10 리뷰). 코드까지 넣을 자리도 없으면 그때는 통째로 자른다.
+    """
+    if len(label) <= room:
+        return label
+    if room <= 1:
+        return label[:room]  # "…" 를 넣을 자리도 없다
+
+    if label.endswith(")") and "(" in label:
+        code = label[label.rindex("(") :]  # "(P001)"
+        keep = room - len(code) - 1  # "…" 한 자리
+        if keep >= 1:
+            return f"{label[:keep]}…{code}"
+
+    return label[: room - 1] + "…"
+
+
 def _build_excluded_notice(
     held_inputs: list[MonthlyReportInput] | None,
     failed_products: list[str] | None,
@@ -294,35 +373,40 @@ def _build_excluded_notice(
     ⚠️ 보류 상품은 이제 **지면에도 페이지가 생긴다**(2026-08-09). 이 문구는 그것과 별개로
        유지한다 — 메인 화면은 PDF 를 열지 않고도 빠진 상품을 알아야 한다.
 
-    ⚠️ 이름 나열은 `NOTICE_MAX_LISTED_PRODUCTS` 개까지다. 상한이 없으면 길이가 상품 수에
-       비례해 자라는데(보류 42건 = 631자), `notice_message` 에는 스키마 max_length 가 없어
-       우리 쪽에서 안 걸린다. 백엔드 컬럼이 짧으면 조용히 잘리거나 INSERT 가 터진다.
+    ⚠️ 상한은 **조립된 최종 문자열**에 건다(`NOTICE_MAX_CHARS`). 구절마다 따로 예산을 주면
+       구절 수·고정 문구 길이만큼 천장이 같이 올라가서 상한이 안 지켜진다 — 구절당 70자로
+       주던 때 실측 천장이 **260자**였다(2026-08-10 리뷰). 그래서 여기서 고정 문구가 쓸
+       자리를 먼저 빼고, 남은 것을 구절들이 **나눠 쓴다.**
+
+           총길이 = 고정 문구 + 구분자 + Σ(나열)  ≤  고정 문구 + 구분자 + n × 나열예산
+                                                 ≤  NOTICE_MAX_CHARS
+
+       `_summarize` 가 `len <= budget` 을 보장하므로 이 부등식이 성립한다.
     """
-    parts = []
+    # (머리말, 나열할 라벨, 꼬리말) — 머리말·꼬리말이 고정 문구다.
+    sections: list[tuple[str, list[str], str]] = []
     if held_inputs:
-        parts.append(
-            f"표본 부족으로 보류된 상품 {len(held_inputs)}개: "
-            f"{_summarize([_label(i) for i in held_inputs])} "
-            f"— VOC {constants.MIN_VOC_COUNT_FOR_REPORT}건 미만이라 분석하지 않았습니다."
-        )
+        sections.append((
+            f"표본 부족으로 보류된 상품 {len(held_inputs)}개: ",
+            [_label(i) for i in held_inputs],
+            f" — VOC {constants.MIN_VOC_COUNT_FOR_REPORT}건 미만이라 분석하지 않았습니다.",
+        ))
     if failed_products:
-        parts.append(
-            f"생성에 실패해 이번 호에서 빠진 상품 {len(failed_products)}개: "
-            f"{_summarize(failed_products)} — 데이터는 정상이며 운영자가 확인 중입니다."
-        )
-    return " ".join(parts) or None
+        sections.append((
+            f"생성에 실패해 이번 호에서 빠진 상품 {len(failed_products)}개: ",
+            list(failed_products),
+            " — 데이터는 정상이며 운영자가 확인 중입니다.",
+        ))
+    if not sections:
+        return None
 
+    # 고정 문구는 못 줄인다(개수 자릿수까지 포함해 여기서 확정된다). 남은 것을 나눠 쓴다.
+    fixed = sum(len(head) + len(tail) for head, _, tail in sections) + (len(sections) - 1)
+    listing_budget = (constants.NOTICE_MAX_CHARS - fixed) // len(sections)
 
-def _summarize(labels: list[str]) -> str:
-    """앞에서 몇 개만 나열하고 나머지는 "외 N개" 로 접는다.
-
-    전부 나열하면 문구 길이가 상품 수에 비례해 자란다 — 42건이면 631자다. 상세는 합본
-    PDF 의 보류 페이지에 상품마다 있으므로, 여기서는 "무엇이 몇 개" 만 알리면 된다.
-    """
-    cap = constants.NOTICE_MAX_LISTED_PRODUCTS
-    if len(labels) <= cap:
-        return ", ".join(labels)
-    return f"{', '.join(labels[:cap])} 외 {len(labels) - cap}개"
+    return " ".join(
+        f"{head}{_summarize(labels, listing_budget)}{tail}" for head, labels, tail in sections
+    )
 
 
 async def compile_and_upload_monthly_book(
