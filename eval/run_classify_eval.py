@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import hashlib
 import json
 import random
 import re
@@ -56,6 +57,7 @@ GOLDEN_LABELS = ROOT / "data" / "golden" / "golden_cs_labels.csv"
 INPUT_INQUIRIES = ROOT / "data" / "input" / "input_cs_inquiries.csv"
 RESULTS_DIR = ROOT / "eval" / "results"
 PROMPT_DIR = ROOT / "app" / "classification" / "prompts"
+CACHE_DIR = ROOT / "data" / "eval_cache"
 
 VALID_ASPECTS = {"색상", "사이즈", "소재", "파손", "오배송", "기타"}
 
@@ -111,6 +113,88 @@ def operational_negative_rate(all_rows: list[dict]) -> float | None:
     if not all_rows:
         return None
     return sum(1 for r in all_rows if r["true_sentiment"] == -1) / len(all_rows)
+
+
+# ── 분류 캐시 ────────────────────────────────────────────────────
+#
+# 왜 필요한가 (2026-08-11): 전량 실행(96,524건 · 4,827청크 · 약 1시간)이 중간에
+# 죽으면 **그때까지 쓴 돈이 통째로 날아간다.** 실제로 API 크레딧이 3,248청크째에
+# 소진돼 70%만 채점된 결과가 나왔고, 재개할 방법이 없어 전부 다시 사야 했다.
+# 실험②(run_pipeline_eval)는 같은 이유로 이미 캐시를 쓰고 있다 — 그 설계를 따른다.
+
+
+def prompt_fingerprint(prompt_version: str) -> str:
+    """캐시 키에 넣을 프롬프트 지문 — 이름(버전) + **내용 해시**.
+
+    버전 문자열만으로는 부족하다. 예시를 파일에 **그대로 추가**하면 파일명이 안 바뀌어서
+    캐시가 안 갈리고 옛 결과를 조용히 재사용한다. "고쳤는데 숫자가 안 변한다"가 되고,
+    캐시 탓인지 수정이 무효한 탓인지 못 가린다. (실험②의 같은 이름 함수와 동일 논리)
+
+    load_llm_prompt 를 쓰므로 "## System Prompt" 위의 변경이력은 해시에 안 들어간다 —
+    LLM 에 안 나가는 부분이라 결과를 못 바꾸고, 주석 한 줄에 캐시가 날아가면 안 된다.
+    """
+    body = classification_service.load_llm_prompt("classification", prompt_version)
+    return f"{prompt_version}-{hashlib.sha256(body.encode('utf-8')).hexdigest()[:8]}"
+
+
+def data_fingerprint(rows: list[dict]) -> str:
+    """채점 대상 행의 (id, 본문) 해시.
+
+    캐시는 `inquiry_id` 로만 조회하는데, 목 데이터를 재생성하면 **같은 id 에 다른
+    텍스트**가 들어간다. 지문이 안 갈리면 "신규 호출 0건"으로 조용히 통과하면서
+    **옛 라벨로 새 문서를 채점한다.** 비용이 안 드는 것처럼 보이면서 결과만 틀리는,
+    제일 나쁜 실패다. 표본 구성(--limit/--seed/--only-negative)도 행 집합이 달라지므로
+    이 지문 하나에 같이 잡힌다.
+    """
+    h = hashlib.sha256()
+    for r in rows:  # sample_rows 가 결정론이라 순서가 안정적이다
+        h.update(str(r["inquiry_id"]).encode("utf-8"))
+        h.update(b"\x00")
+        h.update(str(r["raw_text"]).encode("utf-8"))
+        h.update(b"\x1e")
+    return h.hexdigest()[:8]
+
+
+def cache_path_for(rows: list[dict], prompt_version: str, mode: str, limit: int) -> Path:
+    tag = "full" if limit <= 0 else f"limit{limit}"
+    fp = f"{prompt_fingerprint(prompt_version)}_{data_fingerprint(rows)}"
+    return CACHE_DIR / f"classify_{tag}_{mode}_{fp}.json"
+
+
+async def run_with_cache(
+    rows: list[dict], chunk_size: int, concurrency: int, mode: str, path: Path
+) -> tuple[dict[str, list[dict]], list[str]]:
+    """캐시에 없는 행만 태우고, **묶음마다 저장한다.**
+
+    run_chunks / run_batch_chunks 자체는 안 건드린다 — run_pipeline_eval 이
+    run_batch_chunks 를 import 해서 쓰므로 시그니처가 바뀌면 실험②가 깨진다.
+    여기서는 그 함수들을 묶음 단위로 여러 번 부르고 사이사이 저장만 한다.
+
+    ⚠️ **무응답은 캐시에 안 넣는다.** 다음 실행이 그것만 다시 부르게 하려는 것이다.
+       넣어버리면 실패가 영구히 굳는다.
+    """
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache: dict[str, list[dict]] = (
+        json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    )
+    todo = [r for r in rows if r["inquiry_id"] not in cache]
+    print(f"  캐시 {len(rows) - len(todo):,}건 적중 / 신규 호출 {len(todo):,}건 → {path.name}")
+    if not todo:
+        return {r["inquiry_id"]: cache[r["inquiry_id"]] for r in rows}, []
+
+    runner = run_batch_chunks if mode == "batch" else run_chunks
+    failed: list[str] = []
+    group = chunk_size * concurrency  # 이 묶음이 끝날 때마다 디스크에 쓴다
+    for start in range(0, len(todo), group):
+        part = todo[start : start + group]
+        preds, part_failed = await runner(part, chunk_size, concurrency)
+        cache.update(preds)
+        path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+        failed.extend(part_failed)
+        done = min(start + group, len(todo))
+        print(f"    누적 {done:,}/{len(todo):,}건 저장 (무응답 {len(failed):,})")
+
+    return {r["inquiry_id"]: cache[r["inquiry_id"]] for r in rows if r["inquiry_id"] in cache}, failed
 
 
 def parse_few_shot_examples(prompt_version: str) -> list[str]:
@@ -785,16 +869,27 @@ async def main_async(args: argparse.Namespace) -> None:
     if few_shot_texts:
         print(f"  few-shot 유출 검사: {len(few_shot_texts)}개 예시 대비, 표본 중 {n_leaked_in_sample}건 유출(임계 {args.leak_threshold})")
 
+    cache_file = cache_path_for(
+        sampled, classification_service.PROMPT_ASPECT_VERSION, args.mode, args.limit
+    )
     if args.dry_run:
         n_chunks = -(-len(sampled) // args.chunk_size)
         print(f"\n[dry-run] LLM 호출 안 함. 실제 실행 시 청크 약 {n_chunks}회(청크당 {args.chunk_size}건).")
         print(f"  모드: {args.mode} ({'item당 개별호출×동시실행' if args.mode == 'per_item' else '청크당 호출 1회(진짜 배치)'})")
+        n_cached = len(json.loads(cache_file.read_text(encoding="utf-8"))) if cache_file.exists() else 0
+        print(f"  캐시: {cache_file.name} — {'적중 ' + format(n_cached, ',') + '건' if n_cached else '없음(전량 신규)'}")
         return
 
-    if args.mode == "batch":
-        predictions, failed_ids = await run_batch_chunks(sampled, args.chunk_size, args.concurrency)
+    if args.no_cache:
+        # 캐시를 아예 안 타는 경로. 측정을 처음부터 다시 하고 싶을 때만 쓴다 —
+        # 중단되면 그때까지의 비용이 전부 날아간다.
+        print("  ⚠️ --no-cache: 중단 시 이번 실행 비용이 전부 날아갑니다")
+        runner = run_batch_chunks if args.mode == "batch" else run_chunks
+        predictions, failed_ids = await runner(sampled, args.chunk_size, args.concurrency)
     else:
-        predictions, failed_ids = await run_chunks(sampled, args.chunk_size, args.concurrency)
+        predictions, failed_ids = await run_with_cache(
+            sampled, args.chunk_size, args.concurrency, args.mode, cache_file
+        )
     if failed_ids:
         print(f"\n⚠️ 청크 실패로 무응답 처리된 건: {len(failed_ids)}건")
 
@@ -854,6 +949,11 @@ def main() -> None:
         help="few-shot과 코퍼스 문장의 유사도가 이 값 이상이면 유출로 판정(§6 B안, 2026-08-06)."
              " difflib.SequenceMatcher 기준 — 예시20(1.00완전일치)·25(0.88)·20-2(0.79) 3건을"
              " 전부 잡으려면 0.75 이하 필요(예시20-2가 기준선). 0으로 주면 검사 자체를 끔.",
+    )
+    parser.add_argument(
+        "--no-cache", action="store_true",
+        help="분류 캐시를 안 쓴다(처음부터 재측정). ⚠️ 중단되면 그때까지의 LLM 비용이"
+             " 전부 날아간다 — 전량 실행에서는 쓰지 말 것",
     )
     parser.add_argument("--chunk-size", type=int, default=20, help="청크당 문의 수")
     parser.add_argument("--concurrency", type=int, default=4, help="동시 청크 호출 수")
