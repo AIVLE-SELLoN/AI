@@ -844,22 +844,30 @@ def reverse_flips(documents: list[dict], caches: list) -> None:
     for run, cache in caches:
         flips: Counter = Counter()
         base: Counter = Counter()
+        kinds: dict = {s: set() for s in SOURCE_SPEC}   # 뒤집힌 **고유 문장**
+        pop: dict = {s: set() for s in SOURCE_SPEC}     # 모집단 고유 문장
         for doc in documents:
             label = gold_all.get(doc["id"])
             if label is None or label[1] == "-1":
                 continue
             base[doc["source"]] += 1
+            pop[doc["source"]].add(doc["text"])
             if any(p["sentiment"] == -1 for p in cache.get(doc["id"], [])):
                 flips[doc["source"]] += 1
+                kinds[doc["source"]].add(doc["text"])
         parts = [
             f"{src} {flips[src]:,}/{base[src]:,} ({flips[src] / base[src]:.2%})"
+            f" · {len(kinds[src])}종/{len(pop[src])}종"
             for src in SOURCE_SPEC
             if base[src]
         ]
         print(f"    회차 {run}: " + "  ·  ".join(parts))
-    print("    ⚠️ 리뷰 분모는 골든 비부정만 센 것이다(부정 79건 제외). 리뷰 오판률이")
-    print("       CS 의 수십 배면, 지금 FPR 0/8 은 안전성이 아니라 표본 크기(n=70)의")
-    print("       결과일 수 있다 — SC-034/review 가 그 정상 8슬롯 중 하나다.")
+    print("    ⚠️ 'N종/M종' 은 뒤집힌 고유 문장 / 모집단 고유 문장이다. 건수보다 이쪽을 볼 것 —")
+    print("       리뷰 비부정 모집단이 15종뿐이라 오판률이 문서당 확률이 아니라 특정 템플릿")
+    print("       몇 종의 문제다. 새 문장으로 일반화되지 않으므로 외삽하면 안 된다.")
+    print("       → ②의 FPR 0/8 은 안전성 근거가 아니다. 표본 크기 문제도 아니고,")
+    print("         리뷰 문장이 15종뿐인 **데이터의 결과**다. 운영 FPR 에 대해 ②는")
+    print("         아무 말도 못 한다. (현진님 리뷰 2026-08-09 3차)")
 
 
 def missed_slot_table(documents, config_rows, products, golden, caches) -> None:
@@ -894,20 +902,27 @@ def _slot_table(config_rows, oracle_m, real_m, want, title, run) -> None:
     print(f"\n■ {title}의 현재 윈도우 부정 수 — oracle vs 실측 (회차 {run})"
 )
     print(f"    {'슬롯':38s} {'oracle':>12s} {'실측':>12s} {'차':>6s}")
-    shrunk = 0
+    shrunk = grown = 0
     for key in sorted(truth):
         o, r = oracle_m.get(key), real_m.get(key)
         if not o or not r:
             continue
         if o[0] != r[0]:
             shrunk += 1
+            grown += r[0] > o[0]
         name = f"{key[0]}/{key[1]}/{key[2]}/{key[3]}"
         print(
             f"    {name:38s} {o[0]:>5d}/{o[1]:<6d} {r[0]:>5d}/{r[1]:<6d}"
             f" {r[0] - o[0]:>+6d}"
         )
-    verb = "깎인" if want == "TRUE" else "달라진"
-    print(f"    → 부정 수가 {verb} 슬롯 {shrunk}/{len(truth)}개")
+    print(
+        f"    → 달라진 슬롯 {shrunk}/{len(truth)}개 (감소 {shrunk - grown} · 증가 {grown})"
+        f"  · config intended_answer=={want} 행 {len(truth)}개 기준"
+    )
+    if want == "FALSE":
+        print("      증가 = 역방향 오판이 채점 격자 안까지 들어온 것이다. 이게 오탐의 씨앗이다.")
+        print("      리뷰 config 슬롯은 6개(전부 색상)뿐이라 역방향을 볼 자리 자체가 좁다 —")
+        print("      FPR 0/8 을 안전성 근거로 쓸 수 없는 이유가 여기에도 있다.")
 
 
 # ── 리포트 ───────────────────────────────────────────────────────
