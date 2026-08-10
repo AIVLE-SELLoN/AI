@@ -820,11 +820,11 @@ def diagnose(documents, config_rows, products, golden, tag, mode, runs,
             rates.append(_rate(score(golden, pred)["recall"]))
         print(f"    {run:<6d} {rates[0]:>8.1%} {rates[1]:>10.1%}  ({n:,}건)")
 
-    reverse_flips(documents, caches)
+    reverse_flips(documents, caches, slots)
     missed_slot_table(documents, config_rows, products, golden, caches)
 
 
-def reverse_flips(documents: list[dict], caches: list) -> None:
+def reverse_flips(documents: list[dict], caches: list, slots: set) -> None:
     """골든 **비부정**이 부정으로 뒤집힌 건수 — 오탐을 만들 수 있는 유일한 방향.
 
     classify_errors 는 골든 부정만 순회하므로 이 방향을 아예 안 센다. 그 상태로
@@ -843,6 +843,7 @@ def reverse_flips(documents: list[dict], caches: list) -> None:
     print("    분류로 갈고 과거·배경은 oracle 인 설계의 산물이라 이걸 못 잡는다.")
     for run, cache in caches:
         flips: Counter = Counter()
+        in_slot: Counter = Counter()
         base: Counter = Counter()
         kinds: dict = {s: set() for s in SOURCE_SPEC}   # 뒤집힌 **고유 문장**
         pop: dict = {s: set() for s in SOURCE_SPEC}     # 모집단 고유 문장
@@ -852,22 +853,62 @@ def reverse_flips(documents: list[dict], caches: list) -> None:
                 continue
             base[doc["source"]] += 1
             pop[doc["source"]].add(doc["text"])
-            if any(p["sentiment"] == -1 for p in cache.get(doc["id"], [])):
+            # ⚠️ **어느 aspect 로 뒤집혔는지가 중요하다.** config 슬롯 밖 aspect 로
+            #    뒤집힌 건(예: 기타/-1) 채점 격자에 안 닿아 오탐을 만들 수 없다.
+            #    필터 없이 세면 '역방향 21건' 과 'FALSE 표 증가 1건' 이 따로 놀아
+            #    읽는 사람이 둘을 연결할 수 없다. (현진님 리뷰 5차)
+            hit = [p["aspect"] for p in cache.get(doc["id"], []) if p["sentiment"] == -1]
+            if hit:
                 flips[doc["source"]] += 1
                 kinds[doc["source"]].add(doc["text"])
+                if any(_in_slot(doc, a, slots) for a in hit):
+                    in_slot[doc["source"]] += 1
         parts = [
             f"{src} {flips[src]:,}/{base[src]:,} ({flips[src] / base[src]:.2%})"
+            f" · 격자 안 {in_slot[src]:,}"
             f" · {len(kinds[src])}종/{len(pop[src])}종"
             for src in SOURCE_SPEC
             if base[src]
         ]
         print(f"    회차 {run}: " + "  ·  ".join(parts))
+    print("    '격자 안' = config 슬롯 aspect 로 뒤집힌 것. 그 밖은 채점에 안 닿는다.")
     print("    ⚠️ 'N종/M종' 은 뒤집힌 고유 문장 / 모집단 고유 문장이다. 건수보다 이쪽을 볼 것 —")
     print("       리뷰 비부정 모집단이 15종뿐이라 오판률이 문서당 확률이 아니라 특정 템플릿")
     print("       몇 종의 문제다. 새 문장으로 일반화되지 않으므로 외삽하면 안 된다.")
+    _extra_aspect(documents, caches, slots, gold_all)
     print("       → ②의 FPR 0/8 은 안전성 근거가 아니다. 표본 크기 문제도 아니고,")
     print("         리뷰 문장이 15종뿐인 **데이터의 결과**다. 운영 FPR 에 대해 ②는")
     print("         아무 말도 못 한다. (현진님 리뷰 2026-08-09 3차)")
+
+
+def _extra_aspect(documents, caches, slots, gold_all) -> None:
+    """골든 **부정** 문서에 없던 aspect 를 부정으로 추가한 건수.
+
+    ⚠️ 세 번째 경로다. classify_errors 는 골든 aspect 만 보고, reverse_flips 는 골든
+       비부정만 본다 — 둘 다 이걸 안 센다. 그런데 **채점 격자 안에서 부정 수를 실제로
+       늘린 유일한 기전이 이거였다.** 2026-08-09 실측에서 역방향은 격자 안 0건인데
+       FALSE 슬롯 P024/색상/COUPANG 이 12 → 13 이었고, 원인이 INQ-033753 이다 —
+       골든은 오배송:-1 인데 모델이 색상:-1 을 같이 냈다.
+    """
+    print("\n■ 추가 aspect — 골든 부정 문서에 없던 aspect 를 부정으로 낸 건수")
+    print("    역방향과 다른 경로다. 문서는 골든 부정이라 '비부정→부정' 에 안 잡히고,")
+    print("    골든 aspect 는 맞혔으니 '감성 뒤집힘' 에도 안 잡힌다.")
+    for run, cache in caches:
+        n = in_slot = 0
+        for doc in documents:
+            g = gold_all.get(doc["id"])
+            if not g or g[1] != "-1":
+                continue
+            extra = [
+                p["aspect"]
+                for p in cache.get(doc["id"], [])
+                if p["sentiment"] == -1 and p["aspect"] != g[0]
+            ]
+            if extra:
+                n += 1
+                in_slot += any(_in_slot(doc, a, slots) for a in extra)
+        print(f"    회차 {run}: {n:,}건 · 격자 안 {in_slot:,}건")
+    print("    격자 안 건수가 FALSE 슬롯 표의 '증가' 와 이어지는 수다.")
 
 
 def missed_slot_table(documents, config_rows, products, golden, caches) -> None:
@@ -877,17 +918,28 @@ def missed_slot_table(documents, config_rows, products, golden, caches) -> None:
     Fisher 가 못 낸다"는 처방이 다르다(문장 유형 고치기 vs 구조적 민감도). 캐시만으로
     갈린다 — 미탐 슬롯의 cur_neg 가 얼마나 깎였는지 보면 된다. (현진님 리뷰 §5)
     """
-    _run, cache = caches[0]
-    oracle_rows = build_rows(documents, oracle_classified(documents))
-    real_rows = build_rows(documents, _to_items(documents, cache))
-    oracle_m = measure(oracle_rows, config_rows)
-    real_m = measure(real_rows, config_rows)
+    oracle_m = measure(build_rows(documents, oracle_classified(documents)), config_rows)
 
-    for want, title in (("TRUE", "TRUE 슬롯"), ("FALSE", "정상(FALSE) 슬롯")):
-        _slot_table(config_rows, oracle_m, real_m, want, title, _run)
+    # TRUE 는 미탐 원인 진단이라 1회차로 충분하다. FALSE 는 FPR 근거라 전 회차를 본다 —
+    # 회차별 역방향이 29/34/29 로 달라서, 증가가 특정 회차에만 나오는지가 결론을 바꾼다.
+    # (현진님 리뷰 5차)
+    first = caches[0]
+    _slot_table(
+        config_rows,
+        oracle_m,
+        measure(build_rows(documents, _to_items(documents, first[1])), config_rows),
+        "TRUE", "TRUE 슬롯", first[0],
+    )
+    for run, cache in caches:
+        _slot_table(
+            config_rows,
+            oracle_m,
+            measure(build_rows(documents, _to_items(documents, cache)), config_rows),
+            "FALSE", "정상(FALSE) 슬롯", run, verbose=(run == caches[0][0]),
+        )
 
 
-def _slot_table(config_rows, oracle_m, real_m, want, title, run) -> None:
+def _slot_table(config_rows, oracle_m, real_m, want, title, run, verbose=True) -> None:
     """oracle 대비 실측 cur_neg. TRUE 는 미탐 원인, FALSE 는 오탐 여지를 본다.
 
     FALSE 쪽을 같이 찍는 이유: ②의 FPR 0% 가 "분류 오차가 오탐을 안 만든다" 인지
@@ -902,24 +954,27 @@ def _slot_table(config_rows, oracle_m, real_m, want, title, run) -> None:
     print(f"\n■ {title}의 현재 윈도우 부정 수 — oracle vs 실측 (회차 {run})"
 )
     print(f"    {'슬롯':38s} {'oracle':>12s} {'실측':>12s} {'차':>6s}")
-    shrunk = grown = 0
+    changed = grown = skipped = 0
     for key in sorted(truth):
         o, r = oracle_m.get(key), real_m.get(key)
         if not o or not r:
+            skipped += 1  # 커버리지 미달 등으로 측정 자체가 없는 슬롯
             continue
         if o[0] != r[0]:
-            shrunk += 1
+            changed += 1
             grown += r[0] > o[0]
-        name = f"{key[0]}/{key[1]}/{key[2]}/{key[3]}"
-        print(
-            f"    {name:38s} {o[0]:>5d}/{o[1]:<6d} {r[0]:>5d}/{r[1]:<6d}"
-            f" {r[0] - o[0]:>+6d}"
-        )
+        if verbose or r[0] != o[0]:
+            name = f"{key[0]}/{key[1]}/{key[2]}/{key[3]}"
+            print(
+                f"    {name:38s} {o[0]:>5d}/{o[1]:<6d} {r[0]:>5d}/{r[1]:<6d}"
+                f" {r[0] - o[0]:>+6d}"
+            )
     print(
-        f"    → 달라진 슬롯 {shrunk}/{len(truth)}개 (감소 {shrunk - grown} · 증가 {grown})"
-        f"  · config intended_answer=={want} 행 {len(truth)}개 기준"
+        f"    → 달라진 슬롯 {changed}/{len(truth) - skipped}개"
+        f" (감소 {changed - grown} · 증가 {grown})"
+        f"  · config intended_answer=={want} 행 {len(truth)}개 중 측정 불가 {skipped}개 제외"
     )
-    if want == "FALSE":
+    if want == "FALSE" and verbose:
         print("      증가 = 역방향 오판이 채점 격자 안까지 들어온 것이다. 이게 오탐의 씨앗이다.")
         print("      다만 '경로가 실재한다' 와 '지금 FPR 을 뒤집는다' 는 다르다 — 실측한")
         print("      P024/색상/COUPANG/cs 는 past 40/800(5.0%) 대비 12→13/200 이고,")

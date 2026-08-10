@@ -67,6 +67,11 @@ BASELINE_RATE = {
     "기타": {"COUPANG": 0.03, "NAVER": 0.03, "ZIGZAG": 0.03},  # 회신 확정값
 }
 ASPECTS = list(BASELINE_RATE.keys())
+REVIEW_ASPECTS = ["색상", "사이즈", "소재"]
+"""리뷰는 프롬프트2 스코프만 — 파손·오배송·기타 없음.
+
+⚠️ **두 군데에 적지 말 것.** 이 목록의 길이가 `_negative_rate` 의 부정률 배수라,
+   갈리면 라벨이 조용히 틀려진다(라우팅만 갈리던 예전과 다르다)."""
 CHANNELS = ["COUPANG", "NAVER", "ZIGZAG"]
 SOURCES = ["cs", "review"]
 
@@ -101,13 +106,21 @@ def _negative_rate(aspect: str, channel: str, n_aspects: int, denominator: str) 
     비율을 맞추려면 aspect 수만큼 되돌려 곱해야 한다 — 그러지 않으면 전체 분모로 볼 때
     `config / n_aspects` 로 희석된다(CS 1/6, 리뷰 1/3).
 
-    상한은 1.0 이다. 현재 표의 최대치는 사이즈/NAVER 0.09 x 6 = 0.54 라 여유가 있지만,
-    표를 올릴 때 조용히 깨지지 않도록 막아둔다.
+    ⚠️ 1.0 을 넘으면 **조용히 자르지 않고 죽는다.** 잘라내면 그 aspect 만 요청보다 낮은
+       부정률로 생성되는데, 그게 정확히 이 함수가 고치려던 "명세와 구현이 조용히 갈리는"
+       문제다. 현재 표의 최대치는 사이즈/NAVER 0.09 x 6 = 0.54 라 여유가 있다.
+       (현진님 리뷰 5차)
     """
     rate = BASELINE_RATE[aspect][channel]
     if denominator == BASELINE_DENOMINATOR_TOTAL:
         rate *= n_aspects
-    return min(rate, 1.0)
+    if rate > 1.0:
+        raise ValueError(
+            f"부정률이 1을 넘는다: {aspect}/{channel} "
+            f"{BASELINE_RATE[aspect][channel]} x {n_aspects} = {rate:.3f}. "
+            "BASELINE_RATE 를 올렸거나 aspect 를 늘렸다면 표 자체를 재검토할 것."
+        )
+    return rate
 
 # 배경 상품 볼륨 (회신 확정값)
 BG_CS_CUR_TOTAL, BG_CS_PAST_TOTAL = 42, 168     # 일 6건 x 7일 / x28일
@@ -504,7 +517,7 @@ def build_rows_for_window_group(rows: list[dict], rng: random.Random, pid_map: d
                 if item_aspect is None:
                     # 이 그룹의 모든 aspect 부정 몫을 다 채웠음 — 나머지는 배경(무관한 문의)
                     # ⚠️ 리뷰는 프롬프트2 스코프(색상·사이즈·소재)만 — 파손·오배송·기타 없음
-                    bg_aspect_pool = ["색상", "사이즈", "소재"] if source == "review" else ASPECTS
+                    bg_aspect_pool = REVIEW_ASPECTS if source == "review" else ASPECTS
                     item_aspect = rng.choice(bg_aspect_pool)
                     if item_aspect in group_aspects:
                         # ⚠️ 이 그룹에 속한 aspect는 이미 위에서 "정확 건수"로 부정 몫을 다 심었음
@@ -619,7 +632,6 @@ def build_rows_for_product_background(gid: str, rng: random.Random, pid_map: dic
     NORMAL_VOLUME = {"cs": 6, "review": 2}
     HOT_VOLUME = {"cs": 28, "review": 10}
     hot_channels = hot_channels or set()
-    REVIEW_ASPECTS = ["색상", "사이즈", "소재"]  # 프롬프트2 스코프 — 파손·오배송·기타 없음
 
     for (channel, source), days in day_scope.items():
         if not days:

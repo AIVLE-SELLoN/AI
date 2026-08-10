@@ -72,17 +72,18 @@ def test_two_modes_differ_by_aspect_count():
     assert total / aspect == pytest.approx(len(ASPECTS))
 
 
-def test_rate_is_clamped_to_one():
-    """표를 올렸을 때 확률이 1을 넘어 조용히 깨지지 않는다."""
-    assert _negative_rate("사이즈", "NAVER", 100, BASELINE_DENOMINATOR_TOTAL) == 1.0
+def test_rate_over_one_raises():
+    """확률이 1을 넘으면 조용히 자르지 않고 죽는다 — 이 모듈이 고치려던 실패 유형이다."""
+    with pytest.raises(ValueError, match="부정률이 1을 넘는다"):
+        _negative_rate("사이즈", "NAVER", 100, BASELINE_DENOMINATOR_TOTAL)
 
 
-def test_current_table_stays_below_clamp():
-    """지금 표는 clamp 에 걸리지 않는다 — 걸리면 위 보정이 무의미해지므로 감시한다."""
+def test_current_table_stays_below_one():
+    """지금 표는 1을 안 넘는다 — 넘으면 위 보정이 무의미해지므로 감시한다."""
     for aspect in ASPECTS:
         for channel in ("COUPANG", "NAVER", "ZIGZAG"):
             raw = BASELINE_RATE[aspect][channel] * len(ASPECTS)
-            assert raw < 1.0, f"{aspect}/{channel} 이 clamp 에 걸린다 ({raw})"
+            assert raw <= 1.0, f"{aspect}/{channel} 이 1을 넘는다 ({raw})"
 
 
 # ── 표본 수준 검증 ──────────────────────────────────────────────
