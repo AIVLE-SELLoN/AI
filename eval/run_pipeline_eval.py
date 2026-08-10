@@ -821,6 +821,7 @@ def diagnose(documents, config_rows, products, golden, tag, mode, runs,
         print(f"    {run:<6d} {rates[0]:>8.1%} {rates[1]:>10.1%}  ({n:,}건)")
 
     reverse_flips(documents, caches, slots)
+    extra_aspect(documents, config_rows, caches, slots)
     missed_slot_table(documents, config_rows, products, golden, caches)
 
 
@@ -875,13 +876,21 @@ def reverse_flips(documents: list[dict], caches: list, slots: set) -> None:
     print("    ⚠️ 'N종/M종' 은 뒤집힌 고유 문장 / 모집단 고유 문장이다. 건수보다 이쪽을 볼 것 —")
     print("       리뷰 비부정 모집단이 15종뿐이라 오판률이 문서당 확률이 아니라 특정 템플릿")
     print("       몇 종의 문제다. 새 문장으로 일반화되지 않으므로 외삽하면 안 된다.")
-    _extra_aspect(documents, caches, slots, gold_all)
     print("       → ②의 FPR 0/8 은 안전성 근거가 아니다. 표본 크기 문제도 아니고,")
     print("         리뷰 문장이 15종뿐인 **데이터의 결과**다. 운영 FPR 에 대해 ②는")
     print("         아무 말도 못 한다. (현진님 리뷰 2026-08-09 3차)")
 
 
-def _extra_aspect(documents, caches, slots, gold_all) -> None:
+def intended_slots(config_rows: list[dict], want: str) -> set:
+    """`intended_answer` 가 `want` 인 (상품, aspect, 채널, source) 슬롯."""
+    return {
+        (r["golden_group_id"], r["aspect"], r["channel"], r["source"])
+        for r in config_rows
+        if r.get("intended_answer", "").strip().upper() == want
+    }
+
+
+def extra_aspect(documents, config_rows, caches, slots) -> None:
     """골든 **부정** 문서에 없던 aspect 를 부정으로 추가한 건수.
 
     ⚠️ 세 번째 경로다. classify_errors 는 골든 aspect 만 보고, reverse_flips 는 골든
@@ -890,25 +899,39 @@ def _extra_aspect(documents, caches, slots, gold_all) -> None:
        FALSE 슬롯 P024/색상/COUPANG 이 12 → 13 이었고, 원인이 INQ-033753 이다 —
        골든은 오배송:-1 인데 모델이 색상:-1 을 같이 냈다.
     """
+    gold = _golden_negatives()
+    true_slots = intended_slots(config_rows, "TRUE")
+    false_slots = intended_slots(config_rows, "FALSE")
+
     print("\n■ 추가 aspect — 골든 부정 문서에 없던 aspect 를 부정으로 낸 건수")
     print("    역방향과 다른 경로다. 문서는 골든 부정이라 '비부정→부정' 에 안 잡히고,")
     print("    골든 aspect 는 맞혔으니 '감성 뒤집힘' 에도 안 잡힌다.")
     for run, cache in caches:
-        n = in_slot = 0
+        docs = 0
+        bump: Counter = Counter()  # 슬롯 → 이 경로로 늘어난 부정 수
         for doc in documents:
-            g = gold_all.get(doc["id"])
-            if not g or g[1] != "-1":
+            g = gold.get(doc["id"])
+            if g is None:
                 continue
-            extra = [
-                p["aspect"]
-                for p in cache.get(doc["id"], [])
-                if p["sentiment"] == -1 and p["aspect"] != g[0]
-            ]
-            if extra:
-                n += 1
-                in_slot += any(_in_slot(doc, a, slots) for a in extra)
-        print(f"    회차 {run}: {n:,}건 · 격자 안 {in_slot:,}건")
-    print("    격자 안 건수가 FALSE 슬롯 표의 '증가' 와 이어지는 수다.")
+            hit = False
+            for pred in cache.get(doc["id"], []):
+                if pred["sentiment"] != -1 or pred["aspect"] == g[0]:
+                    continue
+                hit = True
+                key = (doc["product"], pred["aspect"], doc["channel"], doc["source"])
+                if key in slots:
+                    bump[key] += 1
+            docs += hit
+        n_t = sum(v for k, v in bump.items() if k in true_slots)
+        n_f = sum(v for k, v in bump.items() if k in false_slots)
+        s_t = sum(1 for k in bump if k in true_slots)
+        s_f = sum(1 for k in bump if k in false_slots)
+        print(
+            f"    회차 {run}: {docs:,}건 · 격자 안 {sum(bump.values()):,}건/{len(bump)}슬롯"
+            f"  (TRUE {n_t}건/{s_t}슬롯 · FALSE {n_f}건/{s_f}슬롯)"
+        )
+    print("    ⚠️ FALSE 슬롯 수는 아래 표 '증가' 의 **상한**이다 — 같은 슬롯에서 감성")
+    print("       뒤집힘으로 빠진 쪽이 더 크면 순증이 아니라 감소로 찍힌다.")
 
 
 def missed_slot_table(documents, config_rows, products, golden, caches) -> None:
@@ -946,11 +969,7 @@ def _slot_table(config_rows, oracle_m, real_m, want, title, run, verbose=True) -
     "정상 슬롯의 n 이 작아 아직 안 터졌다" 인지 가른다. 역방향 오판률이 높은 소스가
     이 표에 있으면 후자 쪽이다. (현진님 리뷰 §2)
     """
-    truth = {
-        (r["golden_group_id"], r["aspect"], r["channel"], r["source"])
-        for r in config_rows
-        if r.get("intended_answer", "").strip().upper() == want
-    }
+    truth = intended_slots(config_rows, want)
     print(f"\n■ {title}의 현재 윈도우 부정 수 — oracle vs 실측 (회차 {run})"
 )
     print(f"    {'슬롯':38s} {'oracle':>12s} {'실측':>12s} {'차':>6s}")
