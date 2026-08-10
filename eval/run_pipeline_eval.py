@@ -893,11 +893,24 @@ def intended_slots(config_rows: list[dict], want: str) -> set:
 def extra_aspect(documents, config_rows, caches, slots) -> None:
     """골든 **부정** 문서에 없던 aspect 를 부정으로 추가한 건수.
 
-    ⚠️ 세 번째 경로다. classify_errors 는 골든 aspect 만 보고, reverse_flips 는 골든
-       비부정만 본다 — 둘 다 이걸 안 센다. 그런데 **채점 격자 안에서 부정 수를 실제로
-       늘린 유일한 기전이 이거였다.** 2026-08-09 실측에서 역방향은 격자 안 0건인데
-       FALSE 슬롯 P024/색상/COUPANG 이 12 → 13 이었고, 원인이 INQ-033753 이다 —
-       골든은 오배송:-1 인데 모델이 색상:-1 을 같이 냈다.
+    가르는 축은 "새 정보인가" 가 아니라 **슬롯 순증이냐 재분배냐** 다.
+
+        추가  골든 aspect 를 -1 로 유지 → 골든 슬롯 그대로 + 다른 슬롯 +1   (순증)
+        대체  골든 aspect 를 -1 로 못 냄 → 골든 슬롯 -1 + 다른 슬롯 +1      (재분배)
+
+    ⚠️ **양쪽 다 다른 슬롯을 +1 한다.** 그 이득 쪽을 세는 건 여기뿐이다 —
+       classify_errors 는 골든 aspect 만 보고 reverse_flips 는 골든 비부정만 본다.
+       '대체' 의 **손실 쪽**(골든 슬롯 -1)만 기존 버킷에 잡힌다.
+
+    ⚠️ '대체' 는 "다른 aspect 로" 의 부분집합이 **아니다**. keeps_gold 는 aspect + 감성
+       -1 을 요구하는데 classify_errors 의 same_aspect 는 aspect 존재만 보므로 한 칸
+       어긋난다 — 골든 aspect 를 중립으로 낸 건은 그쪽에서 "감성만 뒤집힘" 인데 여기선
+       대체다. 즉 대체 = "감성만 뒤집힘" ∪ "다른 aspect 로" 의 일부다.
+       (2026-08-10 이 데이터에서는 전자가 0건이라 우연히 겹쳐 보였다. 현진님 리뷰 8차)
+
+    2026-08-09 실측 — 역방향은 격자 안 0건인데 FALSE 슬롯 P024/색상/COUPANG 이
+    12 → 13 이었다. 원인이 INQ-033753 이고, 골든은 오배송:-1 인데 모델이 색상:-1 을
+    같이 냈다. 위 '추가' 경로다.
     """
     gold = _golden_negatives()
     true_slots = intended_slots(config_rows, "TRUE")
@@ -909,12 +922,17 @@ def extra_aspect(documents, config_rows, caches, slots) -> None:
     for run, cache in caches:
         docs = 0
         bump: Counter = Counter()  # 슬롯 → 이 경로로 늘어난 부정 수
+        added = replaced = 0
         for doc in documents:
             g = gold.get(doc["id"])
             if g is None:
                 continue
+            preds = cache.get(doc["id"], [])
+            keeps_gold = any(
+                p["sentiment"] == -1 and p["aspect"] == g[0] for p in preds
+            )
             hit = False
-            for pred in cache.get(doc["id"], []):
+            for pred in preds:
                 if pred["sentiment"] != -1 or pred["aspect"] == g[0]:
                     continue
                 hit = True
@@ -922,14 +940,23 @@ def extra_aspect(documents, config_rows, caches, slots) -> None:
                 if key in slots:
                     bump[key] += 1
             docs += hit
+            if hit:
+                added += keeps_gold
+                replaced += not keeps_gold
         n_t = sum(v for k, v in bump.items() if k in true_slots)
         n_f = sum(v for k, v in bump.items() if k in false_slots)
         s_t = sum(1 for k in bump if k in true_slots)
         s_f = sum(1 for k in bump if k in false_slots)
         print(
-            f"    회차 {run}: {docs:,}건 · 격자 안 {sum(bump.values()):,}건/{len(bump)}슬롯"
+            f"    회차 {run}: 추가 {added:,}건(골든 슬롯 유지 + 다른 슬롯 순증)"
+            f" · 대체 {replaced:,}건(골든 슬롯 -1 · 다른 슬롯 +1 재분배)"
+        )
+        print(
+            f"              격자 안 {sum(bump.values()):,}건/{len(bump)}슬롯"
             f"  (TRUE {n_t}건/{s_t}슬롯 · FALSE {n_f}건/{s_f}슬롯)"
         )
+    print("    '대체' 의 손실 쪽(골든 슬롯 -1)은 '감성만 뒤집힘'·'다른 aspect 로' 에 이미")
+    print("    잡힌다. 다만 **이득 쪽(다른 슬롯 +1)은 둘 다 안 세므로** 여기서만 보인다.")
     print("    ⚠️ FALSE 슬롯 수는 아래 표 '증가' 의 **상한**이다 — 같은 슬롯에서 감성")
     print("       뒤집힘으로 빠진 쪽이 더 크면 순증이 아니라 감소로 찍힌다.")
 
