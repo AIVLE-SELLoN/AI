@@ -388,8 +388,21 @@ async def _run_per_item(
        통째로 raise 하면 그때까지의 결과가 다 날아간다.
     """
     semaphore = asyncio.Semaphore(concurrency)
+    pending = list(todo)
+    for attempt in range(1, RETRY_WITHIN_RUN + 2):
+        pending = await _per_item_pass(pending, cache, save, semaphore, todo)
+        if not pending or attempt > RETRY_WITHIN_RUN:
+            break
+        print(f"    ↻ 무응답 {len(pending):,}건 재시도 ({attempt}/{RETRY_WITHIN_RUN})")
+    # 배치 경로와 같은 이유로 **다음 회차로 미루지 않는다** (RETRY_WITHIN_RUN 주석 참고).
+    return len(todo) - len(pending), len(pending)
+
+
+async def _per_item_pass(todo, cache, save, semaphore, all_todo) -> list[dict]:
+    """건당 호출 1회 패스. 캐시에 못 넣은 항목을 돌려준다(= 이 패스의 무응답)."""
     chunks = [todo[i : i + CHUNK_SIZE] for i in range(0, len(todo), CHUNK_SIZE)]
-    done = failed = 0
+    done = len(all_todo) - len(todo)
+    leftover: list[dict] = []
 
     for index, chunk in enumerate(chunks, start=1):
         items = [
@@ -411,15 +424,14 @@ async def _run_per_item(
                 # 올라온 건 get_llm_client 실패 같은 **프로세스 전역 문제**이므로,
                 # 청크 하나가 아니라 전체가 같은 이유로 죽을 가능성이 높다.
                 print(f"    [{index}/{len(chunks)}] ⚠️ 청크 전체 실패 {len(chunk)}건 — {exc}")
-                failed += len(chunk)
+                leftover.extend(chunk)
                 continue
 
         # 계약 1·2번: 길이·순서가 입력과 같고, 실패는 그 자리에 예외 객체로 온다.
-        for source_item, result in zip(items, results, strict=True):
+        for source_doc, source_item, result in zip(chunk, items, results, strict=True):
             if isinstance(result, Exception):
-                # 캐시에 넣지 않는다 — 다음 회차가 이것만 다시 부르고, 그때까지는
-                # 커버리지 검사가 잡아서 그 슬롯을 검정에서 뺀다(조용한 왜곡 방지).
-                failed += 1
+                # 캐시에 넣지 않는다 — **같은 회차 안에서** 다시 부른다.
+                leftover.append(source_doc)
                 continue
             # 건당 경로는 _parse_llm_response 를 타므로 CS 폴백이 이미 적용돼 온다.
             cache[source_item.item_id] = [
@@ -429,8 +441,8 @@ async def _run_per_item(
             done += 1
         save()
         if index % 10 == 0 or index == len(chunks):
-            print(f"    [{index}/{len(chunks)}] 누적 {done:,}/{len(todo):,}건")
-    return done, failed
+            print(f"    [{index}/{len(chunks)}] 누적 {done:,}/{len(all_todo):,}건")
+    return leftover
 
 
 async def classify_cached(
