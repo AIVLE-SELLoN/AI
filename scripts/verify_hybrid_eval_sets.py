@@ -314,6 +314,19 @@ async def main_async(args: argparse.Namespace) -> None:
     # 🆕 결과 저장 — mismatches 포함, 나중에 원인 진단용으로 다시 열어볼 수 있게
     import json
     from datetime import datetime
+
+    # 🔴 relabel_300 은 AI Hub 71603 리뷰다. 원문(raw_text)을 결과 JSON에 남기면 그 파일이
+    # 곧 원문 사본이 되고, 커밋 시 AI Hub 이용정책 위반 소지가 생긴다(.gitignore 의
+    # review_eval_*.json 주석과 같은 사유 — 2026-08-09 발견해 여기서도 막는다).
+    # inquiry_id 는 남기므로 원문이 필요하면 relabel_300.csv 를 조회하면 된다.
+    # llm_generated_700 은 LLM 생성물이라 해당 없음 — 그대로 둔다.
+    for m in relabel_result["single"].get("mismatches", []):
+        m.pop("raw_text", None)
+    relabel_result["single"]["mismatches_note"] = (
+        "AI Hub 71603 리뷰 원문(raw_text)은 이용정책상 저장하지 않는다. "
+        "원문이 필요하면 inquiry_id 로 eval/eval_sets/relabel_300.csv 를 조회할 것."
+    )
+
     out_dir = ROOT / "eval" / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
