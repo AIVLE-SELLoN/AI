@@ -11,6 +11,7 @@ os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
 
 import pytest
 
+from app.config import get_settings
 from app.core.schemas import (
     DetectionAlert,
     DetectionConfidence,
@@ -22,6 +23,24 @@ from app.core.schemas import (
     SourceSignals,
     Verdict,
 )
+
+
+@pytest.fixture(autouse=True)
+def block_local_raw_db(monkeypatch, tmp_path):
+    """테스트가 **개발자 로컬의 `data/raw.db` 를 읽지 않게** 막는다.
+
+    `fetch_linked_inquiries`(REST 경로)가 raw DB 를 직접 조회하는데, 그 파일은
+    gitignore 라 **있는 사람과 없는 사람의 결과가 갈린다.** 있으면 실제 원문이 섞여
+    들어오고 없으면 안 섞이는데, 둘 다 통과해 버려서 무엇을 검증한 건지 알 수 없다.
+    CI 가 따로 없어 **각자 로컬이 곧 CI** 라(`block_real_s3` 와 같은 사유) 기본값을
+    "없는 경로" 로 고정한다.
+
+    DB 를 실제로 쓰는 테스트는 `db_path=` 로 자기 임시 파일을 명시해서 이 기본값을
+    덮는다(`tests/test_load_inputs_from_db.py`).
+    """
+    monkeypatch.setattr(
+        get_settings(), "raw_db_path", str(tmp_path / "없는-raw.db"), raising=False
+    )
 
 
 @pytest.fixture

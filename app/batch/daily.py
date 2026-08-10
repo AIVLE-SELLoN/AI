@@ -55,6 +55,7 @@ from app.core import raw_schema
 from app.core.console import force_utf8_output
 from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
 from app.core.inquiries import build_linked_inquiries
+from app.core.raw_db import connect_readonly
 from app.core.schemas import Channel, ClassifiedItem, DetectionAlert, Source
 from app.detection.loader import check_coverage, unreliable_slots
 from app.detection.service import detect_anomaly
@@ -335,18 +336,10 @@ def load_inputs_from_db(
         FileNotFoundError: DB 파일이 없을 때. 목 파이프라인은 `scripts/mock_producer.py`
             가 먼저 돌아야 원문이 생긴다.
     """
-    path = Path(db_path or get_settings().raw_db_path).resolve()
-    if not path.exists():
-        raise FileNotFoundError(
-            f"raw DB 가 없습니다: {path} — 목 파이프라인은 scripts/mock_producer.py 로"
-            " 원문을 적재한 뒤 scripts/classification_worker.py 로 분류해야 합니다."
-        )
-
     where, params = _window_clause(window_end)
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
+    conn = connect_readonly(db_path)
     try:
-        _require_classified_tables(conn, path)
+        _require_classified_tables(conn, db_path or get_settings().raw_db_path)
         doc_rows = conn.execute(_DOCUMENT_SQL + where, params).fetchall()
         aspect_rows = conn.execute(
             _ASPECT_SQL + where.replace("occurred_at", "v.occurred_at"), params
@@ -357,7 +350,7 @@ def load_inputs_from_db(
     return _build_inputs(doc_rows, aspect_rows, window_end)
 
 
-def _require_classified_tables(conn: sqlite3.Connection, path: Path) -> None:
+def _require_classified_tables(conn: sqlite3.Connection, path: str | Path) -> None:
     """분류 결과 테이블이 **쓸 수 있는 상태인지** 먼저 확인한다.
 
     두 가지를 가른다. 둘 다 원문만 적재된 DB 에서 실제로 나는 상태다:
