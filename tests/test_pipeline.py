@@ -98,6 +98,11 @@ def _judgement(**overrides):
         "verdict": Verdict.BIASED,
         "significant_channels": ["COUPANG"],
         "excluded_channels": [],
+        "channel_rates": [
+            {"channel": "COUPANG", "rate": 0.13, "excluded": False},
+            {"channel": "NAVER", "rate": 0.05, "excluded": False},
+            {"channel": "ZIGZAG", "rate": None, "excluded": True},
+        ],
         "stats": DetectionStats(
             source=Source.CS,
             cur_rate=0.13,
@@ -134,6 +139,8 @@ def test_build_alert_biased_generates_recommendation():
     assert alert.recommended_action == RecommendedAction.GENERATE_RECOMMENDATION
     assert alert.scope_in is True
     assert alert.evidence.inquiry_ids == ["INQ-1", "INQ-2"]
+    assert alert.channel_rates[0].rate == pytest.approx(0.13)
+    assert alert.channel_rates[2].excluded is True
 
 
 def test_build_alert_scattered_cause_downgrades_action():
@@ -347,6 +354,14 @@ def test_excluded_channels_belong_to_own_aspect():
     assert color["excluded_channels"] == []  # 다른 aspect 의 보류가 새면 안 된다
     assert size["aspect"] == "사이즈"
     assert size["excluded_channels"] == ["ZIGZAG"]  # 자기 판정의 보류는 유지
+    assert [row.channel for row in size["channel_rates"]] == [
+        Channel.COUPANG,
+        Channel.NAVER,
+        Channel.ZIGZAG,
+    ]
+    assert size["channel_rates"][0].rate == pytest.approx(26 / 200)
+    assert size["channel_rates"][2].rate is None
+    assert size["channel_rates"][2].excluded is True
 
 
 # ── 입력 정규화 ──────────────────────────────────────────────────
@@ -479,6 +494,8 @@ async def test_pipeline_emits_biased_alert_for_single_channel():
     assert alert.stats.cur_rate == pytest.approx(0.30)
     assert alert.stats.past_rate == pytest.approx(0.05)
     assert alert.stats.bh_significant is True
+    assert [row.rate for row in alert.channel_rates] == pytest.approx([0.30, 0.05, 0.05])
+    assert not any(row.excluded for row in alert.channel_rates)
     assert alert.root_cause.label == "사진_색감_오차"
     assert alert.recommended_action == RecommendedAction.GENERATE_RECOMMENDATION
     assert alert.detection_confidence == DetectionConfidence.MEDIUM  # 시점 미확인
