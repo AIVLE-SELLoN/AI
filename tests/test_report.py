@@ -231,17 +231,22 @@ def cs_output() -> CSGuidelineOutput:
     )
 
 
-def _held_input(product_group_id: str, *, voc: int = 4) -> MonthlyReportInput:
+def _held_input(
+    product_group_id: str, *, voc: int = 4, name: str | None = None
+) -> MonthlyReportInput:
     """표본 부족으로 보류될 상품의 입력. 지면의 보류 페이지가 이 값을 찍는다.
 
     채널쌍은 전부 보류로 둔다 — VOC 가 10건도 안 되는 상품은 채널쌍 판정도 설 수 없다.
+
+    ⚠️ 기본 이름은 13자라 **안내 문구 길이 검증에는 못 쓴다.** 실제 `channel_product_name`
+       은 커머스 노출명이라 훨씬 길다. 길이를 재는 테스트는 `name` 으로 실제 길이를 준다.
     """
     return MonthlyReportInput(
         report_month="2026-07",
         start_date=date(2026, 7, 1),
         end_date=date(2026, 7, 31),
         product_group_id=product_group_id,
-        product_name=f"보류상품 {product_group_id}",
+        product_name=name if name is not None else f"보류상품 {product_group_id}",
         total_voc_count=voc,
         aspect_distributions=[
             {"aspect": a, "total_count": 1, "positive_ratio": 0.2,
@@ -1555,43 +1560,71 @@ async def test_all_held_reports_why_not_just_that_it_failed() -> None:
     assert "표본 부족" in notice
 
 
-def test_notice_length_is_bounded_regardless_of_product_count() -> None:
-    """안내 문구 길이가 상품 수에 비례해 자라지 않는다.
+# 실제 `products.channel_product_name` 을 흉내 낸 이름. `_fetch_product_names()` 가 커머스
+# 노출명을 **자르지 않고 그대로** 싣기 때문에 문구에도 이 길이가 그대로 들어온다.
+#
+# ⚠️ 픽스처 기본 이름(`보류상품 P000`, 13자)으로 재면 상한이 안 걸려도 통과한다 —
+#    개수 상한만 있던 시절 목 이름으로는 223자라 통과했지만 이 이름으로는 368자였다
+#    (2026-08-09 리뷰 실측). 길이 검증은 반드시 **긴 이름**으로 한다.
+_REAL_LENGTH_NAME = "2026 신상 봄가을 여성 미디 원피스 데일리 롱 A라인 5color"
+
+
+def test_notice_length_is_bounded_even_with_real_product_names() -> None:
+    """안내 문구 길이가 상품 수에도, **상품명 길이에도** 비례해 자라지 않는다.
 
     ⚠️ `notice_message` 에는 스키마 max_length 가 없어 **우리 쪽에서 안 걸린다.** 전부
        나열하면 보류 42건에 631자, 보류+실패 동시면 742자였다(2026-08-09 실측).
        백엔드 컬럼이 짧으면 조용히 잘리거나 INSERT 가 터지고, 어느 쪽이든 셀러는 자기
        상품이 왜 빠졌는지 못 본다.
 
-    상세는 합본 PDF 의 보류 페이지에 상품마다 있으므로 문구는 "무엇이 몇 개" 면 된다.
+    ⚠️ 상한을 **개수**로 걸면 안 된다. 상품명이 길면 5개만 나열해도 넘는다 — 실측으로
+       목 이름(7자) 223자 / 실제 노출명(38자) **368자**. 그래서 `_summarize` 는 누적
+       **글자 수**로 자르고, 이 테스트는 긴 이름으로 그걸 확인한다.
     """
     from app.reporting.monthly_report_service import _build_excluded_notice
 
-    few = _build_excluded_notice([_held_input(f"P{i:03d}") for i in range(3)], None)
-    many = _build_excluded_notice([_held_input(f"P{i:03d}") for i in range(42)], None)
-    worst = _build_excluded_notice(
-        [_held_input(f"P{i:03d}") for i in range(42)],
-        [f"P{i:03d}" for i in range(42)],
-    )
+    def held(n: int) -> list:
+        return [_held_input(f"P{i:03d}", name=_REAL_LENGTH_NAME) for i in range(n)]
 
-    # 상품이 14배로 늘어도 길이는 나열 상한(5개)에서 멈춘다.
-    # 상한이 없다면 42건은 600자를 넘었다.
-    assert len(many) < 200, f"{len(many)}자 — 나열 상한이 안 걸렸다"
-    assert len(many) - len(few) < 50, "상품 수에 비례해 자라고 있다"
-    assert "외 37개" in many
+    few = _build_excluded_notice(held(3), None)
+    many = _build_excluded_notice(held(42), None)
+    worst = _build_excluded_notice(held(42), [f"P{i:03d}" for i in range(42)])
+
+    # 상품이 14배로 늘어도 길이는 나열 예산에서 멈춘다(상한이 없으면 42건에 600자 넘었다)
+    assert len(many) < 150, f"{len(many)}자 — 나열 예산이 안 걸렸다"
+    assert len(many) - len(few) < 30, "상품 수에 비례해 자라고 있다"
+    assert "외 41개" in many
     assert "42개" in many  # 총 개수는 그대로 알린다
-    # 보류·실패가 동시에 최악이어도 짧게 유지된다
-    assert len(worst) < 300, f"최악 문구가 {len(worst)}자다 — 백엔드 컬럼 상한을 확인할 것"
+    # 보류·실패가 동시에 최악이어도 VARCHAR(255) 안에 들어간다
+    assert len(worst) <= 255, f"최악 문구가 {len(worst)}자다 — 백엔드 컬럼 상한을 확인할 것"
 
 
-def test_notice_lists_every_product_when_under_cap() -> None:
-    """상한 이하면 전부 나열한다 — 몇 개 안 될 때까지 접으면 정보만 잃는다."""
+def test_notice_stays_bounded_when_one_name_is_absurdly_long() -> None:
+    """이름 **하나**가 예산보다 길어도 상한이 무너지지 않는다.
+
+    최소 1개는 나열해야 셀러가 무엇인지 아는데, 노출명에는 길이 제한이 없어서 그 하나가
+    상한을 통째로 무너뜨릴 수 있다. `_summarize` 가 이름 자체를 자르는 이유다.
+    """
+    from app.reporting.monthly_report_service import _build_excluded_notice
+
+    absurd = "초장문 상품명 " * 30  # 240자
+    held = [_held_input(f"P{i:03d}", name=absurd) for i in range(42)]
+
+    worst = _build_excluded_notice(held, [f"P{i:03d}" for i in range(42)])
+
+    assert len(worst) <= 255, f"이름 하나가 상한을 넘겼다: {len(worst)}자"
+    assert "…" in worst, "긴 이름이 잘리지 않았다"
+    assert "42개" in worst  # 잘려도 총 개수는 알린다
+
+
+def test_notice_lists_every_product_when_budget_allows() -> None:
+    """예산 안이면 전부 나열한다 — 몇 개 안 될 때까지 접으면 정보만 잃는다."""
     from app.core import constants
     from app.reporting.monthly_report_service import _build_excluded_notice
 
-    n = constants.NOTICE_MAX_LISTED_PRODUCTS
-    notice = _build_excluded_notice([_held_input(f"P{i:03d}") for i in range(n)], None)
+    # 짧은 이름 3건이면 예산(70자) 안에 다 들어간다
+    notice = _build_excluded_notice([_held_input(f"P{i:03d}", name="원피스") for i in range(3)], None)
 
-    assert "외 " not in notice
-    for i in range(n):
+    assert "외 " not in notice, f"예산({constants.NOTICE_MAX_LIST_CHARS}자) 안인데 접혔다: {notice}"
+    for i in range(3):
         assert f"P{i:03d}" in notice

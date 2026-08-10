@@ -282,6 +282,37 @@ def _label(input_data: MonthlyReportInput) -> str:
     )
 
 
+def _summarize(labels: list[str]) -> str:
+    """앞에서 몇 개만 나열하고 나머지는 "외 N개" 로 접는다. 기준은 **개수가 아니라 길이**다.
+
+    ⚠️ 개수로 자르면 상품명이 길 때 상한이 안 지켜진다. `product_name` 은 커머스 노출명
+       (`products.channel_product_name`)이라 원래 길다 — 38자짜리 이름이면 5개만 나열해도
+       구절 하나가 200자를 넘는다. 목 데이터 이름이 7자라 로컬에서는 안 밟힌다.
+       (2026-08-09 리뷰: 개수 상한으로 재면 223자, 실제 노출명으로 재면 368자)
+
+    최소 1개는 반드시 나열한다 — 하나도 없으면 셀러가 무엇인지 알 수 없다. 다만 그
+    하나가 예산보다 길면 **이름 자체를 자른다.** 안 자르면 이름 하나가 상한을 통째로
+    무너뜨린다(노출명에 길이 제한이 없어서 얼마든지 길 수 있다).
+    """
+    if not labels:
+        return ""
+
+    budget = constants.NOTICE_MAX_LIST_CHARS
+    shown: list[str] = []
+    used = 0
+    for label in labels:
+        # 두 번째부터는 ", " 구분자도 예산에 넣는다
+        cost = len(label) + (2 if shown else 0)
+        if shown and used + cost > budget:
+            break
+        shown.append(label if len(label) <= budget else label[: budget - 1] + "…")
+        used += cost
+
+    if len(shown) == len(labels):
+        return ", ".join(shown)
+    return f"{', '.join(shown)} 외 {len(labels) - len(shown)}개"
+
+
 def _build_excluded_notice(
     held_inputs: list[MonthlyReportInput] | None,
     failed_products: list[str] | None,
@@ -294,9 +325,9 @@ def _build_excluded_notice(
     ⚠️ 보류 상품은 이제 **지면에도 페이지가 생긴다**(2026-08-09). 이 문구는 그것과 별개로
        유지한다 — 메인 화면은 PDF 를 열지 않고도 빠진 상품을 알아야 한다.
 
-    ⚠️ 이름 나열은 `NOTICE_MAX_LISTED_PRODUCTS` 개까지다. 상한이 없으면 길이가 상품 수에
-       비례해 자라는데(보류 42건 = 631자), `notice_message` 에는 스키마 max_length 가 없어
-       우리 쪽에서 안 걸린다. 백엔드 컬럼이 짧으면 조용히 잘리거나 INSERT 가 터진다.
+    ⚠️ 이름 나열은 `NOTICE_MAX_LIST_CHARS` **글자**까지다(개수가 아니다). `notice_message`
+       에는 스키마 max_length 가 없어 우리 쪽에서 안 걸리고, 백엔드 컬럼이 짧으면 조용히
+       잘리거나 INSERT 가 터진다. 자세한 근거는 그 상수 docstring 참고.
     """
     parts = []
     if held_inputs:
@@ -311,18 +342,6 @@ def _build_excluded_notice(
             f"{_summarize(failed_products)} — 데이터는 정상이며 운영자가 확인 중입니다."
         )
     return " ".join(parts) or None
-
-
-def _summarize(labels: list[str]) -> str:
-    """앞에서 몇 개만 나열하고 나머지는 "외 N개" 로 접는다.
-
-    전부 나열하면 문구 길이가 상품 수에 비례해 자란다 — 42건이면 631자다. 상세는 합본
-    PDF 의 보류 페이지에 상품마다 있으므로, 여기서는 "무엇이 몇 개" 만 알리면 된다.
-    """
-    cap = constants.NOTICE_MAX_LISTED_PRODUCTS
-    if len(labels) <= cap:
-        return ", ".join(labels)
-    return f"{', '.join(labels[:cap])} 외 {len(labels) - cap}개"
 
 
 async def compile_and_upload_monthly_book(
