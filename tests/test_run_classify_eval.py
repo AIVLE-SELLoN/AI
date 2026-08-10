@@ -247,7 +247,7 @@ class TestFewShotLeakFilter:
     """
 
     def test_parse_few_shot_examples_finds_all_v5_inputs(self):
-        """v5의 '입력:' 문장이 전부(46개) 파싱돼야 한다 — 하드코딩이 아니라 실제 파일 파싱
+        """v5의 '입력:' 문장이 전부(48개) 파싱돼야 한다 — 하드코딩이 아니라 실제 파일 파싱
         확인용(§6 B안 1번: '예시가 늘어도 자동 반영').
 
         40 → 46: v5 3차 수정(2026-08-09)에서 감성 정책 예시 6개 추가.
@@ -257,9 +257,14 @@ class TestFewShotLeakFilter:
           22-2  가정형 문의 → 0
           22-3  포장 결함 관측 + 가정형 → -1 (22-2와 대비)
           24-1  담백한 오배송 서술 → -1
+
+        46 → 48: v5 4차 수정(2026-08-10, 실험② 오차분해)에서 대비 예시 2개 추가.
+          27-1  게시 정보 누락 지적(소재) → -1 (27 의 "일반 질문은 0" 과 대비)
+          29-1  상세페이지 언급하되 정확성은 안 따짐 → 0 (29 를 -1 로 정정하며 대비)
+        ⚠️ 예시 29 는 개수가 아니라 **라벨**이 0 → -1 로 바뀐 건이라 이 카운트엔 안 잡힌다.
         """
         texts = parse_few_shot_examples("classify_aspect_v5")
-        assert len(texts) == 46
+        assert len(texts) == 48
         assert "배송 조회가 안 되는데 확인 부탁드려요." in texts
 
     def test_similarity_reproduces_notion_reported_numbers(self):
