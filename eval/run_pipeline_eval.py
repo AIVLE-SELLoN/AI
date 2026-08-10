@@ -683,8 +683,16 @@ def _load_caches(tag: str, mode: str, fingerprint: str, runs: int) -> list[tuple
     return out
 
 
-def diagnose(documents, config_rows, products, golden, tag, mode, runs) -> None:
-    """캐시된 분류 결과로 ②의 하락 원인을 분해한다. LLM 호출 0회."""
+def diagnose(documents, config_rows, products, golden, tag, mode, runs,
+             sources: str = "all") -> None:
+    """캐시된 분류 결과로 ②의 하락 원인을 분해한다. LLM 호출 0회.
+
+    ⚠️ `sources` 로 좁혀도 **캐시 조회는 전체 문서 집합의 지문으로 한다.** 캐시가
+       그 집합으로 만들어졌기 때문이다. 문서를 먼저 거르면 data_fingerprint 가 바뀌어
+       "캐시 없음 → 과거 실행 폴백" 으로 떨어진다(실제로 밟았다). 좁히기는 채점
+       단계에서만 한다 — 범위 몫과 프롬프트 몫을 분리해 보려는 것이 목적이므로,
+       분류 결과 자체는 같은 것을 써야 비교가 성립한다.
+    """
     fingerprint = cache_fingerprint(documents)
     caches = _load_caches(tag, mode, fingerprint, runs)
 
@@ -712,6 +720,13 @@ def diagnose(documents, config_rows, products, golden, tag, mode, runs) -> None:
     print(f"실험② 오차 분해 — {mode} · {fingerprint} · 캐시 {len(caches)}회차")
     print(f"{'=' * 72}")
 
+    if sources != "all":
+        n0 = len(documents)
+        documents = [d for d in documents if d["source"] == sources]
+        config_rows = [r for r in config_rows if r["source"] == sources]
+        print(f"\n⚠️ 채점 범위 {sources} 로 좁힘 — 문서 {n0:,} → {len(documents):,}"
+              " (캐시는 전체 집합 것을 그대로 쓴다)")
+
     total_breakdown: Counter = Counter()
     total_flipped: Counter = Counter()
     for _run, cache in caches:
@@ -738,6 +753,82 @@ def diagnose(documents, config_rows, products, golden, tag, mode, runs) -> None:
             pred = predict_with_counts(config_rows, products, measure(rows, config_rows))
             rates.append(_rate(score(golden, pred)["recall"]))
         print(f"    {run:<6d} {rates[0]:>8.1%} {rates[1]:>10.1%}  ({n:,}건)")
+
+    reverse_flips(documents, caches)
+    missed_slot_table(documents, config_rows, products, golden, caches)
+
+
+def reverse_flips(documents: list[dict], caches: list) -> None:
+    """골든 **비부정**이 부정으로 뒤집힌 건수 — 오탐을 만들 수 있는 유일한 방향.
+
+    classify_errors 는 골든 부정만 순회하므로 이 방향을 아예 안 센다. 그 상태로
+    "분류 오차는 탐지율만 깎고 오탐은 안 만든다"고 말하면, **측정하지 않은 것을
+    없다고 주장**하는 게 된다. (현진님 리뷰 §4, 2026-08-09)
+
+    ⚠️ 이 숫자가 0 이 아니어도 ②의 FPR 은 0 일 수 있다. ②는 현재 윈도우만 실제
+       분류로 갈고 과거 윈도우·배경은 oracle 이라(docstring 11~16행), 기준선이
+       깨끗한 채 분자만 움직인다. 즉 ②의 FPR 0% 는 설계의 산물이지 분류 오차의
+       성질이 아니다. 운영은 과거 윈도우도 LLM 분류라 양쪽이 같이 움직인다.
+    """
+    gold_all = {}
+    for spec in SOURCE_SPEC.values():
+        for r in read(spec["golden"]):
+            rid = r.get("inquiry_id") or r.get("review_id")
+            gold_all[rid] = (r["true_aspect"], r["true_sentiment"])
+
+    print("\n■ 역방향 — 골든 비부정(0/1)이 부정(-1)으로 뒤집힌 건수")
+    print("    (오탐을 만들 수 있는 유일한 방향. ②의 FPR 0% 는 설계상 이걸 못 잡는다)")
+    for run, cache in caches:
+        flips = Counter()
+        base = 0
+        for doc in documents:
+            label = gold_all.get(doc["id"])
+            if label is None or label[1] == "-1":
+                continue
+            base += 1
+            if any(p["sentiment"] == -1 for p in cache.get(doc["id"], [])):
+                flips[doc["source"]] += 1
+        total = sum(flips.values())
+        detail = " · ".join(f"{s} {flips[s]:,}" for s in SOURCE_SPEC if flips[s])
+        print(
+            f"    회차 {run}: {total:,}/{base:,}건 ({total / base:.2%})"
+            + (f"  [{detail}]" if detail else "")
+        )
+
+
+def missed_slot_table(documents, config_rows, products, golden, caches) -> None:
+    """미탐 슬롯이 **왜** 안 울렸는지 — oracle 대비 실측 부정 수·delta·p 값.
+
+    "오차가 케이스 슬롯에 몰린다"와 "오차는 균일한데 케이스 창이 작아 몇 건만 빠져도
+    Fisher 가 못 낸다"는 처방이 다르다(문장 유형 고치기 vs 구조적 민감도). 캐시만으로
+    갈린다 — 미탐 슬롯의 cur_neg 가 얼마나 깎였는지 보면 된다. (현진님 리뷰 §5)
+    """
+    _run, cache = caches[0]
+    oracle_rows = build_rows(documents, oracle_classified(documents))
+    real_rows = build_rows(documents, _to_items(documents, cache))
+    oracle_m = measure(oracle_rows, config_rows)
+    real_m = measure(real_rows, config_rows)
+
+    truth = {
+        (r["golden_group_id"], r["aspect"], r["channel"], r["source"])
+        for r in config_rows
+        if r.get("intended_answer", "").strip().upper() == "TRUE"
+    }
+    print(f"\n■ TRUE 슬롯의 현재 윈도우 부정 수 — oracle vs 실측 (회차 {_run})")
+    print(f"    {'슬롯':38s} {'oracle':>12s} {'실측':>12s} {'차':>6s}")
+    shrunk = 0
+    for key in sorted(truth):
+        o, r = oracle_m.get(key), real_m.get(key)
+        if not o or not r:
+            continue
+        if o[0] != r[0]:
+            shrunk += 1
+        name = f"{key[0]}/{key[1]}/{key[2]}/{key[3]}"
+        print(
+            f"    {name:38s} {o[0]:>5d}/{o[1]:<6d} {r[0]:>5d}/{r[1]:<6d}"
+            f" {r[0] - o[0]:>+6d}"
+        )
+    print(f"    → 부정 수가 깎인 TRUE 슬롯 {shrunk}/{len(truth)}개")
 
 
 # ── 리포트 ───────────────────────────────────────────────────────
@@ -822,7 +913,8 @@ async def main_async(args) -> None:
     tag = "full" if args.limit <= 0 else f"limit{args.limit}"
 
     if args.diagnose:
-        diagnose(documents, config_rows, products, golden, tag, args.mode, args.runs)
+        diagnose(documents, config_rows, products, golden, tag, args.mode,
+                 args.runs, args.sources)
         return
 
     # ① 기준선 — 같은 코드에 oracle 입력을 태운다. 채점 버그면 여기서 먼저 드러난다.
@@ -867,6 +959,13 @@ def main() -> None:
         " 실제 건수는 --dry-run 으로 먼저 확인할 것.",
     )
     ap.add_argument("--dry-run", action="store_true", help="LLM 호출 없이 대상만 확인")
+    ap.add_argument(
+        "--sources",
+        default="all",
+        choices=["all", SOURCE_CS, SOURCE_REVIEW],
+        help="채점 범위. all=CS+리뷰(기본). 범위 몫과 프롬프트 몫을 분리해 볼 때 cs 로"
+        " 좁힌다 — 캐시를 그대로 쓰므로 LLM 호출은 없다.",
+    )
     ap.add_argument(
         "--diagnose",
         action="store_true",
