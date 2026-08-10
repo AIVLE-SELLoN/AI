@@ -387,6 +387,11 @@ async def run_generation(outfile: Path, seed: int, verify: bool = True) -> None:
         for s in stats["reject_samples"][:5]:
             print(f"    - 요청{s['requested']} → 검수{s['verified']}: {s['text'][:60]}")
 
+    # 🔴 ID는 **생존 행 순번**이라 내용 기반이 아니다 (2026-08-09 PR 리뷰 지적).
+    # 검수 게이트가 실패 행을 버리므로 재생성하면 GEN-#### 가 밀리고, 예전에 만든
+    # 라벨 파일(relabel_runs/, relabel_manual_review.csv)을 반영하면 **다른 문장에
+    # 라벨이 붙는다.** 재생성 시에는 그 파일들을 같이 폐기하거나 다시 만들 것.
+    # relabel_generated_sentiment.py 의 check_text_drift() 가 반영 시점에 한 번 더 막는다.
     # CSV 저장 — relabel_300.csv와 같은 컬럼 체계로(합치기 쉽게)
     outfile.parent.mkdir(parents=True, exist_ok=True)
     with outfile.open("w", encoding="utf-8-sig", newline="") as f:

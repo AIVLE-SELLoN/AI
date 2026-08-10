@@ -39,6 +39,17 @@ sentiment accuracy가 자동으로 높게 나오고 그 수치는 아무 의미�
 
     # 3) 사람이 큐 검토 후 실제 반영 (백업 자동 생성)
     python scripts/relabel_generated_sentiment.py --apply
+
+전체 재현 절차 (2026-08-09 반영분을 그대로 다시 만들려면)
+--------------------------------------------------------
+    # ① 재현성 확인된 축만 3회 실행 다수결로 반영
+    python scripts/relabel_generated_sentiment.py --apply-from \
+        eval/eval_sets/relabel_runs/run1.csv run2.csv run3.csv
+    # ② 손검토 확정분(기타·다중 153건)
+    python scripts/relabel_generated_sentiment.py \
+        --apply-manual eval/eval_sets/relabel_manual_review.csv
+    # ③ 정책 전수 스캔분(큐가 구조적으로 못 잡은 12건)
+    python scripts/relabel_generated_sentiment.py --apply-sweep
 """
 
 from __future__ import annotations
@@ -62,6 +73,10 @@ from scripts.generate_hybrid_700 import SENTIMENT_DEFINITIONS
 DEFAULT_INFILE = "eval/eval_sets/llm_generated_700.csv"
 DEFAULT_QUEUE = "eval/eval_sets/relabel_queue_generated_sentiment.csv"
 DEFAULT_MANUAL = "eval/eval_sets/relabel_manual_review.csv"
+# 정책 확정 후 전수 스캔으로 잡은 행 — 손검토 큐가 구조적으로 못 잡는 몫이다.
+# 큐는 "3회 중 하나라도 gold와 다른 행"만 담으므로, 3회가 모두 틀린 gold에 동의하면
+# 검토 대상에서 아예 빠진다. 그 행들을 정책 확정 뒤 규칙으로 훑어 여기에 기록한다.
+DEFAULT_SWEEP = "eval/eval_sets/relabel_policy_sweep.csv"
 
 # 3회 실행(2026-08-09)에서 실행 간 재현성이 확인된 축 — 이것만 자동 반영한다.
 #   색상·사이즈·소재 100% / 오배송 98.7% / 파손 96.7%  ←  자동
@@ -320,9 +335,9 @@ async def run(
     make_backup(infile)
 
     new_by_id = {r["id"]: r["new_sentiment"] for r in ok}  # 무응답 행은 원본 라벨 유지
-    skipped = 0
+    applied = skipped = 0
     for row in rows:
-        if row["id"] not in new_by_id:
+        if row["id"] not in new_by_id or new_by_id[row["id"]] == row["sentiment"]:
             continue
         # --only-aspects: 재현성이 확인된 축만 자동 반영한다(2026-08-09 3회 실행 검증).
         # 기타(80.7%)·다중aspect(82.0%)는 실행마다 판정이 뒤집혀 손검토로 돌린다.
@@ -330,11 +345,11 @@ async def run(
             skipped += 1
             continue
         row["sentiment"] = new_by_id[row["id"]]
+        applied += 1
     with infile.open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["id", "aspect", "sentiment", "raw_text", "source"])
         w.writeheader()
         w.writerows({k: row[k] for k in w.fieldnames} for row in rows)
-    applied = len(changed) - skipped
     print(f"반영 완료 → {infile} ({applied}건 변경)")
     if skipped:
         print(f"  --only-aspects 로 건너뜀: {skipped}건 (손검토 대상 — --build-manual-queue 참고)")
@@ -378,13 +393,19 @@ def build_manual_queue(
         if len(counts) == 1 and majority == row["sentiment"]:
             continue  # 전원 일치 + gold와 같음 → 볼 필요 없음
         verdict = "agree" if len(counts) == 1 else "split"
+        prefilled = accept_agree and verdict == "agree"
         out.append({
             "id": iid,
             "aspect": row["aspect"],
             "gold": row["sentiment"],
             "majority": majority,
             # 사람이 채우는 칸. 비워두면 그 행은 반영 안 됨(= gold 유지).
-            "final": majority if (accept_agree and verdict == "agree") else "",
+            "final": majority if prefilled else "",
+            # 🔴 이 칸이 순환논리 가드다. --accept-agree 로 미리 채운 행은 "모델이 정한 값"이지
+            # 사람이 검토한 값이 아니다. 둘을 파일에서 구분 못 하면 "모델 출력으로 모델
+            # 평가셋을 만드는" 순환이 그대로 뚫린다(2026-08-09 PR 리뷰 지적).
+            # 검토자는 확인한 행의 이 값을 'human' 으로 바꿔야 한다.
+            "decided_by": "model_majority" if prefilled else "",
             "verdict": verdict,
             "votes": " / ".join(labels),
             "confidence": f"{n_top}/{len(labels)}",
@@ -392,7 +413,8 @@ def build_manual_queue(
         })
 
     out.sort(key=lambda r: (r["verdict"] != "split", r["aspect"], r["id"]))
-    fields = ["id", "aspect", "gold", "majority", "final", "verdict", "votes", "confidence", "raw_text"]
+    fields = ["id", "aspect", "gold", "majority", "final", "decided_by", "verdict",
+              "votes", "confidence", "raw_text"]
     out_file.parent.mkdir(parents=True, exist_ok=True)
     with out_file.open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields)
@@ -406,8 +428,37 @@ def build_manual_queue(
     n_filled = sum(1 for r in out if r["final"])
     print("\n  'final' 칸에 최종 라벨을 적으세요. 비워두면 그 행은 반영 안 됩니다(gold 유지).")
     if accept_agree:
-        print(f"  --accept-agree 로 agree {n_filled}건은 majority 로 미리 채웠습니다 — split 만 보시면 됩니다.")
-    print(f"  반영: python scripts/relabel_generated_sentiment.py --apply-manual {out_file.name}")
+        print(f"  --accept-agree 로 agree {n_filled}건은 majority 로 미리 채웠고 "
+              "decided_by='model_majority' 로 표시했습니다.")
+        print("  ⚠️ 확인하신 행은 decided_by 를 'human' 으로 바꿔주세요 — 안 바꾸면 "
+              "'모델이 정한 라벨'로 기록에 남습니다(순환논리 가드).")
+    try:  # 저장소 기준 상대경로로 안내 — 베어 파일명은 ROOT 기준으로 해석돼 죽는다
+        shown = out_file.relative_to(ROOT)
+    except ValueError:
+        shown = out_file
+    print(f"  반영: python scripts/relabel_generated_sentiment.py --apply-manual {shown}")
+
+
+def check_text_drift(rows: list[dict], recorded: dict[str, str], label: str) -> list[str]:
+    """저장된 라벨이 **다른 문장**에 붙는 걸 막는다 (2026-08-09 PR 리뷰 지적).
+
+    `GEN-####` 는 생성 시점의 **생존 행 순번**이라 내용 기반이 아니다. 검수 게이트가
+    실패 행을 버리므로 재생성하면 같은 ID에 다른 문장이 들어간다. 그 상태로 예전
+    라벨 파일을 반영하면 **엉뚱한 문장에 라벨이 붙는다.**
+
+    provenance 파일들이 raw_text 를 같이 들고 있으므로, 반영 전에 현재 CSV와 대조해
+    어긋난 ID를 돌려준다. 호출부는 이걸 발견하면 **반영을 중단**해야 한다.
+    """
+    now = {r["id"]: r["raw_text"] for r in rows}
+    drift = [iid for iid, txt in recorded.items() if iid in now and now[iid] != txt]
+    if drift:
+        print(f"\n🔴 {label}: 저장된 문장과 현재 CSV의 문장이 다른 행 {len(drift)}건")
+        for iid in drift[:5]:
+            print(f"    {iid}")
+            print(f"      기록: {recorded[iid][:60]}")
+            print(f"      현재: {now[iid][:60]}")
+        print("  → ID가 재부여됐을 가능성이 큽니다(생성 순번 기반). 반영을 중단합니다.")
+    return drift
 
 
 def apply_from_runs(
@@ -425,10 +476,16 @@ def apply_from_runs(
         rows = list(csv.DictReader(f))
 
     runs: list[dict[str, str]] = []
+    recorded_text: dict[str, str] = {}
     for p in run_files:
         with p.open(encoding="utf-8-sig", newline="") as f:
-            runs.append({r["id"]: r["new_sentiment"] for r in csv.DictReader(f)})
+            rs = list(csv.DictReader(f))
+        runs.append({r["id"]: r["new_sentiment"] for r in rs})
+        recorded_text.update({r["id"]: r["raw_text"] for r in rs if r.get("raw_text")})
     print(f"실행 {len(runs)}개 다수결 반영: {', '.join(p.name for p in run_files)}")
+
+    if check_text_drift(rows, recorded_text, "run 파일"):
+        return
 
     make_backup(infile)
 
@@ -458,6 +515,52 @@ def apply_from_runs(
     print(f"  다수결 동률이라 보류 {tied}건")
 
 
+def apply_sweep(infile: Path, sweep_file: Path) -> None:
+    """정책 전수 스캔 결과를 반영한다 (LLM 호출 없음, 2026-08-09 PR 리뷰 반영).
+
+    `relabel_policy_sweep.csv` 는 `id, old_sentiment, new_sentiment, decided_by, reason,
+    raw_text` 를 들고 있어, **어떤 행이 왜 바뀌었는지 재현 가능**하다. 이 경로가 없으면
+    전수 스캔분이 provenance 없이 CSV에만 반영돼 "왜 이 라벨인가"에 답할 수 없다.
+    """
+    with infile.open(encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.DictReader(f))
+    with sweep_file.open(encoding="utf-8-sig", newline="") as f:
+        sweep = list(csv.DictReader(f))
+
+    if check_text_drift(rows, {r["id"]: r["raw_text"] for r in sweep if r.get("raw_text")},
+                        sweep_file.name):
+        return
+
+    by_id = {r["id"]: r for r in rows}
+    changed = skipped = 0
+    for s_row in sweep:
+        row = by_id.get(s_row["id"])
+        if row is None:
+            print(f"  ⚠️ {s_row['id']}: CSV에 없는 id")
+            continue
+        parsed = parse_final(s_row["new_sentiment"], len(row["aspect"].split(",")))
+        if parsed is None:
+            print(f"  ⚠️ {s_row['id']}: new_sentiment 형식 오류 '{s_row['new_sentiment']}'")
+            continue
+        new = ",".join(parsed)
+        if row["sentiment"] == new:
+            skipped += 1
+        else:
+            row["sentiment"] = new
+            changed += 1
+
+    print(f"전수 스캔 {len(sweep)}행 — 반영 {changed}건 / 이미 반영됨 {skipped}건")
+    if not changed:
+        print("반영할 변경이 없어 파일을 쓰지 않았습니다.")
+        return
+    make_backup(infile)
+    with infile.open("w", encoding="utf-8-sig", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["id", "aspect", "sentiment", "raw_text", "source"])
+        w.writeheader()
+        w.writerows({k: r[k] for k in w.fieldnames} for r in rows)
+    print(f"반영 완료 → {infile} ({changed}건 변경)")
+
+
 def apply_manual(infile: Path, review_file: Path) -> None:
     """손검토 CSV의 `final` 칸을 읽어 반영한다 (LLM 호출 없음, 2026-08-09 추가).
 
@@ -475,6 +578,10 @@ def apply_manual(infile: Path, review_file: Path) -> None:
         reviewed = list(csv.DictReader(f))
     if "final" not in (reviewed[0].keys() if reviewed else {}):
         print(f"⚠️ {review_file.name} 에 'final' 컬럼이 없습니다. --build-manual-queue 로 다시 만드세요.")
+        return
+
+    recorded_text = {r["id"]: r["raw_text"] for r in reviewed if r.get("raw_text")}
+    if check_text_drift(rows, recorded_text, review_file.name):
         return
 
     changed = blank = invalid = unchanged = 0
@@ -560,6 +667,13 @@ def main() -> None:
         help="손검토 CSV의 final 칸을 읽어 반영(LLM 호출 없음)",
     )
     ap.add_argument(
+        "--apply-sweep",
+        nargs="?",
+        const=DEFAULT_SWEEP,
+        metavar="SWEEP_CSV",
+        help=f"정책 전수 스캔 CSV를 반영(LLM 호출 없음). 기본 {DEFAULT_SWEEP}",
+    )
+    ap.add_argument(
         "--apply-from",
         nargs="+",
         metavar="RUN_CSV",
@@ -588,6 +702,11 @@ def main() -> None:
     only = None if args.only_aspects.strip().lower() == "all" else {
         a.strip() for a in args.only_aspects.split(",") if a.strip()
     }
+
+    if args.apply_sweep:
+        sp = Path(args.apply_sweep)
+        apply_sweep(infile, sp if sp.is_absolute() else ROOT / args.apply_sweep)
+        return
 
     if args.apply_manual:
         rp = Path(args.apply_manual)
