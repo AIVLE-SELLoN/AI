@@ -95,6 +95,24 @@ def load_dataset(golden_path: Path) -> list[dict]:
     return rows
 
 
+def operational_negative_rate(all_rows: list[dict]) -> float | None:
+    """운영 부정비율 p — **표본이 아니라 골든 전량**에서 센다.
+
+    ⚠️ 반드시 `sample_rows()` **이전**의 전체 행을 넘길 것. 표본은 aspect 층화(또는
+       `--only-negative`)라 부정비율이 설계상 왜곡돼 있고, 그 값으로 환산하면
+       precision_operational 이 표본 precision 과 같아져 지표 자체가 무의미해진다.
+
+    ⚠️ 하드코딩 금지 (2026-08-10). 원래 `P_OPERATIONAL = 0.074` 상수였는데,
+       golden_cs_labels.csv 가 재생성되면(배경 baseline 분모 수정 등) 골든 부정비율이
+       움직이는데 상수는 안 움직여서 환산값이 조용히 틀린다. 실제로 7,117/96,531
+       (7.4%) 기준으로 박아둔 값이 재생성 후 3배 넘게 어긋났다. 골든에서 직접 세면
+       어떤 골든을 쓰든 자동으로 맞는다.
+    """
+    if not all_rows:
+        return None
+    return sum(1 for r in all_rows if r["true_sentiment"] == -1) / len(all_rows)
+
+
 def parse_few_shot_examples(prompt_version: str) -> list[str]:
     """프롬프트 파일에서 few-shot '입력:' 문장을 전부 파싱한다(§6 B안 1번, 지인님 리뷰
     2026-08-06). 하드코딩 목록 대신 파일을 직접 읽어서, 예시가 늘어나도 자동 반영된다
@@ -403,7 +421,12 @@ def _basic_metrics(rows_subset: list[dict], predictions: dict[str, list[dict]]) 
     }
 
 
-def score(rows: list[dict], predictions: dict[str, list[dict]], leak_threshold: float | None = None) -> dict:
+def score(
+    rows: list[dict],
+    predictions: dict[str, list[dict]],
+    leak_threshold: float | None = None,
+    operational_rate: float | None = None,
+) -> dict:
     """aspect F1(다중예측 vs 단일정답 set 비교) + 감성정확도 + 완전일치
     + 지인님 A안 지표 3종(2026-08-04, 실험③ 지표 재설계).
 
@@ -518,12 +541,14 @@ def score(rows: list[dict], predictions: dict[str, list[dict]], leak_threshold: 
     # "실제 운영 트래픽에 이 모델을 붙이면 나올 precision"으로 환산한다.
     #   P(true=부정|pred=부정) = P(pred=부정|true=부정)*P(true=부정) / P(pred=부정)
     #                          = recall*p / (recall*p + FPR*(1-p))
-    # P_OPERATIONAL=0.074는 golden_cs_labels.csv 실측값(7,117/96,531=7.37%, 2026-08-06
-    # 재확인)과 Notion 원문의 0.073 사이 반올림 차이 — 최신 실측값 쪽으로 확정.
-    P_OPERATIONAL = 0.074
+    # p는 호출자가 골든 전량에서 세어 넘긴다(operational_negative_rate). 하드코딩했다가
+    # 골든 재생성에 안 따라가서 조용히 틀리는 사고가 있었다 — 그 함수의 주석 참고.
+    # 안 넘어오면 **추정하지 않고 None**을 낸다. 못 재는 걸 그럴듯한 숫자로 채우면
+    # 아무도 안 본다(위 neg_precision_reported 와 같은 원칙).
+    p_operational = operational_rate
     neg_precision_operational = round(
-        (P_OPERATIONAL * neg_recall) / (P_OPERATIONAL * neg_recall + (1 - P_OPERATIONAL) * neg_fpr), 4
-    ) if neg_fpr is not None else None  # neg_fpr가 None이면(비부정표본 0건) 이것도 계산 불가 → None
+        (p_operational * neg_recall) / (p_operational * neg_recall + (1 - p_operational) * neg_fpr), 4
+    ) if (neg_fpr is not None and p_operational is not None) else None
 
     neg_asp_precision, _, _ = _prf1(neg_aspect_tp, neg_aspect_fp, neg_aspect_fn)
     n_true_negative = neg_tp + neg_fn  # 골든상 부정인 문항 수(표본 크기 확인용)
@@ -555,9 +580,13 @@ def score(rows: list[dict], predictions: dict[str, list[dict]], leak_threshold: 
             "precision": neg_precision_reported, "recall": neg_recall, "f1": neg_f1_reported,
             "fpr": neg_fpr,
             "precision_operational": neg_precision_operational,
+            # 어느 p로 환산했는지 JSON에 남긴다 — 골든이 바뀌면 p도 바뀌므로, 이게 없으면
+            # 옛 결과 JSON과 새 결과 JSON을 나란히 놓고 비교할 수 없다.
+            "precision_operational_p": round(p_operational, 4) if p_operational is not None else None,
             "precision_operational_note": (
                 "⚠️ 환산값입니다 — 직접 측정한 게 아니라, 균형표본(50:50)의 recall·FPR을 "
-                f"베이즈 정리로 실제 운영 부정비율(p={P_OPERATIONAL})에 맞춰 재계산한 것. "
+                f"베이즈 정리로 실제 운영 부정비율(p={p_operational})에 맞춰 재계산한 것. "
+                "p는 골든 전량에서 실측한 값이라 골든이 바뀌면 같이 움직인다. "
                 "위 'precision'(표본기준)과 절대 혼동하지 말 것 — FPR이 0%에 가까울 땐 둘이 "
                 "비슷해 보이지만, FPR이 조금만 올라도 크게 벌어짐(예: FPR5%→표본95% vs 운영60%)."
             ),
@@ -656,7 +685,9 @@ def report(result: dict) -> None:
     p_op_str = f"{nd['precision_operational']:.1%}" if nd["precision_operational"] is not None else "측정불가"
     print(f"\n★★★ [대표지표] ① 부정 판별 정확도(탐지 분자 결정)  P(표본기준)={p_str} R={nd['recall']:.1%} F1={f1_str}")
     print(f"    🆕 FPR(오탐률) = {fpr_str}  — eval/README.md가 경고한 '부정 강화하면 FPR 상승' 여부를 실제로 보는 값")
-    print(f"    🆕 P(운영환산, p=7.4%) = {p_op_str}  — ⚠️ 위 P(표본기준)와 다른 값, 실제 트래픽에 붙였을 때 기대되는 precision")
+    p_op = nd.get("precision_operational_p")
+    p_label = f"p={p_op:.1%}" if p_op is not None else "p 미지정"
+    print(f"    🆕 P(운영환산, {p_label}) = {p_op_str}  — ⚠️ 위 P(표본기준)와 다른 값, 실제 트래픽에 붙였을 때 기대되는 precision")
     print(f"    tp={nd['tp']} fp={nd['fp']} fn={nd['fn']} tn={nd['tn']}  (골든 부정 n={nd['n_true_negative']}, 비부정 n={nd['n_true_nonnegative']})")
     print(f"★★★ [대표지표] ② 부정 한정 aspect 정확도(탐지 분자 위치 결정)  accuracy={na['accuracy']:.1%}  (tp={na['tp']} fp={na['fp']} fn={na['fn']})")
     print(f"    골든 부정 표본 n={na['n_true_negative']}" + (f"  ⚠️ {na['n_true_negative_warning']}" if na["n_true_negative_warning"] else ""))
@@ -681,6 +712,8 @@ async def main_async(args: argparse.Namespace) -> None:
         classification_service.PROMPT_ASPECT_VERSION = args.prompt_version
 
     rows = load_dataset(golden_path)
+    # 표본을 뽑기 **전에** 센다 — 표본은 층화라 부정비율이 왜곡돼 있다.
+    p_operational = operational_negative_rate(rows)
     sampled = sample_rows(rows, args.limit, args.seed, only_negative=args.only_negative)
 
     # 🆕 §6 B안 — few-shot 유출 태깅(2026-08-06, 지인님 리뷰)
@@ -694,6 +727,8 @@ async def main_async(args: argparse.Namespace) -> None:
 
     print(f"골든: {golden_path}")
     print(f"전체 {len(rows)}건 → 표본 {len(sampled)}건")
+    if p_operational is not None:
+        print(f"  운영 부정비율 p = {p_operational:.1%} (골든 전량 실측 — 환산 precision 에 쓰임)")
     print(f"  aspect 구성: {dict(Counter(r['true_aspect'] for r in sampled))}")
     print(f"  프롬프트 버전: {classification_service.PROMPT_ASPECT_VERSION}")
     if few_shot_texts:
@@ -738,7 +773,12 @@ async def main_async(args: argparse.Namespace) -> None:
             "leak_threshold": args.leak_threshold,  # 🆕 §6 B안 — few-shot 유출 판정 유사도 임계
             "few_shot_examples_checked": len(few_shot_texts),  # 🆕 파싱된 few-shot 개수(0이면 검사 자체가 스킵됨)
         },
-        "scores": score(sampled, predictions, leak_threshold=args.leak_threshold),
+        "scores": score(
+            sampled,
+            predictions,
+            leak_threshold=args.leak_threshold,
+            operational_rate=p_operational,
+        ),
     }
     report(result)
 

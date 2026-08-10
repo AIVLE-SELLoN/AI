@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from eval.run_classify_eval import (
     compute_leak_map,
+    operational_negative_rate,
     parse_few_shot_examples,
     sample_rows,
     score,
@@ -74,6 +75,11 @@ class TestNegativeDetectionFPR:
         """운영비율 환산 precision — 지인님 PR리뷰 예시(recall95%·FPR5%→~61%) 재현
         (Notion A안, 2026-08-06 반영). 균형표본(50:50) precision은 95%로 높게 나오지만,
         실제 운영 부정비율(7.4%)로 환산하면 60%대로 뚝 떨어진다는 게 이 지표의 핵심.
+
+        p를 인자로 **명시해서** 넘긴다(2026-08-10). 예전엔 score() 안에 0.074가 박혀
+        있어서 이 테스트가 골든 파일 상태에 묶여 있었다 — 골든을 재생성하면 실제 p가
+        움직이는데 이 기대값은 안 움직여서, 공식이 맞는지 데이터가 맞는지 못 가린다.
+        여기서 검증할 것은 **베이즈 공식**뿐이므로 p를 고정한다.
         """
         rows = [_row(f"N{i}", "색상", -1) for i in range(20)] + [_row(f"P{i}", "색상", 0) for i in range(20)]
         predictions = {}
@@ -84,7 +90,7 @@ class TestNegativeDetectionFPR:
         for i in range(1, 20):
             predictions[f"P{i}"] = _pred("색상", 0)
 
-        nd = score(rows, predictions)["negative_detection"]
+        nd = score(rows, predictions, operational_rate=0.074)["negative_detection"]
 
         assert nd["recall"] == 0.95
         assert nd["fpr"] == 0.05
@@ -92,7 +98,39 @@ class TestNegativeDetectionFPR:
         assert abs(nd["precision_operational"] - 0.603) < 0.005, (
             f"운영환산 precision은 60%대여야 하는데 {nd['precision_operational']}"
         )
+        assert nd["precision_operational_p"] == 0.074, "어느 p로 환산했는지 결과에 남아야 함"
         assert nd["precision"] != nd["precision_operational"], "표본기준과 운영환산은 반드시 달라야 함(그게 이 지표의 존재 이유)"
+
+    def test_precision_operational_is_null_without_p(self):
+        """p를 안 넘기면 환산값은 None이다 — 추정해서 채우면 안 된다 (2026-08-10).
+
+        예전엔 0.074가 박혀 있어서, 골든이 재생성돼 실제 부정비율이 3배 넘게 움직인
+        뒤에도 옛 p로 계산한 숫자가 아무 경고 없이 나왔다. 못 재는 건 None으로 낸다.
+        """
+        rows = [_row(f"N{i}", "색상", -1) for i in range(2)] + [_row(f"P{i}", "색상", 0) for i in range(2)]
+        predictions = {r["inquiry_id"]: _pred("색상", r["true_sentiment"]) for r in rows}
+
+        nd = score(rows, predictions)["negative_detection"]
+        assert nd["fpr"] is not None, "FPR은 계산돼야 한다 — None인 건 p 쪽 사유여야 함"
+        assert nd["precision_operational"] is None
+        assert nd["precision_operational_p"] is None
+
+    def test_operational_rate_counts_population_not_sample(self):
+        """p는 골든 전량에서 센다 — 층화 표본의 비율이 아니다.
+
+        표본은 aspect 층화(또는 --only-negative)라 부정비율이 설계상 왜곡돼 있다.
+        표본으로 재면 환산 precision 이 표본 precision 과 같아져 지표가 무의미해진다.
+        """
+        population = [_row(f"N{i}", "색상", -1) for i in range(10)] + [
+            _row(f"P{i}", "색상", 0) for i in range(90)
+        ]
+        assert operational_negative_rate(population) == 0.10
+
+        balanced_sample = population[:10] + population[10:20]  # 50:50 으로 뽑힌 표본
+        assert operational_negative_rate(balanced_sample) == 0.50, (
+            "표본으로 세면 0.5 — 그래서 호출자가 sample_rows() 이전 행을 넘겨야 한다"
+        )
+        assert operational_negative_rate([]) is None
 
     def test_precision_operational_is_null_when_fpr_is_null(self):
         """fpr이 None이면(비부정 표본 0건) precision_operational도 연쇄적으로 None이어야 한다
