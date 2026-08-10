@@ -615,7 +615,31 @@ def _golden_negatives() -> dict[str, tuple[str, str]]:
     }
 
 
-def classify_errors(documents: list[dict], cache: dict) -> tuple[Counter, Counter]:
+def config_slots(config_rows: list[dict]) -> set:
+    """config 에 정의된 (상품, aspect, 채널, source) 슬롯.
+
+    **채점에 닿는 유일한 집합이다.** measure() 가 이 슬롯만 내고, 나머지는
+    build_combinations 의 합성값을 그대로 쓴다. 즉 슬롯 밖 문서의 분류 결과는
+    분자에도 분모에도 안 들어간다(분모는 build_rows 경유라 분류와 무관).
+
+    ⚠️ 이 구분이 없으면 --diagnose 숫자를 못 읽는다. 2026-08-09 배경 baseline
+       재생성으로 케이스 윈도우의 골든 부정이 1,618 → 3,367 로 늘었는데 config
+       슬롯 몫은 1,278 로 그대로다. 슬롯 내 비율이 79% → 38% 로 떨어져서, 필터
+       없이 세면 분모의 62% 가 채점과 무관한 문서다. (현진님 리뷰 §1)
+    """
+    return {
+        (r["golden_group_id"], r["aspect"], r["channel"], r["source"])
+        for r in config_rows
+    }
+
+
+def _in_slot(doc: dict, aspect: str, slots: set) -> bool:
+    return (doc["product"], aspect, doc["channel"], doc["source"]) in slots
+
+
+def classify_errors(
+    documents: list[dict], cache: dict, slots: set | None = None
+) -> tuple[Counter, Counter]:
     """골든 부정 문의가 실제 분류에서 어떻게 됐는지 분해한다.
 
     ②의 하락폭이 '어떤 종류의 분류 오차'에서 오는지 가르는 게 목적이다. aspect 를
@@ -634,6 +658,8 @@ def classify_errors(documents: list[dict], cache: dict) -> tuple[Counter, Counte
         if label is None:
             continue
         aspect, _ = label
+        if slots is not None and not _in_slot(doc, aspect, slots):
+            continue
         predicted = cache.get(doc["id"], [])
         same_aspect = [p for p in predicted if p["aspect"] == aspect]
 
@@ -649,7 +675,9 @@ def classify_errors(documents: list[dict], cache: dict) -> tuple[Counter, Counte
     return breakdown, flipped
 
 
-def restore_sentiment(documents: list[dict], cache: dict) -> tuple[dict, int]:
+def restore_sentiment(
+    documents: list[dict], cache: dict, slots: set | None = None
+) -> tuple[dict, int]:
     """감성만 골든으로 되돌린 캐시 사본을 만든다. **민감도 분석 전용.**
 
     ⚠️ 성능 주장이 아니다. 골든을 예측에 주입하므로 이 숫자는 '달성 가능한 성능'이
@@ -666,6 +694,8 @@ def restore_sentiment(documents: list[dict], cache: dict) -> tuple[dict, int]:
         if label is None:
             continue
         aspect, _ = label
+        if slots is not None and not _in_slot(doc, aspect, slots):
+            continue
         for entry in restored.get(doc["id"], []):
             if entry["aspect"] == aspect and entry["sentiment"] == 0:
                 entry["sentiment"] = -1
@@ -727,26 +757,37 @@ def diagnose(documents, config_rows, products, golden, tag, mode, runs,
         print(f"\n⚠️ 채점 범위 {sources} 로 좁힘 — 문서 {n0:,} → {len(documents):,}"
               " (캐시는 전체 집합 것을 그대로 쓴다)")
 
-    total_breakdown: Counter = Counter()
+    slots = config_slots(config_rows)
+    both: dict[str, Counter] = {"전체": Counter(), "config 슬롯 내": Counter()}
     total_flipped: Counter = Counter()
     for _run, cache in caches:
-        breakdown, flipped = classify_errors(documents, cache)
-        total_breakdown.update(breakdown)
-        total_flipped.update(flipped)
+        for name, flt in (("전체", None), ("config 슬롯 내", slots)):
+            breakdown, flipped = classify_errors(documents, cache, flt)
+            both[name].update(breakdown)
+            if flt is not None:
+                total_flipped.update(flipped)
 
-    grand = sum(total_breakdown.values())
-    print(f"\n■ 골든 부정 CS 문의가 실제 분류에서 어떻게 됐나 ({len(caches)}회차 합산)")
-    for label, n in total_breakdown.most_common():
-        print(f"    {n:7,d} ({n / grand:5.1%})  {label}")
+    print(f"\n■ 골든 부정이 실제 분류에서 어떻게 됐나 ({len(caches)}회차 합산)")
+    print("    'config 슬롯 내' 만 채점에 닿는다 — measure() 가 그 슬롯만 내고,")
+    print("    밖은 build_combinations 합성값을 쓴다. 분자·분모 어느 쪽도 안 움직인다.")
+    labels = list(both["전체"].keys())
+    print(f"\n    {'':28s} {'전체':>16s} {'config 슬롯 내':>18s}")
+    for label in labels:
+        a, b = both["전체"][label], both["config 슬롯 내"][label]
+        ga, gb = sum(both["전체"].values()), sum(both["config 슬롯 내"].values())
+        print(f"    {label:28s} {a:7,d} ({a/ga:5.1%}) {b:9,d} ({b/gb:5.1%})")
+    ga, gb = sum(both["전체"].values()), sum(both["config 슬롯 내"].values())
+    print(f"    {'합계':28s} {ga:7,d}          {gb:9,d}   ({gb/ga:.0%})")
 
-    print("\n■ 감성이 부정→중립으로 뒤집힌 문장 (상위 10)")
+    print("\n■ 감성이 부정→중립으로 뒤집힌 문장 — config 슬롯 내만 (상위 10)")
     for (aspect, text), n in total_flipped.most_common(10):
         print(f"    {n:5,d}회 [{aspect}] {text[:58]}")
 
     print("\n■ 민감도 — 감성만 골든으로 되돌리면 (성능 주장 아님, 상한)")
     print(f"    {'회차':6s} {'현재':>8s} {'감성 복원':>10s}  (복원 건수)")
+    print("    복원 대상은 config 슬롯 내로 한정한다 — 밖은 복원해도 점수가 안 움직인다")
     for run, cache in caches:
-        restored, n = restore_sentiment(documents, cache)
+        restored, n = restore_sentiment(documents, cache, slots)
         rates = []
         for source in (cache, restored):
             rows = build_rows(documents, _to_items(documents, source))
@@ -853,7 +894,14 @@ def report(runs: list[dict], oracle: dict, mode: str = MODE_BATCH) -> None:
     print(f"\n{'=' * 72}")
     print("실험② 분류 오류 전파 — ①(oracle) vs ②(실제 분류)")
     print(f"{'=' * 72}")
-    print(f"분류 호출 방식: {mode} · 프롬프트 {prompt_fingerprint()} · {len(runs)}회 평균")
+    print(
+        f"분류 호출 방식: CS {mode} · 리뷰 per_item"
+        f" · 프롬프트 {prompt_fingerprint()} · {len(runs)}회 평균"
+    )
+    print(
+        "  ↳ ⚠️ 리뷰는 항상 per_item 이다(프롬프트2 에 배치 조립기가 없다). 아래 배치↔건당"
+        "\n     동등성 근거(실험③)는 프롬프트1·CS 에서 잰 것이라 리뷰엔 안 걸린다."
+    )
     if mode == MODE_BATCH:
         # 운영(워커)은 건당이라 조건이 다르다. 근거를 숫자와 함께 남겨야, 나중에
         # "왜 운영은 건당인데 실험은 배치냐"는 질문에 답이 있다.
