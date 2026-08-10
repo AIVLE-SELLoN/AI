@@ -33,6 +33,81 @@
   평균 14토큰이라, 건당 호출은 1회의 99.8%가 프롬프트 재전송이다 — ③④와 운영 워커도
   같은 구조라 배치 전환 시 같은 비율로 준다(전량 96,531건 기준 $92 → $7) 96,514 -> 96,531로 데이터 수 변경(8/5)
 
+## 목 데이터 재생성 — 2026-08-09
+
+`data/**` 는 전부 미커밋이라 **팀원마다 다른 데이터를 들고 있을 수 있다.** 아래 순서로
+맞춘다. LLM 호출 0회다(`cause_text_cache.json` 이 14/14 커버).
+
+> 🔴 **`38c1074` 이상이 필요하다.** `--baseline-denominator` 는 그 커밋에서 생긴
+> 플래그다. main 에 머지되기 전에는 이 레시피가 "unrecognized arguments" 로 죽는다.
+> `git log --oneline | grep 38c1074` 로 확인할 것.
+
+**① 먼저 아카이브한다.** 아래 명령은 `--outdir data/input` 으로 **제자리 덮어쓰기**다.
+`data/**` 가 전부 미커밋이라 한 번 돌리면 이전 데이터는 복구할 수 없다.
+
+```bash
+cp -R data/input data/golden data/config data/_archive/$(date +%Y%m%d)/
+```
+
+**② 재생성한다.**
+
+```bash
+python scripts/generate_cs_review_data.py \
+    --anomaly-config data/config/config_anomaly.csv \
+    --products-config data/config/config_products.csv \
+    --mapping-dir data/input --golden-mapping-dir data/golden \
+    --templates data/config/templates.yaml \
+    --outdir data/input --golden-outdir data/golden \
+    --anchor-date 2026-08-28 --seed 11 \
+    --baseline-denominator total
+```
+
+**③ config 대조로 검산한다.** `verify_counts.py` 가 config 의
+`past_neg`/`past_total`/`cur_neg`/`cur_total` 을 생성 데이터 실제 건수와 맞춰본다.
+
+```bash
+IDS=$(python -c "import csv;print(','.join(sorted({r['case_id'] for r in csv.DictReader(open('data/config/config_anomaly.csv',encoding='utf-8-sig'))})))")
+python scripts/verify_counts.py \
+    --anomaly-config data/config/config_anomaly.csv \
+    --generated-dir data/input --golden-dir data/golden \
+    --mapping-dir data/input --golden-mapping-dir data/golden \
+    --anchor-date 2026-08-28 --case-ids "$IDS"
+```
+
+2026-08-09 재생성분 실측: **246 슬롯 전부 PASS · FAIL 0 · "전체 통과"**.
+행수가 96,531 → 96,524 로 움직였지만 케이스 슬롯 카운트는 config 그대로다 —
+케이스 경로가 정확 건수를 심고 배경 경로만 고쳤다는 증거다.
+
+맞았는지 확인하는 값:
+
+| | 값 |
+| --- | --- |
+| `input_cs_inquiries.csv` | 96,524행 |
+| `input_reviews.csv` | 31,639행 |
+| `golden_cs_labels.csv` 의 `true_sentiment == -1` | 23,950 |
+| 실험② `data_fingerprint` | `1fb05ed9` |
+| `verify_counts.py` | 246 슬롯 PASS · FAIL 0 |
+
+**왜 재생성했나** — 생성기 배경 경로가 `BASELINE_RATE` 를 aspect 내부 분모로 적용하고
+있었다. 확정 스펙(시나리오 정의서 §1, `config_anomaly` 의 `past_total`,
+`app/detection/aggregate.py`)은 전부 전체 문의 분모라, 전체 분모로 보면 CS 1/6 ·
+리뷰 1/3 로 희석돼 있었다. 커밋 `38c1074`.
+
+**무엇이 무효가 됐나** — `data/golden` · `data/input` 을 읽는 기록값 전부다.
+
+- 실험③ F1 99.0% (`app/classification/service.py:72` 주석)
+- `run_classify_eval.py` 의 `P_OPERATIONAL` 하드코딩 — 골든 전량 실측으로 교체됨(현진, `5a7376b`)
+- 재생성 전 실험② 수치 (48.0% / 60.0%)
+
+**무효가 아닌 것** — `config_anomaly.csv` 는 생성기의 *입력*이라 안 움직인다. 케이스
+경로가 `past_neg`/`cur_neg` 를 정확 건수로 심으므로 채점 슬롯 카운트도 불변이고,
+그래서 실험① 은 재생성 후에도 100%(25/25 · 0/8 · 33/33 · 배치 1,464)로 같다.
+
+옛 데이터는 `data/_archive/v1_aspect_denominator_20260809/` 에 있다. 행 단위 동일
+재현은 불가하다 — 분모 해석이 바뀌면 rng 소비 순서가 달라져 이후 추첨이 전부 밀린다.
+
+---
+
 ## 실행
 
 저장소 루트에서 실행한다 (`app` 을 import 하므로). `data/` 와 ChromaDB 시딩이
@@ -102,16 +177,36 @@ python eval/run_embedding_eval.py --dry-run # 표본만 출력, $0
 회차별 탐지율 52.0% / 40.0% / 52.0%. CS 빈 배열 14건(0.1%)이 기타/중립으로 대체됨.
 
 > 🔴 **분모 주의 — 이 표의 "11,990건"은 문항 수가 아니다 (2026-08-06 확인).**
-> `input_cs_inquiries.csv` 는 **96,531행이지만 고유 문장이 329종**이다(문장당 평균
+> `input_cs_inquiries.csv` 는 **96,524행이지만 고유 문장이 329종**이다(문장당 평균
 > 293회 반복, 골든 부정만 보면 299종). 실험② 대상 11,990건은 그 329종을 **전부**
 > 포함한다. 즉 분류 성능 관점의 **유효 표본은 n≈329** 다.
+>
+> 🔴 **리뷰는 더 심하다 (2026-08-09 추가).** `input_reviews.csv` 는 31,639행에
+> **고유 30종**이다. 실험②의 리뷰 케이스 윈도우 420건을 보면 부정 58건/14종,
+> 비부정 362건/**15종**이다.
+>
+> 그래서 **실험②의 리뷰 파트는 프롬프트2 품질 근거가 못 된다.** 실측에서 역방향
+> 오판(비부정→부정)이 리뷰 21건으로 3회차 내내 고정이었는데, `--diagnose` 로 세어
+> 보니 **1종**이었다. 문서당 오판률이 아니라 템플릿 하나가 매번 같은 방향으로 틀리는
+> 것이라, 건수를 새 문장으로 외삽하면 안 된다.
+>
+> 따라오는 결론 둘.
+> - **프롬프트2 를 이 데이터로 고치면 안 된다.** 1종 맞히기가 된다. 실험④(AI Hub
+>   71603)로 가야 한다.
+> - **②의 FPR 0/8 을 안전성 근거로 쓸 수 없다.** 표본 크기 문제가 아니라 리뷰 문장이
+>   15종뿐인 데이터의 결과다. 운영 FPR 에 대해 ②는 아무 말도 못 한다.
 >
 > 두 가지가 따라온다.
 > 1. **홀드아웃을 행 분할로 만들 수 없다.** 실험② 밖 84,541행이 같은 문장을 쓴다 —
 >    어떻게 쪼개도 같은 문제가 양쪽에 들어간다. 시험지는 **새 텍스트 생성** 또는
 >    **외부 실데이터**로만 만들어진다(`mock data 정의서` §676 이 그렇게 설계했다).
 > 2. **이 표는 분류기 성능 근거로 못 쓴다.** 파이프라인 검증(배선·BH 거동)에는 유효하고
->    실험①이 그 역할이다. 모델 성능은 `eval/eval_sets/`(미구축)에서 재야 한다.
+>    실험①이 그 역할이다. 모델 성능은 `eval/eval_sets/` 에서 재야 하는데, 2026-08-09
+>    확인 결과 **그쪽도 아직 준비가 안 됐다** — 채점 러너가 없고(읽는 건 생성·재라벨·
+>    검증 스크립트뿐), `llm_generated_700` 700건 중 화면/사진-실물 대조가 16건뿐이라
+>    겨냥 패턴 커버리지가 얇다. `relabel_300` 은 AI Hub 리뷰 텍스트라 프롬프트1 에
+>    안 맞는다. 홀드아웃이 필요하면 대조 계열 문항을 **사람이 새로 작성**해야 한다
+>    (`mock data 정의서` §672).
 >
 > ③도 같은 `data/golden/golden_cs_labels.csv` 를 읽으므로 **F1 99.0% 에 같은 제약이
 > 걸린다**(`run_classify_eval.py:49`). `--limit 1000` 이어도 서로 다른 문제는 최대 329개다.
@@ -219,6 +314,35 @@ BH 실효 컷오프가 6.0e-04 라 경계 케이스가 탈락하고, BH 는 step
 batch=per_item인지는 별도 확인 필요. **측정이 아니라 가정**이므로 리포트가 매 실행
 이 문구를 출력한다.
 운영과 완전히 같은 조건은 `--mode per_item`(≈$34.3).
+
+### 데모 재현(`demo_sim.py`)의 `real` 은 당분간 안 나온다
+
+`scripts/detection_experiments/demo_sim.py` 는 `detect_anomaly()` 를 32일 이어 돌려
+**셀러가 실제로 받는 알림** 을 세는 도구다. `oracle` / `real` 두 팔로 도는데, 지금은
+**`oracle` 만 나온다.**
+
+`swap_real()` 이 캐시에 없는 `item_id` 를 **조용히 golden 으로 되돌린다.** 그래서 캐시가
+부분적이면 `real` 열에 oracle 이 섞인 채로 실제 분류 결과처럼 찍힌다. 그걸 막으려고
+적용률 99% 미만이면 `real` 팔을 아예 뺀다(2026-08-09).
+
+| | 건수 |
+| --- | --- |
+| 데모가 보는 문서 | 128,163 (CS 96,524 + 리뷰 31,639) |
+| 실험②가 만드는 캐시 | 12,410 (케이스 상품 현재 윈도우만) |
+| **적용률** | **9.7%** |
+
+즉 **실험②를 아무리 돌려도 데모 `real` 은 안 나온다.** 스코프가 다르다.
+
+복구하려면 **전량 128,163건 분류 캐시**가 필요하다. 비용은 CS 배치 기준 실험②의
+11,990건 ≈ $2.6 에서 자릿수가 하나 뛰고(전량 96,524건 ≈ $7), 리뷰 31,639건은 프롬프트2
+에 배치 조립기가 없어 `per_item` 이라 그만큼 더 든다 — **총 $10 안팎**으로 본다.
+
+> 🔻 **사기 전에 확인할 것.** 데모 `real` 은 실험②(분류 오차가 탐지를 얼마나 깎나)와
+> 데모 `oracle`(데이터가 정합적일 때 알림이 얼마나 나오나)을 합친 값에 가깝다. 두
+> 숫자를 이미 갖고 있다면 새로 얻는 정보가 크지 않다. 발표에서 "셀러가 실제로 받는
+> 헛알림률" 을 직접 말해야 할 때만 산다.
+
+---
 
 ## ③ 실측 결과 (2026-08-05 · classify_aspect_v5 · --only-negative · 배치)
 
