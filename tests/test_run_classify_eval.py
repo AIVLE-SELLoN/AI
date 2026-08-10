@@ -131,6 +131,27 @@ class TestNegativeDetectionFPR:
         assert nd["precision_operational"] is None, "0/0 을 숫자로 내면 안 된다"
         assert nd["precision_operational_lower"] is None
 
+    def test_recall_and_operational_are_null_without_negative_sample(self):
+        """골든 부정 표본이 0건이면 recall 은 0/0 이라 **못 재는 것**이지 0% 가 아니다.
+
+        _prf1 이 0.0 을 폴백으로 내는 바람에 recall·f1·환산 precision 이 전부 "0%" 로
+        찍혔다 — 비부정 쪽은 has_nonneg_sample 로 막아뒀는데 이쪽만 빠져 있었다.
+        (서영님 리뷰 2026-08-10) precision 은 예외다 — tp/(tp+fp) 는 부정 표본이 없어도
+        "낸 예측이 다 틀렸다"로 실제 측정된 값이라 0.0 이 맞다.
+        """
+        rows = [_row(f"P{i}", "색상", 0) for i in range(50)]
+        predictions = {r["inquiry_id"]: _pred("색상", 0) for r in rows}
+        predictions["P0"] = _pred("색상", -1)  # 오탐 1건 → FPR 2%
+
+        nd = score(rows, predictions, operational_rate=0.248)["negative_detection"]
+        assert nd["n_true_negative"] == 0, "부정 표본이 0건인 상황 셋업 확인"
+        assert nd["recall"] is None, "0/0 을 0% 로 내면 안 된다"
+        assert nd["f1"] is None
+        assert nd["precision_operational"] is None, "recall 이 없으면 환산도 불가능"
+        assert nd["precision_operational_lower"] is None
+        assert nd["precision"] == 0.0, "precision 은 실제로 측정된다 — 낸 예측 1건이 다 틀렸다"
+        assert nd["fpr"] == 0.02, "FPR 은 비부정 표본으로 재므로 정상 계산"
+
     def test_operational_lower_bound_when_no_false_positive(self):
         """fp==0 이면 환산값이 무조건 100% — rule of three 하한을 같이 낸다.
 
@@ -299,7 +320,7 @@ class TestFewShotLeakFilter:
     """
 
     def test_parse_few_shot_examples_finds_all_v5_inputs(self):
-        """v5의 '입력:' 문장이 전부(48개) 파싱돼야 한다 — 하드코딩이 아니라 실제 파일 파싱
+        """v5의 '입력:' 문장이 전부(49개) 파싱돼야 한다 — 하드코딩이 아니라 실제 파일 파싱
         확인용(§6 B안 1번: '예시가 늘어도 자동 반영').
 
         40 → 46: v5 3차 수정(2026-08-09)에서 감성 정책 예시 6개 추가.

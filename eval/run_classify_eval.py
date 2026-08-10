@@ -532,7 +532,17 @@ def score(
     has_nonneg_sample = (neg_fp + neg_tn) > 0
     neg_fpr = round(neg_fp / (neg_fp + neg_tn), 4) if has_nonneg_sample else None
     neg_precision_reported = neg_precision if has_nonneg_sample else None
-    neg_f1_reported = neg_f1 if has_nonneg_sample else None
+
+    # ⚠️ **반대 방향도 같이 막는다** (서영님 리뷰 2026-08-10). 골든 부정 표본이 0건이면
+    #    recall 은 0/0 이라 **못 재는 것**이지 0% 가 아니다. _prf1 이 0.0 을 폴백으로 내는
+    #    바람에 recall·f1·환산 precision 이 전부 "0%" 로 찍혔다 — 비부정 쪽은
+    #    has_nonneg_sample 로 막아뒀는데 이쪽만 빠져 있었다. 이 파일이 없애려던
+    #    "못 재는 걸 그럴듯한 숫자로 채우는" 실패 그대로다.
+    #    precision 은 예외다 — tp/(tp+fp) 는 부정 표본이 없어도 "낸 예측이 다 틀렸다"로
+    #    실제 측정된 값이라 0.0 이 맞다.
+    has_neg_sample = (neg_tp + neg_fn) > 0
+    neg_recall_reported = neg_recall if has_neg_sample else None
+    neg_f1_reported = neg_f1 if (has_nonneg_sample and has_neg_sample) else None
 
     # 🆕 운영 비율 환산 precision (Notion A안, 지인님 PR리뷰 2026-08-06 재요청)
     # 균형표본(50:50)의 precision은 실제 운영 트래픽 비율(부정 7.4%)의 값이 아니다.
@@ -557,7 +567,7 @@ def score(
     #    이 계산이 JSON 쓰기 **전**에 있어서, 터지면 그 회차 LLM 비용이 통째로 날아간다.
     #    가드가 `is not None` 뿐이라 값이 0 인 건 안 걸렸다.
     neg_precision_operational = None
-    if raw_fpr is not None and p_operational is not None:
+    if raw_fpr is not None and p_operational is not None and has_neg_sample:
         denom = p_operational * raw_recall + (1 - p_operational) * raw_fpr
         if denom > 0:
             neg_precision_operational = round(p_operational * raw_recall / denom, 4)
@@ -607,8 +617,10 @@ def score(
         # ── 이상탐지 소비 지표(부정만) — 지인님 A안, 2026-08-04부터 대표 지표 ──
         "negative_detection": {
             "note": "탐지 분자를 결정하는 값 — 문의 단위 부정/비부정 2분류. "
-                    "precision·f1은 비부정 표본(fp+tn)이 0건이면 null(측정불가, 100%로 착각 금지)",
-            "precision": neg_precision_reported, "recall": neg_recall, "f1": neg_f1_reported,
+                    "못 재는 값은 0/100이 아니라 null이다 — precision은 비부정 표본(fp+tn)이 "
+                    "0건일 때, recall은 부정 표본(tp+fn)이 0건일 때, f1은 둘 중 하나라도 0건일 때. "
+                    "precision_operational도 recall에 기대므로 같이 null이 된다",
+            "precision": neg_precision_reported, "recall": neg_recall_reported, "f1": neg_f1_reported,
             "fpr": neg_fpr,
             "precision_operational": neg_precision_operational,
             # 어느 p로 환산했는지 JSON에 남긴다 — 골든이 바뀌면 p도 바뀌므로, 이게 없으면
@@ -718,7 +730,8 @@ def report(result: dict) -> None:
     f1_str = f"{nd['f1']:.1%}" if nd["f1"] is not None else "측정불가"
     fpr_str = f"{nd['fpr']:.1%}" if nd["fpr"] is not None else "측정불가(비부정 표본 0건)"
     p_op_str = f"{nd['precision_operational']:.1%}" if nd["precision_operational"] is not None else "측정불가"
-    print(f"\n★★★ [대표지표] ① 부정 판별 정확도(탐지 분자 결정)  P(표본기준)={p_str} R={nd['recall']:.1%} F1={f1_str}")
+    r_str = f"{nd['recall']:.1%}" if nd["recall"] is not None else "측정불가(부정 표본 0건)"
+    print(f"\n★★★ [대표지표] ① 부정 판별 정확도(탐지 분자 결정)  P(표본기준)={p_str} R={r_str} F1={f1_str}")
     print(f"    🆕 FPR(오탐률) = {fpr_str}  — eval/README.md가 경고한 '부정 강화하면 FPR 상승' 여부를 실제로 보는 값")
     p_op = nd.get("precision_operational_p")
     p_label = f"p={p_op:.1%}" if p_op is not None else "p 미지정"
