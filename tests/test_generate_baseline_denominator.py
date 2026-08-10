@@ -24,7 +24,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from generate_cs_review_data import (  # noqa: E402
+from generate_cs_review_data import (
     ASPECTS,
     BASELINE_DENOMINATOR_ASPECT,
     BASELINE_DENOMINATOR_TOTAL,
