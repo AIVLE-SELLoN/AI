@@ -86,6 +86,7 @@ from run_detection_eval import (  # ①과 배치·채점을 공유해야 비교
 
 from app.classification.service import (
     PROMPT_ASPECT_VERSION,
+    PROMPT_SENTIMENT_VERSION,
     ClassifyRequestItem,
     _cs_empty_fallback,
     classify_aspect,
@@ -100,14 +101,33 @@ from app.detection.statistics import run_detection
 from app.detection.verdict import run_verdict
 
 INPUT_INQUIRIES = ROOT / "data" / "input" / "input_cs_inquiries.csv"
+INPUT_REVIEWS = ROOT / "data" / "input" / "input_reviews.csv"
 INPUT_CHANNEL_PRODUCTS = ROOT / "data" / "input" / "input_channel_products.csv"
 GOLDEN_MAPPING = ROOT / "data" / "golden" / "golden_mapping.csv"
 GOLDEN_CS_LABELS = ROOT / "data" / "golden" / "golden_cs_labels.csv"
+GOLDEN_REVIEW_LABELS = ROOT / "data" / "golden" / "golden_review_labels.csv"
 CACHE_DIR = ROOT / "data" / "eval_cache"
 
 DAY1 = date(2026, 6, 30)  # Day 1 = 문의 데이터 첫날
 SOURCE_CS = "cs"
+SOURCE_REVIEW = "review"
 SOURCES = ("cs", "review")
+
+# source 별 원본·골든·날짜 컬럼. collect_documents 가 이 표만 보고 돈다.
+SOURCE_SPEC = {
+    SOURCE_CS: {
+        "input": INPUT_INQUIRIES,
+        "golden": GOLDEN_CS_LABELS,
+        "id_col": "inquiry_id",
+        "date_col": "inquired_at",
+    },
+    SOURCE_REVIEW: {
+        "input": INPUT_REVIEWS,
+        "golden": GOLDEN_REVIEW_LABELS,
+        "id_col": "review_id",
+        "date_col": "created_at",
+    },
+}
 
 # per_item: 넘긴 항목 수만큼 동시 호출이 뜬다(classify_aspect 내부 asyncio.gather).
 # batch:    청크 하나가 LLM 호출 1회. 청크 크기가 곧 실패 반경이다.
@@ -119,16 +139,21 @@ MODE_PER_ITEM = "per_item"
 
 
 def prompt_fingerprint() -> str:
-    """캐시 키에 넣을 프롬프트 지문 — 이름(버전) + **내용 해시**.
+    """캐시 키에 넣을 프롬프트 지문 — 프롬프트1·2 각각 이름(버전) + **내용 해시**.
+
+    ⚠️ 리뷰가 대상에 들어오면서 프롬프트2 도 결과를 좌우한다(2026-08-09). 프롬프트1 만
+       해싱하면 프롬프트2 를 고쳐도 캐시가 안 갈려 옛 리뷰 라벨을 조용히 재사용한다.
 
     버전 문자열만으로는 부족하다. Agent1 이 예시를 classify_aspect_v5.md 에 **그대로
     추가**하면 파일명이 안 바뀌어서, 캐시가 안 갈리고 옛 결과를 조용히 재사용한다.
     "고쳤는데 숫자가 안 변한다"가 되고, 캐시 탓인지 수정이 무효한 탓인지 못 가린다.
     내용 해시는 제자리 수정까지 잡는다. 이름을 같이 남기는 건 사람이 읽기 위해서다.
     """
-    body = load_llm_prompt("classification", PROMPT_ASPECT_VERSION)
-    digest = hashlib.sha256(body.encode("utf-8")).hexdigest()[:8]
-    return f"{PROMPT_ASPECT_VERSION}-{digest}"
+    parts = []
+    for version in (PROMPT_ASPECT_VERSION, PROMPT_SENTIMENT_VERSION):
+        body = load_llm_prompt("classification", version)
+        parts.append(f"{version}-{hashlib.sha256(body.encode('utf-8')).hexdigest()[:8]}")
+    return "_".join(parts)
 
 
 def data_fingerprint(documents: list[dict]) -> str:
@@ -172,42 +197,53 @@ def _product_of() -> dict[tuple[str, str], str]:
     return out
 
 
-def collect_documents(config_rows: list[dict]) -> tuple[list[dict], dict[str, tuple]]:
-    """케이스 상품의 **현재 윈도우** CS 문의를 모은다 (분모의 출처).
+def collect_documents(config_rows: list[dict]) -> tuple[list[dict], dict[tuple, tuple]]:
+    """케이스 상품의 **현재 윈도우** 문서를 모은다 (분모의 출처). CS·리뷰 둘 다.
 
     Returns:
-        (documents, windows)  — windows 는 product → (cur_start, cur_end) 실제 날짜
+        (documents, windows)  — windows 는 (product, source) → (cur_start, cur_end)
+
+    ⚠️ **리뷰를 빼면 안 된다** (2026-08-09). 채점 단위 33건 중 리뷰가 2건이고
+       (SC-034/review FALSE, SC-035/review TRUE), 리뷰를 안 태우면 그 2건이 oracle
+       인 채로 점수에 들어가 (①−②)가 'CS 분류 오차'만 뜻하게 된다. 설계도 데모도
+       두 소스를 다 쓰는데(로직 §[8] combine_sources) 실험②만 CS 전용이던 것은
+       근거가 문서 어디에도 없었고, 실험③(프롬프트1·CS 배치) 경로를 재사용하면서
+       따라온 공백으로 보인다.
+
+    ⚠️ 윈도우 키가 (product, source) 다. 같은 상품이 CS·리뷰에서 다른 창을 가질 수
+       있으므로 product 단독 키로 두면 한쪽이 다른 쪽 창을 덮어쓴다. 현재 config 는
+       P034·P035 가 양쪽 같은 창이라 결과가 같지만, 키를 좁혀두면 config 가 바뀔 때
+       조용히 어긋나는 걸 막는다.
     """
-    windows: dict[str, tuple] = {}
+    windows: dict[tuple, tuple] = {}
     for r in config_rows:
-        if r["source"] != SOURCE_CS:
-            continue
         end = DAY1 + timedelta(days=int(r["window_end_day"]) - 1)
-        windows[r["golden_group_id"]] = (
+        windows[(r["golden_group_id"], r["source"])] = (
             end - timedelta(days=CURRENT_WINDOW_DAYS - 1),
             end,
         )
 
     product_of = _product_of()
     documents: list[dict] = []
-    for r in read(INPUT_INQUIRIES):
-        product = product_of.get((r["channel"], r["channel_product_id"]))
-        if product not in windows:
-            continue
-        created = datetime.fromisoformat(r["inquired_at"])
-        cur_start, cur_end = windows[product]
-        if not (cur_start <= created.date() <= cur_end):
-            continue
-        documents.append(
-            {
-                "id": r["inquiry_id"],
-                "product": product,
-                "channel": r["channel"],
-                "source": SOURCE_CS,
-                "created_at": created,
-                "text": r["content"],
-            }
-        )
+    for source, spec in SOURCE_SPEC.items():
+        for r in read(spec["input"]):
+            product = product_of.get((r["channel"], r["channel_product_id"]))
+            span = windows.get((product, source))
+            if span is None:
+                continue
+            created = datetime.fromisoformat(r[spec["date_col"]])
+            if not (span[0] <= created.date() <= span[1]):
+                continue
+            documents.append(
+                {
+                    "id": r[spec["id_col"]],
+                    "product": product,
+                    "channel": r["channel"],
+                    "source": source,
+                    "created_at": created,
+                    "text": r["content"],
+                }
+            )
     return documents, windows
 
 
@@ -395,8 +431,8 @@ async def classify_cached(
     안 변한다"가 생기는 걸 막는 게 목적이다.
     """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    # 대상이 CS 전용이라 프롬프트1 지문만 본다 (collect_documents 가 source=cs 만 모음).
-    # 데이터 지문도 같이 넣는다 — 같은 id 에 다른 텍스트가 들어와도 갈리게 (data_fingerprint).
+    # 지문 = 프롬프트1+2 이름·내용 해시 + 데이터 (id, 본문) 해시. 리뷰가 들어오면서
+    # 프롬프트2 도 결과에 영향을 주므로 둘 다 본다 (prompt_fingerprint 참고).
     cache_path = (
         CACHE_DIR / f"pipeline_{tag}_{mode}_{cache_fingerprint(documents)}_run{run}.json"
     )
@@ -420,8 +456,22 @@ async def classify_cached(
         counter = _FallbackCounter()
         logging.getLogger("app.classification.service").addHandler(counter)
         try:
-            runner = _run_batch if mode == MODE_BATCH else _run_per_item
-            _done, failed = await runner(todo, cache, save, concurrency)
+            # ⚠️ 리뷰는 항상 per_item 이다. 배치 프롬프트 조립기
+            #    (run_classify_eval._build_batch_prompt)가 프롬프트1 전용이라
+            #    "## 분류 대상 CS 문의" 로 잘라 쓰는데, 프롬프트2 에는 그 구분자가
+            #    없어서 넣으면 프롬프트가 통째로 깨진다. per_item 은 source 를
+            #    ClassifyRequestItem 에 실어 보내 classify_item 이 알아서 분기한다.
+            cs_todo = [d for d in todo if d["source"] == SOURCE_CS]
+            rv_todo = [d for d in todo if d["source"] != SOURCE_CS]
+            failed = 0
+            if cs_todo:
+                runner = _run_batch if mode == MODE_BATCH else _run_per_item
+                _done, f = await runner(cs_todo, cache, save, concurrency)
+                failed += f
+            if rv_todo:
+                print(f"  리뷰 {len(rv_todo):,}건 — per_item (프롬프트2)")
+                _done, f = await _run_per_item(rv_todo, cache, save, concurrency)
+                failed += f
         finally:
             logging.getLogger("app.classification.service").removeHandler(counter)
 
@@ -438,8 +488,12 @@ async def classify_cached(
 
 
 def oracle_classified(documents: list[dict]) -> list[ClassifiedItem]:
-    """golden 라벨로 만든 ClassifiedItem — ①과 같은 입력. LLM 0회."""
+    """golden 라벨로 만든 ClassifiedItem — ①과 같은 입력. LLM 0회.
+
+    CS·리뷰 골든을 한 표로 합친다. id 체계가 INQ-/RVW- 로 갈려 충돌하지 않는다.
+    """
     labels = {r["inquiry_id"]: r for r in read(GOLDEN_CS_LABELS)}
+    labels.update({r["review_id"]: r for r in read(GOLDEN_REVIEW_LABELS)})
     aspects_of: dict[str, list] = {}
     for d in documents:
         label = labels.get(d["id"], {})
@@ -470,12 +524,10 @@ def measure(rows: list[dict], config_rows: list[dict]) -> dict:
     slots = {
         (r["golden_group_id"], r["aspect"], r["channel"], r["source"])
         for r in config_rows
-        if r["source"] == SOURCE_CS
     }
     expected_total = {
         (r["golden_group_id"], r["channel"], r["source"]): int(r["cur_total"])
         for r in config_rows
-        if r["source"] == SOURCE_CS
     }
     days = sorted({r["day"] for r in rows})
     if not days:
@@ -746,14 +798,21 @@ async def main_async(args) -> None:
     if args.limit > 0:
         documents = take_whole_products(documents, args.limit)
 
-    print(f"케이스 상품 {len(windows)}개 · 현재 윈도우 CS 문의 {len(documents):,}건")
-    print("과거 윈도우·배경 슬롯은 ①과 동일(oracle) — 차이는 현재 윈도우 분류뿐")
-    calls = (
-        -(-len(documents) // CHUNK_SIZE) if args.mode == MODE_BATCH else len(documents)
+    n_by_source = Counter(d["source"] for d in documents)
+    print(
+        f"케이스 상품 {len({p for p, _s in windows})}개 · 현재 윈도우 문서"
+        f" {len(documents):,}건"
+        f" (CS {n_by_source[SOURCE_CS]:,} · 리뷰 {n_by_source[SOURCE_REVIEW]:,})"
     )
+    print("과거 윈도우·배경 슬롯은 ①과 동일(oracle) — 차이는 현재 윈도우 분류뿐")
+    # 리뷰는 배치 프롬프트가 없어 항상 per_item 이다(_build_batch_prompt 가 프롬프트1
+    # 전용). 그래서 호출 수도 source 별로 따로 센다.
+    n_cs, n_rv = n_by_source[SOURCE_CS], n_by_source[SOURCE_REVIEW]
+    calls = (-(-n_cs // CHUNK_SIZE) if args.mode == MODE_BATCH else n_cs) + n_rv
     print(
         f"→ 분류 {len(documents):,}건 × {args.runs}회"
-        f" = LLM 호출 {calls * args.runs:,}회 [{args.mode}] (캐시 적중분 제외)"
+        f" = LLM 호출 {calls * args.runs:,}회"
+        f" [CS {args.mode} · 리뷰 per_item] (캐시 적중분 제외)"
     )
 
     if args.dry_run:
