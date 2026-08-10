@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     # 아예 못 뜬다. 로컬 docker-compose 처럼 아무것도 없는 환경에서만 true 로 켠다.
     mq_declare_topology: bool = False
 
+    # --- raw DB (「Raw DB 스키마 확정 (8/7)」) ---
+    # AI 노드는 원본 DB 에 **직접 읽기** 권한이 있다(§5-2) — 서비스 DB 만 main server
+    # 경유다. 목 파이프라인에서는 `scripts/mock_producer.py` 가 만든 sqlite 파일이고,
+    # 운영에서는 Postgres DSN 이 된다. 쓰는 쪽(`scripts/`)은 같은 이름의 환경변수를
+    # 직접 읽으므로 키 이름을 바꾸면 양쪽이 갈린다.
+    raw_db_path: str = "./data/raw.db"
+
     # --- 앱 ---
     log_level: str = "INFO"
 

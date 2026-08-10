@@ -20,11 +20,10 @@
     python -m app.batch.daily --window-end 2026-08-28
     python -m app.batch.daily --input-source golden --dry-run   # 평가·재현 (oracle)
 
-⚠️ 인프라가 아직 없다 (RabbitMQ · `classified_item` 테이블). 그래서 입력은 **주입**
-   받는 형태로 뒀다 — `run_batch(load_inputs=...)`. 기본값 `load_inputs_from_db()` 는
-   rawDB 스키마 §5 확정 전까지 NotImplementedError 다.
-   발행·개선안·가이드라인 함수도 아직 없어서 import 폴백으로 뒀다. 담당자가 만들면
-   **이 파일 수정 없이** 자동으로 연결된다.
+입력은 **주입**받는 형태다 — `run_batch(load_inputs=...)`. 기본값
+`load_inputs_from_db()` 는 raw DB(`cs`·`reviews`·`classified_item`)를 직접 읽는다.
+목 파이프라인에서는 그 테이블을 `scripts/mock_producer.py` 와
+`scripts/classification_worker.py` 가 채우므로, **둘을 먼저 돌려야 배치가 돈다.**
 
 🔴 **이 모듈은 `data/golden/` 을 읽지 않는다.** `eval/README.md` §232("`data/golden/`
    은 `eval/` 만 읽는다 — `app/` 이 import 하면 컨닝이다")를 지키기 위해 골든 로더를
@@ -39,21 +38,24 @@ import asyncio
 import json
 import logging
 import os
+import sqlite3
 import sys
 import uuid
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 from pydantic import ValidationError
 
+from app.config import get_settings
+from app.core import raw_schema
 from app.core.console import force_utf8_output
 from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
 from app.core.inquiries import build_linked_inquiries
-from app.core.schemas import ClassifiedItem, DetectionAlert
+from app.core.schemas import Channel, ClassifiedItem, DetectionAlert, Source
 from app.detection.loader import check_coverage, unreliable_slots
 from app.detection.service import detect_anomaly
 
@@ -245,8 +247,59 @@ class CountingClient:
 # ── 입력 ────────────────────────────────────────────────────────
 
 
+INPUT_WINDOW_DAYS = CURRENT_WINDOW_DAYS + PAST_WINDOW_DAYS
+"""DB 에서 읽어올 기간(일). 탐지가 실제로 보는 범위와 같다.
+
+`build_baseline` 의 과거 윈도우가 **현재 윈도우 직전** 28일이라, 필요한 전부가
+`[window_end - 34, window_end]` 다. 값이 `STATE_RETENTION_DAYS` 와 같지만 **사유가
+다르다** — 저쪽은 캐시 보관 기간이다. 한쪽을 바꿀 일이 생겼을 때 다른 쪽이 조용히
+따라가지 않도록 따로 둔다.
+"""
+
+KST = timezone(timedelta(hours=9))
+"""날짜 경계의 기준 시간대. **확정 문서 §3 이 KST 로 못박았다.**
+
+UTC 로 자르면 KST 오전 9시 이전 문의가 전날로 밀려서, 매일 도는 배치가 날짜 경계에서
+매번 어긋난다. 문서의 쿼리는 `(컬럼 AT TIME ZONE 'Asia/Seoul')::date` 인데 그건
+Postgres 문법이라 로컬 sqlite 에 없다 — 그래서 **절단을 파이썬에서 한다**
+(`_to_kst`). 원문은 오프셋이 붙은 ISO 문자열로 저장되므로(raw_schema 모듈 docstring)
+변환에 필요한 정보가 값 안에 다 있다.
+"""
+
+# 분모(원문)와 분자(분류 결과)를 **따로** 읽는다. 확정 문서 §4 는 이 둘을 CTE 로 나눠
+# SQL 안에서 집계하는 형태인데, 우리는 집계를 `app/detection/aggregate.py` 가 하므로
+# 행을 그대로 가져오는 두 쿼리로 나눈다. 지켜야 할 규칙은 같다 —
+#   ① 분모는 원문(voc_document)에서만 센다. classified_item 에서 세면 aspect 0개인
+#      문서가 통째로 빠져 부정률이 부풀려진다(§2-6 경고, loader 모듈 docstring).
+#   ② `sentiment = -1` 을 WHERE 로 올리지 않는다. 올리면 LEFT JOIN 이 INNER JOIN 으로
+#      퇴화해 같은 버그가 돌아온다. 부정 여부는 읽어온 뒤 파이썬이 센다.
+_DOCUMENT_SQL = f"""
+    SELECT item_id, source, channel_id, product_group_id, content, occurred_at
+    FROM {raw_schema.VOC_DOCUMENT}
+"""
+
+_ASPECT_SQL = f"""
+    SELECT ci.item_id AS item_id, a.aspect AS aspect, a.sentiment AS sentiment
+    FROM classified_item ci
+    JOIN {raw_schema.VOC_DOCUMENT} v ON v.item_id = ci.item_id
+    LEFT JOIN classified_item_aspect a ON a.item_id = ci.item_id
+"""
+
+
+def _to_kst(value: str) -> datetime:
+    """저장된 ISO 문자열 → KST 시각. 날짜 절단의 유일한 경로다.
+
+    ⚠️ **문서에 넣는 `created_at` 도 이 값이어야 한다.** `build_rows` 가 `.date()` 로
+       날짜를 다시 뽑는데, 여기서 거른 날짜와 그쪽이 뽑는 날짜가 다르면 윈도우 경계의
+       문서가 "읽히긴 했는데 집계에선 다른 날"이 된다.
+    """
+    return datetime.fromisoformat(value).astimezone(KST)
+
+
 def load_inputs_from_db(
     window_end: date | None = None,
+    *,
+    db_path: str | None = None,
 ) -> tuple[list[ClassifiedItem], list[dict]]:
     """(items, documents) 를 원본 DB 에서 읽는다. **기본 입력원.**
 
@@ -256,26 +309,199 @@ def load_inputs_from_db(
     aspect 마다 1행), items 로 분모를 세면 그 문서가 통째로 빠지고 부정률이 부풀려진다
     (탐지 분모 산출 방식 §1).
 
-    ⚠️ **아직 구현할 수 없다.** rawDB 스키마 §5(`item_id` 연결 방식, `mapped_data`
-       컬럼명)가 미확정이고 `classified_item` 테이블이 실재하지 않는다. 확정되면
-       여기만 채우면 되고, `run_batch(load_inputs=...)` 시그니처는 그대로다.
+    두 소스의 시각 컬럼명이 다르므로(`cs.inquired_at` / `reviews.created_at`)
+    `voc_document` 뷰를 거친다 — 호출부에서 UNION 을 다시 쓰면 시각 컬럼을 잘못 고르는
+    실수가 각자 생긴다(raw_schema 모듈 docstring).
+
+    **읽기 전용으로 연다.** AI 노드는 원문 테이블에 읽기 권한만 있고(§5-2), 경로가
+    틀렸을 때 sqlite 가 빈 파일을 새로 만들어 "문서 0건" 으로 조용히 통과하는 것도 막는다.
 
     평가·재현으로 배치를 돌리려면 `scripts/golden_inputs.load_golden_inputs` 를
     주입한다 — 골든을 `app/` 안에서 읽지 않기 위해 밖으로 뺐다(eval/README §232).
 
     Args:
-        window_end: 현재 윈도우 마지막 날. 주면 그 이전
-            `CURRENT_WINDOW_DAYS + PAST_WINDOW_DAYS`(35일)만 읽으면 된다.
-            **지금 시그니처에 넣어두는 이유** — 없이 DB 로 가면 매 배치가 전량을
-            풀스캔한다(현재 CSV 기준 128,228건). 나중에 붙이려면 호출부까지
-            같이 고쳐야 한다. (지인님 PR 리뷰 잔가지, 2026-08-06)
-            None 이면 전량을 읽고 호출부가 최신 날짜로 윈도우를 정한다.
+        window_end: 현재 윈도우 마지막 날. 주면 `[window_end-34, window_end]` 35일만
+            읽는다(현재 7 + 과거 28 — `build_baseline` 의 과거 윈도우가 현재 윈도우
+            직전 28일이라 그 합이 필요한 전부다). None 이면 전량을 읽고 호출부가 최신
+            날짜로 윈도우를 정한다 — 첫 실행·백필용이고, 매일 배치에서는 반드시 줄 것
+            (현재 목 데이터 기준 128,228건 풀스캔이다).
+        db_path: raw DB 경로. 기본은 `settings.raw_db_path`(테스트 주입용 인자다).
+
+    Returns:
+        items: 분자의 출처 (ClassifiedItem)
+        documents: **분모의 출처** (원본 문서)
+
+    Raises:
+        FileNotFoundError: DB 파일이 없을 때. 목 파이프라인은 `scripts/mock_producer.py`
+            가 먼저 돌아야 원문이 생긴다.
     """
-    raise NotImplementedError(
-        "classified_item 테이블 미구현 (rawDB 스키마 §5 확정 대기). "
-        "평가·재현은 run_batch(load_inputs=scripts.golden_inputs.load_golden_inputs) "
-        "로 주입할 것 — 그 입력은 oracle 이라 결과가 탐지 성능이 아니다."
+    path = Path(db_path or get_settings().raw_db_path).resolve()
+    if not path.exists():
+        raise FileNotFoundError(
+            f"raw DB 가 없습니다: {path} — 목 파이프라인은 scripts/mock_producer.py 로"
+            " 원문을 적재한 뒤 scripts/classification_worker.py 로 분류해야 합니다."
+        )
+
+    where, params = _window_clause(window_end)
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        _require_classified_tables(conn, path)
+        doc_rows = conn.execute(_DOCUMENT_SQL + where, params).fetchall()
+        aspect_rows = conn.execute(
+            _ASPECT_SQL + where.replace("occurred_at", "v.occurred_at"), params
+        ).fetchall()
+    finally:
+        conn.close()
+
+    return _build_inputs(doc_rows, aspect_rows, window_end)
+
+
+def _require_classified_tables(conn: sqlite3.Connection, path: Path) -> None:
+    """분류 결과 테이블이 **쓸 수 있는 상태인지** 먼저 확인한다.
+
+    두 가지를 가른다. 둘 다 원문만 적재된 DB 에서 실제로 나는 상태다:
+      - 테이블 자체가 없음 → 워커를 아직 안 돌렸다. 그냥 두면 `no such table` 이
+        올라오는데, 원인이 "경로가 틀렸나"인지 "안 돌렸나"인지 안 드러난다.
+      - 8/7 확정 이전 구조로 남아 있음 → `find_legacy_tables`. `IF NOT EXISTS` 가 옛
+        테이블을 그대로 두기 때문에 **조회 단계에서 `no such column` 으로** 터진다
+        (PR #37 에서 워커가 같은 함정을 맞았다). `data/` 는 gitignore 라 팀원마다 DB
+        상태가 달라서 남아 있을 수 있다.
+
+    조용히 빈 결과로 넘기지 않는 이유: items 가 0건이면 분자가 통째로 비어 **알림이
+    한 건도 안 나오는데 배치는 정상 종료**한다. 무동작이 성공으로 보고되는 형태다.
+    """
+    stale = raw_schema.find_legacy_tables(conn)
+    if stale:
+        raise RuntimeError(
+            f"raw DB 가 8/7 확정 이전 스키마입니다({', '.join(stale)}): {path} — "
+            "구버전 파일을 지우고 mock_producer·classification_worker 를 다시 돌리세요."
+        )
+    exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='classified_item'"
+    ).fetchone()
+    if exists is None:
+        raise RuntimeError(
+            f"분류 결과 테이블이 없습니다: {path} — scripts/classification_worker.py 를"
+            " 먼저 돌려야 분자(부정 건수)가 생깁니다."
+        )
+
+
+def _window_clause(window_end: date | None) -> tuple[str, tuple]:
+    """35일 범위조회 조건절. 인덱스(`cs.inquired_at`·`reviews.created_at`)를 타라고 둔다.
+
+    경계를 하루씩 넓혀 잡고 **정확한 절단은 파이썬이 한다**(`_build_inputs`). 문자열
+    비교라 저장된 오프셋이 전부 같아야 정확한데, 그 전제가 깨진 행이 하나 섞여도
+    경계에서 조용히 빠지지 않게 하려는 것이다. 넓힌 만큼은 뒤에서 다시 걸러진다.
+    """
+    if window_end is None:
+        return "", ()
+    start = date.fromordinal(window_end.toordinal() - INPUT_WINDOW_DAYS + 1)
+    return (
+        " WHERE occurred_at >= ? AND occurred_at < ?",
+        (
+            date.fromordinal(start.toordinal() - 1).isoformat(),
+            date.fromordinal(window_end.toordinal() + 2).isoformat(),
+        ),
     )
+
+
+def _build_inputs(
+    doc_rows: list, aspect_rows: list, window_end: date | None
+) -> tuple[list[ClassifiedItem], list[dict]]:
+    """조회 결과 → (items, documents). 못 쓰는 행은 버리고 건수만 경고로 남긴다.
+
+    ⚠️ **버리는 방향은 항상 "분모에서도 뺀다" 이다.** 문서는 남기고 분류 결과만 버리면
+       그 슬롯이 분류 커버리지 미달로 잡혀(`check_coverage`) 검정에서 통째로 빠지는데,
+       그건 오탐이 아니라 미탐 방향이라 조용하다. 사유별 건수를 로그로 남기는 이유다.
+    """
+    start = (
+        date.fromordinal(window_end.toordinal() - INPUT_WINDOW_DAYS + 1)
+        if window_end
+        else None
+    )
+
+    documents: list[dict] = []
+    created_of: dict[str, datetime] = {}
+    meta_of: dict[str, dict] = {}
+    dropped: Counter[str] = Counter()
+
+    for row in doc_rows:
+        product = (row["product_group_id"] or "").strip()
+        if not product:
+            # 상품매핑이 아직 안 붙은 원문. 어느 상품의 분모인지 모르니 셀 수 없다.
+            dropped["상품매핑 없음"] += 1
+            continue
+        try:
+            channel = Channel(row["channel_id"])
+            source = Source(row["source"])
+            created = _to_kst(row["occurred_at"])
+        except ValueError:
+            dropped["채널·소스·시각 형식 오류"] += 1
+            continue
+        if start and not (start <= created.date() <= window_end):
+            continue  # 조건절을 하루씩 넓혀 잡은 만큼 (_window_clause)
+
+        item_id = row["item_id"]
+        documents.append(
+            {
+                "id": item_id,
+                "product": product,
+                "channel": channel.value,
+                "source": source.value,
+                "created_at": created,
+                "text": row["content"],
+            }
+        )
+        created_of[item_id] = created
+        meta_of[item_id] = {
+            "source": source,
+            "channel": channel,
+            "product_group_id": product,
+            "raw_text": row["content"],
+        }
+
+    aspects_of: dict[str, list[dict]] = defaultdict(list)
+    for row in aspect_rows:
+        item_id = row["item_id"]
+        if item_id not in meta_of:
+            continue  # 윈도우 밖이거나 위에서 버린 문서
+        aspects_of.setdefault(item_id, [])
+        if row["aspect"] is not None:
+            # aspect 0개인 분류 결과도 항목은 만든다 — 리뷰의 정상 출력이다.
+            aspects_of[item_id].append(
+                {"aspect": row["aspect"], "sentiment": row["sentiment"]}
+            )
+
+    items: list[ClassifiedItem] = []
+    for item_id, aspects in aspects_of.items():
+        try:
+            items.append(
+                ClassifiedItem(
+                    item_id=item_id,
+                    created_at=created_of[item_id],
+                    aspects=aspects,
+                    **meta_of[item_id],
+                )
+            )
+        except ValidationError:
+            # 리뷰에 허용 밖 aspect 가 붙은 경우 등. 분모(문서)는 그대로 두고 분자만
+            # 빠지므로 그 슬롯은 커버리지 미달로 검정에서 제외된다 — 안전한 방향이다.
+            dropped["분류 결과 스키마 불일치"] += 1
+
+    if dropped:
+        logger.warning(
+            "raw DB 입력에서 %d건을 제외했습니다: %s",
+            sum(dropped.values()),
+            dict(dropped),
+        )
+    logger.info(
+        "raw DB 로드 documents=%d items=%d (window_end=%s)",
+        len(documents),
+        len(items),
+        window_end,
+    )
+    return items, documents
 
 
 # ── 발행 기록 캐시 ──────────────────────────────────────────────
