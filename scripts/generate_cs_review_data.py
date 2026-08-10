@@ -53,6 +53,10 @@ from app.core.llm_client import get_llm_client
 from app.core.exceptions import LlmCallError, LlmParseError
 import yaml
 
+# cause 프롬프트는 이 스크립트 옆(scripts/prompts/)에 산다. cwd 가 어디든 같은 파일을
+# 가리켜야 한다 — 저장소 루트에서 돌렸을 때만 조용히 플레이스홀더로 빠지는 일을 막는다.
+DEFAULT_CAUSE_PROMPT = Path(__file__).resolve().parent / "prompts" / "generate_cause_text_v3.md"
+
 # ────────────────────────────────────────────────────────────────
 # 배경(비케이스) 상품용 baseline — 서영님 시나리오 정의서 §1 표 + 기타=3%(합의)
 # ────────────────────────────────────────────────────────────────
@@ -718,7 +722,11 @@ def main():
     ap.add_argument("--golden-mapping-dir", default=None,
                      help="golden_mapping.csv 위치(생략 시 --mapping-dir와 동일 — 하위호환)")
     ap.add_argument("--templates", default="templates.yaml", help="분모용(denom) 텍스트 템플릿 사전")
-    ap.add_argument("--cause-prompt", default="prompts/generate_cause_text_v3.md", help="원인분류 투입분 생성 프롬프트")
+    # ⚠️ 스크립트 위치 기준으로 잡는다. cwd 기준이면 저장소 루트에서 돌릴 때 못 찾고,
+    #    못 찾으면 cause 텍스트가 [PLACEHOLDER:cause:색상:사진*색감*오차] 로 나간다.
+    #    원인 라벨이 본문에 박혀 [6] 원인분류가 문장을 읽는 게 아니라 답을 베끼게 된다.
+    ap.add_argument("--cause-prompt", default=str(DEFAULT_CAUSE_PROMPT),
+                     help="원인분류 투입분 생성 프롬프트")
     ap.add_argument("--cause-cache", default="cause_text_cache.json", help="cause 텍스트 캐시(재실행 시 재호출 방지)")
     ap.add_argument("--no-llm-cause", action="store_true", help="LLM 없이 cause도 플레이스홀더로(오프라인 테스트용)")
     ap.add_argument("--outdir", default="./output", help="input_*.csv 출력 디렉토리")
@@ -748,8 +756,23 @@ def main():
                               cause_cache_path=args.cause_cache, use_llm=not args.no_llm_cause)
     if not Path(args.templates).exists():
         print(f"  ⚠️ 템플릿 파일 {args.templates} 없음 — denom 텍스트도 플레이스홀더로 나감")
+    if args.no_llm_cause:
+        print(
+            "  ⚠️ --no-llm-cause: cause 텍스트가 [PLACEHOLDER:cause:<aspect>:<원인>] 으로 나갑니다.\n"
+            "     원인 라벨이 본문에 박히므로 이 데이터로 [6] 원인분류를 채점하면 안 됩니다"
+            " (오프라인 스모크 테스트 전용)."
+        )
     if not args.no_llm_cause and not text_gen.cause_system_prompt:
-        print(f"  ⚠️ cause 프롬프트 {args.cause_prompt} 없음 — cause 텍스트도 플레이스홀더로 나감")
+        # 경고로 흘리면 안 된다. 프롬프트가 없으면 cause 텍스트가
+        # [PLACEHOLDER:cause:색상:사진*색감*오차] 로 나가고, 원인 라벨이 본문에 그대로
+        # 박힌 코퍼스가 만들어진다. [6] 원인분류가 문장을 읽는 게 아니라 답을 베끼게 돼
+        # 채점 자체가 성립하지 않는다. 조용히 만들어져 쌓이느니 여기서 멈추는 게 낫다.
+        raise SystemExit(
+            f"❌ cause 프롬프트를 못 찾았습니다: {args.cause_prompt}\n"
+            f"   기본값은 {DEFAULT_CAUSE_PROMPT} 입니다.\n"
+            "   이대로 두면 원인 라벨이 본문에 박힌 코퍼스가 나와 [6] 채점이 무효가 됩니다.\n"
+            "   의도적으로 플레이스홀더를 쓰려면 --no-llm-cause 를 명시하세요."
+        )
 
     anomaly_rows = load_anomaly_config(args.anomaly_config)
     products = load_products_config(args.products_config)

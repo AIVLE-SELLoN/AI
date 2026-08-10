@@ -38,6 +38,14 @@
 `data/**` 는 전부 미커밋이라 **팀원마다 다른 데이터를 들고 있을 수 있다.** 아래 순서로
 맞춘다. LLM 호출 0회다(`cause_text_cache.json` 이 14/14 커버).
 
+> 🔴 **`cause_text_cache.json`(저장소 루트)이 없으면 이 레시피로 같은 코퍼스가 안 나온다.**
+> config·templates·seed 는 결정론적이라 누가 돌려도 같지만, **원인(cause) 텍스트만은
+> LLM 출력**이라 같은 seed 로도 재생산되지 않는다. 캐시가 없는 사람은 LLM 을 새로 태우고
+> **다른 문장**을 얻는다 — 행수 검산(96,524 / 31,639)은 그래도 통과하므로 조용히 갈린다.
+>
+> 이 파일은 `.gitignore`(`*_cache.json`) 대상이라 저장소에 없다. **재생성 전에 가진
+> 사람에게 받아라.** 받은 뒤 `--cause-cache` 가 그 경로를 보게 하면 LLM 호출이 0 이 된다.
+
 > 🔴 **`38c1074` 이상이 필요하다.** `--baseline-denominator` 는 그 커밋에서 생긴
 > 플래그다. main 에 머지되기 전에는 이 레시피가 "unrecognized arguments" 로 죽는다.
 > `git log --oneline | grep 38c1074` 로 확인할 것.
@@ -46,8 +54,14 @@
 `data/**` 가 전부 미커밋이라 한 번 돌리면 이전 데이터는 복구할 수 없다.
 
 ```bash
+mkdir -p data/_archive/$(date +%Y%m%d)
 cp -R data/input data/golden data/config data/_archive/$(date +%Y%m%d)/
+cp cause_text_cache.json data/_archive/$(date +%Y%m%d)/   # ← 루트에 있어서 data/ 복사에 안 딸려온다
 ```
+
+> ⚠️ **`cause_text_cache.json` 을 빼먹지 마라.** 저장소 루트에 있어서 `data/` 만 복사하면
+> 안 딸려오는데, 재생성이 이 파일을 **덮어쓴다.** gitignore 대상이라 덮으면 복구 경로가
+> 없고, 위 상자대로 LLM 출력이라 다시 만들어도 같은 문장이 안 나온다.
 
 **② 재생성한다.**
 
