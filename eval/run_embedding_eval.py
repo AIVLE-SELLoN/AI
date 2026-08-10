@@ -35,7 +35,7 @@ from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 
 from app.core.console import force_utf8_output
 from app.core.constants import EMBEDDING_MODEL, SIMILAR_CASE_TOP_N
-from app.core.vectordb import get_embedding_function
+from app.core.vectordb import get_embedding_function, query_documents, upsert_documents
 
 force_utf8_output()
 
@@ -114,7 +114,8 @@ def build_collection(client: Any, embedding_function: Any, tag: str) -> Any:
         name=f"embed_eval_{tag}_{uuid.uuid4().hex[:8]}",
         embedding_function=embedding_function,
     )
-    collection.upsert(
+    upsert_documents(
+        collection,
         ids=[label for _, label, _, _ in SAMPLES],
         documents=[build_document(label, text) for _, label, text, _ in SAMPLES],
         metadatas=[{"aspect": aspect, "root_cause_label": label} for aspect, label, _, _ in SAMPLES],
@@ -125,19 +126,22 @@ def build_collection(client: Any, embedding_function: Any, tag: str) -> Any:
 def score(collection: Any, *, mode: str) -> tuple[int, list[str]]:
     """top-1 적중 수와 틀린 케이스 설명을 돌려준다.
 
-    운영과 같은 조건으로 조회한다 — aspect 사전 필터 + `SIMILAR_CASE_TOP_N`
-    (retrieve_context 는 그중 1위 하나만 쓴다).
+    운영과 같은 조건으로 조회한다 — `query_documents` 경유 + aspect 사전 필터 +
+    `SIMILAR_CASE_TOP_N`(retrieve_context 는 그중 1위 하나만 쓴다). 컬렉션을 직접
+    부르지 않는 이유는 배선을 운영과 같게 두려는 것이다 — 조회 경로가 갈리면 실험이
+    운영과 다른 것을 재게 된다.
     """
     hits = 0
     misses: list[str] = []
     for aspect, label, _, paraphrase in SAMPLES:
         query_text = label if mode == "label" else paraphrase
-        result = collection.query(
-            query_texts=[query_text],
+        rows = query_documents(
+            collection,
+            query_text=query_text,
             n_results=SIMILAR_CASE_TOP_N,
             where={"aspect": aspect},
         )
-        ranked = (result.get("ids") or [[]])[0]
+        ranked = [row["id"] for row in rows]
         if ranked and ranked[0] == label:
             hits += 1
         else:
