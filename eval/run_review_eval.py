@@ -1,34 +1,34 @@
-"""실험④ 프롬프트2 평가 — 리뷰 aspect별 긍부정 정확도 (AI Hub 71603 원본 라벨 기준).
+"""실험④ 프롬프트2 평가 — 리뷰 aspect별 긍부정 정확도 (AI Hub 71630 원본 라벨 기준).
 
 무엇을 재나: aspect(색상/사이즈/소재) F1 + 감성 정확도 + mixed_signal 정확도 + 완전일치
-어떻게:     AI Hub 71603 원본 zip(Source=쇼핑몰, 여성/남성의류, Training)에서 표본 추출
+어떻게:     AI Hub 71630 원본 zip(Source=쇼핑몰, 여성/남성의류, Training)에서 표본 추출
             → app.classification.service.classify_aspect() 실제 호출(source=REVIEW라
-            자동으로 프롬프트2 분기) → 71603 원본 라벨과 대조
+            자동으로 프롬프트2 분기) → 71630 원본 라벨과 대조
 
-⚠️ 계획B 채택(현진↔팀 논의 결과) — 71603 원본 sentiment 라벨을 **재라벨링 없이 그대로**
+⚠️ 계획B 채택(현진↔팀 논의 결과) — 71630 원본 sentiment 라벨을 **재라벨링 없이 그대로**
    신뢰도 있는 외부 정답지로 사용. 계획A(사람이 300건 재검증)는 보류.
-   한계: 71603 원본이 우리 프롬프트2의 세부 판정 규칙(착용감 배제, 부정우선 통합 등)과
+   한계: 71630 원본이 우리 프롬프트2의 세부 판정 규칙(착용감 배제, 부정우선 통합 등)과
    완전히 같은 기준으로 라벨링됐다는 보장은 없음 — 오답으로 나온 건 중 일부는 모델이
    아니라 원본 라벨과의 기준 차이일 수 있음(결과 해석 시 감안할 것).
 
 🔴 **알려진 구체적 충돌** (PR 리뷰에서 지적됨, 일반론이 아니라 실측치): 이 스크립트의
-   `build_dataset()`은 71603 낱개 라벨을 **무조건 "부정 우선"으로 통합**해서 골든을
+   `build_dataset()`은 71630 낱개 라벨을 **무조건 "부정 우선"으로 통합**해서 골든을
    만드는데, 같은 PR에서 classify_sentiment_v4.md에 추가한 예시11은 정반대를 가르친다 —
    "화자가 '~것만 빼면'으로 스스로 사소한 흠이라 규정하면 부정 우선 예외를 적용해
    `sentiment: 1` + `mixed_signal: true`로 판단". 즉 v4가 의도대로 동작할수록 이 골든
    기준으로는 오답 처리된다. seed=42/n=300/batch 실행(review_eval_20260731_143326.scrubbed.json
-   — 원본은 raw_text 에 71603 원문이 들어가 public 저장소에 못 올린다, .gitignore:46-57)
+   — 원본은 raw_text 에 71630 원문이 들어가 public 저장소에 못 올린다, .gitignore:46-57)
    기준 실측: 전체 오답 166건 중 "것만 빼면/제외하고/빼고는" 류 패턴 **3건(1.8%)** —
-   방향은 확인됐으나 감성정확도(79.7%) 하락분의 대부분을 설명하진 못함(나머지는 71603
+   방향은 확인됐으나 감성정확도(79.7%) 하락분의 대부분을 설명하진 못함(나머지는 71630
    라벨링 관습과 소재 스코프 정의 차이 등 다른 원인). golden 쪽에도 같은 예외처리 규칙을
    반영할지는 별도 논의 필요(미해결).
 
    🔻 2026-08-11 전수 점검 — **이 충돌은 실측상 0.13%(2,314건 중 3건)이고, 그중 실제
-   프레이밍은 1건이다.** 71603 낱개 라벨에는 "화자가 사소하다고 프레이밍했는가"가 없어
+   프레이밍은 1건이다.** 71630 낱개 라벨에는 "화자가 사소하다고 프레이밍했는가"가 없어
    자동 반영도 불가능하다. 같은 점검에서 **7배 큰 결함**이 나왔다 — 아래 TARGET_MAP 참고.
    분해 결과·수정 방향 목록은 `eval/README.md` §④ 참고.
 
-🔴 **TARGET_MAP 이 프롬프트2보다 좁다 (2026-08-11, 미수정)**: 71603은 aspect를 18종으로
+🔴 **TARGET_MAP 이 프롬프트2보다 좁다 (2026-08-11, 미수정)**: 71630은 aspect를 18종으로
    쪼개는데 여기선 4종만 매핑한다. 그런데 프롬프트2는 `신축성`을 소재에 포함하라 명시
    (v4 28행)하고 예시12는 `마감`을, 예시8은 `길이`(기장)를 각각 소재·사이즈로 분류한다 —
    골든이 이들을 별도 aspect로 떼어두는 바람에 정답이 오답으로 잡힌다. 소재 FP 40건 중
@@ -36,12 +36,12 @@
 
 ⚠️ "핏"은 TARGET_MAP으로 "사이즈"에 통합(REVIEW_ALLOWED_ASPECTS와 스코프 일치).
 ⚠️ 같은 aspect가 리뷰 한 건 안에서 여러 번(감성 다르게) 나오면, 우리 프롬프트와 동일한
-   "부정 우선 통합" 규칙으로 골든을 만든다(71603 원본은 이 통합 개념이 없이 낱개로만 존재).
+   "부정 우선 통합" 규칙으로 골든을 만든다(71630 원본은 이 통합 개념이 없이 낱개로만 존재).
 
 실행:
-    python eval/run_review_eval.py --data-dir <71603 압축 푼 폴더> --dry-run --limit 300
-    python eval/run_review_eval.py --data-dir <71603 압축 푼 폴더> --mode per_item --limit 300 --seed 99
-    python eval/run_review_eval.py --data-dir <71603 압축 푼 폴더> --mode batch    --limit 300 --seed 99
+    python eval/run_review_eval.py --data-dir <71630 압축 푼 폴더> --dry-run --limit 300
+    python eval/run_review_eval.py --data-dir <71630 압축 푼 폴더> --mode per_item --limit 300 --seed 99
+    python eval/run_review_eval.py --data-dir <71630 압축 푼 폴더> --mode batch    --limit 300 --seed 99
 """
 
 from __future__ import annotations
@@ -86,31 +86,42 @@ def _already_used(text: str) -> bool:
     return any(text.startswith(p) or p in text for p in USED_PREFIXES)
 
 
-def load_71603(data_dir: str) -> list[dict]:
-    """71603 zip을 풀어놓은 폴더 로딩. macOS 유니코드 정규화(NFD) 이슈 방어 —
-    경로 문자열 비교 전 NFC로 정규화(그냥 '/Training/' in path 로 비교하면
-    한글이 섞인 경로에서 조용히 실패할 수 있음, 실제로 겪은 문제)."""
+def _dataset_split(path: str | Path) -> str:
+    """71630 파일 경로에서 데이터 분할을 OS와 무관하게 판별한다."""
+    normalized = unicodedata.normalize("NFC", str(path)).replace("\\", "/")
+    parts = normalized.split("/")
+    if "Training" in parts:
+        return "Training"
+    if "Validation" in parts:
+        return "Validation"
+    return "Unknown"
+
+
+def load_71630(data_dir: str) -> list[dict]:
+    """71630 압축 해제 폴더 로딩.
+
+    macOS의 NFD 파일명과 Windows의 역슬래시 경로를 모두 처리한다.
+    """
     files = [f for f in glob.glob(f"{data_dir}/**/*.json", recursive=True) if "__MACOSX" not in f]
     all_data = []
     for fp in files:
-        norm = unicodedata.normalize("NFC", fp)
-        split = "Training" if "/Training/" in norm else ("Validation" if "/Validation/" in norm else "Unknown")
+        split = _dataset_split(fp)
         with open(fp, encoding="utf-8") as f:
             recs = json.load(f)
         for i, r in enumerate(recs):
             r["_split"] = split
-            r["_uid"] = f"{Path(fp).stem}-{i}"  # 71603엔 안정적 고유ID가 없어 파일명+인덱스로 생성
+            r["_uid"] = f"{Path(fp).stem}-{i}"  # 71630엔 안정적 고유ID가 없어 파일명+인덱스로 생성
         all_data.extend(recs)
     return all_data
 
 
 def build_dataset(data_dir: str, max_len: int = 300) -> list[dict]:
-    """71603 원본 → (원문 + 통합된 골든 aspect/sentiment/mixed_signal) 리스트.
+    """71630 원본 → (원문 + 통합된 골든 aspect/sentiment/mixed_signal) 리스트.
 
     필터: Source=쇼핑몰, MainCategory=여성/남성의류, Split=Training, 대상aspect 1개 이상,
           few-shot 유출 원문 제외, 길이 제한.
     """
-    all_data = load_71603(data_dir)
+    all_data = load_71630(data_dir)
     rows = []
     for r in all_data:
         if not (
@@ -384,7 +395,7 @@ async def main_async(args: argparse.Namespace) -> None:
     if args.prompt_version:
         classification_service.PROMPT_SENTIMENT_VERSION = args.prompt_version
 
-    print("71603 로딩 중...")
+    print("71630 로딩 중...")
     rows = build_dataset(args.data_dir)
     sampled = sample_rows(rows, args.limit, args.seed)
 
@@ -411,7 +422,7 @@ async def main_async(args: argparse.Namespace) -> None:
         "meta": {
             "experiment": "④ 프롬프트2 리뷰 aspect별 감성 정확도",
             "run_at": datetime.now().isoformat(timespec="seconds"),
-            "data_source": "AI Hub 71603 (원본 라벨, 재라벨링 없음 — 계획B)",
+            "data_source": "AI Hub 71630 (원본 라벨, 재라벨링 없음 — 계획B)",
             "prompt_version": classification_service.PROMPT_SENTIMENT_VERSION,
             "model": get_settings().llm_model,
             "seed": args.seed, "limit": args.limit, "chunk_size": args.chunk_size, "mode": args.mode,
@@ -429,7 +440,7 @@ async def main_async(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--data-dir", required=True, help="71603 zip을 풀어놓은 폴더")
+    parser.add_argument("--data-dir", required=True, help="71630 zip을 풀어놓은 폴더")
     parser.add_argument("--limit", type=int, default=300, help="표본 수 (0=전량)")
     parser.add_argument("--seed", type=int, default=42, help="표본 추출 시드")
     parser.add_argument("--chunk-size", type=int, default=20)

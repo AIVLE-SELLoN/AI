@@ -2,7 +2,7 @@
   "meta": {
     "experiment": "④ 프롬프트2 리뷰 aspect별 감성 정확도",
     "run_at": "2026-07-31T14:33:26",
-    "data_source": "AI Hub 71603 (원본 라벨, 재라벨링 없음 — 계획B)",
+    "data_source": "AI Hub 71630 (원본 라벨, 재라벨링 없음 — 계획B)",
     "prompt_version": "classify_sentiment_v4",
     "model": "gpt-4o-mini",
     "seed": 42,
@@ -10,11 +10,11 @@
     "chunk_size": 20,
     "mode": "batch",
     "scrubbed": {
-      "note": "AI Hub 71603 이용정책상 원문을 공개 저장소에 올릴 수 없어 mismatches[].raw_text 를 제거한 사본. 그 외 필드는 원본 그대로다.",
+      "note": "AI Hub 71630 이용정책상 원문을 공개 저장소에 올릴 수 없어 mismatches[].raw_text 를 제거한 사본. 그 외 필드는 원본 그대로다.",
       "source_file": "review_eval_20260731_143326.json",
       "removed_field": "scores.mismatches[].raw_text",
       "removed_count": 166,
-      "rejoin": "review_id 는 '<71603 파일명>-<레코드 인덱스>' 라, 71603 사본이 있으면 원문·원본 Aspects 를 그대로 되붙일 수 있다."
+      "rejoin": "review_id 는 '<71630 파일명>-<레코드 인덱스>' 라, 71630 사본이 있으면 원문·원본 Aspects 를 그대로 되붙일 수 있다."
     }
   },
   "scores": {

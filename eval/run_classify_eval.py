@@ -200,7 +200,7 @@ async def run_with_cache(
 def parse_few_shot_examples(prompt_version: str) -> list[str]:
     """프롬프트 파일에서 few-shot '입력:' 문장을 전부 파싱한다(§6 B안 1번, 지인님 리뷰
     2026-08-06). 하드코딩 목록 대신 파일을 직접 읽어서, 예시가 늘어나도 자동 반영된다
-    (`USED_PREFIXES` 방식의 반대 — 그쪽은 71603 재라벨링 스크립트 전용이고, 이건 우리
+    (`USED_PREFIXES` 방식의 반대 — 그쪽은 71630 재라벨링 스크립트 전용이고, 이건 우리
     자체 코퍼스 채점용이라 목적이 다름).
     """
     path = PROMPT_DIR / f"{prompt_version}.md"

@@ -70,7 +70,7 @@ class ClassifyRequestItem(BaseModel):
 #
 # 두 프롬프트 모두 실데이터 정량 평가를 마친 상태(실험③④). 갱신 시 eval/ 재실행 후 교체할 것.
 PROMPT_ASPECT_VERSION = "classify_aspect_v5"        # 프롬프트1(CS) — 실험③ 부정판별 F1 98.3% · FPR 0.64%(2026-08-11 전량 96,524건)
-PROMPT_SENTIMENT_VERSION = "classify_sentiment_v4"  # 프롬프트2(리뷰) — 실험④ aspect F1 84.4%(71603 n=300, 1회)
+PROMPT_SENTIMENT_VERSION = "classify_sentiment_v4"  # 프롬프트2(리뷰) — 실험④ aspect F1 84.4%(71630 n=300, 1회)
 
 
 async def classify_aspect(
