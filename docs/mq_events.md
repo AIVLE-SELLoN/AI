@@ -7,6 +7,10 @@
 > 양방향 검증까지 마쳤다. 다만 **운영 접속 정보(C1)와 `MQ_COMPANY_ID` 가 아직 없어
 > `MQ_ENABLED=false` 로 꺼둔 상태**다. 정본 스키마는 `app/core/schemas.py`.
 > 남은 항목은 §12 구현 현황 참고.
+>
+> ✅ **S3 버킷·Lifecycle 값(§5·§6)은 최용준님 확인 완료(2026-08-11).** 버킷 1개 +
+> prefix 구분 · CS 가이드라인 7일 · 월간 180일(6개월) 전부 코드·문서와 일치한다.
+> **운영 버킷명만 아직 dev 기본값**이라 `<S3_BUCKET_NAME>` 플레이스홀더로 둔다.
 
 ---
 
@@ -111,7 +115,7 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
 | `verdict` | enum | 정상 \| 편중형 \| 전역형 \| 잠정 전역형 \| 구분불가 |
 | `significant_channels` | string[] | 유의 판정된 채널 |
 | `excluded_channels` | string[] | 표본 부족(<10)으로 판정 제외된 채널 |
-| `channel_rates` | object[] | `[{channel, rate, excluded}]`. 탐지 당시 `stats.source`·`main_aspect`·현재 7일 기준 채널별 부정률(0~1). 관측 표본이 없으면 rate는 null |
+| `channel_rates` | object[] | `[{channel, rate, excluded, total}]`. 탐지 당시 `stats.source`·`main_aspect`·현재 7일 기준 채널별 부정률(0~1)과 그 분모. 관측 표본이 없으면 rate는 null·total은 0. §4.1.1 |
 | `main_aspect` | enum | 색상 \| 사이즈 \| 소재 \| 파손 \| 오배송 \| 기타 |
 | `sub_aspects` | object[] | `[{aspect, delta, recommended_action}]`. 없으면 `[]` |
 | `stats` | object | `{source, cur_rate, past_rate, delta, p_value, bh_significant, cur_total}` |
@@ -130,9 +134,56 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
   `false` = 판정했으나 미발화. 화면에서 합치면 안 된다.
 - **`root_cause`가 null인 판정이 있다.** 전역형·구분불가·스코프밖은 원인 분류를 안 한다.
 
+### 4.1.1 `channel_rates` 상세
+
+`total` = 그 채널의 현재 윈도우 총문의(= `rate`의 분모, aspect 무관). **`stats.cur_total`로
+대체할 수 없다** — 그쪽은 대표 채널 1개분이다(전역형이면 delta 최대 채널 값).
+"6.9%(203건 기준)"처럼 비율 옆에 표본을 붙이는 용도다.
+
+**`total`의 `null`과 `0`은 뜻이 다르다.**
+
+| 값 | 뜻 | 나오는 곳 |
+|---|---|---|
+| `null` | **구버전 알림** — 이 필드가 생기기(2026-08-11) 전에 발행돼 저장된 것 | 백엔드 상세 조회 전용 |
+| `0` | **관측 0건** — 그 채널에 문서가 아예 없었다. `rate: null`·`excluded: true`와 세트 | 신규 발행 |
+| `>= 1` | 현재 윈도우 총문의 | 신규 발행 |
+
+⚠️ **신규 발행 이벤트에는 항상 정수가 실린다.** 관측이 없어도 `null`이 아니라 `0`이다 —
+신규에서 `null`이 나오면 위 구분이 무너진다.
+
+**채널 상태(유의/보통/제외)는 payload에서 파생한다 — `status` 필드를 따로 싣지 않는다.**
+
+| 상태 | 판정 |
+|---|---|
+| 제외 | `channel_rates[].excluded == true` |
+| 유의 | `channel ∈ significant_channels` |
+| 보통 | 나머지 |
+
+두 집합은 **배타다** — 표본 부족으로 보류된 채널은 검정 자체를 안 타서 유의가 될 수 없다.
+같은 사실을 두 곳에 실으면 한쪽만 바뀌었을 때 조용히 어긋나므로 파생 규칙으로 둔다.
+
+⚠️ **`excluded`를 "표본 부족"으로 단정하면 안 된다.** 사유가 셋이고(표본<10 · 과거 표본 0 ·
+분류 커버리지 미달) `total`로 구분되는 건 첫 번째뿐이다.
+
+⚠️ **변화폭(현재−과거)을 막대 길이로 그려도 유의 채널이 제일 길다는 보장이 없다.**
+실측 예: 쿠팡 +5.6%p(유의) vs 네이버 +12.5%p(표본 42건, 유의 아님). 채널 강조는 크기가
+아니라 `significant_channels`로 할 것.
+
 ### 4.2 `recommendation` 객체 (Agent3 산출물)
 
-`recommended_action == "개선안 생성"`일 때만 non-null. 그 외 6종 조치는 항상 null.
+`recommendation`이 non-null 이면 `recommended_action`은 항상 `개선안 생성`이다.
+**역은 성립하지 않는다** — `개선안 생성`인데 `recommendation: null` 인 경우가 있다
+(2026-08-09~08-11):
+
+| 사유 | 언제 | 성격 |
+|---|---|---|
+| 근거 0건 | 상세페이지 미등록 **이면서** CS 원문 조회 0건 | 데이터 갭. mock 기준 상세페이지 504행 중 489행이 "정보 없음"이라 흔하다 |
+| 라우팅 미스 | 근거가 한쪽에만 있는데 모델이 빈 쪽 도구를 고름 | **슬롯을 인위적으로 비운 실험** 22건 중 7건 — 운영 빈도가 아니다 |
+
+⚠️ **"조치=개선안 생성 → 카드가 반드시 있다"를 불변식으로 잡으면 안 된다.**
+빈 카드·렌더 오류가 난다. 카드 유무는 `recommendation` 필드로만 판단할 것.
+그 외 6종 조치는 종전대로 항상 null 이다.
+
 정본은 `docs/recommenation_schema.md`.
 
 | 필드 | 타입 | 설명 |
@@ -150,9 +201,10 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
 | `hitl_status` | enum | **발행 시점엔 항상 `대기`** |
 | `hitl_feedback` | object \| null | 발행 시점엔 null. §8 이벤트로 채워짐 |
 
-**⚠️ `citations`는 현재 항상 빈 배열이다.** 인용 원문을 채우려면 원본 DB의 `cs`·`reviews`를
-`evidence.inquiry_ids`로 재조회해야 하는데, `ClassifiedItem.item_id`와 두 테이블 PK의 연결이
-아직 확인 안 됐다. 가짜로 채우지 않고 비워 둔다.
+**`citations`는 `image_guide` 타입에서만 채워진다** (PR #40, 2026-08-09). 실제 CS 원문과
+문자 그대로 대조해 인용에 성공한 문의만 담는다 — `evidence.inquiry_ids` 밖은 들어갈 수 없다.
+`copy_draft`·fallback_guide·SCOPE_LIMIT 경로는 인용할 원문이 없거나 대조 대상이 아니라
+**빈 배열이 정직한 값**이다(버그 아님).
 
 ### 4.3 예시
 
@@ -175,9 +227,9 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
     "significant_channels": ["COUPANG"],
     "excluded_channels": [],
     "channel_rates": [
-      { "channel": "COUPANG", "rate": 0.13, "excluded": false },
-      { "channel": "NAVER", "rate": 0.05, "excluded": false },
-      { "channel": "ZIGZAG", "rate": null, "excluded": true }
+      { "channel": "COUPANG", "rate": 0.13, "excluded": false, "total": 200 },
+      { "channel": "NAVER", "rate": 0.05, "excluded": false, "total": 160 },
+      { "channel": "ZIGZAG", "rate": null, "excluded": true, "total": 0 }
     ],
     "main_aspect": "색상",
     "sub_aspects": [
@@ -293,11 +345,19 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
 
 ### `pdf_s3_meta`
 
+**버킷은 1개다.** 월간·CS 가이드라인이 같은 버킷을 쓰고 prefix로 구분한다
+(`monthly-report` / `cs-guideline`) — S3 Lifecycle이 prefix 단위로만 걸리기 때문
+(2026-08-05 확정, 2026-08-10 문서 반영). 예전 `sellon-reports`/`sellon-temp-reports`
+두 버킷 서술은 폐기됐다.
+
 | 필드 | 설명 |
 |---|---|
-| `s3_bucket_name` | `sellon-reports` (월간 전용, 6개월 보존) |
-| `s3_file_path` / `new_file_name` / `s3_full_key` | `s3_full_key = s3_file_path + new_file_name` (스키마가 강제) |
-| `file_extension` / `file_size_bytes` | 상한 10MB |
+| `s3_bucket_name` | 월간·CS가 공유하는 단일 버킷명 |
+| `s3_file_path` / `new_file_name` / `s3_full_key` | `s3_full_key = s3_file_path + new_file_name` (스키마가 강제). 경로 형식 `reports/{report_type}/{company_id}/{yyyy}/{mm}/` — `{yyyy}/{mm}`은 업로드 시각이 아니라 **보고 대상 기간**. `report_type`이 `company_id`보다 **위**다(Lifecycle이 리터럴 prefix 완전일치만 지원해서, 회사가 위면 문서 종류별 보존 규칙을 못 건다) |
+| `company_id` | **필수.** 경로에 쓰인 고객사 식별자 — 메인이 S3 키를 파싱하지 않고 바로 어느 회사 것인지 알 수 있다 |
+| `company_name` | **선택.** 표시용 고객사명. **경로에는 쓰지 않는다**(회사명이 바뀌면 경로가 갈라져 이전 산출물을 못 찾는다) |
+| ~~`file_extension`~~ | **삭제됨.** 확장자는 파일명에 `.pdf`로 고정 포함한다 — 파일명에 이미 있는 값을 별도 컬럼으로 한 번 더 들면 둘이 어긋날 수 있다 |
+| `file_size_bytes` | 상한 10MB |
 | `original_file_name` | 원본·표시용 파일명 |
 | `presigned_url` | 다운로드·미리보기 URL |
 | `presigned_expires_at` | 링크 만료 = 발급 +**7일**. 만료 후 `s3_full_key`로 백엔드가 재발급 (SigV4 상한이 7일이라 영구 링크 불가) |
@@ -328,8 +388,8 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
 | `guideline_id` | string | **멱등 키.** `alert_id`의 `ALT-` 접두어를 `GD-`로 바꾼 값 — 예: `ALT-20260528-P001-COUPANG` → `GD-20260528-P001-COUPANG`. 알림과 **1:1**이라 재생성해도 같은 ID<br>⚠️ 백엔드 문서의 `GD-{탐지일}-{상품그룹}`은 **폐기된 규칙**이다. 탐지가 (상품, aspect, 채널) 단위로 발화하므로 같은 날 같은 상품의 다른 알림이 전부 같은 ID가 됐고, 멱등 upsert 때문에 나중 가이드라인이 앞의 것을 조용히 덮어썼다 (PR #22에서 수정, `app/reporting/ids.py`) |
 | `alert_id` | string | 원본 알림 ID |
 | `status` | enum | §5와 동일. `HOLD_INSUFFICIENT_DATA`는 발생하지 않음 |
-| `pdf_s3_meta` | object \| null | 버킷 `sellon-temp-reports`, `object_expires_at` = 업로드 +**24시간**, `presigned_expires_at`도 동일 |
-| `source_payload` | object | **필수.** 입력 JSON + 출력 JSON 원본. 메인이 PostgreSQL JSONB에 영구 보관하며, PDF가 24시간 뒤 사라져도 이 원본으로 재컴파일한다 |
+| `pdf_s3_meta` | object \| null | **월간과 같은 버킷**을 prefix `cs-guideline`로 구분(§5 참고). `object_expires_at` = 업로드 +**7일**(2026-08-06 확정, 기존 24시간에서 연장), `presigned_expires_at`도 +7일 |
+| `source_payload` | object | **필수.** 입력 JSON + 출력 JSON 원본. 메인이 PostgreSQL JSONB에 영구 보관하며, PDF가 **7일** 뒤 사라져도 이 원본으로 재컴파일한다 |
 | `notice_message` | string \| null | 비 `SUCCESS`일 때 안내 문구 |
 | `validation_report` | object \| null | `FAILED_VALIDATION` 사유 |
 
@@ -465,6 +525,7 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
 | enum 동기화 확인 | §9 대조표 전달 완료, 백엔드 반영 확인 대기 |
 | Publisher Confirm(AI) · Manual ACK(양쪽) | ✅ AI 쪽 완료 (`publisher_confirms=True` · 컨슈머 Manual ACK) |
 | `MQ_COMPANY_ID` 실제 값 | **백엔드 대기** — 없으면 발행이 막힌다 |
+| S3 버킷·Lifecycle 값(§5·§6) | ✅ **확인 완료(2026-08-11, 최용준)** — 버킷 1개 + prefix 구분 · CS 가이드라인 7일 · 월간 180일. **운영 버킷명만 미정**(코드 기본값이 dev) |
 
 `ai.anomaly.analyzed` · `ai.guideline.generated` 두 발행 경로는 배치(`app/batch/daily.py`)에
 붙어 있다. REST 6개는 그대로 남아 재현·디버깅용으로 쓴다.
