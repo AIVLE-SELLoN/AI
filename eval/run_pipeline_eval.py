@@ -134,6 +134,15 @@ SOURCE_SPEC = {
 CHUNK_SIZE = 20
 CONCURRENCY = 4
 
+RETRY_WITHIN_RUN = 2
+"""무응답 건을 **그 회차 안에서** 다시 부르는 횟수.
+
+⚠️ 회차는 LLM 흔들림을 평균 내려고 나눈 것이라 **서로 독립이어야 한다.** 무응답을
+   다음 회차로 미루면 앞 회차가 뒤 회차 실행 때 채워져서, 앞 회차일수록 커버리지가
+   좋아진다. 그러면 ± 가 흔들림이 아니라 커버리지 비대칭을 잰다.
+   (2026-08-04 내가 넣은 구조인데 before 가 편차 0 이라 안 보였고, 프롬프트 개선으로
+    케이스가 컷오프 근처로 올라오면서 드러났다 — 회차 1 이 60% → 84%)"""
+
 MODE_BATCH = "batch"
 MODE_PER_ITEM = "per_item"
 
@@ -338,23 +347,35 @@ async def _run_batch(
     다만 결과를 전부 모아 마지막에 한 번에 돌려주므로 중간에 죽으면 다 날아간다.
     그래서 CONCURRENCY 청크씩만 넘기고 **그 묶음마다 캐시를 저장**한다.
     """
-    done = failed = 0
+    done = 0
+    pending = list(todo)
     group = CHUNK_SIZE * concurrency
-    for start in range(0, len(todo), group):
-        part = todo[start : start + group]
-        rows = [{"inquiry_id": d["id"], "raw_text": d["text"]} for d in part]
-        predictions, failed_ids = await run_batch_chunks(rows, CHUNK_SIZE, concurrency)
+    for attempt in range(1, RETRY_WITHIN_RUN + 2):
+        leftover: list[dict] = []
+        for start in range(0, len(pending), group):
+            part = pending[start : start + group]
+            rows = [{"inquiry_id": d["id"], "raw_text": d["text"]} for d in part]
+            predictions, failed_ids = await run_batch_chunks(rows, CHUNK_SIZE, concurrency)
 
-        for item_id, aspects in predictions.items():
-            cache[item_id] = aspects or _cs_fallback_aspects(item_id)
-        save()
+            for item_id, aspects in predictions.items():
+                cache[item_id] = aspects or _cs_fallback_aspects(item_id)
+            save()
 
-        done += len(predictions)
-        # 무응답 건은 **캐시에 넣지 않는다** — 다음 회차 실행이 그것만 다시 부르고,
-        # 그때까지는 커버리지 검사가 잡아서 그 슬롯을 검정에서 뺀다(조용한 왜곡 방지).
-        failed += len(failed_ids)
-        print(f"    누적 {done:,}/{len(todo):,}건 (무응답 {failed:,})")
-    return done, failed
+            done += len(predictions)
+            missed = set(failed_ids)
+            leftover.extend(d for d in part if d["id"] in missed)
+            print(f"    누적 {done:,}/{len(todo):,}건 (남은 무응답 {len(leftover):,})")
+
+        pending = leftover
+        if not pending or attempt > RETRY_WITHIN_RUN:
+            break
+        print(f"    ↻ 무응답 {len(pending):,}건 재시도 ({attempt}/{RETRY_WITHIN_RUN})")
+
+    # 재시도를 다 쓰고도 남은 건은 캐시에 안 넣는다 — 커버리지 검사가 그 슬롯을 검정에서
+    # 뺀다(조용한 왜곡 방지). **다음 회차로 미루지 않는 것이 핵심이다** — 미루면 앞 회차가
+    # 뒤 회차 실행에서 채워져 커버리지가 회차마다 달라지고, ± 가 LLM 흔들림이 아니라
+    # 커버리지 비대칭을 재게 된다. (2026-08-10 실측에서 회차 1 이 60% → 84% 로 움직였다)
+    return done, len(pending)
 
 
 async def _run_per_item(
@@ -367,8 +388,21 @@ async def _run_per_item(
        통째로 raise 하면 그때까지의 결과가 다 날아간다.
     """
     semaphore = asyncio.Semaphore(concurrency)
+    pending = list(todo)
+    for attempt in range(1, RETRY_WITHIN_RUN + 2):
+        pending = await _per_item_pass(pending, cache, save, semaphore, todo)
+        if not pending or attempt > RETRY_WITHIN_RUN:
+            break
+        print(f"    ↻ 무응답 {len(pending):,}건 재시도 ({attempt}/{RETRY_WITHIN_RUN})")
+    # 배치 경로와 같은 이유로 **다음 회차로 미루지 않는다** (RETRY_WITHIN_RUN 주석 참고).
+    return len(todo) - len(pending), len(pending)
+
+
+async def _per_item_pass(todo, cache, save, semaphore, all_todo) -> list[dict]:
+    """건당 호출 1회 패스. 캐시에 못 넣은 항목을 돌려준다(= 이 패스의 무응답)."""
     chunks = [todo[i : i + CHUNK_SIZE] for i in range(0, len(todo), CHUNK_SIZE)]
-    done = failed = 0
+    done = len(all_todo) - len(todo)
+    leftover: list[dict] = []
 
     for index, chunk in enumerate(chunks, start=1):
         items = [
@@ -390,15 +424,14 @@ async def _run_per_item(
                 # 올라온 건 get_llm_client 실패 같은 **프로세스 전역 문제**이므로,
                 # 청크 하나가 아니라 전체가 같은 이유로 죽을 가능성이 높다.
                 print(f"    [{index}/{len(chunks)}] ⚠️ 청크 전체 실패 {len(chunk)}건 — {exc}")
-                failed += len(chunk)
+                leftover.extend(chunk)
                 continue
 
         # 계약 1·2번: 길이·순서가 입력과 같고, 실패는 그 자리에 예외 객체로 온다.
-        for source_item, result in zip(items, results, strict=True):
+        for source_doc, source_item, result in zip(chunk, items, results, strict=True):
             if isinstance(result, Exception):
-                # 캐시에 넣지 않는다 — 다음 회차가 이것만 다시 부르고, 그때까지는
-                # 커버리지 검사가 잡아서 그 슬롯을 검정에서 뺀다(조용한 왜곡 방지).
-                failed += 1
+                # 캐시에 넣지 않는다 — **같은 회차 안에서** 다시 부른다.
+                leftover.append(source_doc)
                 continue
             # 건당 경로는 _parse_llm_response 를 타므로 CS 폴백이 이미 적용돼 온다.
             cache[source_item.item_id] = [
@@ -408,8 +441,8 @@ async def _run_per_item(
             done += 1
         save()
         if index % 10 == 0 or index == len(chunks):
-            print(f"    [{index}/{len(chunks)}] 누적 {done:,}/{len(todo):,}건")
-    return done, failed
+            print(f"    [{index}/{len(chunks)}] 누적 {done:,}/{len(all_todo):,}건")
+    return leftover
 
 
 async def classify_cached(
@@ -1077,8 +1110,17 @@ def report(runs: list[dict], oracle: dict, mode: str = MODE_BATCH) -> None:
         spread = f" ±{(max(values) - min(values)) / 2:.1%}" if len(values) > 1 else ""
         print(f"{label:24s} {a:>10.1%} {b:>8.1%}{spread:<5s} {a - b:>+9.1%}")
 
+    if len(runs) > 1:
+        # ± 의 정의를 숫자 옆에 붙여둔다. 이 값만 떼서 노션·발표로 옮기면 읽는 쪽은
+        # 표준편차나 신뢰구간으로 읽는다. 반범위는 양 끝 두 점만 쓰고 가운데를 버리는
+        # 가장 거친 산포 측도이고, 범위는 표본이 커질수록 넓어져 구조적으로 과소추정이다.
+        print(
+            f"\n± 는 {len(runs)}회 **반범위** (max−min)/2 다 — 표준편차도 신뢰구간도 아니다."
+            "\n  회차를 늘리면 폭은 넓어지는 쪽으로 움직인다. '관측된 폭'으로만 읽을 것."
+        )
+
     per_run = " / ".join(f"{_rate(r['recall']):.1%}" for r in runs)
-    print(f"\n회차별 탐지율: {per_run}")
+    print(f"회차별 탐지율: {per_run}")
 
     only_in_pipeline = sorted({m for r in runs for m in r["misses"]})
     if only_in_pipeline:
