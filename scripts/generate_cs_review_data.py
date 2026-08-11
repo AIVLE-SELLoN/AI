@@ -49,6 +49,7 @@ from pathlib import Path as _Path
 # 저장소 루트를 sys.path에 넣어야 함(실행 방식에 따라 자동으로 안 잡힐 수 있어서 명시)
 sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 
+from app.core.console import force_utf8_output
 from app.core.llm_client import get_llm_client
 from app.core.exceptions import LlmCallError, LlmParseError
 import yaml
@@ -752,6 +753,14 @@ def write_csv(rows: list[dict], path: Path):
 # ────────────────────────────────────────────────────────────────
 
 def main():
+    # 출력이 나가기 전에 부른다. 이 스크립트의 진단 문구는 `⚠️`·`❌`·`—` 를 쓰는데 cp949
+    # (한국어 윈도우 기본 콘솔)에 없어서, 안 부르면 cause 프롬프트 가드에 닿기도 전에
+    # UnicodeEncodeError 로 죽는다 — 멈춘 이유를 알리려고 만든 메시지가 통째로 사라지고
+    # traceback 만 남는다. `--help` 도 같은 이유로 죽는다(모듈 docstring 에 `—` 가 있다).
+    # `if __name__ == "__main__"` 이 아니라 여기 두는 이유는 배선을 테스트로 고정하기
+    # 위해서다 (generate_monthly_reports.py · app/batch/daily.py 와 같은 관례).
+    force_utf8_output()
+
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--anomaly-config", default="config_anomaly.csv")
     ap.add_argument("--products-config", default="config_products.csv")
