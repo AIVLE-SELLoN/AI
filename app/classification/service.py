@@ -69,8 +69,8 @@ class ClassifyRequestItem(BaseModel):
 # ── 프롬프트 버전 (매직넘버 금지 컨벤션 — 여기서만 관리, 한 줄만 바꾸면 전체 반영) ──
 #
 # 두 프롬프트 모두 실데이터 정량 평가를 마친 상태(실험③④). 갱신 시 eval/ 재실행 후 교체할 것.
-PROMPT_ASPECT_VERSION = "classify_aspect_v5"        # 프롬프트1(CS) — aspect 스코프 확장, 실험③ F1 99.0%(seed=42, n=300)
-PROMPT_SENTIMENT_VERSION = "classify_sentiment_v4"  # 프롬프트2(리뷰) — v3 누적 수정 통합, 실험④ F1 84.4%(71603 기준)
+PROMPT_ASPECT_VERSION = "classify_aspect_v5"        # 프롬프트1(CS) — 실험③ 부정판별 F1 98.3% · FPR 0.64%(2026-08-11 전량 96,524건)
+PROMPT_SENTIMENT_VERSION = "classify_sentiment_v4"  # 프롬프트2(리뷰) — 실험④ aspect F1 84.4%(71603 n=300, 1회)
 
 
 async def classify_aspect(
