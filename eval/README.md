@@ -45,6 +45,8 @@
 >
 > 이 파일은 `.gitignore`(`*_cache.json`) 대상이라 저장소에 없다. **재생성 전에 가진
 > 사람에게 받아라.** 받은 뒤 `--cause-cache` 가 그 경로를 보게 하면 LLM 호출이 0 이 된다.
+> 정상 실행은 캐시나 신규 LLM 출력에서 `[PLACEHOLDER:cause:...]` 를 발견하면 저장 전에
+> 중단한다. 플레이스홀더는 `--no-llm-cause` 를 명시한 비채점 스모크 테스트에서만 허용한다.
 
 > 🔴 **`38c1074` 이상이 필요하다.** `--baseline-denominator` 는 그 커밋에서 생긴
 > 플래그다. main 에 머지되기 전에는 이 레시피가 "unrecognized arguments" 로 죽는다.
