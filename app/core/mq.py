@@ -304,6 +304,11 @@ async def _publish(event_type: str, payload: dict, trace_id: str, *, key: str) -
         confirmation = await exchange.publish(
             message, routing_key=event_type, timeout=settings.mq_publish_timeout_seconds
         )
+    except MqConfigError:
+        # 설정 오류는 재시도 대상이 아니다. MqPublishError 로 싸면 "다음 배치가 다시
+        # 시도한다" 는 뜻이 되는데, 플래그를 안 고치는 한 영원히 같은 자리에서 실패한다.
+        # 위 MQ_COMPANY_ID 검사가 이미 MqConfigError 로 나가고 있어 그쪽과 짝을 맞춘다.
+        raise
     except Exception as exc:
         # 연결은 닫지 않는다. connect_robust 가 스스로 복구하고, 채널이 브로커 오류로
         # 닫혔으면 _get_exchange 가 다음 호출에서 새로 연다. 여기서 끊으면 그 복구를
@@ -387,15 +392,42 @@ async def resolve_exchange(channel: Any, settings: Any) -> Any:
 
     `MQ_DECLARE_TOPOLOGY=true` 일 때만 우리가 만든다 — 로컬 docker-compose 처럼 아직
     아무것도 없는 환경 전용이다. 컨슈머도 같은 함수를 쓴다.
+
+    두 방향 다 **설정이 어긋났다는 뜻이라 `MqConfigError` 로 바꿔서 올린다.** 브로커가
+    주는 원문(`PRECONDITION_FAILED - inequivalent arg 'type'`)은 무엇을 고쳐야 하는지를
+    안 알려줘서, 이 자리에 걸린 사람이 로그만 보고는 플래그를 찾아가지 못한다.
+
+    Raises:
+        MqConfigError: exchange 소유권이 어긋남 — 재시도해도 안 고쳐진다.
     """
     from aio_pika import ExchangeType
+    from aio_pika.exceptions import ChannelNotFoundEntity, ChannelPreconditionFailed
 
     if settings.mq_declare_topology:
-        return await channel.declare_exchange(
-            settings.mq_exchange, ExchangeType.TOPIC, durable=True
-        )
+        try:
+            return await channel.declare_exchange(
+                settings.mq_exchange, ExchangeType.TOPIC, durable=True
+            )
+        except ChannelPreconditionFailed as exc:
+            raise MqConfigError(
+                f"exchange '{settings.mq_exchange}' 가 이미 다른 설정으로 존재해 "
+                "선언이 거부됐습니다 (MQ_DECLARE_TOPOLOGY=true). 이 브로커는 exchange 를 "
+                "이미 소유하고 있습니다 — 운영이라면 MQ_DECLARE_TOPOLOGY=false 로 "
+                f"내리세요. vhost 도 같이 확인할 것 (지금 {settings.mq_vhost!r}). "
+                "운영 토폴로지는 백엔드 인프라 소유입니다 (docs/mq_events.md §2-1)"
+            ) from exc
+
     # ensure=True 면 passive declare 로 존재만 확인한다 — 없으면 그 자리에서 터진다.
-    return await channel.get_exchange(settings.mq_exchange, ensure=True)
+    try:
+        return await channel.get_exchange(settings.mq_exchange, ensure=True)
+    except ChannelNotFoundEntity as exc:
+        raise MqConfigError(
+            f"exchange '{settings.mq_exchange}' 가 vhost {settings.mq_vhost!r} 에 "
+            "없습니다. 로컬이면 `python scripts/setup_local_mq.py` 를 먼저 돌리세요 "
+            "(MQ_DECLARE_TOPOLOGY=true 필요). 운영이면 백엔드가 아직 안 만들었거나 "
+            "MQ_VHOST 가 틀린 것이고, 어느 쪽이든 **우리가 만들면 안 됩니다** "
+            "(docs/mq_events.md §2-1)"
+        ) from exc
 
 
 async def _get_exchange(settings: Any) -> Any:
