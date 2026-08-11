@@ -339,6 +339,7 @@ def _build_channel_rates(
     알림의 ``stats.source``와 같은 source, ``main_aspect``와 같은 aspect 기준이다.
     관측 문서가 전혀 없는 채널은 비율을 만들 수 없으므로 ``rate=None``이며 판정에서도
     제외된 것으로 표시한다. rate는 퍼센트가 아닌 기존 ``stats.cur_rate``와 같은 0~1 값이다.
+    ``total``은 그 비율의 분모다 — 이미 집계된 값이라 추가 연산이 없다.
     """
     excluded = set(excluded_channels)
     snapshots: list[ChannelRate] = []
@@ -347,14 +348,21 @@ def _build_channel_rates(
         channel_counts = counts.get((product, aspect, channel.value, source))
         if channel_counts is None:
             rate = None
+            # 🔴 ``None``(= 구버전 알림)이 아니라 ``0``이다. build_combinations 가
+            #    문서를 센 Counter 를 돌므로 **키가 없다 = 그 채널 관측 0건**이고,
+            #    0 이 사실이다. None 을 실으면 백엔드가 구버전과 구분하지 못한다.
+            total = 0
             is_excluded = True
         else:
             cur_neg, cur_total, _past_neg, _past_total = channel_counts
             rate = cur_neg / cur_total if cur_total else None
+            total = cur_total
+            # ``cur_total == 0``은 실질 도달 불가다(Counter 라 키가 있으면 최소 1).
+            # 방어용으로 남긴다.
             is_excluded = channel.value in excluded or cur_total == 0
 
         snapshots.append(
-            ChannelRate(channel=channel, rate=rate, excluded=is_excluded)
+            ChannelRate(channel=channel, rate=rate, excluded=is_excluded, total=total)
         )
 
     return snapshots

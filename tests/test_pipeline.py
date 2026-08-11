@@ -364,6 +364,34 @@ def test_excluded_channels_belong_to_own_aspect():
     assert size["channel_rates"][2].excluded is True
 
 
+def test_channel_rates_carry_the_denominator():
+    """🔴 비율 옆에 분모가 같이 실린다 — 관측 0건은 `total=0` 이지 `None` 이 아니다.
+
+    `None` 은 이 필드가 생기기 전(2026-08-11) 발행분의 값이다. 신규 발행에서 나오면
+    백엔드가 "구버전인가 관측 0건인가" 를 못 가린다.
+
+    채널마다 분모를 다르게 둔 건 `stats.cur_total`(대표 채널 1개분) 을 그대로 복사하는
+    구현을 걸러내기 위해서다.
+    """
+    batch = [
+        _test_result("P1", "색상", "COUPANG", "cs", True),
+        _test_result("P1", "색상", "NAVER", "cs", False),
+    ]
+    counts = {
+        ("P1", "색상", "COUPANG", "cs"): (26, 200, 40, 800),
+        ("P1", "색상", "NAVER", "cs"): (8, 160, 30, 640),
+        # ZIGZAG 는 키 자체가 없다 = 그 채널 관측 0건.
+    }
+    tests = {t["key"]: t for t in batch}
+
+    candidates = _build_candidates(run_verdict(batch, []), "cs", tests, counts)
+    rates = candidates[("P1", "COUPANG")]["channel_rates"]
+
+    assert [row.total for row in rates] == [200, 160, 0]
+    assert rates[2].total is not None, "구버전 알림(None)과 구분이 안 된다"
+    assert rates[2].rate is None and rates[2].excluded is True
+
+
 # ── 입력 정규화 ──────────────────────────────────────────────────
 def _item(item_id, channel, aspects, day, source="cs", product="P001"):
     return ClassifiedItem(

@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.schemas import (
+    ChannelRate,
     Citation,
     ClassifiedItem,
     Evaluator,
@@ -28,6 +29,22 @@ def test_global_alert_is_valid(global_alert):
 def test_indeterminate_alert_is_valid(indeterminate_alert):
     assert indeterminate_alert.verdict == "구분불가"
     assert indeterminate_alert.excluded_channels == ["NAVER", "ZIGZAG"]
+
+
+# ── ChannelRate.total (2026-08-11 신설) ──────────────────────────
+
+
+def test_channel_rate_total_is_optional_but_zero_is_not_null():
+    """`total` 없이 저장된 구버전 알림도 읽힌다 — 그때만 `None` 이고, 관측 0건은 `0` 이다.
+
+    필수로 만들면 백엔드가 이 필드 이전에 저장한 알림을 다시 읽을 때 `ValidationError`
+    로 죽는다. 반대로 관측 0건에 `None` 을 쓰면 그 구버전과 구분이 사라진다.
+    """
+    old = ChannelRate(channel="COUPANG", rate=0.13, excluded=False)
+    observed_none = ChannelRate(channel="ZIGZAG", rate=None, excluded=True, total=0)
+
+    assert old.total is None
+    assert observed_none.total == 0
 
 
 # ── source=="review"면 aspect는 색상/사이즈/소재만 ────────────────

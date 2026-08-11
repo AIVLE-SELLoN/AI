@@ -129,11 +129,21 @@ class DetectionStats(BaseModel):
 
 
 class ChannelRate(BaseModel):
-    """탐지 시점의 채널별 현재 윈도우 부정률 스냅샷."""
+    """탐지 시점의 채널별 현재 윈도우 부정률 스냅샷.
+
+    ``total`` 은 그 비율의 분모(= 그 채널의 현재 윈도우 총문의, aspect 무관)다.
+    ``stats.cur_total`` 은 **대표 채널 1개분**이라 채널별 분모를 대체하지 못한다.
+
+    ⚠️ **``None`` 과 ``0`` 은 뜻이 다르다.** ``None`` 은 이 필드가 생기기 전(2026-08-11)
+    발행돼 백엔드에 저장된 구버전 알림뿐이고, ``0`` 은 그 채널에 문서가 아예 없었다는
+    관측 결과다(``rate=None``·``excluded=True`` 와 세트). **신규 발행은 관측이 없어도
+    ``0`` 을 싣는다** — 기본값 ``None`` 이 그대로 나가면 백엔드가 둘을 못 가린다.
+    """
 
     channel: Channel
     rate: float | None
     excluded: bool
+    total: int | None = None
 
 
 class SourceSignals(BaseModel):
