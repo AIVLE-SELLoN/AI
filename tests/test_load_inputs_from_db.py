@@ -238,9 +238,13 @@ def test_naive_timestamp_is_kst_even_on_a_utc_host():
     result = subprocess.run(
         [sys.executable, "-c", code],
         cwd=ROOT,
-        env={**os.environ, "TZ": "UTC"},
+        # 인코딩을 양쪽 다 못박는다. 한글 traceback 이 stderr 에 실렸을 때 부모가
+        # 로케일(cp949)로 디코드하면 깨지면서 `stderr` 가 통째로 `None` 이 된다 —
+        # 아래 assert 가 실패 원인을 보여주려고 그 값을 쓰는데 그게 사라진다.
+        env={**os.environ, "TZ": "UTC", "PYTHONIOENCODING": "utf-8"},
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=180,
         check=False,  # 종료코드를 직접 본다 — stderr 를 assert 메시지에 실으려고
     )
