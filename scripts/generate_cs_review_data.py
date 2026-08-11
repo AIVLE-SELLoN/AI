@@ -470,7 +470,13 @@ def build_rows_for_window_group(rows: list[dict], rng: random.Random, pid_map: d
         assert r["past_total"] == first["past_total"] and r["cur_total"] == first["cur_total"], \
             f"같은 그룹인데 past_total/cur_total이 다름: {rows}"
 
-    group_aspects = {r["aspect"] for r in rows}  # 이 창 안에서 "이미 부정 몫이 정해진" aspect들
+    # ⚠️ set 이면 안 된다. 아래 reserved_neg 가 이 순서를 dict 키 순서로 물려받고,
+    #    그게 "하루치 부정 슬롯을 어느 aspect 가 먼저 가져가나"를 정한다. 파이썬 str 해시는
+    #    PYTHONHASHSEED 를 안 박으면 프로세스마다 무작위라, 같은 코드·같은 seed 로도
+    #    실행마다 색상/파손 순서가 뒤집혀 다른 코퍼스가 나온다. 집계(aspect 별 부정 건수)는
+    #    같아서 verify_counts 도 행수 검산도 통과한다 — 조용히 갈린다.
+    #    dict.fromkeys 면 config 행 순서로 고정되고 `in` 은 그대로 O(1) 이다.
+    group_aspects = dict.fromkeys(r["aspect"] for r in rows)  # 이 창에서 부정 몫이 정해진 aspect들
 
     data_rows, label_rows = [], []
 
