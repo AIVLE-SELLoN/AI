@@ -49,9 +49,15 @@ from pathlib import Path as _Path
 # 저장소 루트를 sys.path에 넣어야 함(실행 방식에 따라 자동으로 안 잡힐 수 있어서 명시)
 sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 
+from app.core.console import force_utf8_output
 from app.core.llm_client import get_llm_client
 from app.core.exceptions import LlmCallError, LlmParseError
 import yaml
+
+# cause 프롬프트는 이 스크립트 옆(scripts/prompts/)에 산다. cwd 가 어디든 같은 파일을
+# 가리켜야 한다 — 저장소 루트에서 돌렸을 때만 조용히 플레이스홀더로 빠지는 일을 막는다.
+DEFAULT_CAUSE_PROMPT = Path(__file__).resolve().parent / "prompts" / "generate_cause_text_v3.md"
+CAUSE_PLACEHOLDER_PREFIX = "[PLACEHOLDER:cause:"
 
 # ────────────────────────────────────────────────────────────────
 # 배경(비케이스) 상품용 baseline — 서영님 시나리오 정의서 §1 표 + 기타=3%(합의)
@@ -249,12 +255,18 @@ class TextGenerator:
                 self.templates = yaml.safe_load(f) or {}
 
         self.use_llm = use_llm
+        self.llm_requested = use_llm
         self.llm_client = None
+        self.llm_init_error: Exception | None = None
         if use_llm:
             try:
                 self.llm_client = get_llm_client()
             except Exception as e:
-                print(f"  ⚠️ LLM 클라이언트 생성 실패({e}) — cause 텍스트는 플레이스홀더로 대체됩니다.")
+                # 캐시가 100% 차 있으면 LLM 없이도 재생성할 수 있으므로 여기서 바로 죽이지
+                # 않는다. 대신 첫 캐시 미스에서 중단한다. 정상 실행이 플레이스홀더로 조용히
+                # 내려가는 것은 금지하고, 그 동작은 --no-llm-cause 에서만 허용한다.
+                print(f"  ⚠️ LLM 클라이언트 생성 실패({e}) — 캐시 미스가 있으면 중단합니다.")
+                self.llm_init_error = e
                 self.use_llm = False
         self.cause_system_prompt = None
         if cause_prompt_path and Path(cause_prompt_path).exists():
@@ -280,7 +292,16 @@ class TextGenerator:
         반환: [{"cause": "...", "text": "..."}, ...] (개수 = sum(cause_counts.values()))"""
         cache_key = f"{case_id}:{aspect}"
         if cache_key in self.cause_cache:
-            return self.cause_cache[cache_key]
+            cached = self.cause_cache[cache_key]
+            if self.llm_requested and any(
+                str(item.get("text", "")).startswith(CAUSE_PLACEHOLDER_PREFIX)
+                for item in cached
+            ):
+                raise RuntimeError(
+                    f"[{cache_key}] cause 캐시에 정답 노출 플레이스홀더가 있습니다. "
+                    "정상 cause_text_cache.json 으로 교체하세요."
+                )
+            return cached
 
         total = sum(cause_counts.values())
         trace_key = f"case_id={case_id};aspect={aspect}"
@@ -289,14 +310,28 @@ class TextGenerator:
             return {"cause": cause, "text": f"[PLACEHOLDER:cause:{aspect}:{cause}]"}
 
         if not self.use_llm or not self.cause_system_prompt:
+            if self.llm_requested:
+                reason = (
+                    f"LLM 클라이언트 초기화 실패: {self.llm_init_error}"
+                    if self.llm_init_error
+                    else "cause 프롬프트를 읽지 못함"
+                )
+                raise RuntimeError(
+                    f"[{trace_key}] cause 캐시 미스인데 생성할 수 없습니다 ({reason}). "
+                    "정답이 노출되는 플레이스홀더는 저장하지 않습니다. "
+                    "정상 캐시를 받거나, 채점하지 않을 스모크 테스트라면 "
+                    "--no-llm-cause 를 명시하세요."
+                )
             items = [_placeholder(c) for c, n in cause_counts.items() for _ in range(n)]
             self.cause_cache[cache_key] = items
             return items
 
         collected: list[dict] = []
         remaining = dict(cause_counts)
+        rounds_attempted = 0
 
         for round_num in range(1, 5):  # 1라운드(전체) + 부족분 보충 최대 3라운드
+            rounds_attempted = round_num
             req_lines = "\n".join(f"- {c}: {n}건" for c, n in remaining.items() if n > 0)
             if round_num == 1:
                 user_msg = f"aspect: {aspect}\n요청 개수:\n{req_lines}\n총 {total}건, 위 개수를 정확히 지켜서 생성하세요."
@@ -339,13 +374,14 @@ class TextGenerator:
                 return collected
             print(f"    ⚠️ [{trace_key}] round{round_num} 후에도 부족: {remaining} → 보충 요청")
 
-        # 최종까지 부족하면, 부족분만 플레이스홀더로 채움(전체가 아니라 일부만 — 손실 최소화)
-        for c, n in remaining.items():
-            for _ in range(n):
-                collected.append(_placeholder(c))
-        print(f"    ⚠️ [{trace_key}] 최종 부족분 {sum(remaining.values())}건 플레이스홀더로 채움")
-        self.cause_cache[cache_key] = collected
-        return collected
+        # 정상 실행에서 부족분을 플레이스홀더로 채우면 원인 라벨이 본문에 노출돼 [6] 채점이
+        # 무효가 된다. 부분 결과도 캐시에 넣지 않고 전체 실행을 중단해 다음 실행이 다시
+        # 생성하게 한다. 명시적인 --no-llm-cause 는 위의 전용 경로에서만 허용한다.
+        raise RuntimeError(
+            f"[{trace_key}] {rounds_attempted}라운드 시도 후에도 cause 텍스트 "
+            f"{sum(remaining.values())}건이 "
+            "부족합니다. 플레이스홀더·부분 캐시는 저장하지 않습니다."
+        )
 
     def generate(self, aspect: str, sentiment: int, source: str, is_cause_sample: bool = False) -> str:
         sent_label = {-1: "부정", 0: "중립", 1: "긍정"}[sentiment]
@@ -435,7 +471,13 @@ def build_rows_for_window_group(rows: list[dict], rng: random.Random, pid_map: d
         assert r["past_total"] == first["past_total"] and r["cur_total"] == first["cur_total"], \
             f"같은 그룹인데 past_total/cur_total이 다름: {rows}"
 
-    group_aspects = {r["aspect"] for r in rows}  # 이 창 안에서 "이미 부정 몫이 정해진" aspect들
+    # ⚠️ set 이면 안 된다. 아래 reserved_neg 가 이 순서를 dict 키 순서로 물려받고,
+    #    그게 "하루치 부정 슬롯을 어느 aspect 가 먼저 가져가나"를 정한다. 파이썬 str 해시는
+    #    PYTHONHASHSEED 를 안 박으면 프로세스마다 무작위라, 같은 코드·같은 seed 로도
+    #    실행마다 색상/파손 순서가 뒤집혀 다른 코퍼스가 나온다. 집계(aspect 별 부정 건수)는
+    #    같아서 verify_counts 도 행수 검산도 통과한다 — 조용히 갈린다.
+    #    dict.fromkeys 면 config 행 순서로 고정되고 `in` 은 그대로 O(1) 이다.
+    group_aspects = dict.fromkeys(r["aspect"] for r in rows)  # 이 창에서 부정 몫이 정해진 aspect들
 
     data_rows, label_rows = [], []
 
@@ -711,6 +753,14 @@ def write_csv(rows: list[dict], path: Path):
 # ────────────────────────────────────────────────────────────────
 
 def main():
+    # 출력이 나가기 전에 부른다. 이 스크립트의 진단 문구는 `⚠️`·`❌`·`—` 를 쓰는데 cp949
+    # (한국어 윈도우 기본 콘솔)에 없어서, 안 부르면 cause 프롬프트 가드에 닿기도 전에
+    # UnicodeEncodeError 로 죽는다 — 멈춘 이유를 알리려고 만든 메시지가 통째로 사라지고
+    # traceback 만 남는다. `--help` 도 같은 이유로 죽는다(모듈 docstring 에 `—` 가 있다).
+    # `if __name__ == "__main__"` 이 아니라 여기 두는 이유는 배선을 테스트로 고정하기
+    # 위해서다 (generate_monthly_reports.py · app/batch/daily.py 와 같은 관례).
+    force_utf8_output()
+
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--anomaly-config", default="config_anomaly.csv")
     ap.add_argument("--products-config", default="config_products.csv")
@@ -718,7 +768,11 @@ def main():
     ap.add_argument("--golden-mapping-dir", default=None,
                      help="golden_mapping.csv 위치(생략 시 --mapping-dir와 동일 — 하위호환)")
     ap.add_argument("--templates", default="templates.yaml", help="분모용(denom) 텍스트 템플릿 사전")
-    ap.add_argument("--cause-prompt", default="prompts/generate_cause_text_v3.md", help="원인분류 투입분 생성 프롬프트")
+    # ⚠️ 스크립트 위치 기준으로 잡는다. cwd 기준이면 저장소 루트에서 돌릴 때 못 찾고,
+    #    못 찾으면 cause 텍스트가 [PLACEHOLDER:cause:색상:사진*색감*오차] 로 나간다.
+    #    원인 라벨이 본문에 박혀 [6] 원인분류가 문장을 읽는 게 아니라 답을 베끼게 된다.
+    ap.add_argument("--cause-prompt", default=str(DEFAULT_CAUSE_PROMPT),
+                     help="원인분류 투입분 생성 프롬프트")
     ap.add_argument("--cause-cache", default="cause_text_cache.json", help="cause 텍스트 캐시(재실행 시 재호출 방지)")
     ap.add_argument("--no-llm-cause", action="store_true", help="LLM 없이 cause도 플레이스홀더로(오프라인 테스트용)")
     ap.add_argument("--outdir", default="./output", help="input_*.csv 출력 디렉토리")
@@ -748,8 +802,23 @@ def main():
                               cause_cache_path=args.cause_cache, use_llm=not args.no_llm_cause)
     if not Path(args.templates).exists():
         print(f"  ⚠️ 템플릿 파일 {args.templates} 없음 — denom 텍스트도 플레이스홀더로 나감")
+    if args.no_llm_cause:
+        print(
+            "  ⚠️ --no-llm-cause: cause 텍스트가 [PLACEHOLDER:cause:<aspect>:<원인>] 으로 나갑니다.\n"
+            "     원인 라벨이 본문에 박히므로 이 데이터로 [6] 원인분류를 채점하면 안 됩니다"
+            " (오프라인 스모크 테스트 전용)."
+        )
     if not args.no_llm_cause and not text_gen.cause_system_prompt:
-        print(f"  ⚠️ cause 프롬프트 {args.cause_prompt} 없음 — cause 텍스트도 플레이스홀더로 나감")
+        # 경고로 흘리면 안 된다. 프롬프트가 없으면 cause 텍스트가
+        # [PLACEHOLDER:cause:색상:사진*색감*오차] 로 나가고, 원인 라벨이 본문에 그대로
+        # 박힌 코퍼스가 만들어진다. [6] 원인분류가 문장을 읽는 게 아니라 답을 베끼게 돼
+        # 채점 자체가 성립하지 않는다. 조용히 만들어져 쌓이느니 여기서 멈추는 게 낫다.
+        raise SystemExit(
+            f"❌ cause 프롬프트를 못 찾았습니다: {args.cause_prompt}\n"
+            f"   기본값은 {DEFAULT_CAUSE_PROMPT} 입니다.\n"
+            "   이대로 두면 원인 라벨이 본문에 박힌 코퍼스가 나와 [6] 채점이 무효가 됩니다.\n"
+            "   의도적으로 플레이스홀더를 쓰려면 --no-llm-cause 를 명시하세요."
+        )
 
     anomaly_rows = load_anomaly_config(args.anomaly_config)
     products = load_products_config(args.products_config)
@@ -813,6 +882,21 @@ def main():
 
     print(f"구멍 메우기(60일 연속화)로 추가된 행: {total_gap_filled}건")
     print(f"생성됨 — CS 문의 {len(cs_data)}건 / 리뷰 {len(review_data)}건")
+    if not args.no_llm_cause:
+        placeholder_rows = [
+            row for row in [*cs_data, *review_data]
+            if str(row.get("content", "")).startswith(CAUSE_PLACEHOLDER_PREFIX)
+        ]
+        if placeholder_rows:
+            sample_ids = [
+                row.get("inquiry_id") or row.get("review_id")
+                for row in placeholder_rows[:5]
+            ]
+            raise SystemExit(
+                f"❌ cause 플레이스홀더 {len(placeholder_rows)}건 발견 — "
+                "캐시와 CSV를 저장하지 않습니다. "
+                f"예시 ID: {sample_ids}. 정상 cause_text_cache.json 을 사용하세요."
+            )
     text_gen.save_cause_cache()
     print(f"cause 텍스트 캐시 저장 → {args.cause_cache}")
 
