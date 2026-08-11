@@ -213,13 +213,12 @@ services:
   # 이 서비스는 안 띄우면 된다.
   #
   # 🔴 **그때 MQ_DECLARE_TOPOLOGY=false · MQ_VHOST=/app 도 같이 내릴 것.** 접속만 바꾸면
-  #    resolve_exchange()·resolve_queue() 가 운영 토폴로지를 선언하러 들어간다. 이미
-  #    있거나 우리 계정에 권한이 없으면 MqConfigError 로 막히지만(어느 플래그를 고쳐야
-  #    하는지 문구로 안내한다), **아직 없는데 configure 권한은 있으면 예외 없이 성공해서
-  #    운영 exchange·큐가 우리 인자로 생긴다** — quorum·DLX·TTL 없이 선점되고, 나중에
-  #    백엔드가 정상 토폴로지를 올릴 때 그쪽이 터진다. 백엔드보다 우리가 먼저 붙는
-  #    순간이 그 창이다.
-  #    (setup_local_mq.py 는 플래그와 함께 MQ_HOST 도 보므로 그쪽은 거부하고 멈춘다.)
+  #    발행·수신이 MqConfigError 로 멈춘다 — resolve_exchange()·resolve_queue() 가
+  #    플래그와 함께 MQ_HOST 도 보고, 로컬이 아니면 브로커에 가기 전에 세운다
+  #    (require_local_topology_target). setup_local_mq.py 도 같은 판정을 쓴다.
+  #    **이건 고장이 아니라 의도다** — 그 조합이 통과하면 아직 없는 운영 exchange·큐를
+  #    우리가 quorum·DLX·TTL 없이 선점하고, 백엔드가 정상 토폴로지를 올릴 때 그쪽이
+  #    터진다. 메시지가 무엇을 내리라고 알려주므로 그대로 따르면 된다.
   #
   #   docker compose up -d rabbitmq
   #   python scripts/setup_local_mq.py   ← ⚠️ 이걸 안 하면 발행이 전부 실패한다(아래 참고)

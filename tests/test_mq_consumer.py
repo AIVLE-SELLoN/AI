@@ -263,15 +263,57 @@ async def test_does_not_redeclare_inbound_queue(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_declares_queue_only_for_local_topology(monkeypatch):
+    """⚠️ `mq_host` 를 명시한다 — 가드가 호스트도 보고 기본값 `""` 는 fail-closed 다.
+
+    안 주면 `.env` 를 만든 사람만 통과하는 테스트가 된다.
+    """
     from app.config import get_settings
 
     settings = get_settings()
     monkeypatch.setattr(settings, "mq_declare_topology", True)
+    monkeypatch.setattr(settings, "mq_host", "localhost")
     channel = _FakeChannel()
 
     await mq_consumer.resolve_queue(channel, mq_consumer.INBOUND_QUEUE, settings)
 
     assert channel.calls == ["declare_queue"]
+
+
+@pytest.mark.asyncio
+async def test_refuses_to_declare_queue_against_a_remote_broker(monkeypatch):
+    """🔴 컨슈머 쪽도 같은 가드를 탄다 — **선언 자체를 시도하지 않는다.**
+
+    이쪽이 스크립트보다 위험하다. 스크립트는 사람이 돌려야 돌지만 컨슈머는 배포되면
+    자동으로 뜬다. 운영 큐가 아직 없으면 `declare_queue` 가 그냥 성공해서
+    `ai.inbound` 가 quorum·DLX·delivery-limit 없는 classic 큐로 선점된다.
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "mq_declare_topology", True)
+    monkeypatch.setattr(settings, "mq_host", "mq.sellon.example.com")
+    channel = _FakeChannel()
+
+    with pytest.raises(MqConfigError) as exc:
+        await mq_consumer.resolve_queue(channel, mq_consumer.INBOUND_QUEUE, settings)
+
+    assert channel.calls == []
+    assert "MQ_DECLARE_TOPOLOGY=false" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_remote_broker_is_fine_when_we_do_not_declare_queue(monkeypatch):
+    """⚠️ 운영 설정(플래그 off + 원격 호스트)은 막으면 안 된다 — 컨슈머가 못 뜬다."""
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "mq_declare_topology", False)
+    monkeypatch.setattr(settings, "mq_host", "mq.sellon.example.com")
+    channel = _FakeChannel()
+
+    await mq_consumer.resolve_queue(channel, mq_consumer.INBOUND_QUEUE, settings)
+
+    assert channel.calls == ["get_queue"]
 
 
 class _RefusingQueueChannel:
@@ -305,6 +347,9 @@ async def test_declaring_someone_elses_queue_says_which_flag_to_drop(monkeypatch
 
     settings = get_settings()
     monkeypatch.setattr(settings, "mq_declare_topology", True)
+    # 로컬 호스트여야 이 경로에 온다 — 원격이면 `require_local_topology_target()` 이
+    # 브로커에 가기 전에 세운다. 여기는 **시도할 자격은 있었는데 거부당한** 경우다.
+    monkeypatch.setattr(settings, "mq_host", "localhost")
     channel = _RefusingQueueChannel(
         ChannelPreconditionFailed("PRECONDITION_FAILED - inequivalent arg 'x-queue-type'")
     )
