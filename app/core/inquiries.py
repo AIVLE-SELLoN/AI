@@ -25,7 +25,7 @@ from collections.abc import Iterator, Sequence
 
 from app.core import raw_schema
 from app.core.raw_db import connect_readonly
-from app.core.schemas import DetectionAlert, LinkedCSInquiry
+from app.core.schemas import DetectionAlert, LinkedCSInquiry, Source
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,11 @@ def build_linked_inquiries(
     없이 만들어진다. 전부 빠져 빈 리스트가 되면 호출부에서 걸린다
     (`CSGuidelineInput.linked_inquiries` 는 `min_length=1`).
 
+    🔴 **`source` 값이 틀려도 그 문의는 살린다 — 출처 미상(None)으로 둘 뿐이다.**
+    나쁜 행 하나를 건너뛰는 위 규율이 여기에도 걸린다. `Source(...)` 를 그냥 부르면
+    `ValidationError` 가 호출부까지 올라가서 **값이 이상한 1건 때문에 그 알림의 문의가
+    통째로 사라진다**(문서 못 찾음이면 1건만 빠지는 것과 대비된다).
+
     Args:
         alert: 탐지 알림. `evidence.inquiry_ids` 가 대상 목록이다.
         documents: 배치가 읽은 원본 문서. 키는 `id` · `text` · `created_at`
@@ -65,6 +70,7 @@ def build_linked_inquiries(
     seen: set[str] = set()
     missing = 0
     blank = 0
+    bad_source = 0
 
     for inquiry_id in alert.evidence.inquiry_ids:
         if inquiry_id in seen:
@@ -81,14 +87,22 @@ def build_linked_inquiries(
             blank += 1
             continue
 
+        # `.get` 이다 — documents 계약엔 필수 키지만 이 함수를 부르는 스크립트·
+        # 테스트가 안 넣어도 죽지 않게 한다. 없으면 출처 미상(None).
+        raw_source = doc.get("source")
+        try:
+            source = Source(raw_source) if raw_source else None
+        except ValueError:
+            # 값이 틀린 경우도 세고 넘긴다 (`daily.py` 의 소스 파싱과 같은 모양).
+            bad_source += 1
+            source = None
+
         inquiries.append(
             LinkedCSInquiry(
                 item_id=inquiry_id,
                 raw_text=raw_text,
                 created_at=doc["created_at"],
-                # `.get` 이다 — documents 계약엔 필수 키지만 이 함수를 부르는 스크립트·
-                # 테스트가 안 넣어도 죽지 않게 한다. 없으면 출처 미상(None).
-                source=doc.get("source"),
+                source=source,
             )
         )
 
@@ -99,6 +113,15 @@ def build_linked_inquiries(
             alert.alert_id,
             missing,
             blank,
+        )
+    if bad_source:
+        # 경고를 따로 낸다 — 위와 결과가 다르다. 이쪽은 문의가 근거로 남고
+        # cs/review 구분만 사라진다.
+        logger.warning(
+            "alert=%s 출처 값 오류 %d건 — 출처 미상(None)으로 두고 문의는 살립니다"
+            " (cs/review 구분만 사라집니다)",
+            alert.alert_id,
+            bad_source,
         )
     return inquiries
 

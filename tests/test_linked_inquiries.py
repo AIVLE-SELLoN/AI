@@ -198,8 +198,11 @@ def test_both_paths_agree_on_source(tmp_path):
     내야 한다. 한쪽만 출처를 채우면 **REST 로 디버깅한 결과와 운영 배치 결과가 갈려서**,
     "리뷰였는데 문의로 보였다" 를 재현으로 확인할 수 없게 된다.
 
-    `fetch_` 가 `build_` 를 그대로 부르는 구조라 지금은 자동으로 맞지만, 쿼리에서
-    `source` 를 빼먹으면 조용히 `None` 이 된다 — 그걸 잡는다.
+    ⚠️ **실제로 갈릴 수 있는 지점은 쿼리에서 `source` 를 빼먹는 것 하나뿐이고, 그건
+    첫 assert 가 잡는다**(뮤테이션으로 확인 — 빼고 돌리면 첫 줄에서 멈춘다). 둘째
+    assert 는 `fetch_` 가 `build_` 를 그대로 부르는 구조라 매핑이 갈려서 깨질 일이
+    없다 — 그 구조를 계약으로 못박아 두는 자리다(양쪽이 각자 매핑을 쓰기 시작하면
+    거기서 걸린다).
     """
     db = _raw_db(
         tmp_path,
@@ -240,6 +243,26 @@ def test_build_without_source_key_does_not_crash():
     doc.pop("source")
 
     assert build_linked_inquiries(_alert(["INQ-1"]), [doc])[0].source is None
+
+
+@pytest.mark.parametrize("bad", ["CS", "kakao"])
+def test_build_survives_a_bad_source_value(bad, caplog):
+    """🔴 출처 값이 틀려도 **그 문의만** 출처 미상이 된다 — 나머지가 같이 죽지 않는다.
+
+    `Source(...)` 를 그냥 부르면 `ValidationError` 가 호출부까지 올라가서, 값이 이상한
+    1건 때문에 **그 알림의 문의가 통째로 사라진다.** 문서 못 찾음·원문 빈 값은 1건만
+    빠지는데 출처만 규율 밖에 있으면 같은 함수 안에서 실패 모양이 갈린다.
+
+    `.get` 이 막아 주는 건 키가 없는 경우까지다 — 값이 틀린 경우는 별개다.
+    """
+    alert = _alert(["INQ-1", "INQ-2"])
+    documents = [{**_doc("INQ-1"), "source": bad}, _doc("INQ-2")]
+
+    inquiries = build_linked_inquiries(alert, documents)
+
+    assert [i.item_id for i in inquiries] == ["INQ-1", "INQ-2"]
+    assert [i.source for i in inquiries] == [None, Source.CS]
+    assert any("출처 값 오류 1건" in r.getMessage() for r in caplog.records)
 
 
 def test_fetch_without_evidence_never_opens_the_db(tmp_path):
