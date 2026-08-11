@@ -28,11 +28,11 @@
    자동 반영도 불가능하다. 같은 점검에서 **7배 큰 결함**이 나왔다 — 아래 TARGET_MAP 참고.
    분해 결과·수정 방향 목록은 `eval/README.md` §④ 참고.
 
-🔴 **TARGET_MAP 이 프롬프트2보다 좁다 (2026-08-11, 미수정)**: 71630은 aspect를 18종으로
-   쪼개는데 여기선 4종만 매핑한다. 그런데 프롬프트2는 `신축성`을 소재에 포함하라 명시
-   (v4 28행)하고 예시12는 `마감`을, 예시8은 `길이`(기장)를 각각 소재·사이즈로 분류한다 —
-   골든이 이들을 별도 aspect로 떼어두는 바람에 정답이 오답으로 잡힌다. 소재 FP 40건 중
-   21건(52%)·사이즈 FP 11건 중 5건이 이 원인이고, 실제 모델 오류는 소재 FP의 22.5%뿐이다.
+✅ **TARGET_MAP 정정 (2026-08-11)**: 71630의 `신축성`·`마감`을 소재로, `길이`를
+   사이즈로 매핑한다. 프롬프트2가 이미 그렇게 정의하므로 모델 규칙을 바꾼 것이 아니라
+   평가 crosswalk를 맞춘 것이다. 옛 300건과 직접 비교할 때는 legacy 코호트의 동일 ID를
+   고정한다. 옛 실행은 전체 예측이 없어 그 84.4%와 직접 paired 재채점할 수 없고,
+   새 3회 예측 각각을 기존/정정 골든에 함께 채점해 TARGET_MAP 효과를 분리한다.
 
 ⚠️ "핏"은 TARGET_MAP으로 "사이즈"에 통합(REVIEW_ALLOWED_ASPECTS와 스코프 일치).
 ⚠️ 같은 aspect가 리뷰 한 건 안에서 여러 번(감성 다르게) 나오면, 우리 프롬프트와 동일한
@@ -40,8 +40,7 @@
 
 실행:
     python eval/run_review_eval.py --data-dir <71630 압축 푼 폴더> --dry-run --limit 300
-    python eval/run_review_eval.py --data-dir <71630 압축 푼 폴더> --mode per_item --limit 300 --seed 99
-    python eval/run_review_eval.py --data-dir <71630 압축 푼 폴더> --mode batch    --limit 300 --seed 99
+    python eval/run_review_eval.py --data-dir <71630 압축 푼 폴더> --mode batch --limit 300 --runs 3
 """
 
 from __future__ import annotations
@@ -49,12 +48,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import glob
+import hashlib
 import json
 import random
 import sys
 import unicodedata
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -67,8 +67,28 @@ from app.core.llm_client import get_llm_client
 from app.core.schemas import Channel, Source
 
 RESULTS_DIR = ROOT / "eval" / "results"
-TARGET_MAP = {"색상": "색상", "소재": "소재", "사이즈": "사이즈", "핏": "사이즈"}
+LEGACY_TARGET_MAP = {
+    "색상": "색상",
+    "소재": "소재",
+    "사이즈": "사이즈",
+    "핏": "사이즈",
+}
+TARGET_MAP = {
+    **LEGACY_TARGET_MAP,
+    "신축성": "소재",
+    "마감": "소재",
+    "길이": "사이즈",
+}
 VALID_ASPECTS = {"색상", "사이즈", "소재"}
+RETRY_WITHIN_RUN = 2
+SUMMARY_METRICS = (
+    "aspect_f1",
+    "aspect_precision",
+    "aspect_recall",
+    "sentiment_accuracy",
+    "mixed_signal_accuracy",
+    "exact_match_rate",
+)
 
 # 프롬프트1·2 few-shot에 이미 쓴 원문 — 시험지 유출 방지(select_relabel_300.py와 동일 목록)
 USED_PREFIXES = [
@@ -115,13 +135,18 @@ def load_71630(data_dir: str) -> list[dict]:
     return all_data
 
 
-def build_dataset(data_dir: str, max_len: int = 300) -> list[dict]:
+def build_dataset(
+    data_dir: str,
+    max_len: int = 300,
+    target_map: dict[str, str] | None = None,
+) -> list[dict]:
     """71630 원본 → (원문 + 통합된 골든 aspect/sentiment/mixed_signal) 리스트.
 
     필터: Source=쇼핑몰, MainCategory=여성/남성의류, Split=Training, 대상aspect 1개 이상,
           few-shot 유출 원문 제외, 길이 제한.
     """
     all_data = load_71630(data_dir)
+    active_map = TARGET_MAP if target_map is None else target_map
     rows = []
     for r in all_data:
         if not (
@@ -136,7 +161,7 @@ def build_dataset(data_dir: str, max_len: int = 300) -> list[dict]:
 
         by_aspect: dict[str, list[str]] = defaultdict(list)
         for a in r.get("Aspects", []):
-            mapped = TARGET_MAP.get(a["Aspect"])
+            mapped = active_map.get(a["Aspect"])
             if mapped:
                 by_aspect[mapped].append(a["SentimentPolarity"])
         if not by_aspect:
@@ -165,7 +190,7 @@ def sample_rows(rows: list[dict], limit: int, seed: int) -> list[dict]:
     rng = random.Random(seed)
     by_primary: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
-        primary = sorted(r["gold"].keys())[0]
+        primary = min(r["gold"])
         by_primary[primary].append(r)
 
     picked: list[dict] = []
@@ -182,7 +207,61 @@ def sample_rows(rows: list[dict], limit: int, seed: int) -> list[dict]:
     return picked[:limit]
 
 
-async def run_chunks(rows: list[dict], chunk_size: int, concurrency: int) -> tuple[dict[str, list[dict]], list[str]]:
+def build_evaluation_sample(
+    data_dir: str,
+    limit: int,
+    seed: int,
+    cohort: str,
+) -> tuple[list[dict], list[dict], int, list[dict] | None]:
+    """정정된 골든과 고정 평가 코호트를 만든다.
+
+    ``legacy``는 2026-07-31 단발 측정과 동일한 옛 TARGET_MAP으로 표본 ID를 먼저
+    고정한 뒤, 그 동일 ID의 골든만 새 TARGET_MAP으로 다시 만든다. 새 예측을 두 골든에
+    함께 채점해 매핑 효과를 paired 비교한다. ``current``는 확장된 TARGET_MAP 모집단에서
+    새로 표본을 뽑으며, 최종 스코프 성능용이지만 옛 84.4%와 직접 비교하면 안 된다.
+    """
+    current_rows = build_dataset(data_dir, target_map=TARGET_MAP)
+    if cohort == "current":
+        return current_rows, sample_rows(current_rows, limit, seed), len(current_rows), None
+    if cohort != "legacy":
+        raise ValueError(f"지원하지 않는 cohort: {cohort}")
+
+    legacy_rows = build_dataset(data_dir, target_map=LEGACY_TARGET_MAP)
+    legacy_sample = sample_rows(legacy_rows, limit, seed)
+    current_by_id = {r["review_id"]: r for r in current_rows}
+    sampled = [current_by_id[r["review_id"]] for r in legacy_sample]
+    return current_rows, sampled, len(legacy_rows), legacy_sample
+
+
+def data_fingerprint(rows: list[dict]) -> str:
+    """표본 ID·원문·정정 골든을 함께 묶은 재현 지문."""
+    h = hashlib.sha256()
+    for row in rows:
+        payload = {
+            "review_id": row["review_id"],
+            "raw_text": row["raw_text"],
+            "gold": row["gold"],
+        }
+        h.update(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+        h.update(b"\x1e")
+    return h.hexdigest()[:8]
+
+
+def prompt_fingerprint() -> str:
+    """실제로 모델에 전달되는 프롬프트2 본문의 SHA-256 앞 8자리."""
+    body = classification_service.load_llm_prompt(
+        "classification", classification_service.PROMPT_SENTIMENT_VERSION
+    )
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:8]
+
+
+async def run_chunks(
+    rows: list[dict],
+    chunk_size: int,
+    concurrency: int,
+    *,
+    trace_prefix: str = "",
+) -> tuple[dict[str, list[dict]], list[str]]:
     """item당 개별 호출(동시 실행) — 기존 방식."""
     chunks = [rows[i : i + chunk_size] for i in range(0, len(rows), chunk_size)]
     semaphore = asyncio.Semaphore(concurrency)
@@ -193,7 +272,7 @@ async def run_chunks(rows: list[dict], chunk_size: int, concurrency: int) -> tup
         items = [
             ClassifyRequestItem(
                 item_id=r["review_id"], source=Source.REVIEW, channel=Channel.ALL,
-                product_group_id="EVAL", raw_text=r["raw_text"], created_at=datetime.now(),
+                product_group_id="EVAL", raw_text=r["raw_text"], created_at=datetime.now(UTC),
             )
             for r in chunk
         ]
@@ -253,7 +332,13 @@ def _build_batch_prompt(chunk: list[dict]) -> str:
     return head + tail
 
 
-async def run_batch_chunks(rows: list[dict], chunk_size: int, concurrency: int) -> tuple[dict[str, list[dict]], list[str]]:
+async def run_batch_chunks(
+    rows: list[dict],
+    chunk_size: int,
+    concurrency: int,
+    *,
+    trace_prefix: str = "",
+) -> tuple[dict[str, list[dict]], list[str]]:
     """청크당 LLM 호출 1회(진짜 배치)."""
     chunks = [rows[i : i + chunk_size] for i in range(0, len(rows), chunk_size)]
     semaphore = asyncio.Semaphore(concurrency)
@@ -263,7 +348,8 @@ async def run_batch_chunks(rows: list[dict], chunk_size: int, concurrency: int) 
 
     async def one(index: int, chunk: list[dict]) -> None:
         prompt = _build_batch_prompt(chunk)
-        trace_key = f"batch_chunk={index}_n={len(chunk)}"
+        prefix = f"{trace_prefix}_" if trace_prefix else ""
+        trace_key = f"{prefix}batch_chunk={index}_n={len(chunk)}"
         async with semaphore:
             try:
                 data = await client.complete_json(prompt, trace_key=trace_key)
@@ -304,7 +390,57 @@ async def run_batch_chunks(rows: list[dict], chunk_size: int, concurrency: int) 
     return predictions, failed_ids
 
 
-def score(rows: list[dict], predictions: dict[str, list[dict]]) -> dict:
+async def run_with_retries(
+    rows: list[dict],
+    chunk_size: int,
+    concurrency: int,
+    mode: str,
+    run_number: int,
+    retries: int = RETRY_WITHIN_RUN,
+) -> tuple[dict[str, list[dict]], list[str], list[dict]]:
+    """한 회차 안에서 무응답만 재시도하고 회차별 예측을 독립적으로 닫는다."""
+    runner = run_batch_chunks if mode == "batch" else run_chunks
+    predictions: dict[str, list[dict]] = {}
+    pending = list(rows)
+    attempts: list[dict] = []
+
+    for attempt in range(1, retries + 2):
+        requested = len(pending)
+        pass_predictions, _failed_ids = await runner(
+            pending,
+            chunk_size,
+            concurrency,
+            trace_prefix=f"run{run_number}_attempt{attempt}",
+        )
+        predictions.update(pass_predictions)
+        pending = [r for r in pending if r["review_id"] not in predictions]
+        attempts.append(
+            {
+                "attempt": attempt,
+                "requested": requested,
+                "succeeded": requested - len(pending),
+                "remaining": len(pending),
+            }
+        )
+        if not pending:
+            break
+        if attempt <= retries:
+            print(f"    ↻ 회차 {run_number} 무응답 {len(pending)}건 재시도 ({attempt}/{retries})")
+
+    ordered = {
+        row["review_id"]: predictions[row["review_id"]]
+        for row in rows
+        if row["review_id"] in predictions
+    }
+    return ordered, [r["review_id"] for r in pending], attempts
+
+
+def score(
+    rows: list[dict],
+    predictions: dict[str, list[dict]],
+    *,
+    include_raw_text: bool = False,
+) -> dict:
     """다중 aspect(색상/사이즈/소재) F1 + 감성정확도 + mixed_signal정확도 + 완전일치."""
     scored = [r for r in rows if r["review_id"] in predictions]
     unanswered = len(rows) - len(scored)
@@ -348,10 +484,14 @@ def score(rows: list[dict], predictions: dict[str, list[dict]]) -> dict:
 
         exact_match += item_all_correct
         if not item_all_correct:
-            mismatches.append({
-                "review_id": r["review_id"], "raw_text": r["raw_text"],
-                "gold": gold, "predicted": pred_list,
-            })
+            mismatch = {
+                "review_id": r["review_id"],
+                "gold": gold,
+                "predicted": pred_list,
+            }
+            if include_raw_text:
+                mismatch["raw_text"] = r["raw_text"]
+            mismatches.append(mismatch)
 
     precision = tp / (tp + fp) if (tp + fp) else 0.0
     recall = tp / (tp + fn) if (tp + fn) else 0.0
@@ -359,6 +499,7 @@ def score(rows: list[dict], predictions: dict[str, list[dict]]) -> dict:
 
     return {
         "n_sampled": len(rows), "n_scored": len(scored), "n_unanswered": unanswered,
+        "aspect_counts": {"tp": tp, "fp": fp, "fn": fn},
         "aspect_f1": round(f1, 4), "aspect_precision": round(precision, 4), "aspect_recall": round(recall, 4),
         "sentiment_accuracy": round(sent_correct / sent_total, 4) if sent_total else 0.0,
         "mixed_signal_accuracy": round(mix_correct / mix_total, 4) if mix_total else 0.0,
@@ -368,6 +509,9 @@ def score(rows: list[dict], predictions: dict[str, list[dict]]) -> dict:
                 "precision": round(v[0] / (v[0] + v[1]), 4) if (v[0] + v[1]) else 0.0,
                 "recall": round(v[0] / (v[0] + v[2]), 4) if (v[0] + v[2]) else 0.0,
                 "n_true": v[0] + v[2],
+                "tp": v[0],
+                "fp": v[1],
+                "fn": v[2],
             }
             for a, v in sorted(per_aspect.items())
         },
@@ -375,11 +519,62 @@ def score(rows: list[dict], predictions: dict[str, list[dict]]) -> dict:
     }
 
 
-def report(result: dict) -> None:
-    meta = result["meta"]
-    s = result["scores"]
+def summarize_runs(runs: list[dict]) -> dict:
+    """회차별 점수의 평균과 관측 범위. half_range는 신뢰구간이 아니다."""
+    metrics = {}
+    for key in SUMMARY_METRICS:
+        values = [run["scores"][key] for run in runs]
+        metrics[key] = {
+            "mean": round(sum(values) / len(values), 4),
+            "min": min(values),
+            "max": max(values),
+            "half_range": round((max(values) - min(values)) / 2, 4),
+            "values": values,
+        }
+    unanswered = [run["scores"]["n_unanswered"] for run in runs]
+    return {
+        "n_runs": len(runs),
+        "all_runs_zero_unanswered": all(v == 0 for v in unanswered),
+        "unanswered_by_run": unanswered,
+        "metrics": metrics,
+    }
+
+
+def summarize_paired_runs(runs: list[dict]) -> dict | None:
+    """같은 예측을 정정 전·후 골든에 채점해 TARGET_MAP 효과만 분리한다."""
+    paired = [run for run in runs if run.get("legacy_scores") is not None]
+    if not paired:
+        return None
+
+    legacy_summary = summarize_runs(
+        [{"scores": run["legacy_scores"]} for run in paired]
+    )
+    deltas = {}
+    for key in SUMMARY_METRICS:
+        values = [
+            round(run["scores"][key] - run["legacy_scores"][key], 4)
+            for run in paired
+        ]
+        deltas[key] = {
+            "mean": round(sum(values) / len(values), 4),
+            "min": min(values),
+            "max": max(values),
+            "values": values,
+        }
+    return {
+        "method": "동일 표본·동일 예측을 정정 전후 TARGET_MAP 골든으로 paired 재채점",
+        "legacy_summary": legacy_summary,
+        "delta_current_minus_legacy": deltas,
+    }
+
+
+def report_run(meta: dict, run: dict) -> None:
+    s = run["scores"]
     print("\n" + "=" * 62)
-    print(f"실험④ 프롬프트2 리뷰 감성 — {meta['prompt_version']} / {meta['model']} / seed={meta['seed']} / mode={meta['mode']}")
+    print(
+        f"실험④ 회차 {run['run']} — {meta['prompt_version']} / {meta['model']}"
+        f" / seed={meta['seed']} / mode={meta['mode']}"
+    )
     print("=" * 62)
     print(f"채점 {s['n_scored']}건 (표본 {s['n_sampled']}, 무응답 {s['n_unanswered']})")
     print(f"\n■ Aspect F1  {s['aspect_f1']:.1%}  (Precision {s['aspect_precision']:.1%} / Recall {s['aspect_recall']:.1%})")
@@ -391,51 +586,141 @@ def report(result: dict) -> None:
         print(f"    {aspect:6s} P={v['precision']:.1%}  R={v['recall']:.1%}  (n={v['n_true']})")
 
 
+def report_summary(summary: dict) -> None:
+    print("\n" + "=" * 62)
+    print(f"실험④ {summary['n_runs']}회 요약")
+    print("=" * 62)
+    for key, label in (
+        ("aspect_f1", "Aspect F1"),
+        ("sentiment_accuracy", "감성 정확도"),
+        ("mixed_signal_accuracy", "mixed_signal 정확도"),
+        ("exact_match_rate", "완전일치"),
+    ):
+        metric = summary["metrics"][key]
+        values = " / ".join(f"{v:.1%}" for v in metric["values"])
+        print(
+            f"■ {label:20s} 평균 {metric['mean']:.1%}"
+            f" · 관측 {metric['min']:.1%}~{metric['max']:.1%} ({values})"
+        )
+    print(f"■ 회차별 무응답: {summary['unanswered_by_run']}")
+
+
+def report_paired_comparison(comparison: dict | None) -> None:
+    if comparison is None:
+        return
+    legacy = comparison["legacy_summary"]["metrics"]["aspect_f1"]
+    delta = comparison["delta_current_minus_legacy"]["aspect_f1"]
+    print(
+        "■ TARGET_MAP paired 효과: "
+        f"기존 평균 {legacy['mean']:.1%} → 정정 후 "
+        f"{legacy['mean'] + delta['mean']:.1%} (평균 {delta['mean']:+.1%}p)"
+    )
+
+
 async def main_async(args: argparse.Namespace) -> None:
     if args.prompt_version:
         classification_service.PROMPT_SENTIMENT_VERSION = args.prompt_version
 
     print("71630 로딩 중...")
-    rows = build_dataset(args.data_dir)
-    sampled = sample_rows(rows, args.limit, args.seed)
+    current_rows, sampled, cohort_population, legacy_sample = build_evaluation_sample(
+        args.data_dir,
+        args.limit,
+        args.seed,
+        args.cohort,
+    )
 
-    print(f"필터+클린 후 전체 {len(rows)}건 → 표본 {len(sampled)}건")
-    primary_dist = Counter(sorted(r["gold"].keys())[0] for r in sampled)
+    print(
+        f"필터+클린 후 정정 스코프 {len(current_rows)}건"
+        f" / {args.cohort} 코호트 {cohort_population}건 → 표본 {len(sampled)}건"
+    )
+    primary_dist = Counter(min(r["gold"]) for r in sampled)
     print(f"  대표aspect 구성: {dict(primary_dist)}")
     print(f"  프롬프트 버전: {classification_service.PROMPT_SENTIMENT_VERSION}")
+    print(f"  프롬프트/표본 지문: {prompt_fingerprint()} / {data_fingerprint(sampled)}")
 
     if args.dry_run:
         n_chunks = -(-len(sampled) // args.chunk_size)
-        print(f"\n[dry-run] LLM 호출 안 함. 청크 약 {n_chunks}회(청크당 {args.chunk_size}건). 모드: {args.mode}")
+        print(
+            f"\n[dry-run] LLM 호출 안 함. 회차당 약 {n_chunks}회 × {args.runs}회"
+            f" = {n_chunks * args.runs}회(청크당 {args.chunk_size}건). 모드: {args.mode}"
+        )
         return
-
-    if args.mode == "batch":
-        predictions, failed_ids = await run_batch_chunks(sampled, args.chunk_size, args.concurrency)
-    else:
-        predictions, failed_ids = await run_chunks(sampled, args.chunk_size, args.concurrency)
-    if failed_ids:
-        print(f"\n⚠️ 무응답 처리된 건: {len(failed_ids)}건")
 
     from app.config import get_settings
 
     result = {
         "meta": {
             "experiment": "④ 프롬프트2 리뷰 aspect별 감성 정확도",
-            "run_at": datetime.now().isoformat(timespec="seconds"),
+            "run_at": datetime.now(UTC).isoformat(timespec="seconds"),
             "data_source": "AI Hub 71630 (원본 라벨, 재라벨링 없음 — 계획B)",
             "prompt_version": classification_service.PROMPT_SENTIMENT_VERSION,
+            "prompt_fingerprint": prompt_fingerprint(),
+            "data_fingerprint": data_fingerprint(sampled),
             "model": get_settings().llm_model,
-            "seed": args.seed, "limit": args.limit, "chunk_size": args.chunk_size, "mode": args.mode,
+            "seed": args.seed,
+            "limit": args.limit,
+            "chunk_size": args.chunk_size,
+            "mode": args.mode,
+            "runs": args.runs,
+            "retries_within_run": args.retries,
+            "cohort": args.cohort,
+            "cohort_note": (
+                "2026-07-31 단발 측정과 동일 ID를 새 TARGET_MAP으로 재채점"
+                if args.cohort == "legacy"
+                else "확장된 TARGET_MAP 모집단에서 새로 표본 추출"
+            ),
+            "cohort_population": cohort_population,
+            "current_population": len(current_rows),
+            "target_map": TARGET_MAP,
+            "legacy_target_map": LEGACY_TARGET_MAP if legacy_sample is not None else None,
+            "scrubbed": {
+                "raw_text_saved": False,
+                "full_predictions_saved": True,
+                "rejoin": "sample_ids/review_id를 71630 원본과 조인해 원문을 복구할 수 있다.",
+            },
         },
-        "scores": score(sampled, predictions),
+        "sample_ids": [r["review_id"] for r in sampled],
+        "runs": [],
     }
-    report(result)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out = RESULTS_DIR / f"review_eval_{stamp}.json"
-    out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    out = RESULTS_DIR / f"review_eval_{stamp}.scrubbed.json"
+
+    for run_number in range(1, args.runs + 1):
+        print(f"\n{'#' * 20} 독립 회차 {run_number}/{args.runs} {'#' * 20}")
+        predictions, failed_ids, attempts = await run_with_retries(
+            sampled,
+            args.chunk_size,
+            args.concurrency,
+            args.mode,
+            run_number,
+            args.retries,
+        )
+        run_result = {
+            "run": run_number,
+            "attempts": attempts,
+            "failed_ids": failed_ids,
+            "scores": score(sampled, predictions),
+            "legacy_scores": (
+                score(legacy_sample, predictions) if legacy_sample is not None else None
+            ),
+            "predictions": predictions,
+        }
+        result["runs"].append(run_result)
+        result["summary"] = summarize_runs(result["runs"])
+        result["paired_comparison"] = summarize_paired_runs(result["runs"])
+        report_run(result["meta"], run_result)
+        out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    summary = result["summary"]
+    report_summary(summary)
+    report_paired_comparison(result["paired_comparison"])
     print(f"\n결과 저장: eval/results/{out.name}")
+    if not summary["all_runs_zero_unanswered"]:
+        raise RuntimeError(
+            f"최종 무응답이 남은 회차가 있어 보고 불가: {summary['unanswered_by_run']}"
+        )
 
 
 def main() -> None:
@@ -446,9 +731,21 @@ def main() -> None:
     parser.add_argument("--chunk-size", type=int, default=20)
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--prompt-version", default=None)
-    parser.add_argument("--mode", choices=["per_item", "batch"], default="per_item")
+    parser.add_argument("--mode", choices=["per_item", "batch"], default="batch")
+    parser.add_argument("--runs", type=int, default=3, help="서로 독립적인 LLM 실행 회차")
+    parser.add_argument("--retries", type=int, default=RETRY_WITHIN_RUN, help="회차 내부 무응답 재시도 횟수")
+    parser.add_argument(
+        "--cohort",
+        choices=["legacy", "current"],
+        default="legacy",
+        help="legacy=옛 300건과 같은 ID·두 TARGET_MAP paired / current=확장 스코프 새 표본",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    if args.runs < 1:
+        parser.error("--runs는 1 이상이어야 합니다.")
+    if args.retries < 0:
+        parser.error("--retries는 0 이상이어야 합니다.")
     asyncio.run(main_async(args))
 
 
