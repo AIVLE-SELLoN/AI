@@ -15,6 +15,7 @@
 CS 만 달랐다. 다중-aspect 그룹 3개가 전부 `source=cs` 라서다.
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -33,12 +34,23 @@ def _order_under(hashseed: str, expr: str) -> str:
     """해시 시드를 박은 **별도 프로세스**에서 순회 순서를 찍는다.
 
     같은 프로세스 안에서는 해시 시드가 이미 정해져 있어 재현이 안 된다.
+
+    ⚠️ 부모·자식 **양쪽** 인코딩을 못박는다. 페이로드가 한글이라 한쪽만 정하면 갈린다.
+       - `env` 를 통째로 교체하면 자식이 `PYTHONUTF8` 을 잃어 cp949 로 쓴다.
+         그런데 `os.environ` 상속만으로는 부족하다 — `-X utf8` 은 커맨드라인
+         플래그라 `os.environ` 에 없어서 부모만 UTF-8 로 남는다.
+       - 🔴 그 실패는 `check=True` 로 안 잡힌다. 자식은 rc=0 으로 성공하고, 디코드는
+         **부모의 reader 스레드**에서 깨진다. `subprocess` 가 그 예외를 삼키고
+         스트림을 `None` 으로 두므로 `CalledProcessError` 가 아니라
+         `AttributeError: 'NoneType' … 'strip'` 으로 터진다.
+       실측(2026-08-11, 한국어 Windows): `PYTHONUTF8=1`·`-X utf8` 로 pytest 를 돌리면
+       이 파일의 2건이 그렇게 죽어서, 비결정성 회귀 가드가 조용히 사라졌다.
     """
     code = f"rows=[{{'aspect':'색상'}},{{'aspect':'파손'}}]; print(','.join({expr}))"
     out = subprocess.run(
         [sys.executable, "-c", code],
-        env={"PYTHONHASHSEED": hashseed, "PATH": "/usr/bin:/bin"},
-        capture_output=True, text=True, check=True,
+        env={**os.environ, "PYTHONHASHSEED": hashseed, "PYTHONIOENCODING": "utf-8"},
+        capture_output=True, text=True, encoding="utf-8", check=True,
     )
     return out.stdout.strip()
 
