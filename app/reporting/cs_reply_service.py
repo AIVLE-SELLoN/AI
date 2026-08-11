@@ -30,6 +30,7 @@ from app.core.schemas import (
     DetectionAlert,
     GenerationCallback,
     LinkedCSInquiry,
+    Source,
 )
 from app.reporting.callback import GenerationResult, build_guideline_callback
 from app.reporting.cs_reply_validator import validate_cs_guideline
@@ -46,7 +47,10 @@ logger = logging.getLogger("CSReplyService")
 
 # v3: 지시문 압축 + 문의 목록을 JSON → 파이프 표로 바꾼 토큰 절감판.
 # v4: guideline_id 를 서버가 계산해 주입 — 모델이 만들면 알림별 유일성이 깨진다.
-PROMPT_VERSION = "cs_reply_v4"
+# v5: 원문 출처(문의/리뷰) 분기. 리뷰를 근거로 쓰기로 확정(2026-08-11)하면서 붙였다 —
+#     리뷰는 공개 답글이라 응대가 다르다. v4 는 전 구간이 "문의" 를 전제해서, 리뷰에
+#     그대로 쓰면 답글로는 접수할 수 없는 "무상 교환·반품을 도와드리겠습니다" 가 나간다.
+PROMPT_VERSION = "cs_reply_v5"
 
 
 def build_guideline_id(input_data: CSGuidelineInput) -> str:
@@ -76,18 +80,33 @@ def _build_root_cause_summary(input_data: CSGuidelineInput) -> str:
     return f"{root_cause.label} {root_cause.count}건 / 전체 {root_cause.total}건 ({share:.0f}%)"
 
 
+# `LinkedCSInquiry.source` → 프롬프트 표기. 모델이 읽을 값이라 한글로 쓴다.
+#
+# ⚠️ `None`(출처 미상)은 **문의로 본다.** `build_linked_inquiries` 가 값이 이상하거나
+#    키가 없을 때 None 을 넣는데(2026-08-11), 그때 "리뷰 답글" 톤으로 쓰면 답변을
+#    기다리는 고객에게 "고객센터로 연락 주세요" 가 나간다. 반대(리뷰에 문의 답변 톤)는
+#    어색할 뿐이지만 이쪽은 응대 자체가 어긋나므로, 모르면 문의 쪽으로 기운다.
+_SOURCE_LABEL = {Source.CS: "문의", Source.REVIEW: "리뷰"}
+
+
 def _build_inquiry_table(input_data: CSGuidelineInput) -> str:
-    """문의 목록을 `문의ID|원문` 표로 (v3 이상에서 사용).
+    """원문 목록을 `ID|출처|내용` 표로 (v5 이상). v3·v4 는 출처 열이 없어도 읽힌다.
 
     토큰이 가장 많이 걸리는 자리다 — 문의가 수십 건이면 JSON 은 건마다
     `{"item_id": ..., "raw_text": ..., "created_at": ...}` 키를 되풀이한다.
     created_at 은 뺐다. 출력 어느 필드도 문의 시각을 쓰지 않아 순수 낭비였다.
     파이프·줄바꿈은 표가 깨지지 않게 치환한다.
+
+    ⚠️ 출처 열은 **리뷰를 근거로 쓰기로 확정**(2026-08-11)하면서 붙였다. 리뷰는 공개
+       답글이라 응대 방식이 다른데(반품 접수 불가·다른 구매자도 읽음), 표에 없으면
+       모델이 전부 1:1 문의로 답한다. 접두사(`RVW-`)로 추측시키지 않고 명시한다 —
+       ID 규칙이 바뀌면 조용히 틀리기 때문이다.
     """
     rows = []
     for item in input_data.linked_inquiries:
         text = item.raw_text.replace("|", "/").replace("\n", " ").strip()
-        rows.append(f"{item.item_id}|{text}")
+        label = _SOURCE_LABEL.get(item.source, "문의")
+        rows.append(f"{item.item_id}|{label}|{text}")
     return "\n".join(rows)
 
 

@@ -51,6 +51,47 @@ CREATE TABLE IF NOT EXISTS channel (
 );
 """
 
+# §2-2 products — 채널에 올라간 상품(variant) 카탈로그.
+#
+# 채널 쪽 사실만 담는다. **어느 상품끼리 같은 상품인지는 여기 없다** — 그 판단은 상품
+# 매핑의 결과라 `mapped_data` 로 갈린다. 목 데이터의 `input_channel_products.csv` 가
+# 이 테이블에 1:1 대응하고, 그 CSV 에 `product_group_id` 가 없는 것도 같은 이유다.
+#
+# channel_product_name  월간 리포트가 셀러에게 보여줄 표기명. 채널마다 다르다
+#                       (`monthly_aggregator._fetch_product_names()` 가 최빈값을 고른다).
+PRODUCTS_DDL = """
+CREATE TABLE IF NOT EXISTS products (
+    variant_row_id       TEXT PRIMARY KEY,
+    channel_id           TEXT NOT NULL REFERENCES channel(channel_id),
+    channel_product_id   TEXT NOT NULL,
+    channel_product_name TEXT,
+    option_group_names   TEXT,
+    channel_option_name  TEXT,
+    sale_price           INTEGER,
+    original_price       INTEGER
+);
+"""
+
+# §2-3 mapped_data — 상품 매핑 결과. variant → 상품 그룹.
+#
+# ⚠️ **AI 노드가 만드는 값이 아니다.** 매핑은 백엔드(Spring Boot)가 수행해 적재한다
+#    (2026-08-11 확정). 목 파이프라인에서는 `mock_producer` 가 main server 자리를 대신해
+#    채우지만, 규칙을 정하는 쪽은 어디까지나 백엔드다.
+#
+# ⚠️ 이 테이블이 비면 **채널 간 비교가 통째로 무너진다.** 상품 하나가 채널마다 다른 그룹이
+#    되어 탐지의 편중형/전역형 판정도, 월간 리포트의 채널 격차도 성립하지 않는다.
+#    (2026-08-11 실측: 매핑 없이 돌렸을 때 상세페이지 RAG 조회 적중률 0%)
+MAPPED_DATA_DDL = """
+CREATE TABLE IF NOT EXISTS mapped_data (
+    variant_row_id   TEXT PRIMARY KEY REFERENCES products(variant_row_id),
+    product_group_id TEXT NOT NULL
+);
+"""
+
+MAPPED_DATA_GROUP_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_mapped_data_group ON mapped_data (product_group_id);"
+)
+
 # §2-4 cs — CS 문의 원문. 이상탐지·리포팅이 **분모를 세는 정본**이다.
 #
 # ⚠️ 분류 안 된 문의도 반드시 남는다(§2-4 운영 정책). 분모가 "그 상품·채널의 총 문의 수"라
@@ -231,10 +272,15 @@ SOURCE_TABLES = ("cs", "reviews")
 
 
 def create_source_tables(conn) -> None:
-    """main server 소유 테이블 + 통합 뷰. 목 파이프라인에서는 프로듀서가 부른다."""
-    for ddl in (CHANNEL_DDL, CS_DDL, REVIEWS_DDL, ORDERS_DDL):
+    """main server 소유 테이블 + 통합 뷰. 목 파이프라인에서는 프로듀서가 부른다.
+
+    ⚠️ `products` 는 `channel` 다음, `mapped_data` 는 `products` 다음이어야 한다 —
+       FK 가 그 방향으로 걸려 있어서 순서가 뒤집히면 `PRAGMA foreign_keys=ON` 인 연결에서
+       테이블 생성이 실패한다.
+    """
+    for ddl in (CHANNEL_DDL, PRODUCTS_DDL, MAPPED_DATA_DDL, CS_DDL, REVIEWS_DDL, ORDERS_DDL):
         conn.execute(ddl)
-    for stmt in SOURCE_INDEXES:
+    for stmt in (*SOURCE_INDEXES, MAPPED_DATA_GROUP_INDEX):
         conn.execute(stmt)
     conn.execute(VOC_DOCUMENT_VIEW)
 

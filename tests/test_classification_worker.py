@@ -400,6 +400,68 @@ def test_view_merges_cs_and_reviews_on_one_time_axis() -> None:
     assert rows[0]["occurred_at"] == "2026-05-01T10:00:00+09:00"  # inquired_at, created_at 아님
 
 
+def test_denominator_counts_source_not_classified_rows() -> None:
+    """분모는 **원문**에서 센다 — 분류 안 된 문의도 남는다(§2-4).
+
+    ⚠️ `COUNT_SOURCE_SQL` 이 `classified_item` 을 세도록 바뀌면 **분류 실패분이 조용히
+       분모에서 빠진다.** 부정률 = 분자/분모 인데 분모만 줄어드니 비율이 부풀고, 그 값이
+       그대로 이상탐지 발화 기준이 된다. 숫자는 계속 나오므로 아무도 못 알아챈다.
+
+    §2-4 가 "분류 안 된 문의도 반드시 남는다"고 못박은 것이 이 계산의 전제다. 그래서
+    3건 중 1건만 분류된 상태를 만들어, 분모가 **3** 인지(원문 기준) **1** 인지(분류 기준)
+    가른다.
+    """
+    conn = _open_pipeline_db()
+    for i in range(1, 4):
+        conn.execute(
+            "INSERT INTO cs (id, channel_id, content, inquired_at, created_at) VALUES (?,?,?,?,?)",
+            (f"INQ-{i}", "COUPANG", "문의", f"2026-05-0{i}T10:00:00+09:00", None),
+        )
+    # 3건 중 1건만 분류됐다 — 나머지 2건은 실패했거나 아직 안 돌았다.
+    conn.execute(
+        worker.CLASSIFIED_ITEM_INSERT, ("INQ-1", "cs", "2026-05-01T11:00:00+09:00", "v1")
+    )
+    conn.commit()
+
+    denominator = conn.execute(worker.COUNT_SOURCE_SQL, worker.CLASSIFY_SOURCES).fetchone()[0]
+    classified = conn.execute("SELECT COUNT(*) FROM classified_item").fetchone()[0]
+
+    assert classified == 1, "픽스처 전제가 깨졌다 — 1건만 분류돼 있어야 한다"
+    assert denominator == 3, (
+        f"분모가 {denominator} 다 — 분류 결과({classified}건)를 세고 있다. "
+        "원문(voc_document)에서 세야 분류 실패분이 분모에 남는다"
+    )
+
+
+def test_unclassified_item_survives_the_left_join() -> None:
+    """aspect 가 0개인 문의도 LEFT JOIN 뒤에 남는다 — §4 권장 패턴.
+
+    ⚠️ 집계 쿼리가 INNER JOIN 이면 aspect 0개인 문의가 통째로 사라져 위 테스트와 같은
+       왜곡이 생긴다. 분모는 원문에서 세고 분류는 **LEFT JOIN 으로 분자만** 붙인다.
+    """
+    conn = _open_pipeline_db()
+    for i in (1, 2):
+        conn.execute(
+            "INSERT INTO cs (id, channel_id, content, inquired_at, created_at) VALUES (?,?,?,?,?)",
+            (f"INQ-{i}", "COUPANG", "문의", f"2026-05-0{i}T10:00:00+09:00", None),
+        )
+    # 둘 다 분류는 돌았지만, INQ-2 는 어느 aspect 에도 안 걸렸다(자식 0행).
+    for item_id in ("INQ-1", "INQ-2"):
+        conn.execute(
+            worker.CLASSIFIED_ITEM_INSERT, (item_id, "cs", "2026-05-01T11:00:00+09:00", "v1")
+        )
+    conn.execute(worker.CLASSIFIED_ITEM_ASPECT_INSERT, ("INQ-1", "색상", -1, None))
+    conn.commit()
+
+    rows = conn.execute(
+        f"SELECT v.item_id, COUNT(a.id) AS hits FROM {worker.SOURCE_VIEW} v "
+        "LEFT JOIN classified_item_aspect a ON a.item_id = v.item_id "
+        "GROUP BY v.item_id ORDER BY v.item_id"
+    ).fetchall()
+
+    assert [(r["item_id"], r["hits"]) for r in rows] == [("INQ-1", 1), ("INQ-2", 0)]
+
+
 # ── 구버전 raw DB 감지 ───────────────────────────────────────────────────
 
 # 8/7 확정 이전 커서 테이블. 컬럼명이 last_occurred_at / last_event_id 였다(§2-8 이전).
