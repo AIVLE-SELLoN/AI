@@ -25,7 +25,11 @@ from typing import Any
 from pydantic import BaseModel
 
 from app.config import get_settings
-from app.core.exceptions import HitlContextUnavailableError, MqDisabledError
+from app.core.exceptions import (
+    HitlContextUnavailableError,
+    MqConfigError,
+    MqDisabledError,
+)
 from app.core.schemas import DetectionAlert, HitlFeedback, HitlStatus, Recommendation
 
 logger = logging.getLogger(__name__)
@@ -130,10 +134,46 @@ async def resolve_queue(channel: Any, queue_name: str, settings: Any) -> Any:
     quorum 타입에 DLX·delivery-limit·TTL 을 걸어 만들어 뒀는데 우리가 맨 인자로
     `declare` 하면 브로커가 `PRECONDITION_FAILED` 로 거부해 컨슈머가 아예 못 뜬다.
     로컬에선 우리가 만든 큐라 이 사고가 안 나서 조용히 통과한다 — 실제로 붙일 때 터진다.
+
+    두 방향 다 설정이 어긋났다는 뜻이라 `MqConfigError` 로 바꿔서 올린다 —
+    `mq.resolve_exchange()` 와 같은 처리이고 예외 목록도 같은 함수에서 가져온다(§2-1 이
+    두 함수를 한 문장으로 묶어 놨다). 브로커 원문만으로는 어느 플래그를 고쳐야 하는지
+    알 수 없다.
+
+    ⚠️ **exchange 보다 이쪽이 먼저 걸린다.** 우리가 주는 인자는 `durable=True` 하나뿐인데
+    운영 큐는 quorum·DLX·delivery-limit·TTL 이라(§2-1) 맞을 수가 없다 — exchange 는
+    topic·durable 이 우연히 같을 수 있어서 통과하고 여기서 터지는 순서가 나온다.
+
+    Raises:
+        MqConfigError: 큐 소유권이 어긋남 — 재시도해도 안 고쳐진다.
     """
+    from app.core.mq import topology_config_errors
+
+    config_errors = topology_config_errors()
+
     if settings.mq_declare_topology:
-        return await channel.declare_queue(queue_name, durable=True)
-    return await channel.get_queue(queue_name, ensure=True)
+        try:
+            return await channel.declare_queue(queue_name, durable=True)
+        except config_errors as exc:
+            raise MqConfigError(
+                f"큐 '{queue_name}' 을 선언하지 못했습니다 "
+                f"(MQ_DECLARE_TOPOLOGY=true, vhost={settings.mq_vhost!r}, 브로커: {exc}). "
+                "운영 큐는 quorum·DLX·TTL 이 붙어 있어 우리가 맨 인자로 선언하면 "
+                "거부됩니다 — 운영이라면 MQ_DECLARE_TOPOLOGY=false 로 내리고 MQ_VHOST 도 "
+                "같이 확인하세요. 운영 토폴로지는 백엔드 인프라 소유입니다 "
+                "(docs/mq_events.md §2-1)"
+            ) from exc
+
+    try:
+        return await channel.get_queue(queue_name, ensure=True)
+    except config_errors as exc:
+        raise MqConfigError(
+            f"큐 '{queue_name}' 을 vhost {settings.mq_vhost!r} 에서 확인하지 못했습니다 "
+            f"(브로커: {exc}). 로컬이면 `python scripts/setup_local_mq.py` 를 먼저 "
+            "돌리세요 (MQ_DECLARE_TOPOLOGY=true 필요). 운영이면 백엔드가 아직 안 "
+            "만들었거나 MQ_VHOST·계정 권한이 틀린 것이고, 어느 쪽이든 **우리가 만들면 "
+            "안 됩니다** (docs/mq_events.md §2-1)"
+        ) from exc
 
 
 async def consume(*, queue_name: str = INBOUND_QUEUE) -> None:
@@ -148,6 +188,7 @@ async def consume(*, queue_name: str = INBOUND_QUEUE) -> None:
 
     Raises:
         MqDisabledError: `MQ_ENABLED=false`.
+        MqConfigError: exchange·큐 소유권이 어긋남 — 재시도해도 안 고쳐진다.
     """
     from aio_pika import connect_robust
 

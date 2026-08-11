@@ -10,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core import mq_consumer
-from app.core.exceptions import HitlContextUnavailableError
+from app.core.exceptions import HitlContextUnavailableError, MqConfigError
 from app.core.schemas import (
     Aspect,
     Channel,
@@ -272,6 +272,101 @@ async def test_declares_queue_only_for_local_topology(monkeypatch):
     await mq_consumer.resolve_queue(channel, mq_consumer.INBOUND_QUEUE, settings)
 
     assert channel.calls == ["declare_queue"]
+
+
+class _RefusingQueueChannel:
+    """큐 호출을 브로커가 거부하는 채널. 두 방향을 각각 재현한다."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    async def declare_queue(self, *_args, **_kwargs):
+        raise self._exc
+
+    async def get_queue(self, *_args, **_kwargs):
+        raise self._exc
+
+
+@pytest.mark.asyncio
+async def test_declaring_someone_elses_queue_says_which_flag_to_drop(monkeypatch):
+    """🔴 운영 브로커에 `MQ_DECLARE_TOPOLOGY=true` 로 붙었을 때의 안내.
+
+    **exchange 보다 이쪽이 먼저 걸린다.** 우리가 주는 인자는 `durable=True` 하나뿐인데
+    운영 큐는 quorum·DLX·delivery-limit·TTL 이라(§2-1) 맞을 수가 없다 — exchange 는
+    topic·durable 이 우연히 같아 통과할 수 있다. 그러면 `resolve_exchange` 의 친절한
+    문구를 못 보고 여기서 브로커 원문만 보게 된다.
+
+    컨슈머가 못 뜨면 `feedback.recommendation.reviewed` 가 안 들어오고, 그건 컬렉션2
+    축적의 유일한 경로다.
+    """
+    from aio_pika.exceptions import ChannelPreconditionFailed
+
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "mq_declare_topology", True)
+    channel = _RefusingQueueChannel(
+        ChannelPreconditionFailed("PRECONDITION_FAILED - inequivalent arg 'x-queue-type'")
+    )
+
+    with pytest.raises(MqConfigError) as exc:
+        await mq_consumer.resolve_queue(channel, mq_consumer.INBOUND_QUEUE, settings)
+
+    message = str(exc.value)
+    assert "MQ_DECLARE_TOPOLOGY=false" in message
+    assert mq_consumer.INBOUND_QUEUE in message
+    assert "vhost" in message
+
+
+@pytest.mark.asyncio
+async def test_missing_queue_points_at_the_local_setup_script(monkeypatch):
+    """반대 방향 — `MQ_DECLARE_TOPOLOGY=false` 인데 큐가 아직 없을 때.
+
+    로컬이면 `setup_local_mq.py` 를 안 돌린 것이고, 운영이면 백엔드가 아직 안
+    만들었거나 vhost·권한이 틀린 것이다. **어느 쪽이든 우리가 만들면 안 된다**는 것까지
+    문구에 남긴다 — 여기서 막힌 사람의 첫 유혹이 플래그를 켜는 것이라서다.
+    """
+    from aio_pika.exceptions import ChannelNotFoundEntity
+
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "mq_declare_topology", False)
+    channel = _RefusingQueueChannel(
+        ChannelNotFoundEntity("NOT_FOUND - no queue 'ai.inbound'")
+    )
+
+    with pytest.raises(MqConfigError) as exc:
+        await mq_consumer.resolve_queue(channel, mq_consumer.INBOUND_QUEUE, settings)
+
+    message = str(exc.value)
+    assert "setup_local_mq.py" in message
+    assert "우리가 만들면 안 됩니다" in message
+
+
+@pytest.mark.asyncio
+async def test_queue_and_exchange_share_one_error_list(monkeypatch):
+    """🔴 두 함수가 **같은** 예외 목록을 봐야 한다 — 한쪽만 넓히면 조용히 갈린다.
+
+    403 을 exchange 쪽에만 넣으면 exchange 는 잡히고 큐는 안 잡히는 상태가 되는데,
+    둘 다 같은 브로커·같은 계정이라 실제로는 항상 같이 온다.
+    """
+    # ⚠️ `aio_pika.exceptions` 에는 이 이름이 없다 — 정의처인 aiormq 에서 가져온다
+    #    (`mq.topology_config_errors()` 주석 참고).
+    from aiormq.exceptions import ChannelAccessRefused
+
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "mq_declare_topology", False)
+    channel = _RefusingQueueChannel(
+        ChannelAccessRefused("ACCESS_REFUSED - read access to queue")
+    )
+
+    with pytest.raises(MqConfigError) as exc:
+        await mq_consumer.resolve_queue(channel, mq_consumer.INBOUND_QUEUE, settings)
+
+    assert "ACCESS_REFUSED" in str(exc.value)
 
 
 # ── 실패 분류(nack requeue) ──────────────────────────────────────
