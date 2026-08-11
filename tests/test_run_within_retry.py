@@ -64,8 +64,15 @@ def test_batch_retries_within_run(monkeypatch):
 def test_batch_gives_up_after_limit(monkeypatch):
     """재시도를 다 써도 안 오면 캐시에 넣지 않는다 — 커버리지 검사가 슬롯을 뺀다.
 
-    호출 패스 수도 함께 고정한다. 최종 무응답 건수만 보면 `range(1, RETRY_WITHIN_RUN + 2)`
-    를 `+ 3` 으로 바꿔도 통과해서, 비용 근거가 걸려 있는 "정확히 2회"가 안 지켜진다.
+    호출 패스 수도 함께 고정한다 — 예산 상수를 바꿨을 때 실제 패스 수가 따라오는지를
+    건다. 비용 근거("최대 100여 건")가 여기 걸려 있다.
+
+    ⚠️ 예산은 **가드 두 겹**이 정확히 같은 지점에서 끊는다.
+        `range(1, RETRY_WITHIN_RUN + 2)`        → attempt 1·2·3
+        `if ... or attempt > RETRY_WITHIN_RUN`  → attempt 3 에서 break
+    그래서 어느 한쪽만 느슨하게 해도(range 를 `+ 3` 으로, break 를 `+ 1` 로, break 를
+    아예 제거) 패스 수는 3 그대로다. 실제로 4패스가 되려면 **둘 다** 건드려야 하고,
+    그때 이 assert 가 문다. 한쪽만 바꿔보고 "테스트가 안 무네"로 읽지 말 것.
     """
     calls: list[set] = []
 
