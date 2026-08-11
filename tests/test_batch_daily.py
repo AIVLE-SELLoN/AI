@@ -285,6 +285,38 @@ async def test_cs_inquiries_are_built_once_and_shared(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cs_mapping_failure_does_not_kill_the_batch(tmp_path, monkeypatch):
+    """🔴 CS 원문 매핑이 터져도 배치가 끝까지 돈다 — 알림 발행도 캐시 저장도 살아 있다.
+
+    이 호출은 알림별 try/except **바깥**에 있었다. 루프를 감싸는 try 엔 except 가 없어서
+    (`finally: close_mq()` 뿐) 여기서 던지면 `run_batch` 밖으로 나가고, `save_published()`
+    가 try/finally **뒤**라 같이 건너뛴다 — **이미 발행에 성공한 앞쪽 알림이 캐시에 안
+    들어가서 다음 배치가 같은 알림을 다시 만들고 LLM 비용을 또 쓴다.**
+
+    `state_cached` 를 같이 보는 이유가 그것이다. 실패 항목만 확인하면 캐시 유실은 안 잡힌다.
+    """
+
+    def boom(alert, documents):
+        raise ValueError("documents 한 행의 형식이 이상함")
+
+    async def sent(alert, rec, trace_id):
+        return None
+
+    monkeypatch.setattr(daily, "build_linked_inquiries", boom)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json", load_inputs=_stub_inputs
+    )
+
+    mapping = [f for f in summary["failures"] if f["stage"] == "CS 원문 매핑"]
+    assert mapping, "매핑 실패가 요약에 남아야 한다"
+    assert "형식이 이상함" in mapping[0]["error"], "실제 사유가 남아야 한다"
+    assert summary["delivered"] >= 1, "알림은 통계로 서므로 CS 원문과 무관하게 발행된다"
+    assert summary["state_cached"] >= 1, "발행분이 캐시에 들어가야 한다 — 안 그러면 재과금"
+
+
+@pytest.mark.asyncio
 async def test_silent_recommendation_failure_still_shows_up(tmp_path, monkeypatch):
     """⚠️ 개선안이 조용히 실패해도 요약·종료코드에 남는다.
 

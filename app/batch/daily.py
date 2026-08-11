@@ -744,7 +744,33 @@ async def run_batch(
             # 개선안·가이드라인이 **같은 CS 원문**을 근거로 쓴다. 여기서 한 번 만들어 둘 다
             # 에게 넘긴다 — 각자 만들면 같은 매핑이 두 벌이 되고, C4(item_id ↔ cs/reviews PK)
             # 가 풀려 DB 조회로 바뀔 때 고칠 곳이 두 곳이 된다.
-            inquiries = build_linked_inquiries(alert, documents)
+            #
+            # 🔴 **아래 격리 안에 있어야 한다 — 밖에 두면 배치가 통째로 죽는다.** 이 루프를
+            #    감싸는 try(위 `finally: close_mq()`)엔 except 가 없어서 여기서 던지면
+            #    run_batch 밖으로 나가고, `save_published()` 가 try/finally **뒤**라 같이
+            #    건너뛴다 — **이미 발행에 성공한 앞쪽 알림이 캐시에 안 들어가서 다음 배치가
+            #    같은 알림을 다시 만들고 LLM 비용을 또 쓴다.** documents 한 행이 이상해서
+            #    죽을 수 있는 자리라(값 검증은 `LinkedCSInquiry` 가 한다) 격리 대상이다.
+            #
+            # ⚠️ **`continue` 하지 않는다 — 알림 자체는 발행한다.** 알림은 통계로 서고
+            #    CS 원문과 무관하다. 여기서 건너뛰면 셀러가 그 이상 자체를 못 본다.
+            #    이 루프의 다른 단계도 전부 같은 규율이다(`개선안`·`가이드라인` 실패가
+            #    발행을 막지 않는다 — test_silent_recommendation_failure_still_shows_up).
+            #    빈 리스트로 내려보내면 `generate_guideline` 이 "대상 알림인데 원문이
+            #    0건" 을 ValueError 로 올려서 그쪽 단계에도 정직하게 남는다(그 함수
+            #    docstring 의 Raises 가 바로 이 경우다). 두 항목이 남지만 단계 이름이
+            #    달라서 어느 쪽이 근본 원인인지 구분된다.
+            try:
+                inquiries = build_linked_inquiries(alert, documents)
+            except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
+                inquiries = []
+                failures.append(
+                    {
+                        "alert_id": alert.alert_id,
+                        "stage": "CS 원문 매핑",
+                        "error": repr(exc),
+                    }
+                )
 
             # ⚠️ alert 1건이 터져도 배치는 계속한다. 여기서 던지면 **이미 LLM 비용을 쓴
             #    앞쪽 알림들까지 발행되지 않고 날아간다.** 실패는 모아서 끝에 요약한다.
