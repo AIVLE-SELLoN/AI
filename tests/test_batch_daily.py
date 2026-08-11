@@ -116,6 +116,23 @@ def test_atomic_write_leaves_no_partial_file(tmp_path):
 # ── 배치 본체 ────────────────────────────────────────────────────
 
 
+def test_optional_wiring_is_actually_connected():
+    """🔴 폴백은 **미구현용**이다. 실물이 있는데 폴백을 타면 배치가 조용히 no-op 이 된다.
+
+    `_missing()` 은 모듈이 없을 때만 폴백하려는 것인데, `from X import Y` 에서 **Y 만**
+    없어도 `exc.name` 이 모듈명이라 True 가 나온다(3.12 확인). 그래서 import 하는 심볼
+    이름에 오타가 나면 폴백이 조용히 켜지고, 개선안·가이드라인이 **둘 다 no-op** 인데
+    요약엔 "ℹ️ 미연결" 한 줄만 찍히고 배치는 정상 종료한다. 셀러에게 개선안이 하나도
+    안 나가는 상태다.
+
+    이 파일의 다른 테스트는 그 함수들을 전부 monkeypatch 하므로 이 끊김을 못 잡는다.
+    (2026-08-11 리뷰 ②)
+    """
+    assert daily.MQ_AVAILABLE, "app.core.mq 가 있는데 폴백을 타고 있다"
+    assert daily.RECOMMENDATION_AVAILABLE, "Agent3 가 있는데 폴백을 타고 있다"
+    assert daily.GUIDELINE_AVAILABLE, "가이드라인이 있는데 폴백을 타고 있다"
+
+
 def _stub_inputs(window_end=None):
     """[6] 도 Agent3 도 안 타는 최소 입력 — 파손(스코프 밖) 1슬롯만 발화시킨다.
 
@@ -274,12 +291,13 @@ async def test_silent_recommendation_failure_still_shows_up(tmp_path, monkeypatc
     `generate_outcome_for_alert` 는 계약상 예외를 안 던지고 개선안 없는 결과를 돌려준다.
     except 만 믿으면 개선안이 하나도 안 붙은 배치가 "성공"으로 끝나서 아무도 못 알아챈다.
     알림 자체는 그대로 발행된다 — 개선안 없는 것과 알림이 안 가는 건 다르다.
+
+    실패로 남는 사유는 `ERROR` 뿐이다(데이터 갭·라우팅 미스는 아래 두 테스트 참고).
     """
 
     async def always_fails(alert, inquiries):
         return RecommendationOutcome(
-            reason=SkipReason.ROUTED_WITHOUT_EVIDENCE,
-            detail="image_guide 로 라우팅됐으나 그쪽 근거가 없음",
+            reason=SkipReason.ERROR, detail="RuntimeError('Chroma 접속 실패')"
         )
 
     async def sent(alert, rec, trace_id):
@@ -295,11 +313,49 @@ async def test_silent_recommendation_failure_still_shows_up(tmp_path, monkeypatc
 
     assert summary["failures"], "조용한 실패가 요약에 남아야 한다"
     assert all(f["stage"] == "개선안" for f in summary["failures"])
-    assert "라우팅" in summary["failures"][0]["error"], (
+    assert "Chroma" in summary["failures"][0]["error"], (
         "사유를 값으로 받았으니 요약에도 그대로 남아야 한다"
     )
-    assert summary["no_evidence"] == 0, "이건 데이터 갭이 아니다"
+    assert summary["no_evidence"] == 0
+    assert summary["routing_miss"] == 0
     assert summary["delivered"] >= 1, "개선안이 없어도 알림은 발행된다"
+
+
+@pytest.mark.asyncio
+async def test_routing_miss_is_counted_but_not_a_failure(tmp_path, monkeypatch):
+    """🔴 라우팅 미스도 **실패가 아니다** — 건수로만 센다 (2026-08-11 리뷰 반영).
+
+    처음엔 실패로 뒀는데, 그러면 `NO_EVIDENCE` 를 실패에서 뺀 이유가 옆문으로 그대로
+    돌아온다. **근본 원인이 같기 때문**이다(상세페이지 미등록 — mock 504행 중 489행이
+    "정보 없음"). 갈리는 건 모델이 그 빈 쪽을 골랐느냐뿐이고, 그 선택을 코드로 강제하지
+    않기로 한 것도 우리 결정이다. 우리가 안 고치기로 한 걸 매일 실패로 세면 배치가 상시
+    종료코드 1 로 끝나 진짜 장애가 묻힌다.
+
+    대신 **요약에는 남아야 한다** — 여기가 조용해지면 프롬프트 v3 를 손볼 근거가 사라진다.
+    """
+
+    async def routed_wrong(alert, inquiries):
+        return RecommendationOutcome(
+            reason=SkipReason.ROUTED_WITHOUT_EVIDENCE,
+            detail="copy_draft 로 라우팅됐으나 그쪽 근거가 없음",
+        )
+
+    async def sent(alert, rec, trace_id):
+        return None
+
+    monkeypatch.setattr(daily, "should_generate", lambda _alert: True)
+    monkeypatch.setattr(daily, "generate_outcome_for_alert", routed_wrong)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json", load_inputs=_stub_inputs
+    )
+
+    assert summary["failures"] == [], "라우팅 미스는 배치 실패가 아니다"
+    assert summary["routing_miss"] == summary["processed"] >= 1
+    assert summary["no_evidence"] == 0, "데이터 갭과 섞이면 안 된다"
+    # 라우팅까지는 갔으므로 LLM 을 썼다 — 근거 0건과 달리 비용 집계에 들어간다.
+    assert summary["llm_calls"].get("개선안", 0) == summary["processed"]
 
 
 @pytest.mark.asyncio

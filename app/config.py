@@ -57,8 +57,13 @@ class Settings(BaseSettings):
     # --- raw DB (「Raw DB 스키마 확정 (8/7)」) ---
     # AI 노드는 원본 DB 에 **직접 읽기** 권한이 있다(§5-2) — 서비스 DB 만 main server
     # 경유다. 목 파이프라인에서는 `scripts/mock_producer.py` 가 만든 sqlite 파일이고,
-    # 운영에서는 Postgres DSN 이 된다. 쓰는 쪽(`scripts/`)은 같은 이름의 환경변수를
-    # 직접 읽으므로 키 이름을 바꾸면 양쪽이 갈린다.
+    # 쓰는 쪽(`scripts/`)은 같은 이름의 환경변수를 직접 읽으므로 키 이름을 바꾸면
+    # 양쪽이 갈린다.
+    #
+    # ⚠️ **지금은 파일 경로 전용이다.** `core/raw_db.connect_readonly()` 가
+    #    `Path(...).exists()` 를 먼저 보므로 Postgres DSN 을 넣으면 `FileNotFoundError`
+    #    가 난다. 운영 DB 로 옮길 때는 이 값의 타입이 아니라 **연결 함수를** 바꿔야
+    #    한다(sqlite3 → psycopg). 그때 `?mode=ro` 도 DB 권한으로 대체된다.
     raw_db_path: str = "./data/raw.db"
 
     # --- 앱 ---

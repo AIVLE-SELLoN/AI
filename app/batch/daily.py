@@ -41,7 +41,7 @@ import os
 import sqlite3
 import sys
 import uuid
-from collections import Counter, defaultdict
+from collections import Counter
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -299,8 +299,22 @@ def _to_kst(value: str) -> datetime:
     ⚠️ **문서에 넣는 `created_at` 도 이 값이어야 한다.** `build_rows` 가 `.date()` 로
        날짜를 다시 뽑는데, 여기서 거른 날짜와 그쪽이 뽑는 날짜가 다르면 윈도우 경계의
        문서가 "읽히긴 했는데 집계에선 다른 날"이 된다.
+
+    🔴 **오프셋이 없으면 KST 로 간주한다 — 호스트 시간대를 보지 않는다.**
+       `.astimezone()` 만 쓰면 naive 값을 **실행 호스트의 로컬 시각**으로 해석한다.
+       `2026-08-28T20:00:00` 이 KST 노트북에선 08-28 인데 **UTC 컨테이너에선 08-29**
+       가 된다 — §3(KST 경계)을 지키려고 만든 함수가 배포 환경에 따라 §3 을 어기는
+       셈이고, 개발 머신이 KST 라 **로컬 테스트로는 영원히 안 잡힌다.**
+       규칙은 생성기와 같다(`mock_producer._iso()`: "naive 면 KST 로 간주한다").
+
+    ⚠️ 지금 목 파이프라인은 전부 오프셋을 붙여 저장하므로 이 분기는 안 탄다. 다만
+       인프라 연동 후에는 **적재하는 쪽이 백엔드로 바뀌므로** 방어가 필요하다.
+       (2026-08-11 리뷰 ⑥)
     """
-    return datetime.fromisoformat(value).astimezone(KST)
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=KST)
+    return parsed.astimezone(KST)
 
 
 def load_inputs_from_db(
@@ -376,13 +390,21 @@ def _require_classified_tables(conn: sqlite3.Connection, path: str | Path) -> No
             f"raw DB 가 8/7 확정 이전 스키마입니다({', '.join(stale)}): {path} — "
             "구버전 파일을 지우고 mock_producer·classification_worker 를 다시 돌리세요."
         )
-    exists = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='classified_item'"
-    ).fetchone()
-    if exists is None:
+    # ⚠️ **두 테이블을 다 본다.** `classified_item` 만 보면 자식 테이블이 없는 DB 에서
+    #    `no such table: classified_item_aspect` 가 조회 단계에서 그대로 올라온다 —
+    #    이 가드가 막으려던 바로 그 모양이다. (2026-08-11 리뷰 잔가지)
+    found = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+            " AND name IN ('classified_item', 'classified_item_aspect')"
+        )
+    }
+    missing = {"classified_item", "classified_item_aspect"} - found
+    if missing:
         raise RuntimeError(
-            f"분류 결과 테이블이 없습니다: {path} — scripts/classification_worker.py 를"
-            " 먼저 돌려야 분자(부정 건수)가 생깁니다."
+            f"분류 결과 테이블이 없습니다({', '.join(sorted(missing))}): {path} — "
+            "scripts/classification_worker.py 를 먼저 돌려야 분자(부정 건수)가 생깁니다."
         )
 
 
@@ -460,17 +482,16 @@ def _build_inputs(
             "raw_text": row["content"],
         }
 
-    aspects_of: dict[str, list[dict]] = defaultdict(list)
+    aspects_of: dict[str, list[dict]] = {}
     for row in aspect_rows:
         item_id = row["item_id"]
         if item_id not in meta_of:
             continue  # 윈도우 밖이거나 위에서 버린 문서
-        aspects_of.setdefault(item_id, [])
+        # LEFT JOIN 이라 aspect 가 NULL 인 행이 온다. 그래도 **키는 만든다** — aspect
+        # 0개인 분류 결과도 item 으로 살아남아야 한다(리뷰의 정상 출력).
+        entry = aspects_of.setdefault(item_id, [])
         if row["aspect"] is not None:
-            # aspect 0개인 분류 결과도 항목은 만든다 — 리뷰의 정상 출력이다.
-            aspects_of[item_id].append(
-                {"aspect": row["aspect"], "sentiment": row["sentiment"]}
-            )
+            entry.append({"aspect": row["aspect"], "sentiment": row["sentiment"]})
 
     items: list[ClassifiedItem] = []
     for item_id, aspects in aspects_of.items():
@@ -484,8 +505,15 @@ def _build_inputs(
                 )
             )
         except ValidationError:
-            # 리뷰에 허용 밖 aspect 가 붙은 경우 등. 분모(문서)는 그대로 두고 분자만
-            # 빠지므로 그 슬롯은 커버리지 미달로 검정에서 제외된다 — 안전한 방향이다.
+            # 리뷰에 허용 밖 aspect 가 붙은 경우 등. 분모(문서)는 남고 분자만 빠진다.
+            #
+            # ⚠️ **이건 미탐 방향이다.** 예전 주석은 "커버리지 미달로 검정에서 제외되니
+            #    안전하다" 고 했는데 **틀렸다** — `check_coverage` 는 CS 전용인데
+            #    (`COVERAGE_CHECKED_SOURCES`) 이 분기를 실제로 태우는 건 리뷰 aspect
+            #    검증이다. 리뷰가 걸리면 제외 없이 분자만 조용히 깎인다.
+            #    지금은 워커가 `ClassifiedItem` 을 만들 때 이미 걸러서 DB 에 들어올 수
+            #    없으므로 **도달 불가**다. 로그로 세는 이유가 그것이다 — 0 이 아니면
+            #    워커 쪽 계약이 깨진 것이다. (2026-08-11 리뷰 잔가지)
             dropped["분류 결과 스키마 불일치"] += 1
 
     if dropped:
@@ -675,9 +703,10 @@ async def run_batch(
     targets = alerts if max_alerts is None else alerts[:max_alerts]
     failures: list[dict] = []
     counts: Counter[str] = Counter()
-    # 근거 0건으로 개선안을 못 만든 건수. **실패가 아니라 데이터 갭이다** — 루프 안
-    # 주석 참고. failures 와 분리해 두는 이유는 종료코드에 안 실리게 하기 위해서다.
+    # 개선안이 안 나왔지만 **실패가 아닌** 두 사유의 건수. failures 와 분리해 두는
+    # 이유는 종료코드에 안 실리게 하기 위해서다(루프 안 주석 참고).
     evidence_gaps = 0
+    routing_misses = 0
     # ⚠️ **발행에 성공한 것만** 캐시에 넣는다. save_published docstring 참고.
     delivered: list[DetectionAlert] = []
 
@@ -695,6 +724,12 @@ async def run_batch(
             if dry_run:
                 # 실제로 몇 번 부를지만 센다. 추정이 아니라 실측이다 — 게이트를 안 태우면
                 # Agent3 비용이 크게 과대추정된다(조치 7종 중 1종만 해당).
+                #
+                # ⚠️ **개선안 수치는 상한이다.** dry-run 은 근거 조회(ChromaDB·CS 원문)를
+                #    안 하므로 근거 0건으로 걸러질 알림을 미리 알 수 없다. 실제 실행은
+                #    그것들을 `no_evidence` 로 빼므로 여기보다 작게 나온다 — **어긋난 게
+                #    아니라 원리적으로 못 맞추는 것**이다(가이드라인 쪽은 게이트가
+                #    `evidence.inquiry_ids` 만 보므로 조회 없이도 맞출 수 있어 태운다).
                 if wants_recommendation:
                     counts["개선안"] += 1
                 # 가이드라인도 **게이트를 태워서** 센다. `evidence.inquiry_ids` 가 빈 알림
@@ -734,18 +769,24 @@ async def run_batch(
                     #    끝난다. else 인 이유: except 와 둘 다 타면 실패 1건이 요약에 2건으로
                     #    잡혀 배치 요약의 실패 건수를 못 믿게 된다.
                     #
-                    # 🔴 **개선안이 없는 사유 두 가지를 가른다 (2026-08-10).**
-                    #    근거 0건(상세페이지 미등록 + CS 원문 없음)은 파이프라인이 정상인
-                    #    **데이터 갭**이고 흔하다 — 그걸 실패로 세면 배치가 상시 종료코드 1로
-                    #    끝나서 진짜 장애 신호가 무뎌진다. 그래서 건수로만 세고 실패엔 안 넣는다.
-                    #    어떤 사유가 갭인지는 pipeline 이 정한다(`RecommendationOutcome`) —
+                    # 🔴 **개선안이 없는 사유를 셋으로 가른다 (2026-08-10).**
+                    #    상세페이지 미등록은 흔한 **데이터 갭**이고(mock 504행 중 489행이
+                    #    "정보 없음"), 그걸 실패로 세면 배치가 상시 종료코드 1로 끝나서 진짜
+                    #    장애가 묻힌다. 근거 0건(`is_evidence_gap`)과 모델이 빈 쪽을 고른 것
+                    #    (`is_routing_miss`)은 **근본 원인이 같아** 둘 다 실패에서 뺀다.
+                    #    대신 각각 따로 세서 요약에 남긴다 — 라우팅 미스가 조용해지면
+                    #    프롬프트 v3 를 손볼 근거가 사라진다.
+                    #    ⚠️ 판정은 `RecommendationOutcome` 이 한다(`counts_as_failure`).
                     #    여기서 사유를 다시 판정하면 사유가 늘 때 두 곳이 갈린다.
                     if outcome.is_evidence_gap:
                         # 라우팅 전에 걸러지므로 LLM 호출은 0회다 — 개선안 카운트에 안 넣는다.
                         evidence_gaps += 1
                     else:
+                        # 라우팅까지는 갔으므로 LLM 을 썼다(미스여도 마찬가지).
                         counts["개선안"] += 1
-                        if rec is None:
+                        if outcome.is_routing_miss:
+                            routing_misses += 1
+                        elif outcome.counts_as_failure:
                             failures.append(
                                 {
                                     "alert_id": alert.alert_id,
@@ -829,9 +870,11 @@ async def run_batch(
         "delivered": len(delivered),
         "llm_calls": dict(counts),
         "cause_calls": stub.calls if stub else None,
-        # 근거 0건으로 개선안을 생략한 건수. failures 와 **별개**다 — 데이터 갭이라
-        # 종료코드에 안 실린다. 이 숫자가 계속 크면 상세페이지 시딩·CS 원문 조회를 볼 것.
+        # 개선안이 안 나왔지만 실패가 아닌 두 사유. failures 와 **별개**라 종료코드에
+        # 안 실린다. `no_evidence` 가 계속 크면 상세페이지 시딩·CS 원문 조회를,
+        # `routing_miss` 가 계속 크면 라우팅 프롬프트를 볼 것.
         "no_evidence": evidence_gaps,
+        "routing_miss": routing_misses,
         "failures": failures,
         "state_cached": cached,
     }
@@ -867,6 +910,13 @@ def print_summary(summary: dict) -> None:
         print(
             f"  개선안 생략   {summary['no_evidence']}건  ← 근거 0건(상세페이지 미등록·CS"
             " 원문 없음). 실패 아님"
+        )
+    if summary.get("routing_miss"):
+        # 종료코드에서 뺐으니 요약에서라도 눈에 띄어야 한다 — 안 그러면 라우팅 미스가
+        # 조용히 쌓이고 프롬프트를 손볼 근거가 사라진다.
+        print(
+            f"  라우팅 미스   {summary['routing_miss']}건  ← 근거가 있는 쪽을 모델이 안"
+            " 골랐음. 실패 아님 / 프롬프트 재측정 대상"
         )
     if summary["dry_run"]:
         print("\n  [dry-run] LLM 호출 0회. 실제로 돌리면:")

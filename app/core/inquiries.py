@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 
 from app.core import raw_schema
 from app.core.raw_db import connect_readonly
@@ -157,6 +157,6 @@ def fetch_linked_inquiries(
     return build_linked_inquiries(alert, documents)
 
 
-def _chunks(values: Sequence[str], size: int):
+def _chunks(values: Sequence[str], size: int) -> Iterator[list[str]]:
     for start in range(0, len(values), size):
         yield list(values[start : start + size])

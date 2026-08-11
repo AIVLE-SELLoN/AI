@@ -111,8 +111,13 @@ async def test_run_returns_none_when_routed_evidence_is_missing(monkeypatch, bia
 
     assert outcome.recommendation is None
     assert outcome.reason is pipeline.SkipReason.ROUTED_WITHOUT_EVIDENCE
+    assert outcome.is_routing_miss
     assert not outcome.is_evidence_gap, (
-        "쓸 수 있던 근거를 버린 건이라 데이터 갭으로 세면 안 된다"
+        "근거가 아예 없는 것과는 구분한다 — 요약에서 따로 세야 프롬프트를 손볼 수 있다"
+    )
+    assert not outcome.counts_as_failure, (
+        "구분은 하되 실패로는 안 센다 — 근본 원인이 NO_EVIDENCE 와 같아서, "
+        "실패로 세면 배치가 상시 종료코드 1 이 된다"
     )
     assert await pipeline.run(biased_alert) is None
 

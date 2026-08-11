@@ -38,9 +38,9 @@ def block_local_raw_db(monkeypatch, tmp_path):
     DB 를 실제로 쓰는 테스트는 `db_path=` 로 자기 임시 파일을 명시해서 이 기본값을
     덮는다(`tests/test_load_inputs_from_db.py`).
     """
-    monkeypatch.setattr(
-        get_settings(), "raw_db_path", str(tmp_path / "없는-raw.db"), raising=False
-    )
+    # `raising=True`(기본)로 둔다 — 필드명이 바뀌면 여기서 터지는 게 맞다. False 면
+    # 이 가드가 조용히 죽고 테스트가 개발자 로컬 DB 를 다시 읽기 시작한다.
+    monkeypatch.setattr(get_settings(), "raw_db_path", str(tmp_path / "없는-raw.db"))
 
 
 @pytest.fixture

@@ -748,8 +748,9 @@ class SkipReason(str, Enum):
 
     ROUTED_WITHOUT_EVIDENCE = "라우팅_근거없음"
     """근거가 한쪽엔 있었는데 모델이 **빈 쪽** 도구를 골랐다. 쓸 수 있던 근거를 버린
-    것이라 데이터 갭이 아니라 실패로 남긴다(2026-08-09 라우팅 미스 항목). 라우팅
-    프롬프트를 손볼 근거가 여기서 나온다."""
+    것이라 `NO_EVIDENCE` 와 구분하지만, **배치 실패로는 세지 않는다** —
+    `RecommendationOutcome.is_routing_miss` 참고. 라우팅 프롬프트를 손볼 근거가
+    여기서 나오므로 요약에는 따로 센다."""
 
     ERROR = "생성_예외"
     """생성 중 예외. 사유는 `detail` 에 `repr(exc)` 로 담긴다."""
@@ -770,12 +771,40 @@ class RecommendationOutcome:
 
     @property
     def is_evidence_gap(self) -> bool:
-        """근거가 없어서 안 만든 것인가 — **배치가 실패로 세지 않는 유일한 사유.**
+        """근거가 아예 없어서 안 만든 것인가. **배치가 실패로 세지 않는다.**
 
         판정을 여기 두는 이유: "어떤 사유가 실패인가"가 호출부마다 갈리면, 사유를
         하나 추가할 때 배치·테스트·모니터링이 따로 놀게 된다.
         """
         return self.reason is SkipReason.NO_EVIDENCE
+
+    @property
+    def is_routing_miss(self) -> bool:
+        """모델이 빈 쪽 도구를 골라서 못 만든 것인가. **배치가 실패로 세지 않는다.**
+
+        🔴 **`is_evidence_gap` 과 따로 두되, 종료코드에서는 똑같이 뺀다.** 처음엔 이걸
+        실패로 뒀는데(2026-08-10) 그러면 `NO_EVIDENCE` 를 뺀 이유가 옆문으로 그대로
+        돌아온다 — 근본 원인이 **같기 때문**이다(상세페이지 미등록). 갈리는 건 모델이
+        그 빈 쪽을 골랐느냐뿐이고, 그 선택을 **코드로 강제하지 않기로 한 것도 우리
+        결정**이다(2026-08-10 서영님과 합의). 우리가 안 고치기로 한 것을 매일 실패로
+        세면 배치가 상시 종료코드 1 로 끝나 진짜 장애가 묻힌다.
+        상세페이지는 mock 504행 중 489행이 "정보 없음" 이라 **운영에서 흔하다.**
+
+        대신 **요약에는 따로 센다**(`daily.py` 의 `routing_miss`). 여기가 조용해지면
+        라우팅 프롬프트 v3 를 손볼 근거가 사라지기 때문이다.
+        """
+        return self.reason is SkipReason.ROUTED_WITHOUT_EVIDENCE
+
+    @property
+    def counts_as_failure(self) -> bool:
+        """배치가 **실패로 세는가.** 종료코드가 이 값으로 갈린다.
+
+        개선안이 나온 경우와 위 두 사유는 실패가 아니다. 남는 것은 `ERROR`(생성 중
+        예외)와 `GATE_CLOSED`(배치가 미리 걸러 여기까지 안 온다) 뿐이다.
+        """
+        if self.recommendation is not None:
+            return False
+        return not (self.is_evidence_gap or self.is_routing_miss)
 
 
 @traceable

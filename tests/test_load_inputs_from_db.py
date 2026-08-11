@@ -12,8 +12,12 @@ TABLE 을 다시 적으면 확정 문서가 바뀔 때 테스트만 옛 스키�
 LLM·네트워크 없음. sqlite 파일만 만든다.
 """
 
+import os
 import sqlite3
+import subprocess
+import sys
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -23,6 +27,8 @@ from app.core import raw_schema
 KST = timezone(timedelta(hours=9))
 
 WINDOW_END = date(2026, 8, 28)
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _db(tmp_path, cs_rows=(), review_rows=(), classified=()):
@@ -191,6 +197,58 @@ def test_day_boundary_uses_kst_not_utc(tmp_path):
     # build_rows 가 `.date()` 로 날짜를 다시 뽑으므로 넘겨주는 값도 KST 여야 한다 —
     # 여기서 갈리면 "읽히긴 했는데 집계에선 다른 날"이 된다.
     assert documents[0]["created_at"].date() == first_day
+
+
+def test_naive_timestamp_is_read_as_kst_not_host_local():
+    """🔴 오프셋 없는 값은 **KST 로 못박는다** — 실행 호스트 시간대를 보면 안 된다.
+
+    `.astimezone()` 만 쓰면 naive 값을 호스트 로컬로 해석해서, 같은 행이 KST
+    노트북에선 08-28 · UTC 컨테이너에선 08-29 가 된다. §3(KST 경계)을 지키려고 만든
+    함수가 배포 환경에 따라 §3 을 어기는 셈이다.
+
+    ⚠️ **이 테스트는 KST 머신에서는 옛 코드로도 통과한다** — 호스트가 마침 KST 라서다.
+       무는 건 UTC 컨테이너다. 그래도 계약을 글로만 두지 않으려고 박아둔다.
+       (2026-08-11 리뷰 ⑥)
+    """
+    got = daily._to_kst("2026-08-28T20:00:00")
+
+    assert got.utcoffset() == timedelta(hours=9)
+    # 벽시계가 그대로여야 한다. 호스트를 봤다면 UTC 컨테이너에서 08-29 05:00 이 된다.
+    assert (got.year, got.month, got.day, got.hour) == (2026, 8, 28, 20)
+
+
+def test_offset_aware_timestamp_is_converted_not_relabeled():
+    """오프셋이 있으면 **변환**한다 — 라벨만 갈아치우면 같은 순간이 아니게 된다."""
+    got = daily._to_kst("2026-07-24T23:00:00+00:00")
+
+    assert (got.year, got.month, got.day, got.hour) == (2026, 7, 25, 8)
+
+
+def test_naive_timestamp_is_kst_even_on_a_utc_host():
+    """🔴 위 계약을 **UTC 호스트에서** 확인한다 — 개발 머신이 KST 라 여기서만 잡힌다.
+
+    같은 프로세스에서 재면 호스트가 마침 KST 라 옛 코드(`.astimezone()` 만)도 통과한다.
+    그래서 `TZ=UTC` 로 서브프로세스를 띄워서 잰다 — 배치를 컨테이너(UTC)로 올렸을 때
+    실제로 도는 조건이다. 인코딩 배선을 서브프로세스로 검증한 PR #46 과 같은 방식이다.
+    """
+    code = (
+        "from app.batch import daily;"
+        "print(daily._to_kst('2026-08-28T20:00:00').isoformat())"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env={**os.environ, "TZ": "UTC"},
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,  # 종료코드를 직접 본다 — stderr 를 assert 메시지에 실으려고
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "2026-08-28T20:00:00+09:00", (
+        "UTC 호스트에서 날짜가 밀렸습니다 — naive 값을 호스트 로컬로 해석하고 있습니다"
+    )
 
 
 def test_unmapped_product_is_dropped_with_a_warning(tmp_path, caplog):

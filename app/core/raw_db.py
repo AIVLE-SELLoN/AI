@@ -39,6 +39,11 @@ def connect_readonly(db_path: str | None = None) -> sqlite3.Connection:
             " 원문을 적재한 뒤 scripts/classification_worker.py 로 분류해야 합니다."
         )
 
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    # ⚠️ **`as_uri()` 로 만든다.** `f"file:{path}?mode=ro"` 는 경로에 `#` 이 있으면
+    #    그 뒤가 URI fragment 로 잘려 **`mode=ro` 가 통째로 날아간다.** 그러면 남은
+    #    앞부분을 경로로 잡고 **빈 DB 를 새로 만들어** 위 두 이유가 동시에 깨진다
+    #    (실측: `.../we#ird/raw.db` → `.../we` 라는 0바이트 파일 생성).
+    #    `as_uri()` 가 `#` 을 `%23` 으로 인코딩한다. (2026-08-11 리뷰 ③)
+    conn = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
