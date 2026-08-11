@@ -8,26 +8,43 @@ graph.ainvoke()를 호출하도록 바뀔 예정이며, router.py는 이 함수�
 
 from __future__ import annotations
 
+import logging
+
+from app.core.inquiries import fetch_linked_inquiries
 from app.core.mq_consumer import RecommendationReviewed, load_hitl_context
 from app.core.schemas import DetectionAlert, Recommendation
 from app.recommendation import pipeline
+
+logger = logging.getLogger(__name__)
 
 
 async def generate_recommendation(alert: DetectionAlert) -> Recommendation | None:
     """DetectionAlert → Recommendation | None (트리거 미충족 시 None).
 
-    ⚠️ **CS 원문을 안 넘긴다 — 그래서 image_guide 로 라우팅되면 개선안이 안 나온다.**
-    원문은 `alert.evidence.inquiry_ids` 로 조회해야 하는데(`app/core/inquiries.py`),
-    이 REST 엔드포인트는 body 로 alert 만 받아서 조회 입력이 없다. 근거가 0건이면
-    `run()` 이 None 을 돌려주므로(§4-3), image_guide 케이스는 여기서 항상 None 이다.
+    body 로 alert 만 받으므로 **CS 원문은 `evidence.inquiry_ids` 로 직접 조회한다**
+    (`fetch_linked_inquiries`). 예전엔 안 넘겨서 image_guide 로 라우팅되면 근거가 0건이라
+    **항상 None** 이었다 — copy_draft 만 디버깅할 수 있었다(2026-08-10 해소).
 
-    운영 경로가 아니라서 그대로 둔다 — 개선안은 탐지 배치가 `generate_for_alert(alert,
+    운영 경로는 아니다 — 개선안은 탐지 배치가 `generate_outcome_for_alert(alert,
     inquiries)` 로 선생성해 `ai.anomaly.analyzed` payload 에 실어 보낸다. 이 엔드포인트는
-    재현·디버깅용이다. **copy_draft 케이스 디버깅에만 쓸 것.**
+    재현·디버깅용이다.
+
+    ⚠️ **raw DB 가 없으면 원문 없이 진행한다.** 그 환경에서 500 을 내면 DB 없이 쓰던
+    copy_draft 디버깅까지 같이 막힌다. 대신 조용히 넘기지 않고 경고를 남긴다 — 근거가
+    빠진 채 나온 결과를 "개선안이 안 만들어진다" 로 오해하지 않게 하려는 것이다.
 
     # TODO: LangGraph 이식 후 pipeline.run(alert) → graph.ainvoke(초기 상태) 로 교체.
     """
-    return await pipeline.run(alert)
+    try:
+        inquiries = fetch_linked_inquiries(alert)
+    except FileNotFoundError as exc:
+        logger.warning(
+            "raw DB 가 없어 CS 원문 없이 생성합니다 — image_guide 는 근거 0건으로"
+            " 개선안이 안 나옵니다 (%s)",
+            exc,
+        )
+        inquiries = []
+    return await pipeline.run(alert, inquiries)
 
 
 def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -> None:

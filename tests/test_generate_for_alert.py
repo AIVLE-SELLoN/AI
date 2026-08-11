@@ -1,10 +1,14 @@
-"""담당: 지인 — 배치 진입점 `generate_for_alert()` (`app/recommendation/pipeline.py`).
+"""담당: 지인 — 배치 진입점 `generate_outcome_for_alert()` / `generate_for_alert()`
+(`app/recommendation/pipeline.py`).
 
 **계약의 핵심은 "예외를 안 던진다"** 다. 배치가 알림 20건을 도는 중이라, 개선안 1건의
 실패가 밖으로 나가면 그 알림의 **발행까지 막혀** 셀러가 이상 알림 자체를 못 받는다.
 그래서 "안 던진다"를 말로 적어두는 대신 실제로 던져보고 확인한다.
 
-LLM 은 부르지 않는다 — `run()` 을 몽키패치로 막는다.
+두 번째 계약은 **"개선안이 없는 사유를 값으로 돌려준다"** 다(2026-08-10). 근거 0건은
+데이터 갭이라 배치 실패가 아니고, 그 구분이 `None` 하나로는 안 된다.
+
+LLM 은 부르지 않는다 — `run_with_outcome()` 을 몽키패치로 막는다.
 """
 
 import asyncio
@@ -87,7 +91,7 @@ def _recommendation() -> Recommendation:
 
 @pytest.mark.asyncio
 async def test_returns_recommendation_on_success(monkeypatch):
-    """정상 경로는 run() 결과를 그대로 돌려주고, **inquiries 를 그대로 넘긴다**.
+    """정상 경로는 run 결과를 그대로 돌려주고, **inquiries 를 그대로 넘긴다**.
 
     전달을 같이 고정하는 이유: 배선이 끊겨도 결과 객체는 똑같이 나오는데, 실제로는
     image_guide 가 근거를 잃어 전건 fallback 이 된다(조용한 열화). 아래
@@ -99,12 +103,17 @@ async def test_returns_recommendation_on_success(monkeypatch):
 
     async def fake_run(alert, passed_inquiries=()):
         seen["inquiries"] = passed_inquiries
-        return expected
+        return pipeline.RecommendationOutcome(expected)
 
-    monkeypatch.setattr(pipeline, "run", fake_run)
+    monkeypatch.setattr(pipeline, "run_with_outcome", fake_run)
 
-    assert await pipeline.generate_for_alert(_alert(), inquiries) is expected
+    outcome = await pipeline.generate_outcome_for_alert(_alert(), inquiries)
+    assert outcome.recommendation is expected
+    assert outcome.reason is None, "성공엔 사유가 붙지 않는다"
     assert seen["inquiries"] == inquiries
+
+    # 얇은 래퍼(팀 확정 시그니처)도 같은 결과를 돌려준다.
+    assert await pipeline.generate_for_alert(_alert(), inquiries) is expected
 
 
 @pytest.mark.asyncio
@@ -114,12 +123,16 @@ async def test_gate_closed_skips_llm_entirely(monkeypatch):
     게이트가 새면 알림 대부분(6종)에 쓸데없는 LLM 비용이 붙는다.
     """
 
-    async def boom(alert):
-        raise AssertionError("게이트가 닫혔는데 run() 이 불렸습니다")
+    async def boom(alert, inquiries=()):
+        raise AssertionError("게이트가 닫혔는데 run 이 불렸습니다")
 
-    monkeypatch.setattr(pipeline, "run", boom)
+    monkeypatch.setattr(pipeline, "run_with_outcome", boom)
     alert = _alert(action=RecommendedAction.LOGISTICS_CHECK)
 
+    outcome = await pipeline.generate_outcome_for_alert(alert, _inquiries())
+    assert outcome.recommendation is None
+    assert outcome.reason is pipeline.SkipReason.GATE_CLOSED
+    assert not outcome.is_evidence_gap, "게이트 미충족은 근거 갭이 아니다"
     assert await pipeline.generate_for_alert(alert, _inquiries()) is None
 
 
@@ -145,9 +158,15 @@ async def test_never_raises_whatever_run_throws(monkeypatch, error, caplog):
     async def fake_run(alert, inquiries=()):
         raise error
 
-    monkeypatch.setattr(pipeline, "run", fake_run)
+    monkeypatch.setattr(pipeline, "run_with_outcome", fake_run)
 
-    assert await pipeline.generate_for_alert(_alert(), _inquiries()) is None
+    outcome = await pipeline.generate_outcome_for_alert(_alert(), _inquiries())
+    assert outcome.recommendation is None
+    assert outcome.reason is pipeline.SkipReason.ERROR
+    assert not outcome.is_evidence_gap, (
+        "예외를 데이터 갭으로 세면 고장 난 배치가 종료코드 0 으로 끝난다"
+    )
+    assert repr(error) == outcome.detail, "요약에 진짜 사유가 남아야 한다"
     assert any("개선안 생성 실패" in r.getMessage() for r in caplog.records)
 
 
@@ -162,7 +181,7 @@ async def test_cancellation_is_not_swallowed(monkeypatch):
     async def fake_run(alert, inquiries=()):
         raise asyncio.CancelledError()
 
-    monkeypatch.setattr(pipeline, "run", fake_run)
+    monkeypatch.setattr(pipeline, "run_with_outcome", fake_run)
 
     with pytest.raises(asyncio.CancelledError):
-        await pipeline.generate_for_alert(_alert(), _inquiries())
+        await pipeline.generate_outcome_for_alert(_alert(), _inquiries())
