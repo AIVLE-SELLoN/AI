@@ -1,0 +1,3349 @@
+{
+  "meta": {
+    "experiment": "④ 프롬프트2 리뷰 aspect별 감성 정확도",
+    "run_at": "2026-07-31T14:33:26",
+    "data_source": "AI Hub 71603 (원본 라벨, 재라벨링 없음 — 계획B)",
+    "prompt_version": "classify_sentiment_v4",
+    "model": "gpt-4o-mini",
+    "seed": 42,
+    "limit": 300,
+    "chunk_size": 20,
+    "mode": "batch",
+    "scrubbed": {
+      "note": "AI Hub 71603 이용정책상 원문을 공개 저장소에 올릴 수 없어 mismatches[].raw_text 를 제거한 사본. 그 외 필드는 원본 그대로다.",
+      "source_file": "review_eval_20260731_143326.json",
+      "removed_field": "scores.mismatches[].raw_text",
+      "removed_count": 166,
+      "rejoin": "review_id 는 '<71603 파일명>-<레코드 인덱스>' 라, 71603 사본이 있으면 원문·원본 Aspects 를 그대로 되붙일 수 있다."
+    }
+  },
+  "scores": {
+    "n_sampled": 300,
+    "n_scored": 299,
+    "n_unanswered": 1,
+    "aspect_f1": 0.8437,
+    "aspect_precision": 0.8479,
+    "aspect_recall": 0.8395,
+    "sentiment_accuracy": 0.7971,
+    "mixed_signal_accuracy": 0.8882,
+    "exact_match_rate": 0.4448,
+    "per_aspect": {
+      "사이즈": {
+        "precision": 0.9379,
+        "recall": 0.8691,
+        "n_true": 191
+      },
+      "색상": {
+        "precision": 0.8936,
+        "recall": 0.7778,
+        "n_true": 108
+      },
+      "소재": {
+        "precision": 0.6923,
+        "recall": 0.8491,
+        "n_true": 106
+      }
+    },
+    "mismatches": [
+      {
+        "review_id": "1-1.여성의류(155)-98",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          },
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(116)-22",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(82)-4",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": []
+      },
+      {
+        "review_id": "1-1.여성의류(151)-79",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(114)-91",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(153)-12",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(60)-30",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(134)-86",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(82)-33",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": true
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(82)-27",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(66)-61",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "색상",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(114)-76",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(18)-40",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": true
+          },
+          "사이즈": {
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(84)-66",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(114)-6",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(62)-69",
+        "gold": {
+          "사이즈": {
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(6)-55",
+        "gold": {
+          "사이즈": {
+            "sentiment": 0,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(27)-84",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": true
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(110)-75",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(132)-29",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(130)-71",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(64)-78",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(114)-67",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(64)-70",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          },
+          "소재": {
+            "sentiment": 0,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(66)-57",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 0,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(40)-49",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": []
+      },
+      {
+        "review_id": "1-1.여성의류(66)-77",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(148)-0",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": []
+      },
+      {
+        "review_id": "1-1.여성의류(18)-48",
+        "gold": {
+          "사이즈": {
+            "sentiment": 0,
+            "mixed_signal": false
+          },
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(109)-31",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": []
+      },
+      {
+        "review_id": "1-1.여성의류(134)-53",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(116)-65",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(23)-69",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(21)-89",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": true
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(155)-62",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          },
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(155)-34",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(148)-63",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(110)-35",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": true
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(59)-53",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(23)-10",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": []
+      },
+      {
+        "review_id": "1-1.여성의류(82)-99",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(25)-45",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(151)-8",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(21)-50",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(66)-92",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(148)-78",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(148)-97",
+        "gold": {
+          "색상": {
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(148)-34",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(60)-72",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(6)-44",
+        "gold": {
+          "사이즈": {
+            "sentiment": 0,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(23)-23",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(155)-83",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(109)-42",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(40)-47",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": []
+      },
+      {
+        "review_id": "1-1.여성의류(99)-62",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(155)-99",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(27)-11",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": []
+      },
+      {
+        "review_id": "1-1.여성의류(60)-77",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": []
+      },
+      {
+        "review_id": "1-1.여성의류(151)-15",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(129)-77",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(80)-47",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(99)-57",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(84)-92",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 0,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "색상",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(129)-73",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(114)-57",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(25)-10",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(80)-13",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(6)-18",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(109)-30",
+        "gold": {
+          "색상": {
+            "sentiment": -1,
+            "mixed_signal": true
+          },
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(99)-43",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(151)-90",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": true
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(38)-10",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(110)-58",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(80)-41",
+        "gold": {
+          "사이즈": {
+            "sentiment": 0,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": true
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(148)-65",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(153)-7",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": []
+      },
+      {
+        "review_id": "1-1.여성의류(66)-50",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": []
+      },
+      {
+        "review_id": "1-1.여성의류(116)-17",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(155)-60",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(60)-58",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(18)-12",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(42)-73",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(40)-53",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(18)-4",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(132)-44",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(116)-35",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(60)-63",
+        "gold": {
+          "사이즈": {
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(134)-54",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(6)-2",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(21)-92",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": true
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(153)-88",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": true
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(109)-16",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(132)-15",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(99)-39",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(79)-1",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(116)-7",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(155)-53",
+        "gold": {
+          "사이즈": {
+            "sentiment": 0,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(129)-9",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(40)-15",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(134)-63",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(134)-33",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(18)-29",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(64)-14",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(44)-47",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          },
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 0,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(132)-80",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(129)-42",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(151)-55",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(66)-21",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(44)-37",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(116)-67",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(116)-76",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(25)-42",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(109)-85",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(84)-4",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(134)-23",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(18)-65",
+        "gold": {
+          "소재": {
+            "sentiment": 0,
+            "mixed_signal": false
+          },
+          "사이즈": {
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(130)-74",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "색상",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(114)-13",
+        "gold": {
+          "사이즈": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(62)-45",
+        "gold": {
+          "사이즈": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(64)-89",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(134)-76",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(130)-41",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(151)-10",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(42)-87",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(44)-55",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(38)-62",
+        "gold": {
+          "소재": {
+            "sentiment": 0,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(114)-4",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(59)-76",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(18)-10",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(23)-5",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(27)-79",
+        "gold": {
+          "색상": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(114)-40",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(21)-14",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(80)-58",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(44)-10",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(114)-65",
+        "gold": {
+          "색상": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(64)-96",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(59)-12",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 0,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(23)-81",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(40)-45",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": []
+      },
+      {
+        "review_id": "1-1.여성의류(40)-23",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(148)-51",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(80)-34",
+        "gold": {
+          "색상": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(27)-92",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(42)-35",
+        "gold": {
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "소재": {
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(84)-65",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(134)-51",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          "색상": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(38)-35",
+        "gold": {
+          "소재": {
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(62)-87",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": []
+      },
+      {
+        "review_id": "1-1.여성의류(40)-75",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(66)-60",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(59)-93",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(23)-68",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(44)-95",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(18)-28",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(66)-8",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(21)-24",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(38)-51",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(134)-93",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(38)-31",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(130)-89",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(132)-2",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": -1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(38)-9",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "색상",
+            "sentiment": -1,
+            "mixed_signal": true
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(2)-74",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 0,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(151)-82",
+        "gold": {
+          "소재": {
+            "sentiment": -1,
+            "mixed_signal": true
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "사이즈",
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        ]
+      },
+      {
+        "review_id": "1-1.여성의류(23)-22",
+        "gold": {
+          "소재": {
+            "sentiment": 1,
+            "mixed_signal": false
+          }
+        },
+        "predicted": [
+          {
+            "aspect": "소재",
+            "sentiment": 1,
+            "mixed_signal": false
+          },
+          {
+            "aspect": "사이즈",
+            "sentiment": -1,
+            "mixed_signal": false
+          }
+        ]
+      }
+    ]
+  }
+}
