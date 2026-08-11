@@ -59,6 +59,10 @@ CREATE TABLE IF NOT EXISTS channel (
 #
 # channel_product_name  월간 리포트가 셀러에게 보여줄 표기명. 채널마다 다르다
 #                       (`monthly_aggregator._fetch_product_names()` 가 최빈값을 고른다).
+# fetched_at            최초 수집 시각.
+# updated_at            마지막 갱신 시각. 카탈로그는 가격 변동 등으로 원본이 바뀌는데
+#                       `mapped_data` 스냅샷은 따라오지 않는다(§5-3) — 두 테이블이 각각
+#                       언제 기준인지 가르는 값이라 반드시 남긴다.
 PRODUCTS_DDL = """
 CREATE TABLE IF NOT EXISTS products (
     variant_row_id       TEXT PRIMARY KEY,
@@ -68,9 +72,18 @@ CREATE TABLE IF NOT EXISTS products (
     option_group_names   TEXT,
     channel_option_name  TEXT,
     sale_price           INTEGER,
-    original_price       INTEGER
+    original_price       INTEGER,
+    fetched_at           TEXT,
+    updated_at           TEXT
 );
 """
+
+# ⚠️ `channel_product_id` 는 **PK 가 아니라 인덱스**다(§2-2). 색상·사이즈 옵션이 여러 행으로
+#    붙는 구조라 같은 채널 상품 ID 를 여러 variant 가 공유한다 — 유니크로 걸면 적재가 깨진다.
+PRODUCTS_CHANNEL_PRODUCT_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_products_channel_product "
+    "ON products (channel_product_id);"
+)
 
 # §2-3 mapped_data — 상품 매핑 결과. variant → 상품 그룹.
 #
@@ -81,10 +94,18 @@ CREATE TABLE IF NOT EXISTS products (
 # ⚠️ 이 테이블이 비면 **채널 간 비교가 통째로 무너진다.** 상품 하나가 채널마다 다른 그룹이
 #    되어 탐지의 편중형/전역형 판정도, 월간 리포트의 채널 격차도 성립하지 않는다.
 #    (2026-08-11 실측: 매핑 없이 돌렸을 때 상세페이지 RAG 조회 적중률 0%)
+# mapping_method      sim_embedding / rule_naming / manual — 무엇으로 묶었는지(§2-3).
+# mapping_confidence  **참고용이다. 판정 기준으로 쓰지 않는다**(§2-3 명시).
+# mapped_at           매핑 시점. §5-3 이 확정한 스냅샷 동기화(주 1회 매핑 재구성)의 근거
+#                     컬럼이다 — `products` 원본이 나중에 바뀌어도 이 값은 따라오지 않는다.
+#                     "최신 매핑을 고른다" 는 쿼리가 생기면 이 컬럼이 없이는 못 쓴다.
 MAPPED_DATA_DDL = """
 CREATE TABLE IF NOT EXISTS mapped_data (
-    variant_row_id   TEXT PRIMARY KEY REFERENCES products(variant_row_id),
-    product_group_id TEXT NOT NULL
+    variant_row_id     TEXT PRIMARY KEY REFERENCES products(variant_row_id),
+    product_group_id   TEXT NOT NULL,
+    mapping_method     TEXT,
+    mapping_confidence REAL,
+    mapped_at          TEXT
 );
 """
 
@@ -260,6 +281,14 @@ SOURCE_INDEXES = [
     # 집계 GROUP BY 단위와 일치
     "CREATE INDEX IF NOT EXISTS idx_cs_group_channel ON cs (product_group_id, channel_id);",
     "CREATE INDEX IF NOT EXISTS idx_reviews_group_channel ON reviews (product_group_id, channel_id);",
+    # 채널 상품 단위 조회(§2-4·§2-5 Indexes). `product_group_id` 는 비정규화라 상품매핑
+    # 전 구간에서는 비어 있고, 그때 상품을 가리키는 축은 이쪽뿐이다.
+    #
+    # ⚠️ 이 둘은 **이 PR 이 만든 누락이 아니라 원래 빠져 있던 것**이다. §3 인덱스 요약표가
+    #    이상탐지 조회 패턴만 추려서(그쪽은 이 축을 안 쓴다) 거기엔 없지만, DDL 전문과
+    #    §2-4·§2-5 컬럼표에는 있다. 같은 파일·같은 계약이라 함께 채운다.
+    "CREATE INDEX IF NOT EXISTS idx_cs_channel_product ON cs (channel_product_id);",
+    "CREATE INDEX IF NOT EXISTS idx_reviews_channel_product ON reviews (channel_product_id);",
 ]
 
 CLASSIFIED_INDEXES = [
@@ -275,12 +304,14 @@ def create_source_tables(conn) -> None:
     """main server 소유 테이블 + 통합 뷰. 목 파이프라인에서는 프로듀서가 부른다.
 
     ⚠️ `products` 는 `channel` 다음, `mapped_data` 는 `products` 다음이어야 한다 —
-       FK 가 그 방향으로 걸려 있어서 순서가 뒤집히면 `PRAGMA foreign_keys=ON` 인 연결에서
-       테이블 생성이 실패한다.
+       FK 가 그 방향으로 걸려 있다. 다만 **깨지는 곳은 CREATE 가 아니라 적재다.**
+       sqlite 는 부모 테이블이 없어도 `CREATE TABLE ... REFERENCES` 를 그냥 통과시키고
+       (실측: 예외 없음), 그 다음 INSERT 에서 `no such table: main.products` 로 터진다.
+       그래서 순서가 뒤집혀도 스키마 생성 단계는 조용히 지나가고 적재에서 처음 드러난다.
     """
     for ddl in (CHANNEL_DDL, PRODUCTS_DDL, MAPPED_DATA_DDL, CS_DDL, REVIEWS_DDL, ORDERS_DDL):
         conn.execute(ddl)
-    for stmt in (*SOURCE_INDEXES, MAPPED_DATA_GROUP_INDEX):
+    for stmt in (*SOURCE_INDEXES, PRODUCTS_CHANNEL_PRODUCT_INDEX, MAPPED_DATA_GROUP_INDEX):
         conn.execute(stmt)
     conn.execute(VOC_DOCUMENT_VIEW)
 

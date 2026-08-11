@@ -107,8 +107,12 @@ def resolve_product_name(candidates: dict[str, str]) -> str | None:
 def has_product_name_tables(conn: sqlite3.Connection) -> bool:
     """products·mapped_data 가 둘 다 있는가.
 
-    ⚠️ 목 파이프라인에는 아직 두 테이블이 없다 — 확정 스키마 §2-2·§2-3 에 정의는 있지만
-       채울 대본 CSV 가 없어 mock_producer 가 만들지 않는다.
+    ⚠️ 목 파이프라인도 이제 두 테이블을 만든다(2026-08-11) — `mock_producer` 가
+       `seed_product_catalog()` 로 채운다. 다만 **비어 있을 수 있다**: 매핑 대본
+       (`input_mapped_data.csv`)은 백엔드가 주는 것이라 받기 전에는 `mapped_data` 가
+       0행이고, 그때 이 함수는 True 를 돌려주지만 아래 조회가 빈 결과를 낸다.
+       그래서 "테이블 유무" 와 "매핑 유무" 는 다르다 — 호출부는 이름을 못 찾으면
+       product_group_id 를 그대로 쓴다.
 
     상품 목록을 도는 루프 **바깥**에서 한 번만 부르라고 따로 뺐다. 상품이 126개면 안에서
     부를 때 같은 카탈로그 조회를 126번 한다 — 답이 실행 중에 바뀌지 않는 값이다.

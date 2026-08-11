@@ -89,8 +89,12 @@ def _build_root_cause_summary(input_data: CSGuidelineInput) -> str:
 _SOURCE_LABEL = {Source.CS: "문의", Source.REVIEW: "리뷰"}
 
 
-def _build_inquiry_table(input_data: CSGuidelineInput) -> str:
-    """원문 목록을 `ID|출처|내용` 표로 (v5 이상). v3·v4 는 출처 열이 없어도 읽힌다.
+# 출처 열이 있는 표(`ID|출처|내용`)를 읽는 프롬프트. 그 아래 버전은 `ID|원문` 2열이다.
+PROMPT_VERSIONS_WITH_SOURCE = frozenset({"cs_reply_v5"})
+
+
+def _build_inquiry_table(input_data: CSGuidelineInput, *, with_source: bool = True) -> str:
+    """원문 목록을 표로. v5 는 `ID|출처|내용`, v3·v4 는 `ID|원문` 2열이다.
 
     토큰이 가장 많이 걸리는 자리다 — 문의가 수십 건이면 JSON 은 건마다
     `{"item_id": ..., "raw_text": ..., "created_at": ...}` 키를 되풀이한다.
@@ -101,10 +105,18 @@ def _build_inquiry_table(input_data: CSGuidelineInput) -> str:
        답글이라 응대 방식이 다른데(반품 접수 불가·다른 구매자도 읽음), 표에 없으면
        모델이 전부 1:1 문의로 답한다. 접두사(`RVW-`)로 추측시키지 않고 명시한다 —
        ID 규칙이 바뀌면 조용히 틀리기 때문이다.
+
+    ⚠️ **구버전에는 출처 열을 넣지 않는다.** v4 의 헤더는 `[문의] 문의ID|원문` 이라 3열을
+       주면 자기가 선언하지 않은 열을 받게 된다. 구버전은 버전 비교 실험용으로 남겨 둔
+       것이라(CLAUDE.md 4), 입력이 달라지면 그때 잰 수치와 지금 수치를 나란히 못 놓는다.
+       (2026-08-11 리뷰 지적 — 처음엔 버전 무관하게 3열을 냈다.)
     """
     rows = []
     for item in input_data.linked_inquiries:
         text = item.raw_text.replace("|", "/").replace("\n", " ").strip()
+        if not with_source:
+            rows.append(f"{item.item_id}|{text}")
+            continue
         label = _SOURCE_LABEL.get(item.source, "문의")
         rows.append(f"{item.item_id}|{label}|{text}")
     return "\n".join(rows)
@@ -134,7 +146,9 @@ def build_prompt(
         ensure_ascii=False,
     )
     return template.substitute(
-        inquiry_table=_build_inquiry_table(input_data),
+        inquiry_table=_build_inquiry_table(
+            input_data, with_source=prompt_version in PROMPT_VERSIONS_WITH_SOURCE
+        ),
         # 서버가 계산한 ID 를 그대로 주입한다 — 모델이 만들면 알림별 유일성이 깨진다
         guideline_id=build_guideline_id(input_data),
         alert_id=input_data.alert_id,

@@ -401,13 +401,19 @@ def test_view_merges_cs_and_reviews_on_one_time_axis() -> None:
 
 
 def test_denominator_counts_source_not_classified_rows() -> None:
-    """분모는 **원문**에서 센다 — 분류 안 된 문의도 남는다(§2-4).
+    """커버리지 분모는 **원문**에서 센다 — 분류 안 된 문의도 남는다(§2-4).
 
-    ⚠️ `COUNT_SOURCE_SQL` 이 `classified_item` 을 세도록 바뀌면 **분류 실패분이 조용히
-       분모에서 빠진다.** 부정률 = 분자/분모 인데 분모만 줄어드니 비율이 부풀고, 그 값이
-       그대로 이상탐지 발화 기준이 된다. 숫자는 계속 나오므로 아무도 못 알아챈다.
+    ⚠️ **탐지 분모가 아니다.** `COUNT_SOURCE_SQL` 은 `log_coverage()` 한 곳에서만 쓰이는
+       커버리지 로그용 카운터다. 이상탐지가 쓰는 분모는 `daily.py::load_inputs_from_db`
+       쪽이라 여기를 뒤집어도 부정률·발화 기준은 안 움직인다.
+       (2026-08-11 리뷰 정정 — 예전 문장은 "그 값이 그대로 이상탐지 발화 기준이 된다"
+        였는데 틀렸다. 그대로 두면 다음 사람이 "탐지 분모가 여기 있다" 고 믿는다.)
 
-    §2-4 가 "분류 안 된 문의도 반드시 남는다"고 못박은 것이 이 계산의 전제다. 그래서
+    그래도 고정할 값어치가 있다: 이 카운터가 `classified_item` 을 세도록 바뀌면 커버리지
+    로그의 total 이 **분류 성공분만** 세게 되어, "원문 대비 얼마나 분류됐나" 라는 이 로그의
+    존재 이유가 사라진다. 미달을 못 보게 되는 것이라 조용히 무의미해진다.
+
+    §2-4 가 "분류 안 된 문의도 반드시 남는다"고 못박은 것이 그 비교의 전제다. 그래서
     3건 중 1건만 분류된 상태를 만들어, 분모가 **3** 인지(원문 기준) **1** 인지(분류 기준)
     가른다.
     """
@@ -433,35 +439,6 @@ def test_denominator_counts_source_not_classified_rows() -> None:
     )
 
 
-def test_unclassified_item_survives_the_left_join() -> None:
-    """aspect 가 0개인 문의도 LEFT JOIN 뒤에 남는다 — §4 권장 패턴.
-
-    ⚠️ 집계 쿼리가 INNER JOIN 이면 aspect 0개인 문의가 통째로 사라져 위 테스트와 같은
-       왜곡이 생긴다. 분모는 원문에서 세고 분류는 **LEFT JOIN 으로 분자만** 붙인다.
-    """
-    conn = _open_pipeline_db()
-    for i in (1, 2):
-        conn.execute(
-            "INSERT INTO cs (id, channel_id, content, inquired_at, created_at) VALUES (?,?,?,?,?)",
-            (f"INQ-{i}", "COUPANG", "문의", f"2026-05-0{i}T10:00:00+09:00", None),
-        )
-    # 둘 다 분류는 돌았지만, INQ-2 는 어느 aspect 에도 안 걸렸다(자식 0행).
-    for item_id in ("INQ-1", "INQ-2"):
-        conn.execute(
-            worker.CLASSIFIED_ITEM_INSERT, (item_id, "cs", "2026-05-01T11:00:00+09:00", "v1")
-        )
-    conn.execute(worker.CLASSIFIED_ITEM_ASPECT_INSERT, ("INQ-1", "색상", -1, None))
-    conn.commit()
-
-    rows = conn.execute(
-        f"SELECT v.item_id, COUNT(a.id) AS hits FROM {worker.SOURCE_VIEW} v "
-        "LEFT JOIN classified_item_aspect a ON a.item_id = v.item_id "
-        "GROUP BY v.item_id ORDER BY v.item_id"
-    ).fetchall()
-
-    assert [(r["item_id"], r["hits"]) for r in rows] == [("INQ-1", 1), ("INQ-2", 0)]
-
-
 # ── 구버전 raw DB 감지 ───────────────────────────────────────────────────
 
 # 8/7 확정 이전 커서 테이블. 컬럼명이 last_occurred_at / last_event_id 였다(§2-8 이전).
@@ -473,6 +450,64 @@ CREATE TABLE classification_cursor (
     updated_at       TEXT NOT NULL
 );
 """
+
+
+def test_schema_matches_the_confirmed_ddl() -> None:
+    """🔴 `raw_schema` 가 확정 DDL 전문과 컬럼이 일치한다 — 부분집합이면 안 된다.
+
+    ⚠️ 이 파일은 우리가 정한 규칙이 아니라 **확정 문서를 옮겨 적은 것**이다(모듈 docstring).
+       옮기다 빠뜨려도 당장은 안 깨진다 — 빠진 컬럼을 아무도 안 읽으면 그만이다. 실제로
+       `products.fetched_at/updated_at` 과 `mapped_data` 의 매핑 메타 3종이 그렇게 빠져
+       있었다(2026-08-11 리뷰에서 발견).
+
+    조용히 아픈 이유가 둘이다:
+      · `mapped_at` 은 §5-3 이 확정한 스냅샷 동기화의 근거 컬럼이다. "최신 매핑을 고른다"
+        는 쿼리가 생기면 운영에선 돌고 **목에서만 no such column 으로 죽는다.**
+      · DDL 이 `CREATE TABLE IF NOT EXISTS` 라, 좁은 정의로 만들어진 raw.db 는 나중에
+        컬럼을 채워도 **영원히 옛 모양으로 남는다.** `find_legacy_tables()` 는
+        `LEGACY_MARKERS` 에 등록된 테이블만 보므로 이 형태는 못 잡는다.
+    """
+    expected = {
+        "channel": {"channel_id", "display_name", "connected_at", "status"},
+        "products": {
+            "variant_row_id", "channel_product_id", "channel_id", "channel_product_name",
+            "option_group_names", "channel_option_name", "sale_price", "original_price",
+            "fetched_at", "updated_at",
+        },
+        "mapped_data": {
+            "variant_row_id", "product_group_id", "mapping_method",
+            "mapping_confidence", "mapped_at",
+        },
+        "orders": {
+            "channel_id", "channel_product_id", "order_date",
+            "quantity", "order_amount", "created_at",
+        },
+        "cs": {
+            "id", "channel_product_id", "product_group_id", "channel_id",
+            "content", "inquired_at", "created_at",
+        },
+        "reviews": {
+            "id", "channel_product_id", "product_group_id", "channel_id",
+            "content", "rating", "created_at",
+        },
+        "classified_item": {"item_id", "source", "classified_at", "prompt_version"},
+        "classified_item_aspect": {"id", "item_id", "aspect", "sentiment", "mixed_signal"},
+        "classification_failure": {
+            "item_id", "occurred_at", "stage", "error",
+            "attempts", "first_failed_at", "last_failed_at",
+        },
+        "classification_cursor": {
+            "worker_id", "last_inquired_at", "last_item_id", "updated_at",
+        },
+    }
+    conn = _open_pipeline_db()
+
+    for table, columns in expected.items():
+        actual = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        assert actual == columns, (
+            f"{table} 이 확정 DDL 과 다르다 — 누락 {sorted(columns - actual)} / "
+            f"초과 {sorted(actual - columns)}"
+        )
 
 
 def test_fresh_db_is_not_flagged_as_legacy() -> None:

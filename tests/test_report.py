@@ -1286,6 +1286,26 @@ def test_unknown_source_is_treated_as_inquiry(cs_input) -> None:
     assert table.splitlines()[0].split("|")[1] == "문의"
 
 
+def test_old_prompt_versions_keep_the_two_column_table(cs_input) -> None:
+    """⚠️ 구버전에는 출처 열을 넣지 않는다 — 버전 비교 실험의 조건이 달라진다.
+
+    v4 의 헤더는 `[문의] 문의ID|원문` 이라 2열이다. 3열을 주면 자기가 선언하지 않은 열을
+    받게 되고, 구버전을 남겨 둔 이유(정량 비교 — CLAUDE.md 4)가 무너진다. 예전에 잰
+    토큰·정확도와 지금 수치를 나란히 놓을 수 없게 된다.
+    """
+    cs_input.linked_inquiries[0].source = Source.REVIEW
+
+    v4 = cs_reply_service.build_prompt(cs_input, prompt_version="cs_reply_v4")
+    v5 = cs_reply_service.build_prompt(cs_input)
+
+    v4_row = v4.split("[문의] 문의ID|원문\n")[1].splitlines()[0]
+    v5_row = v5.split("[원문] ID|출처|내용\n")[1].splitlines()[0]
+
+    assert v4_row.count("|") == 1, f"v4 표에 열이 늘었다: {v4_row}"
+    assert v5_row.count("|") == 2, f"v5 표에 출처 열이 없다: {v5_row}"
+    assert "|리뷰|" in v5_row and "리뷰" not in v4_row
+
+
 def test_v5_tells_the_model_reviews_cannot_accept_returns(cs_input) -> None:
     """v5 프롬프트가 리뷰 답글의 **조치 한계**를 지시한다.
 

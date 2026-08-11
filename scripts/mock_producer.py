@@ -247,14 +247,28 @@ def seed_product_catalog(
         )
         return
 
-    known = {str(r.get("variant_row_id") or "").strip() for r in products}
+    # 수집·매핑 시각. 대본 CSV 에는 없어서 **적재 시각**으로 둔다 — 목에서는 producer 가
+    # main server 자리를 대신하므로 그게 실제로 이 행이 생긴 시각이다.
+    #
+    # ⚠️ `mapping_method`·`mapping_confidence` 는 채우지 않는다(§2-3). "무엇으로 묶었는지"
+    #    (sim_embedding/rule_naming/manual)와 그 확신도는 **백엔드 매핑의 산물**이라 우리가
+    #    아는 값이 아니다. 그럴듯한 값을 넣으면 나중에 실제 매핑 품질을 볼 때 지어낸 수치가
+    #    섞인다. 모르는 것은 NULL 로 둔다.
+    now = datetime.now(KST).isoformat()
+
+    # ⚠️ `known` 과 INSERT 가 **같은 값**을 봐야 한다. 예전에는 여기서만 strip 하고 INSERT 는
+    #    원본을 넣어서, CSV 에 공백이 섞이면 products 엔 공백 포함으로 들어가고 mapped_data
+    #    는 orphan 으로 빠졌다 — 매핑은 했는데 조회가 안 되는, 제일 찾기 어려운 형태다.
+    known: set[str] = set()
     for row in products:
+        variant_row_id = str(row.get("variant_row_id") or "").strip()
+        known.add(variant_row_id)
         conn.execute(
             "INSERT OR REPLACE INTO products (variant_row_id, channel_id, channel_product_id, "
             "channel_product_name, option_group_names, channel_option_name, sale_price, "
-            "original_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "original_price, fetched_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                row.get("variant_row_id"),
+                variant_row_id,
                 row.get("channel"),
                 row.get("channel_product_id"),
                 row.get("channel_product_name"),
@@ -262,6 +276,8 @@ def seed_product_catalog(
                 row.get("channel_option_name"),
                 row.get("sale_price") or None,
                 row.get("original_price") or None,
+                now,
+                now,
             ),
         )
 
@@ -271,8 +287,9 @@ def seed_product_catalog(
             orphan += 1
             continue
         conn.execute(
-            "INSERT OR REPLACE INTO mapped_data (variant_row_id, product_group_id) VALUES (?, ?)",
-            (vrid, group),
+            "INSERT OR REPLACE INTO mapped_data (variant_row_id, product_group_id, mapped_at) "
+            "VALUES (?, ?, ?)",
+            (vrid, group, now),
         )
     conn.commit()
 
@@ -445,10 +462,16 @@ CHANNEL_PRODUCTS_FILE = "input_channel_products.csv"
 # ⚠️ 매핑 자체는 **백엔드(Spring Boot)가 수행해 적재한다**(2026-08-11 확정). 여기서 읽는
 #    파일은 그 결과를 목으로 흉내 낸 것뿐이고, 규칙을 정하는 쪽은 producer 가 아니다.
 #
-# ⚠️ 목 데이터에서 이 값의 정본은 `data/golden/golden_mapping.csv` 인데 **producer 는 golden
-#    을 못 읽는다**(`validate_data_directory` 가드 · CLAUDE.md 9). 그래서 생성기가
-#    `--golden-mapping-dir` 로 조인해 만든 결과를 input 쪽에 떨궈 주면 그걸 읽는다.
-#    파일이 없으면 매핑 없이 도는데, 그때 무슨 일이 벌어지는지는 아래 로더 docstring 참고.
+# 🔴 **이 파일은 백엔드가 준다. 저장소 안에 만드는 코드가 없다**(2026-08-11 기준).
+#    상품 매핑은 백엔드 소관이라 그 결과물을 받아 `data/input/` 에 두는 구조다.
+#    받기 전까지는 매핑 없이 돌고, 그 상태에서 무엇이 어긋나는지는 아래 로더 docstring 참고.
+#
+#    ⚠️ 예전 주석은 "생성기가 `--golden-mapping-dir` 로 조인해 만들어 준다" 였는데 **틀렸다.**
+#       `generate_cs_review_data.py` 는 golden 매핑을 자기 입력으로 읽을 뿐 이 파일을 내지
+#       않는다. 출처가 두 갈래로 적혀 있으면 다음 사람이 없는 생성기 기능을 고치러 간다.
+#       (`data/golden/golden_mapping.csv` 로 임시로 만들어 쓸 수는 있지만 — producer 는
+#        golden 을 못 읽으므로(`validate_data_directory` 가드 · CLAUDE.md 9) 그 변환은
+#        사람이 한 번 해서 input 쪽에 둬야 한다.)
 MAPPED_DATA_FILE = "input_mapped_data.csv"
 
 
