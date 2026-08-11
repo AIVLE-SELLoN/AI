@@ -549,6 +549,48 @@ async def test_missing_exchange_points_at_the_local_setup_script(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("declare_topology", [True, False])
+async def test_permission_denied_is_a_config_error_too(monkeypatch, declare_topology):
+    """🔴 403 ACCESS_REFUSED 도 설정 오류다 — 406/404 만 잡으면 새어 나간다.
+
+    운영 토폴로지는 백엔드 인프라 소유라 우리 AI 계정에 `configure`/`write` 권한이
+    없을 수 있다 (`consume()` 이 같은 이유로 운영에서 바인딩을 시도하지 않는다).
+    그때 브로커가 주는 건 406 이 아니라 **403** 이라, 빠뜨리면 권한 오류가
+    `MqPublishError`(= 다음 배치가 다시 시도한다)로 나간다 — 권한을 안 고치는 한
+    매일 같은 자리에서 실패하는 것이 일시적 장애처럼 보인다.
+    """
+    # ⚠️ `aio_pika.exceptions` 에는 이 이름이 없다 — 정의처인 aiormq 에서 가져온다
+    #    (`topology_config_errors()` 주석 참고).
+    from aiormq.exceptions import ChannelAccessRefused
+
+    settings = mq.get_settings()
+    monkeypatch.setattr(settings, "mq_declare_topology", declare_topology)
+    refused = ChannelAccessRefused("ACCESS_REFUSED - configure access to exchange")
+    channel = _RefusingChannel(declare_exc=refused, get_exc=refused)
+
+    with pytest.raises(MqConfigError) as exc:
+        await mq.resolve_exchange(channel, settings)
+
+    # 브로커 원문을 문구에 남긴다 — 403·404·406 을 한 자리에서 잡으므로, 무엇이 왔는지는
+    # 메시지로만 구분된다.
+    assert "ACCESS_REFUSED" in str(exc.value)
+
+
+def test_topology_error_tuple_does_not_swallow_plain_channel_close():
+    """`ChannelClosed` 를 통째로 잡으면 안 된다 — 평범한 채널 종료까지 비재시도가 된다.
+
+    `reply_code=None` 인 종료(`_on_close_ok_frame`)는 소유권 문제가 아니라 일시적
+    장애다. 그걸 `MqConfigError` 로 분류하면 다음 배치가 재시도해야 할 것을 안 한다.
+    """
+    from aio_pika.exceptions import ChannelClosed
+
+    errors = mq.topology_config_errors()
+
+    assert ChannelClosed not in errors
+    assert not isinstance(ChannelClosed(None, None), errors)
+
+
+@pytest.mark.asyncio
 async def test_publish_does_not_relabel_config_error_as_retryable(monkeypatch):
     """🔴 `_publish` 의 광범위 except 가 설정 오류를 재시도 대상으로 바꾸면 안 된다.
 
