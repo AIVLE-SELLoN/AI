@@ -293,6 +293,12 @@ def is_guideline_target(alert: DetectionAlert) -> bool:
 
     판정 유형(`GUIDELINE_EXCLUDED_VERDICTS`)과 중복 판정은 하지 않는다 — 그건
     `CSGuidelineInput` 의 검증기가 이미 본다.
+
+    🔴 **소스는 안 본다 — 리뷰(`RVW-`)도 근거로 쓰는 것이 확정 정책이다(2026-08-11).**
+    나중에 "CS 문의만" 으로 정책이 바뀌면 `app/core/inquiries.py` 의 필터와 **이 게이트를
+    같이** 고쳐야 한다. 조회 쪽만 거르면 리뷰 전용 알림이 여기를 통과한 뒤
+    `build_guideline_input` 의 `ValueError` 로 죽어서, 바로 위 ⚠️ 가 막으려던 모양이
+    그대로 재현된다.
     """
     return bool(alert.evidence.inquiry_ids)
 

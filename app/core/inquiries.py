@@ -25,7 +25,7 @@ from collections.abc import Iterator, Sequence
 
 from app.core import raw_schema
 from app.core.raw_db import connect_readonly
-from app.core.schemas import DetectionAlert, LinkedCSInquiry
+from app.core.schemas import DetectionAlert, LinkedCSInquiry, Source
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,11 @@ def build_linked_inquiries(
     없이 만들어진다. 전부 빠져 빈 리스트가 되면 호출부에서 걸린다
     (`CSGuidelineInput.linked_inquiries` 는 `min_length=1`).
 
+    🔴 **`source` 값이 틀려도 그 문의는 살린다 — 출처 미상(None)으로 둘 뿐이다.**
+    나쁜 행 하나를 건너뛰는 위 규율이 여기에도 걸린다. `Source(...)` 를 그냥 부르면
+    `ValidationError` 가 호출부까지 올라가서 **값이 이상한 1건 때문에 그 알림의 문의가
+    통째로 사라진다**(문서 못 찾음이면 1건만 빠지는 것과 대비된다).
+
     Args:
         alert: 탐지 알림. `evidence.inquiry_ids` 가 대상 목록이다.
         documents: 배치가 읽은 원본 문서. 키는 `id` · `text` · `created_at`
@@ -65,6 +70,7 @@ def build_linked_inquiries(
     seen: set[str] = set()
     missing = 0
     blank = 0
+    bad_source = 0
 
     for inquiry_id in alert.evidence.inquiry_ids:
         if inquiry_id in seen:
@@ -81,11 +87,22 @@ def build_linked_inquiries(
             blank += 1
             continue
 
+        # `.get` 이다 — documents 계약엔 필수 키지만 이 함수를 부르는 스크립트·
+        # 테스트가 안 넣어도 죽지 않게 한다. 없으면 출처 미상(None).
+        raw_source = doc.get("source")
+        try:
+            source = Source(raw_source) if raw_source else None
+        except ValueError:
+            # 값이 틀린 경우도 세고 넘긴다 (`daily.py` 의 소스 파싱과 같은 모양).
+            bad_source += 1
+            source = None
+
         inquiries.append(
             LinkedCSInquiry(
                 item_id=inquiry_id,
                 raw_text=raw_text,
                 created_at=doc["created_at"],
+                source=source,
             )
         )
 
@@ -96,6 +113,15 @@ def build_linked_inquiries(
             alert.alert_id,
             missing,
             blank,
+        )
+    if bad_source:
+        # 경고를 따로 낸다 — 위와 결과가 다르다. 이쪽은 문의가 근거로 남고
+        # cs/review 구분만 사라진다.
+        logger.warning(
+            "alert=%s 출처 값 오류 %d건 — 출처 미상(None)으로 두고 문의는 살립니다"
+            " (cs/review 구분만 사라집니다)",
+            alert.alert_id,
+            bad_source,
         )
     return inquiries
 
@@ -115,11 +141,16 @@ def fetch_linked_inquiries(
     일시" 라 전자가 맞다. 이름이 같아서 그냥 매핑하면 조용히 틀린 값이 들어간다 —
     `voc_document` 뷰가 두 소스의 시각을 `occurred_at` 하나로 맞춰 두므로 그 뷰를 쓴다.
 
-    ⚠️ **리뷰(`RVW-`)도 딸려 온다.** `evidence.inquiry_ids` 는 리뷰 소스 알림이면
-    리뷰 ID 이고, 그게 그대로 "고객 작성 문의 원문" 으로 CS 가이드라인에 들어간다.
-    **기술 문제가 아니라 정책 질문("리뷰를 CS 답변 초안의 근거로 쓸 것인가")이라 여기서
-    거르지 않는다** — `build_linked_inquiries` 도 같은 동작이라 경로에 따라 답이 달라지지
-    않는다. 접두사로 구분은 가능하니 정책이 정해지면 한 줄이다(2026-08-07 미결).
+    ⚠️ **리뷰(`RVW-`)도 딸려 온다 — 그게 확정 정책이다(2026-08-11, 용준님과 합의).**
+    `evidence.inquiry_ids` 는 리뷰 소스 알림이면 리뷰 ID 다. 국내 커머스는 셀러가 리뷰에
+    답글을 달고 그것도 CS 업무라, 리뷰 전용 알림의 가이드라인을 버릴 이유가 없다.
+    구분이 필요한 쪽을 위해 `LinkedCSInquiry.source` 로 출처를 실어 보낸다.
+
+    🔴 **거르는 쪽으로 되돌리려면 `is_guideline_target()`(`app/reporting/cs_reply_service.py`)
+    도 같이 고쳐야 한다.** 그 게이트는 `bool(evidence.inquiry_ids)` 만 보므로 여기서만
+    필터를 걸면, 리뷰 전용 알림이 게이트를 통과한 뒤 `build_guideline_input` 의
+    `ValueError` 로 죽는다 — **정상 동작이 배치 요약의 "진짜 실패"로 집계된다**(그 함수
+    docstring 이 경계하는 바로 그 상황).
 
     Args:
         alert: 탐지 알림. `evidence.inquiry_ids` 가 대상 목록이다.
@@ -141,7 +172,7 @@ def fetch_linked_inquiries(
         for chunk in _chunks(ids, _ID_CHUNK):
             placeholders = ",".join("?" * len(chunk))
             rows += conn.execute(
-                "SELECT item_id, content, occurred_at"
+                "SELECT item_id, content, occurred_at, source"
                 f" FROM {raw_schema.VOC_DOCUMENT} WHERE item_id IN ({placeholders})",
                 chunk,
             ).fetchall()
@@ -151,7 +182,12 @@ def fetch_linked_inquiries(
     # documents 계약(`app/detection/loader.py`)의 키로 맞춰서 넘긴다 — 순서·중복·빈 원문
     # 정책을 여기서 다시 쓰지 않으려는 것이다. 두 벌이 되면 REST 와 배치의 근거가 갈린다.
     documents = [
-        {"id": row["item_id"], "text": row["content"], "created_at": row["occurred_at"]}
+        {
+            "id": row["item_id"],
+            "text": row["content"],
+            "created_at": row["occurred_at"],
+            "source": row["source"],
+        }
         for row in rows
     ]
     return build_linked_inquiries(alert, documents)
