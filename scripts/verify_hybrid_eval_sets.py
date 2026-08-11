@@ -12,7 +12,7 @@ llm_generated_700이 부자연스럽게 더 잘 맞으면(10%p 이상 차이) �
 
 평가셋 파일이 둘로 나뉘어 있는 이유 (2026-08-09)
 --------------------------------------------------
-AI Hub 71603 이용정책상 원문을 저장소에 두지 않는다. 그래서 relabel_300 은 두 파일이다.
+AI Hub 71630 이용정책상 원문을 저장소에 두지 않는다. 그래서 relabel_300 은 두 파일이다.
 
     eval/eval_sets/relabel_300_labels.csv   사람이 매긴 라벨 (커밋됨, 원문 없음)
     eval/eval_sets/relabel_300.csv          AI Hub 원문 (gitignore, 로컬에만)
@@ -56,7 +56,7 @@ import app.classification.service as classification_service  # noqa: E402
 def load_raw_texts(text_path: Path) -> dict[str, str]:
     """AI Hub 원문을 `id → raw_text` 로 읽는다 (2026-08-09 분리).
 
-    `relabel_300_labels.csv` 에는 **사람이 매긴 라벨만** 있고 원문이 없다. AI Hub 71603
+    `relabel_300_labels.csv` 에는 **사람이 매긴 라벨만** 있고 원문이 없다. AI Hub 71630
     이용정책상 원문을 저장소에 두지 않기 때문이다(.gitignore 참고). 채점하려면 원문이
     필요하므로 로컬 파일에서 `id` 로 조인한다.
 
@@ -71,8 +71,8 @@ def load_raw_texts(text_path: Path) -> dict[str, str]:
             "   채점하려면 로컬에 원문이 필요합니다. 둘 중 하나로 준비하세요.\n\n"
             "   ① 예전에 받아둔 relabel_300.csv 가 있으면 그 경로를 넘기세요\n"
             "      python scripts/verify_hybrid_eval_sets.py --relabel-text <경로>\n\n"
-            "   ② 없으면 AI Hub 71603 을 받아 같은 선정 규칙으로 다시 만드세요\n"
-            "      python scripts/select_relabel_300.py --data-dir ./aihub71603 \\\n"
+            "   ② 없으면 AI Hub 71630 을 받아 같은 선정 규칙으로 다시 만드세요\n"
+            "      python scripts/select_relabel_300.py --data-dir ./aihub71630 \\\n"
             "          --seed 11 --outfile eval/eval_sets/relabel_300.csv\n"
             "      (선정 로직·seed 가 같으므로 id 가 동일하게 붙습니다. 이 파일의\n"
             "       relabel_* 컬럼은 비어 있지만, 라벨은 labels 파일에서 오므로 상관없습니다)\n"
@@ -375,7 +375,7 @@ async def main_async(args: argparse.Namespace) -> None:
     import json
     from datetime import datetime
 
-    # 🔴 relabel_300 은 AI Hub 71603 리뷰다. 원문(raw_text)을 결과 JSON에 남기면 그 파일이
+    # 🔴 relabel_300 은 AI Hub 71630 리뷰다. 원문(raw_text)을 결과 JSON에 남기면 그 파일이
     # 곧 원문 사본이 되고, 커밋 시 AI Hub 이용정책 위반 소지가 생긴다(.gitignore 의
     # review_eval_*.json 주석과 같은 사유 — 2026-08-09 발견해 여기서도 막는다).
     # inquiry_id 는 남기므로 원문이 필요하면 relabel_300.csv 를 조회하면 된다.
@@ -383,7 +383,7 @@ async def main_async(args: argparse.Namespace) -> None:
     for m in relabel_result["single"].get("mismatches", []):
         m.pop("raw_text", None)
     relabel_result["single"]["mismatches_note"] = (
-        "AI Hub 71603 리뷰 원문(raw_text)은 이용정책상 저장하지 않는다. "
+        "AI Hub 71630 리뷰 원문(raw_text)은 이용정책상 저장하지 않는다. "
         "원문이 필요하면 inquiry_id 로 eval/eval_sets/relabel_300.csv 를 조회할 것."
     )
 

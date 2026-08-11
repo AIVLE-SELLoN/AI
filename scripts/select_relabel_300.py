@@ -1,12 +1,12 @@
 """
-71603 재라벨링 300건 선정
+71630 재라벨링 300건 선정
 ==========================
 프롬프트1 정식 평가셋(하이브리드 1,000건 = 재라벨링 300 + LLM생성 700) 중
-71603 재라벨링 몫 300건을 선정한다.
+71630 재라벨링 몫 300건을 선정한다.
 
 선정 기준
 --------
-- 소스: AI Hub 71603, Source=쇼핑몰, MainCategory=여성의류/남성의류
+- 소스: AI Hub 71630, Source=쇼핑몰, MainCategory=여성의류/남성의류
 - Split: Training만 (Validation은 최종 1회 검증용으로 따로 보관, 여기서 안 씀)
 - 제외: 프롬프트1·프롬프트2 few-shot에 이미 쓴 원문(총 17개) — 시험지 유출 방지
   (재라벨링 300건은 프롬프트1의 "시험지"이므로, 프롬프트1·2가 이미 "본 적 있는"
@@ -19,9 +19,9 @@
 
 사용법
 ------
-    python select_relabel_300.py --data-dir ./aihub71603 --seed 11 --outfile relabel_300.csv
+    python select_relabel_300.py --data-dir ./aihub71630 --seed 11 --outfile relabel_300.csv
 
---data-dir: 71603 zip을 풀어놓은 폴더(하위에 Training/Validation 폴더가 있는 구조)
+--data-dir: 71630 zip을 풀어놓은 폴더(하위에 Training/Validation 폴더가 있는 구조)
 """
 
 import argparse
@@ -78,7 +78,7 @@ def already_used(text: str) -> bool:
     return any(text.startswith(p) or p in text for p in USED_PREFIXES)
 
 
-def load_71603(data_dir: str) -> list[dict]:
+def load_71630(data_dir: str) -> list[dict]:
     files = sorted(glob.glob(f"{data_dir}/**/*.json", recursive=True))
     all_data = []
     for fp in files:
@@ -132,8 +132,8 @@ def select(candidates: dict[str, list[dict]], seed: int) -> list[dict]:
             selected.append({
                 "target_aspect": asp,
                 "raw_text": r["RawText"],
-                "gold_71603_aspect_label": r["_gold_aspect"],
-                "gold_71603_sentiment": r["_gold_sentiment"],
+                "gold_71630_aspect_label": r["_gold_aspect"],
+                "gold_71630_sentiment": r["_gold_sentiment"],
                 "source_file": r["_file"].split("/")[-1],
             })
     rng.shuffle(selected)  # aspect끼리 뭉치지 않게 섞기(재라벨링자 편향 방지)
@@ -142,7 +142,7 @@ def select(candidates: dict[str, list[dict]], seed: int) -> list[dict]:
 
 def write_csv(selected: list[dict], outfile: str):
     fieldnames = [
-        "id", "target_aspect", "raw_text", "gold_71603_aspect_label", "gold_71603_sentiment",
+        "id", "target_aspect", "raw_text", "gold_71630_aspect_label", "gold_71630_sentiment",
         "source_file", "relabel_aspect", "relabel_sentiment", "relabel_note",
     ]
     with open(outfile, "w", encoding="utf-8-sig", newline="") as f:
@@ -158,13 +158,13 @@ def write_csv(selected: list[dict], outfile: str):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data-dir", required=True, help="71603 압축 풀어놓은 폴더")
+    ap.add_argument("--data-dir", required=True, help="71630 압축 풀어놓은 폴더")
     ap.add_argument("--seed", type=int, default=11)
     ap.add_argument("--outfile", default="relabel_300.csv")
     args = ap.parse_args()
 
-    print("71603 로딩 중...")
-    all_data = load_71603(args.data_dir)
+    print("71630 로딩 중...")
+    all_data = load_71630(args.data_dir)
     print(f"전체 레코드 수: {len(all_data)}")
 
     candidates = build_candidates(all_data)

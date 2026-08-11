@@ -1,4 +1,4 @@
-id,target_aspect,gold_71603_aspect_label,gold_71603_sentiment,source_file,relabel_aspect,relabel_sentiment,relabel_note
+id,target_aspect,gold_71630_aspect_label,gold_71630_sentiment,source_file,relabel_aspect,relabel_sentiment,relabel_note
 RELABEL-0001,색상,색상,1,1-1.여성의류(82).json,색상,1,
 RELABEL-0002,색상,색상,1,1-1.여성의류(130).json,색상,1,
 RELABEL-0003,사이즈,사이즈,-1,1-1.여성의류(109).json,사이즈,-1,

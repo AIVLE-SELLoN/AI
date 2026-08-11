@@ -605,7 +605,7 @@ def build_rows_for_window_group(rows: list[dict], rng: random.Random, pid_map: d
                         # ⚠️ 항상 False — templates.yaml의 각 리뷰 문장은 단일 aspect·단일 감성만
                         # 담아서 만들어지므로(한 리뷰 안에서 같은 aspect가 상반된 감성으로 충돌하는
                         # 경우를 애초에 생성하지 않음), 이 Mock 데이터로는 mixed_signal=True 케이스를
-                        # 재현하지 못한다. 프롬프트2의 mixed_signal 정확도는 71603 평가셋(ver1~3
+                        # 재현하지 못한다. 프롬프트2의 mixed_signal 정확도는 71630 평가셋(ver1~3
                         # 성능테스트)으로 별도 검증해야 함 — 이 코퍼스의 한계로 기록.
                         "true_mixed_signal": False,
                     })

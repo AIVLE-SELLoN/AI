@@ -2039,7 +2039,7 @@
         "note": "유출 태깅 안 됨(tag_leaked_rows 미호출) — leak_filter 정보 없음",
         "applied": false
       },
-      "mismatches_note": "AI Hub 71603 리뷰 원문(raw_text)은 이용정책상 저장소에 커밋하지 않는다(.gitignore의 review_eval_*.json 주석 참고). 원문이 필요하면 inquiry_id로 eval/eval_sets/relabel_300.csv 를 조회할 것."
+      "mismatches_note": "AI Hub 71630 리뷰 원문(raw_text)은 이용정책상 저장소에 커밋하지 않는다(.gitignore의 review_eval_*.json 주석 참고). 원문이 필요하면 inquiry_id로 eval/eval_sets/relabel_300.csv 를 조회할 것."
     },
     "multi": {
       "n": 9,

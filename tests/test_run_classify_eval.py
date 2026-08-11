@@ -8,14 +8,18 @@ PR 리뷰(2026-08-05) 지적사항 반영: "신규 지표 3종에 테스트가 �
 
 from __future__ import annotations
 
+import asyncio
+import json
 import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
 # eval/은 app/과 달리 패키지가 아니라 스크립트 폴더라 경로를 직접 추가해야 임포트된다.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import eval.run_classify_eval as rce
 from eval.run_classify_eval import (
     compute_leak_map,
     operational_negative_rate,
@@ -430,3 +434,86 @@ class TestFewShotLeakFilter:
         result = score(rows, predictions)
         assert result["leak_filter"]["applied"] is True
         assert result["leak_filter"]["n_excluded_rows_in_sample"] == 0
+
+class TestClassifyCache:
+    """분류 캐시 — 전량 실행이 중간에 죽어도 이어서 돌 수 있어야 한다.
+
+    2026-08-11: 전량(4,827청크)을 돌리다 API 크레딧이 3,248청크째에 소진돼 70%만
+    채점된 결과가 나왔다. 캐시가 없어서 재개가 불가능했고 쓴 돈이 통째로 날아갔다.
+    """
+
+    @staticmethod
+    def _rows(n: int) -> list[dict]:
+        return [_row(f"INQ-{i:03d}", "색상", 0) for i in range(n)]
+
+    def test_resumes_from_partial_cache_and_does_not_recall_hits(self, tmp_path):
+        """캐시에 있는 건 다시 안 부른다 — 이게 재개의 전부다."""
+        rows = self._rows(10)
+        path = tmp_path / "c.json"
+        path.write_text(
+            json.dumps({f"INQ-{i:03d}": [{"aspect": "색상", "sentiment": 0}] for i in range(4)}),
+            encoding="utf-8",
+        )
+        called: list[str] = []
+
+        async def stub(part, chunk_size, concurrency):
+            called.extend(r["inquiry_id"] for r in part)
+            return {r["inquiry_id"]: [{"aspect": "소재", "sentiment": -1}] for r in part}, []
+
+        with mock.patch.object(rce, "run_batch_chunks", stub):
+            preds, failed = asyncio.run(rce.run_with_cache(rows, 2, 2, "batch", path))
+
+        assert called == [f"INQ-{i:03d}" for i in range(4, 10)], "적중분을 다시 부르면 안 된다"
+        assert failed == []
+        assert len(preds) == 10
+        assert preds["INQ-000"][0]["aspect"] == "색상", "기존 캐시 값을 덮어쓰면 안 된다"
+
+    def test_failed_ids_are_not_cached(self, tmp_path):
+        """무응답은 캐시에 안 넣는다 — 넣으면 실패가 영구히 굳는다."""
+        rows = self._rows(4)
+        path = tmp_path / "c.json"
+
+        async def stub(part, chunk_size, concurrency):
+            ids = [r["inquiry_id"] for r in part]
+            bad = [i for i in ids if i == "INQ-002"]
+            return {i: [{"aspect": "소재", "sentiment": -1}] for i in ids if i not in bad}, bad
+
+        with mock.patch.object(rce, "run_batch_chunks", stub):
+            preds, failed = asyncio.run(rce.run_with_cache(rows, 2, 2, "batch", path))
+
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        assert failed == ["INQ-002"]
+        assert "INQ-002" not in saved, "실패를 캐시하면 다음 실행이 영영 재시도를 안 한다"
+        assert len(saved) == 3 and len(preds) == 3
+
+    def test_cache_saved_incrementally_so_a_crash_keeps_progress(self, tmp_path):
+        """묶음마다 디스크에 쓴다 — 중간에 죽어도 앞부분은 남아야 한다."""
+        rows = self._rows(6)
+        path = tmp_path / "c.json"
+        seen: list[int] = []
+
+        async def stub(part, chunk_size, concurrency):
+            if seen:  # 두 번째 묶음에서 죽는다
+                raise RuntimeError("크레딧 소진")
+            seen.append(1)
+            return {r["inquiry_id"]: [{"aspect": "소재", "sentiment": -1}] for r in part}, []
+
+        with mock.patch.object(rce, "run_batch_chunks", stub), pytest.raises(RuntimeError):
+            asyncio.run(rce.run_with_cache(rows, 2, 2, "batch", path))
+
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        assert len(saved) == 4, "죽기 전 묶음(2청크×2건)은 디스크에 남아야 한다"
+
+    def test_fingerprint_splits_on_prompt_and_data(self, tmp_path):
+        """지문이 안 갈리면 옛 라벨로 새 문서를 채점한다 — 제일 나쁜 실패다."""
+        rows = self._rows(3)
+        other = [dict(r, raw_text=r["raw_text"] + "!") for r in rows]
+        assert rce.data_fingerprint(rows) != rce.data_fingerprint(other), "본문이 바뀌면 갈려야"
+        assert rce.data_fingerprint(rows) == rce.data_fingerprint(self._rows(3)), "같으면 같아야"
+
+        a = rce.cache_path_for(rows, "classify_aspect_v5", "batch", 0)
+        b = rce.cache_path_for(rows, "classify_aspect_v5", "per_item", 0)
+        c = rce.cache_path_for(rows, "classify_aspect_v5", "batch", 300)
+        assert a.name != b.name, "mode 가 다르면 다른 파일"
+        assert a.name != c.name, "표본 크기가 다르면 다른 파일"
+        assert "full" in a.name and "limit300" in c.name
