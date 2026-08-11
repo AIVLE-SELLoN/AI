@@ -15,6 +15,19 @@
 뒤 발행하고 **되받아서** 확인한다. 백엔드의 `main.inbound` 가 하는 일과 같다.
 
 LLM 을 부르지 않는다(비용 0). 픽스처로 만든 알림·개선안·가이드라인을 쓴다.
+
+큐를 왜 직접 declare 하나
+-------------------------
+exchange 는 `mq.resolve_exchange()` 를 타지만 **큐는 `channel.declare_queue()` 를 직접
+부른다.** `mq_consumer.resolve_queue()` 를 경유하지 않는 게 의도다 — 그 함수의 계약은
+"`ai.inbound` 는 **남의 큐**이니 `durable=True` 로 확인만 한다" 인데, 여기서 만드는 건
+`smoke.` 접두어가 붙은 **우리 소유 일회용 큐**(`durable=False`·`auto_delete=True`)라
+성질이 반대다. 경유시키면 두 용도가 한 함수에 섞여 그쪽 계약이 흐려진다.
+
+그래서 `require_local_topology_target()` 가드도 이 큐에는 안 걸린다. 남의 토폴로지를
+선점할 수 없기 때문이다 — 이름이 겹치지 않고, 연결이 끊기면 브로커가 지운다. 다만
+**운영 브로커를 향해 돌리면 거기에 일회용 큐가 잠깐 생기긴 한다.** `--host` 기본값이
+`localhost` 라 운영 호스트를 직접 타이핑해야 도달하는 경로다.
 """
 
 from __future__ import annotations

@@ -467,14 +467,84 @@ async def test_does_not_redeclare_someone_elses_exchange(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_declares_topology_only_when_told_to(monkeypatch):
-    """로컬 docker-compose 처럼 아무것도 없는 환경에서만 우리가 만든다."""
+    """로컬 docker-compose 처럼 아무것도 없는 환경에서만 우리가 만든다.
+
+    ⚠️ `mq_host` 를 여기서 명시한다. 가드가 호스트도 보는데 기본값이 `""`(fail-closed)
+    이라, `.env` 에 기대면 **`.env` 를 만든 사람만 통과하는 테스트**가 된다.
+    """
     settings = mq.get_settings()
     monkeypatch.setattr(settings, "mq_declare_topology", True)
+    monkeypatch.setattr(settings, "mq_host", "localhost")
     channel = _FakeChannel()
 
     await mq.resolve_exchange(channel, settings)
 
     assert channel.calls == ["declare_exchange"]
+
+
+@pytest.mark.asyncio
+async def test_refuses_to_declare_against_a_remote_broker(monkeypatch):
+    """🔴 플래그가 켜져 있어도 브로커가 로컬이 아니면 **선언 자체를 시도하지 않는다.**
+
+    `topology_config_errors()` 로는 이 사고를 못 막는다 — 그쪽은 브로커가 거부했을 때
+    문구를 고쳐 주는 것이고, 운영 exchange 가 **아직 없으면 declare 는 그냥 성공한다.**
+    그러면 quorum·DLX·TTL 없는 우리 인자로 운영 토폴로지가 선점되고, 백엔드가 나중에
+    정상 토폴로지를 올릴 때 그쪽이 터진다.
+
+    그래서 `calls` 가 비어 있는지까지 본다. 예외만 확인하면 "브로커에 다녀온 뒤 터진 것"
+    과 구분되지 않는다.
+    """
+    settings = mq.get_settings()
+    monkeypatch.setattr(settings, "mq_declare_topology", True)
+    monkeypatch.setattr(settings, "mq_host", "mq.sellon.example.com")
+    channel = _FakeChannel()
+
+    with pytest.raises(MqConfigError) as exc:
+        await mq.resolve_exchange(channel, settings)
+
+    assert channel.calls == []
+    # 이 가드에 걸린 사람은 지금 막 운영 전환을 하는 중이다 — 뭘 내려야 하는지 알려준다.
+    assert "MQ_DECLARE_TOPOLOGY=false" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_remote_broker_is_fine_when_we_do_not_declare(monkeypatch):
+    """⚠️ 반대 방향 — **운영 설정(플래그 off + 원격 호스트)은 막으면 안 된다.**
+
+    가드를 `mq_declare_topology` 와 무관하게 걸면 운영에서 발행이 통째로 죽는다.
+    운영이야말로 원격 호스트가 정상인 환경이다.
+    """
+    settings = mq.get_settings()
+    monkeypatch.setattr(settings, "mq_declare_topology", False)
+    monkeypatch.setattr(settings, "mq_host", "mq.sellon.example.com")
+    channel = _FakeChannel()
+
+    await mq.resolve_exchange(channel, settings)
+
+    assert channel.calls == ["get_exchange"]
+
+
+@pytest.mark.parametrize("host", sorted(mq.LOCAL_BROKER_HOSTS))
+def test_local_hosts_are_recognized(host):
+    assert mq.is_local_broker_host(host)
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["mq.sellon.example.com", "10.0.1.20", "sellon-rabbitmq.prod.internal"],
+)
+def test_remote_hosts_are_not_local(host):
+    assert not mq.is_local_broker_host(host)
+
+
+@pytest.mark.parametrize("host", ["", None, "   "])
+def test_missing_host_is_not_local(host):
+    """`mq_host` 기본값이 `""` 이다. 여기서 참을 주면 미설정 환경이 로컬로 통과한다."""
+    assert not mq.is_local_broker_host(host)
+
+
+def test_host_comparison_ignores_case_and_padding():
+    assert mq.is_local_broker_host("  LocalHost  ")
 
 
 class _RefusingChannel:
@@ -510,6 +580,10 @@ async def test_declare_on_someone_elses_exchange_says_which_flag_to_drop(monkeyp
 
     settings = mq.get_settings()
     monkeypatch.setattr(settings, "mq_declare_topology", True)
+    # 로컬 호스트여야 이 경로에 온다 — 원격이면 `require_local_topology_target()` 이
+    # 브로커에 가기 전에 세운다. 즉 여기는 **선언을 시도할 자격은 있었는데 거부당한**
+    # 경우이고, 로컬 브로커에 옛 실험이 남긴 exchange 가 있으면 실제로 난다.
+    monkeypatch.setattr(settings, "mq_host", "localhost")
     channel = _RefusingChannel(
         declare_exc=ChannelPreconditionFailed("PRECONDITION_FAILED - inequivalent arg")
     )
@@ -565,6 +639,9 @@ async def test_permission_denied_is_a_config_error_too(monkeypatch, declare_topo
 
     settings = mq.get_settings()
     monkeypatch.setattr(settings, "mq_declare_topology", declare_topology)
+    # declare 쪽 파라미터가 로컬 가드에 먼저 걸리지 않게 한다 — 여기서 재현하려는 건
+    # **권한 거부**이지 "만들면 안 되는 브로커" 가 아니다.
+    monkeypatch.setattr(settings, "mq_host", "localhost")
     refused = ChannelAccessRefused("ACCESS_REFUSED - configure access to exchange")
     channel = _RefusingChannel(declare_exc=refused, get_exc=refused)
 

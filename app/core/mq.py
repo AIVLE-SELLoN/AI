@@ -432,6 +432,61 @@ def topology_config_errors() -> tuple[type[Exception], ...]:
     return (ChannelAccessRefused, ChannelNotFoundEntity, ChannelPreconditionFailed)
 
 
+LOCAL_BROKER_HOSTS = frozenset(
+    {"localhost", "127.0.0.1", "::1", "rabbitmq", "host.docker.internal"}
+)
+"""로컬로 인정하는 브로커 호스트.
+
+`rabbitmq` 는 docker-compose 서비스명, `host.docker.internal` 은 컨테이너 안에서 호스트를
+가리키는 이름이다. 그 밖은 전부 "우리 것이 아닐 수 있다" 로 본다 — **허용 목록이지
+차단 목록이 아니다.** 운영 호스트명을 미리 알 수 없으니 반대로는 못 막는다.
+
+⚠️ **목록은 여기 한 곳이다.** `scripts/setup_local_mq.py` 가 이걸 import 한다 —
+두 벌로 두면 한쪽에만 호스트를 추가했을 때 스크립트는 통과하는데 런타임은 막히는
+(또는 그 반대의) 상태가 조용히 생긴다.
+"""
+
+
+def is_local_broker_host(host: str | None) -> bool:
+    """브로커 호스트가 로컬인가. `.env` 값의 대소문자·공백은 무시한다.
+
+    빈 값은 **로컬이 아니다** — `mq_host` 기본값이 `""` 이라, 여기서 참을 주면
+    아무것도 설정 안 한 환경이 로컬로 통과한다(fail-closed).
+    """
+    return (host or "").strip().lower() in LOCAL_BROKER_HOSTS
+
+
+def require_local_topology_target(settings: Any) -> None:
+    """토폴로지를 만들려 한다면 브로커가 로컬인지 확인한다.
+
+    `MQ_DECLARE_TOPOLOGY` 는 **"우리가 토폴로지를 만든다" 는 뜻이지 "여기가 로컬이다" 가
+    아니다.** 운영 접속정보(C1)를 `.env` 에 넣으면서 플래그를 같이 안 내리면 declare 분기가
+    그대로 운영 브로커를 향한다.
+
+    🔴 **`topology_config_errors()` 로는 이걸 못 막는다.** 그쪽은 브로커가 **거부했을 때**
+    문구를 고쳐 주는 것이라, 운영 exchange·큐가 **아직 없고 우리 계정에 `configure` 권한이
+    있으면 declare 가 예외 없이 성공한다** — quorum·DLX·TTL 없이 우리 인자로 선점되고,
+    백엔드가 나중에 정상 토폴로지를 올릴 때 그쪽이 터진다. 사고가 조용한 쪽은 이 경로다.
+
+    플래그가 꺼져 있으면 아무것도 보지 않는다 — 운영은 그 상태이고, 운영 호스트를
+    거부하면 안 된다.
+
+    Raises:
+        MqConfigError: 플래그가 켜져 있는데 브로커가 로컬이 아님 — 재시도로 안 고쳐진다.
+    """
+    if not settings.mq_declare_topology or is_local_broker_host(settings.mq_host):
+        return
+
+    raise MqConfigError(
+        f"MQ_DECLARE_TOPOLOGY=true 인데 MQ_HOST={settings.mq_host!r} 는 로컬 브로커가 "
+        "아닙니다. 운영 토폴로지(exchange·큐·바인딩)는 백엔드 인프라 소유라 우리가 "
+        "만들면 안 됩니다 — 운영이라면 MQ_DECLARE_TOPOLOGY=false 로 내리고 MQ_VHOST 도 "
+        f"같이 확인하세요 (지금 {settings.mq_vhost!r}). "
+        f"로컬로 인정하는 호스트: {', '.join(sorted(LOCAL_BROKER_HOSTS))} "
+        "(docs/mq_events.md §2-1)"
+    )
+
+
 async def resolve_exchange(channel: Any, settings: Any) -> Any:
     """`app.events` 토픽 exchange 를 얻는다. **남의 토폴로지를 다시 선언하지 않는다.**
 
@@ -447,11 +502,14 @@ async def resolve_exchange(channel: Any, settings: Any) -> Any:
     안 알려줘서, 이 자리에 걸린 사람이 로그만 보고는 플래그를 찾아가지 못한다.
 
     Raises:
-        MqConfigError: exchange 소유권이 어긋남 — 재시도해도 안 고쳐진다.
+        MqConfigError: exchange 소유권이 어긋남 — 재시도해도 안 고쳐진다. 브로커가 거부한
+            경우와, 애초에 만들면 안 되는 브로커를 향한 경우(`require_local_topology_target`)
+            둘 다 여기로 나온다.
     """
     from aio_pika import ExchangeType
 
     config_errors = topology_config_errors()
+    require_local_topology_target(settings)
 
     if settings.mq_declare_topology:
         try:

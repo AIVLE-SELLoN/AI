@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.core import mq
 from scripts.setup_local_mq import LOCAL_BROKER_HOSTS, assert_local_broker
 
 
@@ -68,3 +69,15 @@ def test_empty_host_is_refused():
     """빈 값(기본값)은 로컬이 아니다 — 접속이 어차피 안 되지만 여기서 먼저 세운다."""
     with pytest.raises(SystemExit):
         assert_local_broker(_settings(""))
+
+
+def test_shares_one_allowlist_with_the_runtime_guard():
+    """🔴 목록이 두 벌이면 스크립트와 런타임의 "로컬" 정의가 조용히 갈린다.
+
+    `resolve_exchange()`·`resolve_queue()` 가 같은 목록으로 막는다. 한쪽에만 호스트를
+    추가하면 **스크립트로는 큐를 만들 수 있는데 배치는 발행을 거부하는**(또는 그 반대의)
+    환경이 생기고, 그건 로컬 검증이 운영을 대변하지 못한다는 뜻이다.
+
+    같은 객체인지까지 본다 — 값만 비교하면 복사본을 만들어 놓고도 통과한다.
+    """
+    assert LOCAL_BROKER_HOSTS is mq.LOCAL_BROKER_HOSTS

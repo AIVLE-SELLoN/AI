@@ -35,18 +35,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.core.mq import LOCAL_BROKER_HOSTS, is_local_broker_host
+
 MAIN_INBOUND = "main.inbound"
 AI_BINDING = "ai.#"
-
-LOCAL_BROKER_HOSTS = frozenset(
-    {"localhost", "127.0.0.1", "::1", "rabbitmq", "host.docker.internal"}
-)
-"""로컬로 인정하는 브로커 호스트.
-
-`rabbitmq` 는 docker-compose 서비스명, `host.docker.internal` 은 컨테이너 안에서 호스트를
-가리키는 이름이다. 그 밖은 전부 "우리 것이 아닐 수 있다" 로 본다 — **허용 목록이지
-차단 목록이 아니다.** 운영 호스트명을 미리 알 수 없으니 반대로는 못 막는다.
-"""
 
 
 def assert_local_broker(settings) -> None:
@@ -59,8 +51,15 @@ def assert_local_broker(settings) -> None:
     스크립트는 성공으로 끝나며, 백엔드가 나중에 정상 토폴로지를 올릴 때
     `PRECONDITION_FAILED` 로 처음 드러난다.
 
+    판정은 `app.core.mq` 것을 쓴다 — 런타임(`resolve_exchange`·`resolve_queue`)이 같은
+    함수로 막으므로, 여기에 목록을 따로 두면 두 경로의 "로컬" 정의가 갈린다.
+    **거부하는 이유는 런타임과 다르다** — 런타임은 남의 exchange·큐를 우리 인자로
+    선점하는 걸 막는 것이고, 이 스크립트는 그 위에 **백엔드 소유 큐를 통째로 만드는**
+    일까지 한다.
+
     Raises:
-        SystemExit: 로컬이 아니거나 플래그가 꺼져 있을 때.
+        SystemExit: 로컬이 아니거나 플래그가 꺼져 있을 때. **`MqConfigError` 가 아니다** —
+            CLI 는 트레이스백이 아니라 읽을 수 있는 한 문단으로 멈춰야 한다.
     """
     if not settings.mq_declare_topology:
         raise SystemExit(
@@ -69,8 +68,7 @@ def assert_local_broker(settings) -> None:
             "PRECONDITION_FAILED 로 거부당합니다 (docs/mq_events.md §2-1)."
         )
 
-    host = (settings.mq_host or "").strip().lower()
-    if host not in LOCAL_BROKER_HOSTS:
+    if not is_local_broker_host(settings.mq_host):
         raise SystemExit(
             f"MQ_HOST={settings.mq_host!r} 는 로컬 브로커가 아닙니다. 중단합니다.\n"
             "이 스크립트는 백엔드 소유 큐(main.inbound·ai.inbound)를 만들기 때문에, "
