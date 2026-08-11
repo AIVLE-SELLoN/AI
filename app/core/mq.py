@@ -213,7 +213,8 @@ async def publish_anomaly_analyzed(
 
     Raises:
         MqDisabledError: `MQ_ENABLED=false`. **삼키지 말 것** — 안 나간 알림이다.
-        MqPublishError: 접속·발행 실패.
+        MqConfigError: 설정 오류(companyId 미설정·토폴로지 소유권). **재시도 대상이 아니다.**
+        MqPublishError: 접속·발행 실패. 재시도 대상.
     """
     await _publish(
         ANOMALY_ANALYZED,
@@ -238,7 +239,8 @@ async def publish_guideline_generated(
     Raises:
         ValueError: `guideline_id` 가 없을 때(= 월간 리포트).
         MqDisabledError: `MQ_ENABLED=false`.
-        MqPublishError: 접속·발행 실패.
+        MqConfigError: 설정 오류(companyId 미설정·토폴로지 소유권). **재시도 대상이 아니다.**
+        MqPublishError: 접속·발행 실패. 재시도 대상.
     """
     payload = build_guideline_payload(callback)
     await _publish(
@@ -265,7 +267,8 @@ async def publish_report_generated(
         ValueError: `report_id` 가 없거나 `guideline_id` 가 채워져 있을 때, 또는 상품 단위
             상태(HOLD·FAILED_VALIDATION)를 실으려 할 때.
         MqDisabledError: `MQ_ENABLED=false`.
-        MqPublishError: 접속·발행 실패.
+        MqConfigError: 설정 오류(companyId 미설정·토폴로지 소유권). **재시도 대상이 아니다.**
+        MqPublishError: 접속·발행 실패. 재시도 대상.
     """
     payload = build_report_payload(callback, report_month)
     await _publish(REPORT_GENERATED, payload, trace_id, key=str(callback.report_id))
@@ -279,6 +282,11 @@ async def _publish(event_type: str, payload: dict, trace_id: str, *, key: str) -
 
     Publisher Confirm 을 켜고 보낸다 — 확인 없이 성공을 반환하면 호출부가 그 알림을
     발행 성공으로 캐시에 넣어 재알림이 7일간 억제된다.
+
+    Raises:
+        MqDisabledError: `MQ_ENABLED=false`.
+        MqConfigError: 설정 오류. **재시도 대상이 아니다** — 아래 except 절 참고.
+        MqPublishError: 접속·발행 실패, 또는 unroutable(`_require_ack`). 재시도 대상.
     """
     settings = get_settings()
     if not settings.mq_enabled:
@@ -304,6 +312,11 @@ async def _publish(event_type: str, payload: dict, trace_id: str, *, key: str) -
         confirmation = await exchange.publish(
             message, routing_key=event_type, timeout=settings.mq_publish_timeout_seconds
         )
+    except MqConfigError:
+        # 설정 오류는 재시도 대상이 아니다. MqPublishError 로 싸면 "다음 배치가 다시
+        # 시도한다" 는 뜻이 되는데, 플래그를 안 고치는 한 영원히 같은 자리에서 실패한다.
+        # 위 MQ_COMPANY_ID 검사가 이미 MqConfigError 로 나가고 있어 그쪽과 짝을 맞춘다.
+        raise
     except Exception as exc:
         # 연결은 닫지 않는다. connect_robust 가 스스로 복구하고, 채널이 브로커 오류로
         # 닫혔으면 _get_exchange 가 다음 호출에서 새로 연다. 여기서 끊으면 그 복구를
@@ -378,6 +391,47 @@ def _build_message(envelope: dict, body: bytes) -> Any:
     )
 
 
+def topology_config_errors() -> tuple[type[Exception], ...]:
+    """토폴로지 소유권이 어긋났다는 뜻의 브로커 오류들. **재시도로 안 고쳐진다.**
+
+    여기서 토폴로지는 **exchange(`app.events`) · 큐(`main.inbound`·`ai.inbound`) ·
+    둘을 잇는 바인딩(`ai.#`·`feedback.#`)** 셋을 묶어 부르는 말이고, 소유권은 "그걸
+    누가 만드느냐"다 — 운영은 백엔드 인프라가 만들고 우리는 쓰기만 한다(§2-1).
+    `MQ_DECLARE_TOPOLOGY` 가 그 스위치다.
+
+    `aiormq` 가 채널 오류 코드를 `ChannelClosed` 하위로 매핑한다(`aiormq/channel.py`
+    `EXCEPTION_MAPPING`) — 403 ACCESS_REFUSED · 404 NOT_FOUND · 406 PRECONDITION_FAILED.
+
+    ⚠️ **403 을 빼지 말 것.** 운영 토폴로지는 백엔드 인프라 소유라 우리 AI 계정에
+    `configure`/`write` 권한이 없을 수 있고(`mq_consumer.consume()` 이 같은 이유로
+    운영에서 바인딩을 시도하지 않는다), 그때 브로커는 406 이 아니라 403 을 준다.
+    빠지면 권한 오류가 `MqPublishError`(= 재시도 대상)로 나가서, 권한을 안 고치는 한
+    매일 같은 자리에서 실패하는 것이 일시적 장애처럼 보인다.
+
+    `ChannelClosed` 를 통째로 잡지는 않는다 — `reply_code=None` 인 평범한 채널 종료까지
+    삼켜서 **일시적 장애를 비재시도로 오분류**한다.
+
+    `mq_consumer.resolve_queue()` 가 같은 튜플을 쓴다. 두 벌로 두면 한쪽만 넓혔을 때
+    exchange 는 잡히고 큐는 안 잡히는 상태가 조용히 생긴다.
+
+    ⚠️ **`aio_pika.exceptions` 가 아니라 `aiormq.exceptions` 에서 가져온다.** 정의도
+    raise 도 aiormq 쪽이고(`aiormq/channel.py`), aio_pika 는 일부만 re-export 하는데
+    거기에 `ChannelAccessRefused` 가 **빠져 있다**(9.5.7 확인 — 나머지 둘은 있어서
+    셋을 같이 쓰려다 ImportError 로 알았다). 클래스 객체는 양쪽이 동일하다.
+
+    ⚠️ 모듈 상단에서 import 하지 않는 이유는 이 파일의 다른 전송 계층 import 와 같다 —
+    `app/batch/daily.py` 의 `_missing(exc, "app.core.mq")` 폴백이 `exc.name` 을 보므로,
+    상단 import 는 패키지 부재 시 폴백이 아니라 크래시가 된다.
+    """
+    from aiormq.exceptions import (
+        ChannelAccessRefused,
+        ChannelNotFoundEntity,
+        ChannelPreconditionFailed,
+    )
+
+    return (ChannelAccessRefused, ChannelNotFoundEntity, ChannelPreconditionFailed)
+
+
 async def resolve_exchange(channel: Any, settings: Any) -> Any:
     """`app.events` 토픽 exchange 를 얻는다. **남의 토폴로지를 다시 선언하지 않는다.**
 
@@ -387,15 +441,45 @@ async def resolve_exchange(channel: Any, settings: Any) -> Any:
 
     `MQ_DECLARE_TOPOLOGY=true` 일 때만 우리가 만든다 — 로컬 docker-compose 처럼 아직
     아무것도 없는 환경 전용이다. 컨슈머도 같은 함수를 쓴다.
+
+    두 방향 다 **설정이 어긋났다는 뜻이라 `MqConfigError` 로 바꿔서 올린다.** 브로커가
+    주는 원문(`PRECONDITION_FAILED - inequivalent arg 'type'`)은 무엇을 고쳐야 하는지를
+    안 알려줘서, 이 자리에 걸린 사람이 로그만 보고는 플래그를 찾아가지 못한다.
+
+    Raises:
+        MqConfigError: exchange 소유권이 어긋남 — 재시도해도 안 고쳐진다.
     """
     from aio_pika import ExchangeType
 
+    config_errors = topology_config_errors()
+
     if settings.mq_declare_topology:
-        return await channel.declare_exchange(
-            settings.mq_exchange, ExchangeType.TOPIC, durable=True
-        )
+        try:
+            return await channel.declare_exchange(
+                settings.mq_exchange, ExchangeType.TOPIC, durable=True
+            )
+        except config_errors as exc:
+            raise MqConfigError(
+                f"exchange '{settings.mq_exchange}' 를 선언하지 못했습니다 "
+                f"(MQ_DECLARE_TOPOLOGY=true, vhost={settings.mq_vhost!r}, 브로커: {exc}). "
+                "이미 다른 설정으로 존재하거나 선언 권한이 없다는 뜻이고, 둘 다 이 브로커가 "
+                "exchange 를 이미 소유하고 있다는 신호입니다 — 운영이라면 "
+                "MQ_DECLARE_TOPOLOGY=false 로 내리고 MQ_VHOST 도 같이 확인하세요. "
+                "운영 토폴로지는 백엔드 인프라 소유입니다 (docs/mq_events.md §2-1)"
+            ) from exc
+
     # ensure=True 면 passive declare 로 존재만 확인한다 — 없으면 그 자리에서 터진다.
-    return await channel.get_exchange(settings.mq_exchange, ensure=True)
+    try:
+        return await channel.get_exchange(settings.mq_exchange, ensure=True)
+    except config_errors as exc:
+        raise MqConfigError(
+            f"exchange '{settings.mq_exchange}' 를 vhost {settings.mq_vhost!r} 에서 "
+            f"확인하지 못했습니다 (브로커: {exc}). 로컬이면 "
+            "`python scripts/setup_local_mq.py` 를 먼저 돌리세요 "
+            "(MQ_DECLARE_TOPOLOGY=true 필요). 운영이면 백엔드가 아직 안 만들었거나 "
+            "MQ_VHOST·계정 권한이 틀린 것이고, 어느 쪽이든 **우리가 만들면 안 됩니다** "
+            "(docs/mq_events.md §2-1)"
+        ) from exc
 
 
 async def _get_exchange(settings: Any) -> Any:

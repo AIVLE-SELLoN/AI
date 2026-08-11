@@ -477,6 +477,140 @@ async def test_declares_topology_only_when_told_to(monkeypatch):
     assert channel.calls == ["declare_exchange"]
 
 
+class _RefusingChannel:
+    """토폴로지 호출을 브로커가 거부하는 채널. 두 방향을 각각 재현한다."""
+
+    def __init__(self, declare_exc=None, get_exc=None) -> None:
+        self._declare_exc = declare_exc
+        self._get_exc = get_exc
+
+    async def declare_exchange(self, *_args, **_kwargs):
+        if self._declare_exc is not None:
+            raise self._declare_exc
+        return "exchange"
+
+    async def get_exchange(self, *_args, **_kwargs):
+        if self._get_exc is not None:
+            raise self._get_exc
+        return "exchange"
+
+
+@pytest.mark.asyncio
+async def test_declare_on_someone_elses_exchange_says_which_flag_to_drop(monkeypatch):
+    """🔴 운영 브로커에 `MQ_DECLARE_TOPOLOGY=true` 로 붙었을 때의 안내.
+
+    브로커 원문은 `PRECONDITION_FAILED - inequivalent arg 'type'` 뿐이라 **무엇을
+    고쳐야 하는지를 안 알려준다.** 연동 주에 이 로그만 보고 플래그를 찾아가야 하는데,
+    그 자리에서 헤매라고 둘 이유가 없다.
+
+    타입도 같이 본다 — `MqPublishError`(재시도 대상)로 나가면 안 된다. 플래그를
+    안 고치는 한 다음 배치도 같은 자리에서 실패한다.
+    """
+    from aio_pika.exceptions import ChannelPreconditionFailed
+
+    settings = mq.get_settings()
+    monkeypatch.setattr(settings, "mq_declare_topology", True)
+    channel = _RefusingChannel(
+        declare_exc=ChannelPreconditionFailed("PRECONDITION_FAILED - inequivalent arg")
+    )
+
+    with pytest.raises(MqConfigError) as exc:
+        await mq.resolve_exchange(channel, settings)
+
+    message = str(exc.value)
+    assert "MQ_DECLARE_TOPOLOGY=false" in message
+    assert settings.mq_exchange in message
+    # vhost 도 같이 봐야 한다 — 운영 전환 시 둘 다 안 내리면 같은 자리에서 또 걸린다.
+    assert "vhost" in message
+
+
+@pytest.mark.asyncio
+async def test_missing_exchange_points_at_the_local_setup_script(monkeypatch):
+    """반대 방향 — `MQ_DECLARE_TOPOLOGY=false` 인데 exchange 가 아직 없을 때.
+
+    로컬이면 `setup_local_mq.py` 를 안 돌린 것이고, 운영이면 백엔드가 아직 안 만들었거나
+    vhost 가 틀린 것이다. **어느 쪽이든 우리가 만들면 안 된다**는 것까지 문구에 남긴다 —
+    여기서 막힌 사람의 첫 유혹이 플래그를 켜는 것이라서다.
+    """
+    from aio_pika.exceptions import ChannelNotFoundEntity
+
+    settings = mq.get_settings()
+    monkeypatch.setattr(settings, "mq_declare_topology", False)
+    channel = _RefusingChannel(
+        get_exc=ChannelNotFoundEntity("NOT_FOUND - no exchange 'app.events'")
+    )
+
+    with pytest.raises(MqConfigError) as exc:
+        await mq.resolve_exchange(channel, settings)
+
+    message = str(exc.value)
+    assert "setup_local_mq.py" in message
+    assert "우리가 만들면 안 됩니다" in message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("declare_topology", [True, False])
+async def test_permission_denied_is_a_config_error_too(monkeypatch, declare_topology):
+    """🔴 403 ACCESS_REFUSED 도 설정 오류다 — 406/404 만 잡으면 새어 나간다.
+
+    운영 토폴로지는 백엔드 인프라 소유라 우리 AI 계정에 `configure`/`write` 권한이
+    없을 수 있다 (`consume()` 이 같은 이유로 운영에서 바인딩을 시도하지 않는다).
+    그때 브로커가 주는 건 406 이 아니라 **403** 이라, 빠뜨리면 권한 오류가
+    `MqPublishError`(= 다음 배치가 다시 시도한다)로 나간다 — 권한을 안 고치는 한
+    매일 같은 자리에서 실패하는 것이 일시적 장애처럼 보인다.
+    """
+    # ⚠️ `aio_pika.exceptions` 에는 이 이름이 없다 — 정의처인 aiormq 에서 가져온다
+    #    (`topology_config_errors()` 주석 참고).
+    from aiormq.exceptions import ChannelAccessRefused
+
+    settings = mq.get_settings()
+    monkeypatch.setattr(settings, "mq_declare_topology", declare_topology)
+    refused = ChannelAccessRefused("ACCESS_REFUSED - configure access to exchange")
+    channel = _RefusingChannel(declare_exc=refused, get_exc=refused)
+
+    with pytest.raises(MqConfigError) as exc:
+        await mq.resolve_exchange(channel, settings)
+
+    # 브로커 원문을 문구에 남긴다 — 403·404·406 을 한 자리에서 잡으므로, 무엇이 왔는지는
+    # 메시지로만 구분된다.
+    assert "ACCESS_REFUSED" in str(exc.value)
+
+
+def test_topology_error_tuple_does_not_swallow_plain_channel_close():
+    """`ChannelClosed` 를 통째로 잡으면 안 된다 — 평범한 채널 종료까지 비재시도가 된다.
+
+    `reply_code=None` 인 종료(`_on_close_ok_frame`)는 소유권 문제가 아니라 일시적
+    장애다. 그걸 `MqConfigError` 로 분류하면 다음 배치가 재시도해야 할 것을 안 한다.
+    """
+    from aio_pika.exceptions import ChannelClosed
+
+    errors = mq.topology_config_errors()
+
+    assert ChannelClosed not in errors
+    assert not isinstance(ChannelClosed(None, None), errors)
+
+
+@pytest.mark.asyncio
+async def test_publish_does_not_relabel_config_error_as_retryable(monkeypatch):
+    """🔴 `_publish` 의 광범위 except 가 설정 오류를 재시도 대상으로 바꾸면 안 된다.
+
+    `MqPublishError` 의 정의가 "재시도 대상(다음 배치가 다시 시도한다)" 이라, 설정
+    오류를 그걸로 싸면 **영원히 같은 자리에서 실패하는 것**이 일시적 장애처럼 보인다.
+    바로 위 `MQ_COMPANY_ID` 검사가 이미 `MqConfigError` 로 나가고 있어 그쪽과 짝을 맞춘다.
+    """
+    settings = mq.get_settings()
+    monkeypatch.setattr(settings, "mq_enabled", True)
+    monkeypatch.setattr(settings, "mq_company_id", "SLN-test")
+
+    async def _boom(_settings):
+        raise MqConfigError("exchange 소유권이 어긋났습니다")
+
+    monkeypatch.setattr(mq, "_get_exchange", _boom)
+
+    with pytest.raises(MqConfigError):
+        await mq._publish("ai.anomaly.analyzed", {"a": 1}, "trace-1", key="ALT-1")
+
+
 # ── ai.report.generated (§5) ─────────────────────────────────────
 
 
