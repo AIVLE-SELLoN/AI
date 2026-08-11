@@ -115,7 +115,7 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
 | `verdict` | enum | 정상 \| 편중형 \| 전역형 \| 잠정 전역형 \| 구분불가 |
 | `significant_channels` | string[] | 유의 판정된 채널 |
 | `excluded_channels` | string[] | 표본 부족(<10)으로 판정 제외된 채널 |
-| `channel_rates` | object[] | `[{channel, rate, excluded}]`. 탐지 당시 `stats.source`·`main_aspect`·현재 7일 기준 채널별 부정률(0~1). 관측 표본이 없으면 rate는 null |
+| `channel_rates` | object[] | `[{channel, rate, excluded, total}]`. 탐지 당시 `stats.source`·`main_aspect`·현재 7일 기준 채널별 부정률(0~1)과 그 분모. 관측 표본이 없으면 rate는 null·total은 0. §4.1.1 |
 | `main_aspect` | enum | 색상 \| 사이즈 \| 소재 \| 파손 \| 오배송 \| 기타 |
 | `sub_aspects` | object[] | `[{aspect, delta, recommended_action}]`. 없으면 `[]` |
 | `stats` | object | `{source, cur_rate, past_rate, delta, p_value, bh_significant, cur_total}` |
@@ -133,6 +133,41 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
 - **`source_signals`의 `null` ≠ `false`.** `null` = 표본 부족 보류(판정 안 함),
   `false` = 판정했으나 미발화. 화면에서 합치면 안 된다.
 - **`root_cause`가 null인 판정이 있다.** 전역형·구분불가·스코프밖은 원인 분류를 안 한다.
+
+### 4.1.1 `channel_rates` 상세
+
+`total` = 그 채널의 현재 윈도우 총문의(= `rate`의 분모, aspect 무관). **`stats.cur_total`로
+대체할 수 없다** — 그쪽은 대표 채널 1개분이다(전역형이면 delta 최대 채널 값).
+"6.9%(203건 기준)"처럼 비율 옆에 표본을 붙이는 용도다.
+
+**`total`의 `null`과 `0`은 뜻이 다르다.**
+
+| 값 | 뜻 | 나오는 곳 |
+|---|---|---|
+| `null` | **구버전 알림** — 이 필드가 생기기(2026-08-11) 전에 발행돼 저장된 것 | 백엔드 상세 조회 전용 |
+| `0` | **관측 0건** — 그 채널에 문서가 아예 없었다. `rate: null`·`excluded: true`와 세트 | 신규 발행 |
+| `>= 1` | 현재 윈도우 총문의 | 신규 발행 |
+
+⚠️ **신규 발행 이벤트에는 항상 정수가 실린다.** 관측이 없어도 `null`이 아니라 `0`이다 —
+신규에서 `null`이 나오면 위 구분이 무너진다.
+
+**채널 상태(유의/보통/제외)는 payload에서 파생한다 — `status` 필드를 따로 싣지 않는다.**
+
+| 상태 | 판정 |
+|---|---|
+| 제외 | `channel_rates[].excluded == true` |
+| 유의 | `channel ∈ significant_channels` |
+| 보통 | 나머지 |
+
+두 집합은 **배타다** — 표본 부족으로 보류된 채널은 검정 자체를 안 타서 유의가 될 수 없다.
+같은 사실을 두 곳에 실으면 한쪽만 바뀌었을 때 조용히 어긋나므로 파생 규칙으로 둔다.
+
+⚠️ **`excluded`를 "표본 부족"으로 단정하면 안 된다.** 사유가 셋이고(표본<10 · 과거 표본 0 ·
+분류 커버리지 미달) `total`로 구분되는 건 첫 번째뿐이다.
+
+⚠️ **변화폭(현재−과거)을 막대 길이로 그려도 유의 채널이 제일 길다는 보장이 없다.**
+실측 예: 쿠팡 +5.6%p(유의) vs 네이버 +12.5%p(표본 42건, 유의 아님). 채널 강조는 크기가
+아니라 `significant_channels`로 할 것.
 
 ### 4.2 `recommendation` 객체 (Agent3 산출물)
 
@@ -192,9 +227,9 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
     "significant_channels": ["COUPANG"],
     "excluded_channels": [],
     "channel_rates": [
-      { "channel": "COUPANG", "rate": 0.13, "excluded": false },
-      { "channel": "NAVER", "rate": 0.05, "excluded": false },
-      { "channel": "ZIGZAG", "rate": null, "excluded": true }
+      { "channel": "COUPANG", "rate": 0.13, "excluded": false, "total": 200 },
+      { "channel": "NAVER", "rate": 0.05, "excluded": false, "total": 160 },
+      { "channel": "ZIGZAG", "rate": null, "excluded": true, "total": 0 }
     ],
     "main_aspect": "색상",
     "sub_aspects": [

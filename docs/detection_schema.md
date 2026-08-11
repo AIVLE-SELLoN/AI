@@ -44,9 +44,9 @@
   "significant_channels": ["COUPANG"],
   "excluded_channels": [],
   "channel_rates": [
-    { "channel": "COUPANG", "rate": 0.13, "excluded": false },
-    { "channel": "NAVER", "rate": 0.05, "excluded": false },
-    { "channel": "ZIGZAG", "rate": null, "excluded": true }
+    { "channel": "COUPANG", "rate": 0.13, "excluded": false, "total": 200 },
+    { "channel": "NAVER", "rate": 0.05, "excluded": false, "total": 160 },
+    { "channel": "ZIGZAG", "rate": null, "excluded": true, "total": 0 }
   ],
 
   "main_aspect": "색상",
@@ -101,7 +101,7 @@
 | verdict | enum | 정상 / 편중형 / 전역형 / 잠정 전역형 / 구분불가 (5종) | 보류는 verdict 아님(채널 상태, §5.2). golden과 동일 enum | 전체 |
 | significant_channels | array |  | 유의 판정된 채널 목록 | 인사이트 |
 | excluded_channels | array |  | 표본<10으로 판정 제외된 채널 ("표본 부족" 병기용) | 대시보드 |
-| channel_rates | array of object | [{channel, rate, excluded}] | 탐지 당시 `stats.source`·`main_aspect`·현재 윈도우 기준 채널별 부정률 스냅샷. rate는 0~1이며 관측 표본이 없으면 null | 대시보드 |
+| channel_rates | array of object | [{channel, rate, excluded, total}] | 탐지 당시 `stats.source`·`main_aspect`·현재 윈도우 기준 채널별 부정률 스냅샷. rate는 0~1이며 관측 표본이 없으면 null. `total`은 그 비율의 분모(그 채널 현재 윈도우 총문의, aspect 무관) — 관측 0건이면 **0**이고, `null`은 이 필드가 생기기(2026-08-11) 전 발행분뿐이다. 채널 상태(유의/보통/제외)는 `significant_channels`·`excluded`에서 파생하며 별도 필드로 싣지 않는다 (`docs/mq_events.md` §4.1.1) | 대시보드 |
 | main_aspect | enum | aspect 6종 | delta 최대 aspect (로직 [4]) | Agent3 |
 | sub_aspects | array of object | [{aspect, delta, recommended_action}] | 동시 유의한 부가 aspect + 각자의 조치. 로직 [4] "병기" 원칙. 없으면 [] | 인사이트·대시보드 |
 | stats.source | enum | cs / review | 이 통계가 어느 소스 기준인지. 리뷰만 발화 시 review | 평가·인사이트 |
