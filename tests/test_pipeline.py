@@ -524,6 +524,10 @@ async def test_pipeline_emits_biased_alert_for_single_channel():
     assert alert.stats.bh_significant is True
     assert [row.rate for row in alert.channel_rates] == pytest.approx([0.30, 0.05, 0.05])
     assert not any(row.excluded for row in alert.channel_rates)
+    # 발행되는 알림엔 `None`(= 구버전 마커)이 섞이지 않는다. 세 채널이 같은 값인 건
+    # 분모가 aspect 무관이라 그렇고, 채널별로 달라지는 경우는 단위 테스트가 잡는다
+    # (test_channel_rates_carry_the_denominator).
+    assert [row.total for row in alert.channel_rates] == [40, 40, 40]
     assert alert.root_cause.label == "사진_색감_오차"
     assert alert.recommended_action == RecommendedAction.GENERATE_RECOMMENDATION
     assert alert.detection_confidence == DetectionConfidence.MEDIUM  # 시점 미확인
