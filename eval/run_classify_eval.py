@@ -155,6 +155,28 @@ def data_fingerprint(rows: list[dict]) -> str:
     return h.hexdigest()[:8]
 
 
+def _corpus_fingerprint() -> str | None:
+    """실험②가 정본으로 쓰는 케이스 윈도우 지문 — 두 실험의 코퍼스 대조용.
+
+    ③의 `data_fingerprint` 는 **이 실행이 채점한 행**의 지문이라 `--limit`/`--seed` 에
+    따라 달라진다. 그것만으로는 "②와 같은 코퍼스인가"를 못 본다. 같은 `data/golden` 을
+    읽으면서 모집단이 다르기 때문이다. 그래서 ②의 값을 같이 남긴다.
+
+    run_pipeline_eval 은 `eval/` 안에 있고 패키지가 아니라, 임포트 실패는 정상 경로다
+    (경로 설정 없이 이 파일만 임포트한 경우). 그때는 None — 기록을 못 남길 뿐 채점은 돈다.
+    """
+    try:
+        sys.path.insert(0, str(ROOT / "eval"))
+        from run_pipeline_eval import CONFIG_ANOMALY, collect_documents
+        from run_pipeline_eval import data_fingerprint as pipeline_fingerprint
+        from run_pipeline_eval import read as read_config
+
+        documents, _ = collect_documents(read_config(CONFIG_ANOMALY))
+        return pipeline_fingerprint(documents)
+    except Exception:  # noqa: BLE001 — 기록용 부가 정보라 채점을 막으면 안 된다
+        return None
+
+
 def cache_path_for(rows: list[dict], prompt_version: str, mode: str, limit: int) -> Path:
     tag = "full" if limit <= 0 else f"limit{limit}"
     fp = f"{prompt_fingerprint(prompt_version)}_{data_fingerprint(rows)}"
@@ -918,6 +940,14 @@ async def main_async(args: argparse.Namespace) -> None:
                                                     # run_at 빼고 구분 불가능했음
             "leak_threshold": args.leak_threshold,  # 🆕 §6 B안 — few-shot 유출 판정 유사도 임계
             "few_shot_examples_checked": len(few_shot_texts),  # 🆕 파싱된 few-shot 개수(0이면 검사 자체가 스킵됨)
+            # 🆕 어느 코퍼스에서 잰 값인가 (2026-08-11). ②는 이 장치를 갖고 있는데 ③에는
+            # 없어서, 재생성 후 "같은 id 에 다른 텍스트"가 들어가도 조용히 통과했다.
+            # 08-11 실행분은 사람이 사후 대조해서 07276bc5 임을 확인했지만 다음엔 못 잡는다.
+            #   sample  이 실행이 실제로 채점한 행의 (id, 본문) 해시 — 캐시 키와 같은 값
+            #   corpus  실험②가 정본으로 쓰는 케이스 윈도우 지문. 두 실험을 나란히 놓고
+            #           같은 코퍼스인지 대조하려면 이게 필요하다(전량이어도 모집단이 다름)
+            "data_fingerprint": data_fingerprint(sampled),
+            "corpus_fingerprint": _corpus_fingerprint(),
         },
         "scores": score(
             sampled,
