@@ -145,11 +145,14 @@ async def resolve_queue(channel: Any, queue_name: str, settings: Any) -> Any:
     topic·durable 이 우연히 같을 수 있어서 통과하고 여기서 터지는 순서가 나온다.
 
     Raises:
-        MqConfigError: 큐 소유권이 어긋남 — 재시도해도 안 고쳐진다.
+        MqConfigError: 큐 소유권이 어긋남 — 재시도해도 안 고쳐진다. 브로커가 거부한 경우와,
+            애초에 만들면 안 되는 브로커를 향한 경우(`require_local_topology_target`) 둘 다
+            여기로 나온다.
     """
-    from app.core.mq import topology_config_errors
+    from app.core.mq import require_local_topology_target, topology_config_errors
 
     config_errors = topology_config_errors()
+    require_local_topology_target(settings)
 
     if settings.mq_declare_topology:
         try:
