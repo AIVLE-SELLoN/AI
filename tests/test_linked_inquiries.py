@@ -169,21 +169,77 @@ def test_fetch_keeps_evidence_order_and_skips_missing(tmp_path, caplog):
 
 
 def test_fetch_reads_reviews_too(tmp_path):
-    """⚠️ 리뷰(`RVW-`)도 딸려 온다 — 여기서 거르지 않는다.
+    """🔴 리뷰(`RVW-`)도 근거로 쓴다 — **확정 정책이다(2026-08-11)**, 미결이 아니다.
 
-    리뷰 소스 알림이면 `evidence.inquiry_ids` 가 `RVW-*` 라, 그게 그대로 "고객 작성
-    문의 원문" 으로 CS 가이드라인에 들어간다. **정책 질문("리뷰를 CS 답변 초안의 근거로
-    쓸 것인가", 2026-08-07 미결)이라 코드가 먼저 정하지 않는다.** documents 경로도 같은
-    동작이라 경로에 따라 답이 달라지지 않는다는 게 지금 지킬 것이다.
+    리뷰 소스 알림이면 `evidence.inquiry_ids` 가 `RVW-*` 이고, 그게 그대로 CS 가이드라인
+    근거로 들어간다. 국내 커머스는 셀러가 리뷰에 답글을 달고 그것도 CS 업무라, 리뷰 전용
+    알림의 가이드라인을 버릴 이유가 없다.
+
+    되돌리려면 `is_guideline_target()` 도 같이 고쳐야 한다 — 조회 쪽만 거르면 리뷰 전용
+    알림이 게이트를 통과한 뒤 `ValueError` 로 죽어서 **정상 동작이 배치 요약의 실패로
+    집계된다**. 이 테스트가 그 되돌림을 잡는 자리다.
     """
     db = _raw_db(
         tmp_path,
         review_rows=[("RVW-1", "P001", "NAVER", "리뷰 원문", "2026-08-27T10:00:00+09:00")],
     )
 
-    assert [i.item_id for i in fetch_linked_inquiries(_alert(["RVW-1"]), db_path=db)] == [
-        "RVW-1"
-    ]
+    inquiries = fetch_linked_inquiries(_alert(["RVW-1"]), db_path=db)
+
+    assert [i.item_id for i in inquiries] == ["RVW-1"]
+    # 거르지 않는 대신 **구분은 할 수 있게** 실어 보낸다. 접두사 파싱에 기대지 않는다.
+    assert inquiries[0].source == Source.REVIEW
+
+
+def test_both_paths_agree_on_source(tmp_path):
+    """🔴 두 조회 경로가 같은 `source` 를 낸다.
+
+    `build_`(배치가 든 documents)와 `fetch_`(raw DB 직접)는 호출부가 다를 뿐 같은 근거를
+    내야 한다. 한쪽만 출처를 채우면 **REST 로 디버깅한 결과와 운영 배치 결과가 갈려서**,
+    "리뷰였는데 문의로 보였다" 를 재현으로 확인할 수 없게 된다.
+
+    `fetch_` 가 `build_` 를 그대로 부르는 구조라 지금은 자동으로 맞지만, 쿼리에서
+    `source` 를 빼먹으면 조용히 `None` 이 된다 — 그걸 잡는다.
+    """
+    db = _raw_db(
+        tmp_path,
+        cs_rows=[
+            (
+                "INQ-1",
+                "P001",
+                "COUPANG",
+                "문의 원문",
+                "2026-08-27T10:00:00+09:00",
+                "2026-08-27T11:00:00+09:00",
+            )
+        ],
+        review_rows=[("RVW-1", "P001", "NAVER", "리뷰 원문", "2026-08-27T10:00:00+09:00")],
+    )
+    alert = _alert(["INQ-1", "RVW-1"])
+
+    fetched = fetch_linked_inquiries(alert, db_path=db)
+    built = build_linked_inquiries(
+        alert,
+        [
+            {**_doc("INQ-1"), "source": "cs"},
+            {**_doc("RVW-1"), "source": "review"},
+        ],
+    )
+
+    assert [i.source for i in fetched] == [Source.CS, Source.REVIEW]
+    assert [i.source for i in fetched] == [i.source for i in built]
+
+
+def test_build_without_source_key_does_not_crash():
+    """`documents` 계약엔 필수 키지만, 안 넣는 호출부가 있어도 죽지 않는다.
+
+    이 함수는 스크립트·테스트에서도 불린다. 출처를 모르면 `None`(출처 미상)이고,
+    그건 "cs 로 단정" 보다 정직하다.
+    """
+    doc = _doc("INQ-1")
+    doc.pop("source")
+
+    assert build_linked_inquiries(_alert(["INQ-1"]), [doc])[0].source is None
 
 
 def test_fetch_without_evidence_never_opens_the_db(tmp_path):

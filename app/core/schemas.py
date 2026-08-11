@@ -847,6 +847,13 @@ class LinkedCSInquiry(BaseModel):
     item_id: str = Field(..., alias="cs_id", description="CS 문의 고유 ID")
     raw_text: str = Field(..., description="고객 작성 문의 원문")
     created_at: datetime = Field(..., description="CS 접수 일시")
+    source: Source | None = Field(
+        None,
+        description=(
+            "원문 출처(cs=문의 / review=리뷰). 리뷰 소스 알림은 이 목록이 리뷰 원문이다"
+            " — 리뷰도 근거로 쓰는 것이 확정 정책(2026-08-11). None 은 출처 미상"
+        ),
+    )
 
     model_config = ConfigDict(populate_by_name=True)
 
