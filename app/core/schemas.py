@@ -138,6 +138,12 @@ class ChannelRate(BaseModel):
     발행돼 백엔드에 저장된 구버전 알림뿐이고, ``0`` 은 그 채널에 문서가 아예 없었다는
     관측 결과다(``rate=None``·``excluded=True`` 와 세트). **신규 발행은 관측이 없어도
     ``0`` 을 싣는다** — 기본값 ``None`` 이 그대로 나가면 백엔드가 둘을 못 가린다.
+
+    🔴 **선택 필드인 이유는 백엔드 사정만이 아니다 — 필수로 만들면 우리 엔드포인트가
+    깨진다.** ``POST /recommendations/hitl`` 의 ``ProcessHitlRequest.alert`` 가
+    ``DetectionAlert`` 라, Spring Boot 가 저장해둔 알림이 그대로 되돌아온다. 필수 필드면
+    구버전 알림에 대한 HITL 요청이 전부 422 가 되고, 그건 **컬렉션2 축적 경로가 막히는
+    것**이다.
     """
 
     channel: Channel
