@@ -670,11 +670,21 @@ async def run_batch(
             "분류 커버리지 미달 %d슬롯 — 검정에서 제외됩니다", len(unreliable)
         )
 
-    # 🔴 **KST 로 오늘을 정한다.** 이 값은 캐시 만료를 재는 날짜 경계라 §3 대상이다 —
-    #    `date.today()` 는 호스트 로컬이라 **UTC 컨테이너에서 KST 오전 9시 이전에 돌면
-    #    하루 전 날짜**가 나오고, 그날치 발행 기록이 보관 기간 밖으로 밀려 억제가 하루
-    #    일찍 풀린다(`_to_kst` 가 막는 것과 같은 모양의 사고). 문서가 하나도 없어
-    #    window_end 를 못 정했을 때만 타는 분기다.
+    # **KST 로 오늘을 정한다.** 문서가 하나도 없어 window_end 를 데이터에서 못 정했을
+    # 때만 타는 분기다. `date.today()` 는 호스트 로컬이라 UTC 컨테이너에서는 KST 보다
+    # 하루 이른 날짜가 나오는데, **날짜 경계는 §3 이 KST 로 못박았으므로** 여기서도
+    # 같은 기준을 쓴다.
+    #
+    # ⚠️ **운영 사고를 막는 코드가 아니다 — 계약 일관성용이다** (서영님 사후 리뷰, PR #68).
+    #    이 분기에서 `prior` 는 바로 아래 로그의 건수에만 쓰인다: documents 가 0건이라
+    #    `detect_anomaly` 가 빈 rows 로 즉시 반환하고(`service.py` 의 `if not rows`),
+    #    `save_published` 도 window_end 가 None 이라 건너뛴다. `load_prior_alerts` 는
+    #    읽기 전용이라 상태 파일도 안 바뀐다.
+    #
+    #    처음엔 "기록이 하루 일찍 잘려 억제가 빨리 풀린다"고 적었는데 **방향이 반대다** —
+    #    `cutoff = window_end - STATE_RETENTION_DAYS` 이고 `window_end >= cutoff` 를
+    #    보관하므로, 날짜가 이르면 cutoff 도 일러져 오히려 **더 오래** 남는다
+    #    (실측: today=1/28 → 3건 보관, today=1/29 → 2건).
     prior = load_prior_alerts(window_end or datetime.now(KST).date(), state_path)
     logger.info(
         "입력 items=%d documents=%d prior_alerts=%d window_end=%s",
