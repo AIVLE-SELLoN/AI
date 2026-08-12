@@ -25,7 +25,23 @@
   python scripts/classification_worker.py --limit 50      # 시험 실행(과금 상한)
   python scripts/classification_worker.py --follow        # 프로듀서 재생을 준실시간 추종
   python scripts/classification_worker.py --retry-failed  # dead-letter 재처리(회수)
+  python scripts/classification_worker.py --reclassify-stale --limit 500
+                                                          # 프롬프트 교체 후 backfill
   python scripts/classification_worker.py --dry-run       # DB 없이 샘플 2건으로 추론만 확인
+
+분류기 버전과 탐지(2026-08-12)
+  적재 시 `classified_item` 에 **버전 3종**(prompt·model·pipeline)을 남기고, 탐지
+  (`app/batch/daily.py`)는 **활성 버전 행만** 읽는다. 탐지가 35일(현재 7 + 과거 28)을 한 번에
+  보기 때문에, 그 사이 분류기를 바꾸면 한 검정 안에 두 라벨러의 결과가 섞이고
+  **분류기 개선이 고객 이상처럼 발화한다.**
+
+  축이 셋인 이유: 프롬프트가 그대로여도 라벨러는 바뀐다. 모델(`LLM_MODEL`)을 갈아끼우거나
+  후처리·폴백을 손보면 프롬프트 파일은 한 글자도 안 바뀌었는데 분포가 달라진다.
+
+  그래서 어느 축이든 올렸으면 `--reclassify-stale` 로 지난 구간을 맞춰야 한다. 안 맞추면
+  탐지 쪽이 옛 행을 안 읽어 과거 기준선이 빈 채로 남는다(daily.py 가 그 상태를 세운다).
+  적재가 upsert 라 재분류 결과가 옛 결과를 덮어쓴다 — 예전 `INSERT OR IGNORE` 시절에는
+  재분류를 돌려도 아무것도 안 바뀌었다.
 
 DB 는 mock_producer 와 같은 sqlite 파일을 기본으로 본다(추가 의존성 없음).
 운영 DB 로 옮길 때는 open_db() 와 raw_schema 의 DDL 만 교체하면 되도록 표준 SQL 범위로
@@ -55,9 +71,11 @@ from app.classification.service import (
     classify_aspect,
     explode_to_rows,
 )
+from app.config import get_settings
 from app.core import constants, raw_schema
 from app.core.exceptions import LlmParseError
 from app.core.schemas import Aspect, AspectSentiment, ClassifiedItem, Sentiment, Source
+from app.core.versions import CLASSIFIER_PIPELINE_VERSION
 
 logging.basicConfig(
     level=logging.INFO,
@@ -209,11 +227,35 @@ ORDER BY f.occurred_at, f.item_id
 LIMIT ?
 """
 
-CLASSIFIED_ITEM_INSERT = """
-INSERT OR IGNORE INTO classified_item (item_id, source, classified_at, prompt_version)
-VALUES (?, ?, ?, ?)
+# 🔴 **`INSERT OR IGNORE` 였다가 upsert 로 바꿨다(2026-08-12).** 옛 형태는 이미 있는
+#    item_id 를 **통째로 무시**해서, 재분류를 돌려도 `prompt_version` 도 결과도 옛 값
+#    그대로 남았다. 그러면 프롬프트를 바꿔도 지난 문서는 영원히 옛 라벨러 기준이고,
+#    탐지가 35일(현재 7 + 과거 28)을 한 번에 읽으므로 **한 검정 안에 두 프롬프트 결과가
+#    섞인다.** 부정률이 움직인 원인이 고객인지 우리가 라벨러를 바꾼 탓인지 구분되지
+#    않는데, Fisher 검정은 그 둘을 못 가른다 — 프롬프트 개선이 그대로 고객 이상 알림으로
+#    발화한다. `--reclassify-stale` 이 이 upsert 위에서 돈다.
+CLASSIFIED_ITEM_UPSERT = """
+INSERT INTO classified_item
+    (item_id, source, classified_at, prompt_version, model_version, pipeline_version)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(item_id) DO UPDATE SET
+    source           = excluded.source,
+    classified_at    = excluded.classified_at,
+    prompt_version   = excluded.prompt_version,
+    model_version    = excluded.model_version,
+    pipeline_version = excluded.pipeline_version
 """
 
+# ⚠️ 재분류 전에 **옛 aspect 를 지운다.** `classified_item_aspect` 는
+#    UNIQUE(item_id, aspect) 라 INSERT OR IGNORE 만으로는 갱신이 안 되고, 그렇다고
+#    upsert 로 바꾸기만 하면 **새 프롬프트가 더 이상 안 내는 aspect 가 옛 행으로 남는다**
+#    (예: v4 가 붙이던 `기타` 를 v5 가 안 붙여도 그 행은 그대로). 부모는 새 버전인데
+#    자식은 두 버전이 섞인 상태가 되고, 분자를 세는 쪽은 그걸 구분할 방법이 없다.
+#    지우고 다시 넣는 편이 "이 문서의 aspect 집합 = 이 프롬프트의 출력"을 지킨다.
+CLASSIFIED_ITEM_ASPECT_DELETE = "DELETE FROM classified_item_aspect WHERE item_id = ?"
+
+# 위에서 먼저 지우므로 남는 충돌은 **한 응답 안의 중복 aspect** 뿐이다(LLM 이 같은 속성을
+# 두 번 낸 경우). 그건 무시하는 게 맞아서 OR IGNORE 를 유지한다.
 CLASSIFIED_ITEM_ASPECT_INSERT = """
 INSERT OR IGNORE INTO classified_item_aspect (item_id, aspect, sentiment, mixed_signal)
 VALUES (?, ?, ?, ?)
@@ -237,6 +279,64 @@ COUNT_SOURCE_SQL = f"""
 SELECT COUNT(*) FROM {SOURCE_VIEW}
 WHERE source IN ({', '.join(['?'] * len(CLASSIFY_SOURCES))})
   AND content IS NOT NULL AND TRIM(content) <> ''
+"""
+
+# ── 활성 분류기 버전 ─────────────────────────────────────────────────────────
+#
+# 술어와 파라미터 순서는 `raw_schema` 가 정본이다(적재는 여기, 조회는 `app/batch/daily.py`
+# — 둘이 각자 적으면 한쪽만 고쳐졌을 때 조회가 0건이 되고 그건 미탐이라 조용하다).
+_STALE_PREDICATE = f"NOT ({raw_schema.active_version_predicate('c')})"
+
+
+def active_version_params() -> tuple[str, str, str, str]:
+    """활성 분류기 신원 — `(프롬프트CS, 프롬프트리뷰, 모델, 파이프라인)`.
+
+    ⚠️ `service_module` 과 설정을 **매번 다시 읽는다**(값을 상수로 굳히지 않는다). 적재 쪽
+       `save_classified_items()` 도 같은 출처를 보므로, 테스트가 버전을 monkeypatch 했을 때
+       **적재와 조회가 같은 값을 본다.** 한쪽만 굳으면 stale 조회가 0건이 되고, 그건
+       "재분류할 게 없다"로 조용히 통과한다.
+    """
+    return raw_schema.version_params(
+        service_module.PROMPT_ASPECT_VERSION,
+        service_module.PROMPT_SENTIMENT_VERSION,
+        get_settings().llm_model,
+        CLASSIFIER_PIPELINE_VERSION,
+    )
+
+
+# 재분류(backfill) 대상 조회 — 이미 분류됐지만 **지금 분류기로 만든 게 아닌** 문서.
+#
+# ⚠️ 신규 조회(FETCH_BATCH_SQL)로는 절대 안 잡힌다. 그쪽은 커서보다 뒤에 있는 원문만
+#    보는데, 이 행들은 커서가 이미 지나간 자리에 있다. 분류기를 바꿔도 지난 문서가
+#    영원히 옛 라벨로 남던 이유가 이것이고, 그래서 별도 조회가 필요하다.
+#
+# ⚠️ 페이지 커서가 필요한 이유는 `--retry-failed` 와 같다 — 재분류에 **실패**한 건은
+#    여전히 stale 이라 다음 조회에 다시 잡힌다. 그러면 한 번 실행하는 동안 같은 건을
+#    무한히 다시 LLM 에 태운다.
+FETCH_STALE_SQL = f"""
+SELECT r.item_id, r.source, r.channel_id, r.channel_product_id, r.product_group_id,
+       r.content, r.occurred_at
+FROM classified_item c
+JOIN {SOURCE_VIEW} r ON r.item_id = c.item_id
+WHERE {_STALE_PREDICATE}
+  AND r.content IS NOT NULL AND TRIM(r.content) <> ''
+  AND (r.occurred_at > ? OR (r.occurred_at = ? AND r.item_id > ?))
+ORDER BY r.occurred_at, r.item_id
+LIMIT ?
+"""
+
+COUNT_STALE_SQL = f"SELECT COUNT(*) FROM classified_item c WHERE {_STALE_PREDICATE}"
+
+# 적재된 분류 결과의 버전 분포. 섞여 있으면 탐지가 그만큼 조용히 틀어진다.
+COUNT_BY_VERSION_SQL = """
+SELECT source,
+       COALESCE(prompt_version, '(미기록)') AS prompt,
+       COALESCE(model_version, '(미기록)') AS model,
+       COALESCE(pipeline_version, '(미기록)') AS pipeline,
+       COUNT(*) AS n
+FROM classified_item
+GROUP BY source, prompt, model, pipeline
+ORDER BY source, n DESC
 """
 
 
@@ -343,6 +443,7 @@ class ClassificationWorker:
         limit: int | None = None,
         retry_failed: bool = False,
         max_attempts: int = DEAD_LETTER_MAX_ATTEMPTS,
+        reclassify_stale: bool = False,
     ) -> None:
         self.db_path = db_path
         self.batch_size = batch_size
@@ -355,9 +456,14 @@ class ClassificationWorker:
         # dead-letter 재처리 모드 — 신규 원본 대신 classification_failure 를 훑는다.
         self.retry_failed = retry_failed
         self.max_attempts = max_attempts
-        # 재처리 전용 페이지 커서(메모리에만 있음). 한 실행에서 같은 건을 두 번 부르지
-        # 않으려고 둔다 — DB 의 classification_cursor 와는 무관하다.
+        # 재분류(backfill) 모드 — 프롬프트가 바뀌어 옛 버전으로 남은 문서를 다시 태운다.
+        self.reclassify_stale = reclassify_stale
+        # 재처리·재분류 전용 페이지 커서(메모리에만 있음). 한 실행에서 같은 건을 두 번 부르지
+        # 않으려고 둔다 — DB 의 classification_cursor 와는 무관하다. 두 모드가 각자 쓴다
+        # (동시에 켤 수 없으므로 값이 섞이지는 않지만, 뜻이 다른 커서라 이름을 나눈다).
         self.retry_page_cursor: tuple[str, str] = ("", "")
+        self.stale_page_cursor: tuple[str, str] = ("", "")
+        self.total_reclassified = 0
         self.processed = 0
         self.conn: sqlite3.Connection | None = None
         self.is_running = True
@@ -383,11 +489,17 @@ class ClassificationWorker:
         last_occurred_at, last_item_id = self.load_cursor()
         logger.info(
             f"[WORKER STARTED] db={self.db_path}, batch={self.batch_size}, follow={self.follow}, "
-            f"retry_failed={self.retry_failed}, cursor=({last_occurred_at}, {last_item_id})"
+            f"retry_failed={self.retry_failed}, reclassify_stale={self.reclassify_stale}, "
+            f"cursor=({last_occurred_at}, {last_item_id})"
         )
 
         try:
-            self.run_retry_loop() if self.retry_failed else self.run_loop()
+            if self.reclassify_stale:
+                self.run_reclassify_loop()
+            elif self.retry_failed:
+                self.run_retry_loop()
+            else:
+                self.run_loop()
         finally:
             self.log_coverage()
             if self.conn:
@@ -397,6 +509,7 @@ class ClassificationWorker:
                 f"[WORKER STOPPED] 원문 {self.total_items}건 → classified_item {self.total_rows}행 적재"
                 f"{f', 실패 {self.total_failed}건' if self.total_failed else ''}"
                 f"{f', 재처리 성공 {self.total_recovered}건' if self.total_recovered else ''}"
+                f"{f', 재분류 {self.total_reclassified}건' if self.total_reclassified else ''}"
             )
 
     def run_loop(self) -> None:
@@ -440,6 +553,57 @@ class ClassificationWorker:
             # 이번 실행에서 이미 시도한 구간은 다시 잡지 않는다(건당 1회 시도 보장)
             self.retry_page_cursor = (rows[-1]["occurred_at"], rows[-1]["item_id"])
             self.process_batch(rows, advance_cursor=False)
+
+    def run_reclassify_loop(self) -> None:
+        """프롬프트 버전 backfill 전용 루프 — 옛 버전으로 남은 문서를 다시 분류한다.
+
+        **왜 필요한가.** 탐지는 35일(현재 7 + 과거 28)을 한 번에 읽는다. 프롬프트를
+        바꾸면 그 뒤로 들어오는 문서만 새 버전이라, 한동안 **과거 구간은 옛 프롬프트 ·
+        현재 구간은 새 프롬프트** 결과로 검정을 한다. 부정률 변화의 원인이 고객인지
+        라벨러 교체인지 구분이 안 되고, Fisher 검정은 그 둘을 못 가른다.
+        `app/batch/daily.py` 는 활성 버전 행만 읽어 섞임을 막는데, 그 상태로 두면 이번엔
+        과거 기준선이 비어 탐지가 아무것도 못 한다. **그 사이를 메우는 것이 이 모드다.**
+
+        커서는 건드리지 않는다(`advance_cursor=False`) — 신규 원본 진행과 독립이고,
+        여기서 미는 건 이미 지나간 구간이다.
+
+        ⚠️ **비용이 든다.** 대상 1건이 곧 LLM 호출 1회다(현재 목 데이터 96,524건 규모).
+           `--limit` 로 나눠 돌릴 수 있게 열어 뒀고, 중간에 끊겨도 끝난 만큼은 새 버전으로
+           남아 다음 실행이 이어받는다 — 재분류된 행은 더 이상 stale 조회에 안 잡힌다.
+
+        ⚠️ `--follow` 는 의미가 없어 무시한다. 대상이 고정 집합이라 다 돌면 끝이다.
+        """
+        total_stale = self.count_stale()
+        if not total_stale:
+            logger.info(
+                "[DONE] 재분류할 문서가 없습니다 — 적재된 분류 결과가 전부 활성 프롬프트"
+                f" 기준입니다(cs={service_module.PROMPT_ASPECT_VERSION},"
+                f" review={service_module.PROMPT_SENTIMENT_VERSION})."
+            )
+            return
+
+        logger.info(
+            f"[RECLASSIFY] 옛 프롬프트로 남은 문서 {total_stale}건 — 대상 1건당 LLM 1회입니다."
+            f"{f' 이번 실행은 {self.limit}건까지만 처리합니다.' if self.limit else ''}"
+        )
+
+        while self.is_running:
+            if self.limit is not None and self.processed >= self.limit:
+                logger.info(f"[LIMIT REACHED] 상한 {self.limit}건 재분류 완료 — 종료합니다.")
+                return
+
+            rows = self.fetch_stale_batch()
+            if not rows:
+                logger.info("[DONE] 재분류 대상을 모두 처리했습니다.")
+                return
+
+            self.processed += len(rows)
+            # 재분류에 **실패**한 건은 여전히 stale 이라 다음 조회에 또 잡힌다 —
+            # 커서가 없으면 한 실행 안에서 같은 건을 무한히 다시 LLM 에 태운다.
+            self.stale_page_cursor = (rows[-1]["occurred_at"], rows[-1]["item_id"])
+            before = self.total_items
+            self.process_batch(rows, advance_cursor=False)
+            self.total_reclassified += self.total_items - before
 
     # ── 커서 ────────────────────────────────────────────────────────────────
 
@@ -493,6 +657,21 @@ class ClassificationWorker:
         return self.conn.execute(
             FETCH_FAILED_SQL, (self.max_attempts, occurred_at, occurred_at, item_id, batch_size)
         ).fetchall()
+
+    def fetch_stale_batch(self) -> list[sqlite3.Row]:
+        """활성 분류기로 만들어지지 않은 분류 결과의 원문 1배치."""
+        batch_size = self.batch_size
+        if self.limit is not None:
+            batch_size = min(batch_size, self.limit - self.processed)
+        occurred_at, item_id = self.stale_page_cursor
+        return self.conn.execute(
+            FETCH_STALE_SQL,
+            (*active_version_params(), occurred_at, occurred_at, item_id, batch_size),
+        ).fetchall()
+
+    def count_stale(self) -> int:
+        """옛 분류기로 남은 문서 수. 0 이면 탐지가 읽을 구간이 전부 활성 버전이다."""
+        return self.conn.execute(COUNT_STALE_SQL, active_version_params()).fetchone()[0]
 
     # ── 처리 ────────────────────────────────────────────────────────────────
 
@@ -751,6 +930,42 @@ class ClassificationWorker:
         else:
             logger.info(message)
 
+        self.log_classifier_versions()
+
+    def log_classifier_versions(self) -> None:
+        """적재된 분류 결과의 분류기 버전 분포를 남긴다.
+
+        커버리지(몇 건이 분류됐나)와 **별개의 축**이다. 전량이 분류돼 있어도 버전이
+        섞여 있으면 탐지는 그중 활성 버전만 읽으므로 분자가 그만큼 빈다 — 커버리지
+        숫자만 보면 100% 라 아무 문제 없어 보이는 상태다. 그래서 따로 찍는다.
+        """
+        if self.conn is None:
+            return
+        try:
+            rows = self.conn.execute(COUNT_BY_VERSION_SQL).fetchall()
+            stale = self.count_stale()
+        except sqlite3.Error as exc:
+            logger.warning(f"[VERSION] 집계 실패: {exc}")
+            return
+
+        if not rows:
+            return
+
+        breakdown = " | ".join(
+            f"{r['source']}:{r['prompt']}/{r['model']}/{r['pipeline']}={r['n']}" for r in rows
+        )
+        prompt_cs, prompt_review, model, pipeline = active_version_params()
+        if stale:
+            logger.warning(
+                f"[VERSION] 분류기 버전이 섞여 있습니다 — {breakdown}\n"
+                f"  활성: cs={prompt_cs}, review={prompt_review},"
+                f" model={model}, pipeline={pipeline}\n"
+                f"  옛 버전 {stale}건은 탐지가 읽지 않습니다(그만큼 분자가 빕니다). "
+                "`--reclassify-stale` 로 backfill 하세요."
+            )
+        else:
+            logger.info(f"[VERSION] {breakdown}")
+
     def save_classified_items(self, items: list[ClassifiedItem]) -> int:
         """분류 결과를 §2-6 두 테이블에 적재. 반환값은 실제 INSERT 된 aspect 행 수.
 
@@ -759,20 +974,34 @@ class ClassificationWorker:
 
         ⚠️ aspect 가 0개인 문의도 **부모 행은 남긴다.** 안 남기면 "분류를 시도했으나 언급된
            속성이 없었다"와 "아직 분류하지 않았다"가 구분되지 않아, 커버리지 확인이 깨진다.
+
+        ⚠️ **같은 item_id 를 다시 넣으면 덮어쓴다**(upsert + aspect 전체 교체). 예전에는
+           `INSERT OR IGNORE` 라 조용히 무시됐는데, 그래서 프롬프트를 바꾸고 재분류를
+           돌려도 결과가 안 바뀌었다 — `--reclassify-stale` 이 성립하려면 여기가
+           덮어쓰기여야 한다. 자세한 근거는 위 SQL 상수 주석.
         """
         classified_at = datetime.now(timezone.utc).astimezone().isoformat()
         inserted = 0
 
+        # ⚠️ 조회(`active_version_params`)와 **같은 출처를 본다.** 여기서 따로 읽으면 적재한
+        #    값과 stale 판정이 갈려, 방금 넣은 행이 곧바로 재분류 대상이 된다.
+        prompt_cs, prompt_review, model_version, pipeline_version = active_version_params()
+
         for item in items:
-            prompt_version = (
-                service_module.PROMPT_ASPECT_VERSION
-                if item.source == Source.CS
-                else service_module.PROMPT_SENTIMENT_VERSION
-            )
+            prompt_version = prompt_cs if item.source == Source.CS else prompt_review
             self.conn.execute(
-                CLASSIFIED_ITEM_INSERT,
-                (item.item_id, item.source.value, classified_at, prompt_version),
+                CLASSIFIED_ITEM_UPSERT,
+                (
+                    item.item_id,
+                    item.source.value,
+                    classified_at,
+                    prompt_version,
+                    model_version,
+                    pipeline_version,
+                ),
             )
+            # 옛 버전이 남긴 aspect 를 먼저 걷어낸다. 신규 적재에서는 지울 게 없어 무해하다.
+            self.conn.execute(CLASSIFIED_ITEM_ASPECT_DELETE, (item.item_id,))
             for row in explode_to_rows(item):
                 cur = self.conn.execute(
                     CLASSIFIED_ITEM_ASPECT_INSERT,
@@ -783,7 +1012,9 @@ class ClassificationWorker:
                         None if row["mixed_signal"] is None else int(row["mixed_signal"]),
                     ),
                 )
-                inserted += cur.rowcount  # INSERT OR IGNORE 로 중복 무시된 행은 0
+                # 앞에서 옛 행을 지웠으므로 여기서 0 이 되는 것은 **한 응답 안의 중복
+                # aspect** 뿐이다(재적재로 무시된 행이 아니다 — 그건 이제 없다).
+                inserted += cur.rowcount
 
         return inserted
 
@@ -846,8 +1077,18 @@ if __name__ == "__main__":
         "--max-attempts", type=int, default=DEAD_LETTER_MAX_ATTEMPTS,
         help=f"재처리 시도 상한(기본 {DEAD_LETTER_MAX_ATTEMPTS}). 넘으면 재처리 대상에서 제외",
     )
+    parser.add_argument(
+        "--reclassify-stale", action="store_true",
+        help="프롬프트 버전이 옛것인 분류 결과를 다시 분류한다(backfill). "
+             "대상 1건당 LLM 1회이므로 --limit 로 나눠 돌릴 것",
+    )
     parser.add_argument("--dry-run", action="store_true", help="DB 없이 모의 데이터로 추론만 확인")
     args = parser.parse_args()
+
+    # 두 모드는 훑는 대상이 다르다(dead-letter vs 이미 성공한 옛 버전 행). 같이 켜면
+    # 어느 쪽을 돌렸는지 모른 채 한쪽만 도므로, 조용히 무시하지 않고 여기서 세운다.
+    if args.retry_failed and args.reclassify_stale:
+        parser.error("--retry-failed 와 --reclassify-stale 은 같이 쓸 수 없습니다.")
 
     worker = ClassificationWorker(
         db_path=args.db,
@@ -858,5 +1099,6 @@ if __name__ == "__main__":
         limit=args.limit,
         retry_failed=args.retry_failed,
         max_attempts=args.max_attempts,
+        reclassify_stale=args.reclassify_stale,
     )
     worker.start()
