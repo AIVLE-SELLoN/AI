@@ -7,6 +7,25 @@ detection 임계값 근거: 이상탐지 로직 V3 §[2]. 파이프라인 [6]~[8
 기준·알림 억제 등)는 해당 단계 구현 시 추가한다.
 """
 
+from datetime import timedelta, timezone
+
+# --- 시간대 ---
+
+KST = timezone(timedelta(hours=9))
+"""날짜 경계의 기준 시간대. **「Raw DB 스키마 확정 (8/7)」 §3 이 KST 로 못박았다.**
+
+UTC 로 자르면 KST 오전 9시 이전 문의가 전날로 밀려서, 매일 도는 배치가 날짜 경계에서
+매번 어긋난다. 문서의 쿼리는 `(컬럼 AT TIME ZONE 'Asia/Seoul')::date` 인데 그건
+Postgres 문법이라 로컬 sqlite 에 없다 — 그래서 **절단을 파이썬에서 한다**
+(`daily._to_kst`). 원문은 오프셋이 붙은 ISO 문자열로 저장되므로(raw_schema 모듈
+docstring) 변환에 필요한 정보가 값 안에 다 있다.
+
+⚠️ **core 에 있는 이유: 쓰는 쪽이 갈려 있다.** 탐지 입력 로더(`app/batch/daily.py`)와
+탐지 시각 기본값(`app/detection/service.py`)이 같은 경계를 쓰는데, 각자 두면
+`timezone(timedelta(hours=9))` 가 여러 벌이 되어 한쪽만 바뀌어도 조용히 갈린다
+(`raw_db.py`·`ids.py` 가 core 로 온 것과 같은 사유).
+"""
+
 # --- 윈도우 (detection / 서영) — 로직 V3 §137 ---
 
 CURRENT_WINDOW_DAYS = 7

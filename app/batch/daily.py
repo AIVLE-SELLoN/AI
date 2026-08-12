@@ -43,7 +43,7 @@ import sys
 import uuid
 from collections import Counter
 from collections.abc import Callable
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -53,7 +53,7 @@ from pydantic import ValidationError
 from app.config import get_settings
 from app.core import raw_schema
 from app.core.console import force_utf8_output
-from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
+from app.core.constants import CURRENT_WINDOW_DAYS, KST, PAST_WINDOW_DAYS
 from app.core.inquiries import build_linked_inquiries
 from app.core.raw_db import connect_readonly
 from app.core.schemas import Channel, ClassifiedItem, DetectionAlert, Source
@@ -261,16 +261,6 @@ INPUT_WINDOW_DAYS = CURRENT_WINDOW_DAYS + PAST_WINDOW_DAYS
 `[window_end - 34, window_end]` 다. 값이 `STATE_RETENTION_DAYS` 와 같지만 **사유가
 다르다** — 저쪽은 캐시 보관 기간이다. 한쪽을 바꿀 일이 생겼을 때 다른 쪽이 조용히
 따라가지 않도록 따로 둔다.
-"""
-
-KST = timezone(timedelta(hours=9))
-"""날짜 경계의 기준 시간대. **확정 문서 §3 이 KST 로 못박았다.**
-
-UTC 로 자르면 KST 오전 9시 이전 문의가 전날로 밀려서, 매일 도는 배치가 날짜 경계에서
-매번 어긋난다. 문서의 쿼리는 `(컬럼 AT TIME ZONE 'Asia/Seoul')::date` 인데 그건
-Postgres 문법이라 로컬 sqlite 에 없다 — 그래서 **절단을 파이썬에서 한다**
-(`_to_kst`). 원문은 오프셋이 붙은 ISO 문자열로 저장되므로(raw_schema 모듈 docstring)
-변환에 필요한 정보가 값 안에 다 있다.
 """
 
 # 분모(원문)와 분자(분류 결과)를 **따로** 읽는다. 확정 문서 §4 는 이 둘을 CTE 로 나눠

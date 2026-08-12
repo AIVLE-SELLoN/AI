@@ -6,11 +6,11 @@ LLM 은 목킹한다 (비용 0). 통합 테스트는 "숫자를 넣으면 몇 �
 
 import itertools
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from app.core.constants import CURRENT_WINDOW_DAYS, RENOTIFY_BLOCK_DAYS
+from app.core.constants import CURRENT_WINDOW_DAYS, KST, RENOTIFY_BLOCK_DAYS
 from app.core.schemas import (
     AspectSentiment,
     Channel,
@@ -21,6 +21,7 @@ from app.core.schemas import (
     Source,
     Verdict,
 )
+from app.detection import service
 from app.detection.alert import (
     UNSPECIFIED_CAUSE,
     build_alert,
@@ -581,6 +582,46 @@ async def test_pipeline_scattered_cause_gives_low_confidence():
 @pytest.mark.asyncio
 async def test_pipeline_empty_input_returns_nothing():
     assert await detect_anomaly([]) == ([], [])
+
+
+@pytest.mark.asyncio
+async def test_detected_at_default_is_kst_not_host_local(monkeypatch):
+    """🔴 `detected_at` 기본값은 **KST 벽시계**다 — 호스트 시간대를 보지 않는다.
+
+    이 값의 날짜 부분이 그대로 `alert_id`(`ALT-%Y%m%d`)가 되고 CS 가이드라인 기간
+    (`%Y-%m`)이 된다. naive `datetime.now()` 는 로컬 시각이라, 배치를 **UTC 컨테이너**
+    로 올리면 KST 오전 9시 이전에 도는 배치의 alert_id 가 **하루 전 날짜**로 찍힌다.
+    개발 머신이 KST 라 로컬에서는 영원히 안 보이는 종류다(`_to_kst` 와 같은 모양).
+
+    시계를 UTC 호스트로 고정해 재현한다 — UTC 8/11 23:30 은 KST 로 **8/12 08:30** 이라
+    두 시간대의 날짜가 갈리는 순간이다. 옛 코드면 `ALT-20260811-...` 이 나온다.
+
+    ⚠️ 값은 **naive 로 남는다**(발행 계약 유지). `docs/mq_events.md` §4.1 예시가
+       오프셋 없는 형태라 aware 로 바꾸면 백엔드 파싱 계약이 조용히 달라진다.
+    """
+
+    class _UtcHostClock(datetime):
+        """UTC 호스트의 시계. `tz` 를 안 주면 UTC 벽시계를 naive 로 돌려준다."""
+
+        @classmethod
+        def now(cls, tz=None):
+            moment = datetime(2026, 8, 11, 23, 30, tzinfo=timezone.utc)
+            return moment.astimezone(tz) if tz else moment.replace(tzinfo=None)
+
+    monkeypatch.setattr(service, "datetime", _UtcHostClock)
+
+    alerts, _ = await detect_anomaly(
+        _scenario_items(),
+        window_end=date(2026, 7, 7),  # detected_at 은 일부러 안 준다 — 기본값을 잰다
+        client=_FakeClient(),
+    )
+
+    # KST 벽시계 8/12 08:30. `tzinfo` 를 떼는 건 발행 계약이 naive 라서다(위 ⚠️).
+    expected = datetime(2026, 8, 12, 8, 30, tzinfo=KST).replace(tzinfo=None)
+
+    assert alerts[0].detected_at == expected
+    assert alerts[0].detected_at.tzinfo is None
+    assert alerts[0].alert_id.startswith("ALT-20260812-")
 
 
 # ── documents 경유(로더) — 리뷰 분모 (탐지 분모 산출 방식 §1) ──────
