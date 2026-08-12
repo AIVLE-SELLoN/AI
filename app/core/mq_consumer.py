@@ -47,9 +47,12 @@ PREFETCH = 10
 class RecommendationReviewed(BaseModel):
     """`feedback.recommendation.reviewed` payload (§8).
 
-    ⚠️ **`alert`·`recommendation` 은 계약에 없는 필드다.** 백엔드가 전문을 실어주면
-    쓰고, 없으면 `_load_hitl_context()` 가 명확히 막는다 — 아래 함수 주석 참고.
-    필드 추가는 옵셔널로만 하는 게 스키마 변경 규칙(§11)이라 이렇게 둬도 계약 위반이 아니다.
+    **`alert`·`recommendation` 전문을 되싣는 것이 계약이다** (2026-08-12 A안 확정, §8.1).
+
+    ⚠️ 그런데도 **타입은 옵셔널로 둔다.** 필수로 바꾸면 백엔드 누락이 파싱 단계의
+    `ValidationError` 로 터져 사유가 안 보이는데, 지금은 `load_hitl_context()` 가
+    무엇이 없는지 문장으로 말해준다. 필드 추가를 옵셔널로만 하는 스키마 변경 규칙(§11)과도
+    같은 방향이다.
     """
 
     recommendation_id: str
@@ -66,15 +69,10 @@ def load_hitl_context(
 ) -> tuple[DetectionAlert, Recommendation]:
     """이벤트 → `record_hitl_outcome()` 이 요구하는 (alert, recommendation).
 
-    🔴 **여기가 유일한 미정 지점이다. 결정되면 이 함수만 바꾸면 된다.**
-
     `record_hitl_outcome()` 은 "원인 라벨 + CS 요약 + 개선안 본문"으로 컬렉션2 문서를
-    만드는데(§4-2), §8 payload 에는 ID 4개뿐이라 그 재료가 없다. 두 안 중 하나가 필요하다:
-
-    (A) 백엔드가 `ai.anomaly.analyzed` 로 받았던 alert·recommendation 을 그대로 되실어
-        준다 → 이 함수는 지금 코드 그대로 동작하고 컨슈머는 무상태다. **권장.**
-    (B) AI 가 발행분을 로컬에 저장해두고 `recommendation_id` 로 되찾는다 → 이 함수가
-        그 저장소를 읽도록 바뀐다. 보관 기간이 지나면 유실되는 게 약점.
+    만드는데(§4-2), ID 만으로는 그 재료가 없다. **백엔드가 `ai.anomaly.analyzed` 로
+    받았던 전문을 그대로 되실어주는 것으로 확정**됐다(2026-08-12 A안, §8.1) — 그래서 이
+    함수는 저장소를 읽지 않고 컨슈머가 무상태로 남는다.
 
     hitl 값은 **이벤트 쪽이 정본이다.** 실어 보낸 recommendation 은 발행 시점 사본이라
     `hitl_status` 가 `대기`로 굳어 있고, 그대로 쓰면 `record_hitl_outcome()` 이
@@ -83,7 +81,8 @@ def load_hitl_context(
     if event.alert is None or event.recommendation is None:
         raise HitlContextUnavailableError(
             f"recommendation_id={event.recommendation_id}: payload 에 alert·recommendation "
-            "전문이 없어 컬렉션2에 적재할 수 없습니다 (docs/mq_events.md §8 확장 필요)"
+            "전문이 없습니다 — 계약(docs/mq_events.md §8.1)상 필수인데 발행 측이 빠뜨린 "
+            "것이라, 이 승인·반려는 컬렉션2에 적재되지 않습니다"
         )
 
     recommendation = event.recommendation.model_copy(
