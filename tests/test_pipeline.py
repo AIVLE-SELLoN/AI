@@ -30,7 +30,12 @@ from app.detection.alert import (
     resolve_channel,
 )
 from app.detection.loader import build_rows, check_coverage, unreliable_slots
-from app.detection.service import _build_candidates, detect_anomaly, normalize
+from app.detection.service import (
+    DetectionDiagnostics,
+    _build_candidates,
+    detect_anomaly,
+    normalize,
+)
 from app.detection.suppression import filter_suppressed
 from app.detection.verdict import run_verdict
 
@@ -597,18 +602,22 @@ async def test_cause_validation_failure_does_not_stop_detection(caplog):
         async def complete_json(self, prompt, *, trace_key="-", temperature=0.0):
             return {"results": []}  # 입력 ID 전체 누락
 
+    diagnostics = DetectionDiagnostics()
     with caplog.at_level(logging.ERROR, logger="app.detection.service"):
         alerts, _ = await detect_anomaly(
             _scenario_items(),
             detected_at=datetime(2026, 7, 7, 9, 0),
             window_end=date(2026, 7, 7),
             client=_InvalidClient(),
+            diagnostics=diagnostics,
         )
 
     assert len(alerts) == 1
     assert alerts[0].root_cause is None
     assert alerts[0].detection_confidence == DetectionConfidence.LOW
     assert alerts[0].recommended_action == RecommendedAction.CHANNEL_OPERATION_CHECK
+    assert len(diagnostics.cause_failures) == 1
+    assert diagnostics.cause_failures[0]["error"].startswith("CauseValidationError:")
     assert any("원인 분류 후보 실패" in record.message for record in caplog.records)
 
 

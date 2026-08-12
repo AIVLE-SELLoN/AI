@@ -4,15 +4,21 @@ judge_cause 는 수제 숫자로(순수), classify_cause·diagnose_cause 는 LLM
 OpenAI 실호출 없음 (비용 0).
 """
 
+import re
+
 import pytest
 
+from app.core.prompts import load_prompt
 from app.detection.cause import (
     CAUSE_CHUNK_SIZE,
+    CAUSE_MAX_PROMPT_CHARS,
+    CAUSE_TAXONOMY,
     CauseValidationError,
     classify_cause,
     diagnose_cause,
     judge_cause,
 )
+from app.detection.scope import SCOPE_ASPECTS
 
 
 # ── judge_cause (순수, 로직 §[6]) ─────────────────────────────────
@@ -161,27 +167,120 @@ async def test_classify_cause_rejects_missing_or_unknown_ids(payload):
 
 
 @pytest.mark.asyncio
-async def test_classify_cause_rejects_taxonomy_mismatch():
+async def test_classify_cause_drops_taxonomy_mismatch_item():
     client = _FakeClient({"results": [{
         "cs_id": "a1", "cause": "실제_원단_문제", "confidence": 0.9,
         "evidence": "사진", "aspect_match": True,
     }]})
-    with pytest.raises(CauseValidationError, match="허용되지 않은 cause"):
-        await classify_cause(
-            "색상", [{"cs_id": "a1", "raw_text": "사진이 달라요"}], client=client
-        )
+    results = await classify_cause(
+        "색상", [{"cs_id": "a1", "raw_text": "사진이 달라요"}], client=client
+    )
+
+    assert results == []
 
 
 @pytest.mark.asyncio
-async def test_classify_cause_rejects_evidence_not_in_source():
+async def test_classify_cause_drops_evidence_not_in_source_item():
     client = _FakeClient({"results": [{
         "cs_id": "a1", "cause": "사진_색감_오차", "confidence": 0.9,
         "evidence": "실물과 완전히 다름", "aspect_match": True,
     }]})
-    with pytest.raises(CauseValidationError, match="원문에 존재하지"):
+    results = await classify_cause(
+        "색상", [{"cs_id": "a1", "raw_text": "사진이 달라요"}], client=client
+    )
+
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_classify_cause_drops_empty_evidence_when_aspect_matches():
+    client = _FakeClient({"results": [{
+        "cs_id": "a1", "cause": "사진_색감_오차", "confidence": 0.9,
+        "evidence": "", "aspect_match": True,
+    }]})
+
+    results = await classify_cause(
+        "색상", [{"cs_id": "a1", "raw_text": "사진이 달라요"}], client=client
+    )
+
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_invalid_items_do_not_inflate_consistency_ratio():
+    """검증 탈락 6건을 분모에서 지워 5/5 일관으로 만드는 회귀를 막는다."""
+    ids = [f"a{i}" for i in range(11)]
+    payload = {"results": [
+        {
+            "cs_id": cs_id,
+            "cause": "사진_색감_오차",
+            "confidence": 0.9,
+            "evidence": "원문" if index < 5 else "원문에 없는 인용",
+            "aspect_match": True,
+        }
+        for index, cs_id in enumerate(ids)
+    ]}
+    items = [{"cs_id": cs_id, "raw_text": "원문"} for cs_id in ids]
+
+    result = await diagnose_cause("색상", items, client=_FakeClient(payload))
+
+    assert result["total"] == 11
+    assert result["attempted_total"] == 11
+    assert result["invalid_count"] == 6
+    assert result["consistent"] is False
+    assert result["label"] is None
+    assert result["cs_ids"] == ids
+
+
+@pytest.mark.asyncio
+async def test_classify_cause_rejects_duplicate_input_ids_before_llm():
+    client = _FakeClient({"results": []})
+    with pytest.raises(CauseValidationError, match="중복"):
         await classify_cause(
-            "색상", [{"cs_id": "a1", "raw_text": "사진이 달라요"}], client=client
+            "색상",
+            [
+                {"cs_id": "a1", "raw_text": "첫 문의"},
+                {"cs_id": "a1", "raw_text": "둘째 문의"},
+            ],
+            client=client,
         )
+    assert client.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_classify_cause_rejects_single_item_over_prompt_limit():
+    client = _FakeClient({"results": []})
+    with pytest.raises(CauseValidationError, match="요청 크기 상한"):
+        await classify_cause(
+            "색상",
+            [{"cs_id": "a1", "raw_text": "x" * CAUSE_MAX_PROMPT_CHARS}],
+            client=client,
+        )
+    assert client.calls == 0
+
+
+def test_cause_taxonomy_matches_scope_and_prompt():
+    """코드·스코프·프롬프트 중 한 곳만 수정되는 taxonomy 드리프트를 막는다."""
+    assert set(CAUSE_TAXONOMY) == {aspect.value for aspect in SCOPE_ASPECTS}
+
+    prompt = load_prompt("detection", "classify_cause_v1")
+    taxonomy_block = prompt.split("[원인 후보 정의와 판별 단서]", 1)[1].split(
+        "[입력 형식]", 1
+    )[0]
+    sections = re.findall(
+        r"^■ (색상|사이즈|소재)\s*$([\s\S]*?)(?=^■ |\Z)",
+        taxonomy_block,
+        flags=re.MULTILINE,
+    )
+    prompt_taxonomy = {
+        aspect: frozenset(
+            label.strip()
+            for label in re.findall(r"^- ([^:\n]+?)\s*:", body, flags=re.MULTILINE)
+        )
+        for aspect, body in sections
+    }
+
+    assert prompt_taxonomy == CAUSE_TAXONOMY
 
 
 class _SequenceClient:

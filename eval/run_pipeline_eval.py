@@ -313,9 +313,10 @@ def _cs_fallback_aspects(item_id: str) -> list[dict]:
     """CS 빈 배열 → 기타/중립. **운영과 같은 함수**(service._cs_empty_fallback)를 쓴다.
 
     배치 경로는 client.complete_json 을 직접 불러 _parse_llm_response 를 우회하므로,
-    거기 들어있는 이 폴백이 안 걸린다. 그대로 두면 빈 배열이 살아남아 커버리지 검사가
-    그 슬롯을 통째로 검정에서 빼버린다(실측: P019 의 CS 슬롯 2개가 다 빠졌다).
-    폴백 규칙을 여기 다시 적지 않고 불러 쓰는 이유는, 두 벌이 되면 갈라지기 때문이다.
+    거기 들어있는 이 폴백이 안 걸린다. 현재 coverage 는 부모 행으로 성공을 판단하므로
+    빈 배열이 슬롯을 제외시키지는 않지만, 운영의 CS 출력 계약과 평가 입력을 동일하게
+    유지해야 한다. 폴백 규칙을 여기 다시 적지 않고 불러 쓰는 이유는 두 벌이 되면
+    갈라지기 때문이다.
     """
     return [
         {"aspect": a.aspect.value, "sentiment": int(a.sentiment)}

@@ -562,6 +562,38 @@ async def test_mq_connection_is_closed_on_the_normal_path(tmp_path, monkeypatch)
     assert closed
 
 
+@pytest.mark.asyncio
+async def test_cause_failure_is_reported_as_batch_failure(tmp_path, monkeypatch):
+    """Agent2 보강 실패를 알림 발행 성공과 별개로 실패 종료 근거에 남긴다."""
+
+    async def fake_detect(_items, *, diagnostics, **_kwargs):
+        diagnostics.cause_failures.append(
+            {
+                "product": "P001",
+                "aspect": "색상",
+                "channel": "COUPANG",
+                "source": "cs",
+                "error": "CauseValidationError: 응답 ID 누락",
+            }
+        )
+        return [], []
+
+    monkeypatch.setattr(daily, "detect_anomaly", fake_detect)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json", load_inputs=_stub_inputs
+    )
+
+    assert summary["cause_failures"] == 1
+    assert summary["failures"] == [
+        {
+            "alert_id": "P001/색상/COUPANG/cs",
+            "stage": "원인분류",
+            "error": "CauseValidationError: 응답 ID 누락",
+        }
+    ]
+
+
 def test_main_switches_encoding_before_printing(monkeypatch):
     """⚠️ `main()` 이 실제로 `force_utf8_output()` 을 부른다 — 배선까지 고정한다.
 

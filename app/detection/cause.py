@@ -13,6 +13,7 @@ judge_cause 는 순수라 숫자만으로 테스트하고, classify_cause 는 LL
 import json
 import logging
 from collections import Counter
+from dataclasses import dataclass, field
 from string import Template
 from typing import Any
 
@@ -44,6 +45,23 @@ CAUSE_MAX_PROMPT_CHARS = 24_000
 
 class CauseValidationError(ValueError):
     """원인 분류 입출력이 프롬프트3 계약을 어겼을 때."""
+
+
+@dataclass
+class CauseValidationSummary:
+    """스키마는 유효하지만 근거·taxonomy 검증에서 제외된 항목의 집계."""
+
+    invalid_items: int = 0
+    invalid_matching_items: int = 0
+    invalid_matching_ids: list[str] = field(default_factory=list)
+    reasons: Counter[str] = field(default_factory=Counter)
+
+    def reject(self, cs_id: str, reasons: list[str], *, aspect_match: bool) -> None:
+        self.invalid_items += 1
+        self.invalid_matching_items += int(aspect_match)
+        if aspect_match:
+            self.invalid_matching_ids.append(cs_id)
+        self.reasons.update(reasons)
 
 
 class CauseResult(BaseModel):
@@ -123,7 +141,13 @@ def _validate_items(aspect: str, items: list) -> list[dict]:
     return normalized
 
 
-def _validate_response(aspect: str, items: list[dict], data: Any) -> list[dict]:
+def _validate_response(
+    aspect: str,
+    items: list[dict],
+    data: Any,
+    *,
+    validation_summary: CauseValidationSummary,
+) -> list[dict]:
     try:
         response = CauseResponse.model_validate(data)
     except ValidationError as exc:
@@ -139,25 +163,35 @@ def _validate_response(aspect: str, items: list[dict], data: Any) -> list[dict]:
 
     raw_by_id = {item["cs_id"]: item["raw_text"] for item in items}
     allowed = CAUSE_TAXONOMY[aspect]
+    valid: list[dict] = []
     for result in response.results:
+        reasons: list[str] = []
         if result.cause not in allowed:
-            raise CauseValidationError(
-                f"aspect={aspect}에 허용되지 않은 cause입니다: "
-                f"cs_id={result.cs_id} cause={result.cause}"
-            )
+            reasons.append("taxonomy_mismatch")
         if result.aspect_match and not result.evidence:
-            raise CauseValidationError(
-                f"aspect_match=true인데 evidence가 비어있습니다: cs_id={result.cs_id}"
-            )
+            reasons.append("empty_evidence")
         if result.evidence and result.evidence not in raw_by_id[result.cs_id]:
-            raise CauseValidationError(
-                f"evidence가 원문에 존재하지 않습니다: cs_id={result.cs_id}"
+            reasons.append("evidence_not_in_source")
+
+        if reasons:
+            validation_summary.reject(
+                result.cs_id,
+                reasons,
+                aspect_match=result.aspect_match,
             )
+            logger.warning(
+                "cause_item_rejected aspect=%s cs_id=%s reasons=%s",
+                aspect,
+                result.cs_id,
+                ",".join(reasons),
+            )
+            continue
+        valid.append(result.model_dump())
 
-    return [result.model_dump() for result in response.results]
+    return valid
 
 
-def judge_cause(classified_causes: list) -> tuple:
+def judge_cause(classified_causes: list, *, total_count: int | None = None) -> tuple:
     """[6] 분류된 원인 라벨 분포로 주원인을 특정한다. (로직 §[6])
 
     Args:
@@ -174,7 +208,10 @@ def judge_cause(classified_causes: list) -> tuple:
         return None, False, {}
 
     top_cause, top_count = freq.most_common(1)[0]
-    ratio = top_count / len(classified_causes)
+    denominator = len(classified_causes) if total_count is None else total_count
+    if denominator < len(classified_causes):
+        raise ValueError("total_count는 분류된 원인 수보다 작을 수 없습니다")
+    ratio = top_count / denominator
     is_consistent = (ratio >= CONSISTENT_RATIO) and (top_count >= CONSISTENT_COUNT)
 
     if is_consistent:
@@ -188,6 +225,7 @@ async def classify_cause(
     *,
     client: Any = None,
     trace_key: str = "-",
+    validation_summary: CauseValidationSummary | None = None,
 ) -> list:
     """[6] 문의 배치를 프롬프트3으로 원인 분류한다 (LLM, 배치 1회 호출).
 
@@ -207,6 +245,7 @@ async def classify_cause(
 
     aspect = _aspect_value(aspect)
     items = _validate_items(aspect, items)
+    validation_summary = validation_summary or CauseValidationSummary()
     template = Template(load_prompt("detection", "classify_cause_v1"))
     chunks = _chunk_cause_items(template, aspect, items)
 
@@ -215,7 +254,14 @@ async def classify_cause(
         prompt = _render_prompt(template, aspect, chunk)
         chunk_trace = f"{trace_key} chunk={index}/{len(chunks)}"
         data = await client.complete_json(prompt, trace_key=chunk_trace)
-        results.extend(_validate_response(aspect, chunk, data))
+        results.extend(
+            _validate_response(
+                aspect,
+                chunk,
+                data,
+                validation_summary=validation_summary,
+            )
+        )
     return results
 
 
@@ -244,16 +290,31 @@ async def diagnose_cause(
     aspect_match=false 로 걷어낸 문의를 인용 경계에 남기면 개수가 total 과 어긋나고,
     **Agent3 가 '다른 aspect 불만'을 근거로 인용할 수 있게 된다.**
     """
-    results = await classify_cause(aspect, items, client=client, trace_key=trace_key)
+    validation = CauseValidationSummary()
+    results = await classify_cause(
+        aspect,
+        items,
+        client=client,
+        trace_key=trace_key,
+        validation_summary=validation,
+    )
     kept = [r for r in results if r.get("aspect_match", True)]
     causes = [r["cause"] for r in kept]
 
-    label, consistent, freq = judge_cause(causes)
+    attempted_total = len(causes) + validation.invalid_matching_items
+    label, consistent, freq = judge_cause(causes, total_count=attempted_total)
+    included_ids = {
+        *(r["cs_id"] for r in kept if r.get("cs_id")),
+        *validation.invalid_matching_ids,
+    }
     return {
         "label": label,
         "consistent": consistent,
         "count": freq.get(label, 0),  # label 이 None 이면 자연히 0
-        "total": len(causes),
+        "total": attempted_total,
         "freq": freq,
-        "cs_ids": [r["cs_id"] for r in kept if r.get("cs_id")],
+        "cs_ids": [item["cs_id"] for item in items if item.get("cs_id") in included_ids],
+        "attempted_total": attempted_total,
+        "invalid_count": validation.invalid_items,
+        "invalid_reasons": dict(validation.reasons),
     }

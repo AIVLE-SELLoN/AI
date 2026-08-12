@@ -58,7 +58,7 @@ from app.core.inquiries import build_linked_inquiries
 from app.core.raw_db import connect_readonly
 from app.core.schemas import Channel, ClassifiedItem, DetectionAlert, Source
 from app.detection.loader import check_coverage, unreliable_slots
-from app.detection.service import detect_anomaly
+from app.detection.service import DetectionDiagnostics, detect_anomaly
 
 logger = logging.getLogger(__name__)
 
@@ -712,6 +712,7 @@ async def run_batch(
     # ⚠️ dry-run 이어도 [6] 원인분류는 detect_anomaly 안에서 돈다. 스텁을 안 주면
     #    "LLM 0회"라고 해놓고 실제로 과금된다.
     stub = CountingClient() if dry_run else None
+    detection_diagnostics = DetectionDiagnostics()
 
     alerts, suppressed = await detect_anomaly(
         items,
@@ -722,10 +723,21 @@ async def run_batch(
         resolved_alert_ids=set(),
         unreliable_denominators=unreliable,
         client=stub,
+        diagnostics=detection_diagnostics,
     )
 
     targets = alerts if max_alerts is None else alerts[:max_alerts]
-    failures: list[dict] = []
+    failures: list[dict] = [
+        {
+            "alert_id": (
+                f"{failure['product']}/{failure['aspect']}/"
+                f"{failure['channel']}/{failure['source']}"
+            ),
+            "stage": "원인분류",
+            "error": failure["error"],
+        }
+        for failure in detection_diagnostics.cause_failures
+    ]
     counts: Counter[str] = Counter()
     # 개선안이 안 나왔지만 **실패가 아닌** 두 사유의 건수. failures 와 분리해 두는
     # 이유는 종료코드에 안 실리게 하기 위해서다(루프 안 주석 참고).
@@ -924,6 +936,7 @@ async def run_batch(
         "delivered": len(delivered),
         "llm_calls": dict(counts),
         "cause_calls": stub.calls if stub else None,
+        "cause_failures": len(detection_diagnostics.cause_failures),
         # 개선안이 안 나왔지만 실패가 아닌 두 사유. failures 와 **별개**라 종료코드에
         # 안 실린다. `no_evidence` 가 계속 크면 상세페이지 시딩·CS 원문 조회를,
         # `routing_miss` 가 계속 크면 라우팅 프롬프트를 볼 것.
@@ -975,6 +988,11 @@ def print_summary(summary: dict) -> None:
         print(
             f"  라우팅 미스   {summary['routing_miss']}건  ← 근거가 있는 쪽을 모델이 안"
             " 골랐음. 실패 아님 / 프롬프트 재측정 대상"
+        )
+    if summary.get("cause_failures"):
+        print(
+            f"  원인분류 실패 {summary['cause_failures']}건  ← 탐지는 계속했지만 "
+            "배치는 실패 상태로 종료"
         )
     if summary["dry_run"]:
         print("\n  [dry-run] LLM 호출 0회. 실제로 돌리면:")

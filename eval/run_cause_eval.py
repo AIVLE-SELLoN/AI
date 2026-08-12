@@ -45,7 +45,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app.config import get_settings
-from app.core.constants import CONSISTENT_COUNT, CONSISTENT_RATIO
+from app.core.constants import CONSISTENT_COUNT, CONSISTENT_RATIO, KST
 from app.detection.cause import classify_cause, judge_cause
 from app.detection.scope import SCOPE_ASPECTS
 
@@ -138,8 +138,10 @@ def sample_rows(rows: list[dict], limit: int, seed: int) -> list[dict]:
     return picked[:limit]
 
 
-async def run_batches(rows: list[dict], batch_size: int, concurrency: int) -> dict[str, dict]:
-    """aspect 별로 묶어 배치 호출. Returns: {cs_id: 프롬프트3 결과 dict}"""
+async def run_batches(
+    rows: list[dict], batch_size: int, concurrency: int
+) -> tuple[dict[str, dict], list[dict]]:
+    """aspect 별 배치를 호출하고 성공 응답과 격리된 실패를 함께 돌려준다."""
     by_aspect: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         by_aspect[r["aspect"]].append(r)
@@ -152,19 +154,40 @@ async def run_batches(rows: list[dict], batch_size: int, concurrency: int) -> di
     semaphore = asyncio.Semaphore(concurrency)
     print(f"→ LLM 배치 {len(batches)}회 호출 (배치당 최대 {batch_size}건, 동시 {concurrency})")
 
-    async def one(index: int, aspect: str, chunk: list[dict]) -> list[dict]:
+    async def one(index: int, aspect: str, chunk: list[dict]) -> tuple[list[dict], dict | None]:
         items = [{"cs_id": r["cs_id"], "raw_text": r["raw_text"]} for r in chunk]
-        async with semaphore:
-            results = await classify_cause(
-                aspect, items, trace_key=f"cause_eval batch={index} aspect={aspect}"
+        try:
+            async with semaphore:
+                results = await classify_cause(
+                    aspect, items, trace_key=f"cause_eval batch={index} aspect={aspect}"
+                )
+        except Exception as exc:  # noqa: BLE001 - 유료 평가의 배치별 실패 격리
+            failure = {
+                "batch": index,
+                "aspect": aspect,
+                "n_items": len(chunk),
+                "cs_ids": [item["cs_id"] for item in items],
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            print(
+                f"   [{index + 1}/{len(batches)}] {aspect} {len(chunk)}건 → 실패: "
+                f"{failure['error']}"
             )
+            return [], failure
         print(f"   [{index + 1}/{len(batches)}] {aspect} {len(chunk)}건 → {len(results)}건 응답")
-        return results
+        return results, None
 
     done = await asyncio.gather(
         *(one(i, aspect, chunk) for i, (aspect, chunk) in enumerate(batches))
     )
-    return {r["cs_id"]: r for batch in done for r in batch if r.get("cs_id")}
+    prediction_map = {
+        row["cs_id"]: row
+        for results, _failure in done
+        for row in results
+        if row.get("cs_id")
+    }
+    failures = [failure for _results, failure in done if failure is not None]
+    return prediction_map, failures
 
 
 def score(rows: list[dict], predictions: dict[str, dict]) -> dict:
@@ -282,7 +305,7 @@ def report(result: dict) -> None:
             print(f"    {c['true']} → {c['pred']}  {c['n']}건")
 
 
-async def main_async(args: argparse.Namespace) -> None:
+async def main_async(args: argparse.Namespace) -> int:
     golden_path = Path(args.golden)
     if not golden_path.is_absolute():
         golden_path = ROOT / golden_path
@@ -301,30 +324,40 @@ async def main_async(args: argparse.Namespace) -> None:
             for a in {r["aspect"] for r in sampled}
         )
         print(f"\n[dry-run] LLM 호출 안 함. 실제 실행 시 배치 약 {n_batches}회.")
-        return
+        return 0
 
-    predictions = await run_batches(sampled, args.batch_size, args.concurrency)
+    predictions, batch_failures = await run_batches(
+        sampled, args.batch_size, args.concurrency
+    )
 
     result = {
         "meta": {
             "experiment": "⑥ 원인분류 정확도",
-            "run_at": datetime.now().isoformat(timespec="seconds"),
+            "run_at": datetime.now(KST).isoformat(timespec="seconds"),
             "golden": golden_path.name,
             "prompt_version": args.prompt_version,
             "model": get_settings().llm_model,
             "seed": args.seed,
             "limit": args.limit,
             "batch_size": args.batch_size,
+            "batch_failures": len(batch_failures),
+            "batch_failure_details": batch_failures,
         },
         "scores": score(sampled, predictions),
     }
     report(result)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.now(KST).strftime("%Y%m%d_%H%M%S")
     out = RESULTS_DIR / f"cause_eval_{stamp}.json"
     out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n결과 저장: eval/results/{out.name}")
+    if batch_failures:
+        print(
+            f"⚠️ 배치 실패 {len(batch_failures)}건은 무응답으로 채점했습니다. "
+            "결과는 저장했지만 실행은 실패 상태로 종료합니다."
+        )
+    return len(batch_failures)
 
 
 def main() -> None:
@@ -340,7 +373,9 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="LLM 호출 없이 표본 구성만 출력")
     args = parser.parse_args()
 
-    asyncio.run(main_async(args))
+    batch_failures = asyncio.run(main_async(args))
+    if batch_failures:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
