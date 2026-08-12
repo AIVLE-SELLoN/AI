@@ -17,9 +17,9 @@
 
 분모는 원본에서 센다
 --------------------
-`loader.build_rows()` 경유. 분류 결과에서 분모를 세면 aspect 가 0개로 나온 문서가
-통째로 빠져 부정률이 부풀려진다(탐지 분모 산출 방식 §1). CS 는 '기타' 가 있어
-실무상 안전하지만, 운영과 같은 경로를 쓰는 편이 회귀에 강하다.
+`loader.build_rows()` 경유. aspect 결과 자식 행에서 분모를 세면 aspect 가 0개로 나온
+문서가 통째로 빠져 부정률이 부풀려진다(탐지 분모 산출 방식 §1). 실제 분류 캐시에 키가
+없는 문서는 미분류로 남기고, 정상 빈 배열은 캐시 키가 있는 부모 완료 건으로 구분한다.
 
 비용 — `--mode` 로 호출 방식을 고른다
 ------------------------------------
@@ -280,8 +280,17 @@ def take_whole_products(documents: list[dict], limit: int) -> list[dict]:
 
 
 def _to_items(
-    documents: list[dict], aspects_of: dict[str, list]
+    documents: list[dict],
+    aspects_of: dict[str, list],
+    *,
+    include_missing: bool = False,
 ) -> list[ClassifiedItem]:
+    """부모 분류 레코드를 `ClassifiedItem`으로 복원한다.
+
+    실제 분류 캐시는 키가 있는 문서만 완료된 것이다. 누락 키까지 빈 aspects 부모로
+    만들면 리뷰 무응답과 정상 빈 배열을 다시 구분할 수 없으므로 기본은 제외한다.
+    oracle은 모든 문서가 골든으로 분류 완료된 것으로 보아 `include_missing=True`를 쓴다.
+    """
     return [
         ClassifiedItem(
             item_id=d["id"],
@@ -296,6 +305,7 @@ def _to_items(
             created_at=d["created_at"],
         )
         for d in documents
+        if include_missing or d["id"] in aspects_of
     ]
 
 
@@ -303,9 +313,10 @@ def _cs_fallback_aspects(item_id: str) -> list[dict]:
     """CS 빈 배열 → 기타/중립. **운영과 같은 함수**(service._cs_empty_fallback)를 쓴다.
 
     배치 경로는 client.complete_json 을 직접 불러 _parse_llm_response 를 우회하므로,
-    거기 들어있는 이 폴백이 안 걸린다. 그대로 두면 빈 배열이 살아남아 커버리지 검사가
-    그 슬롯을 통째로 검정에서 빼버린다(실측: P019 의 CS 슬롯 2개가 다 빠졌다).
-    폴백 규칙을 여기 다시 적지 않고 불러 쓰는 이유는, 두 벌이 되면 갈라지기 때문이다.
+    거기 들어있는 이 폴백이 안 걸린다. 현재 coverage 는 부모 행으로 성공을 판단하므로
+    빈 배열이 슬롯을 제외시키지는 않지만, 운영의 CS 출력 계약과 평가 입력을 동일하게
+    유지해야 한다. 폴백 규칙을 여기 다시 적지 않고 불러 쓰는 이유는 두 벌이 되면
+    갈라지기 때문이다.
     """
     return [
         {"aspect": a.aspect.value, "sentiment": int(a.sentiment)}
@@ -537,7 +548,7 @@ def oracle_classified(documents: list[dict]) -> list[ClassifiedItem]:
                     "sentiment": int(label["true_sentiment"]),
                 }
             ]
-    return _to_items(documents, aspects_of)
+    return _to_items(documents, aspects_of, include_missing=True)
 
 
 # ── 예측 (①의 배치에 실측 카운트만 덮어쓴다) ─────────────────────

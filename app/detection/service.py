@@ -64,6 +64,7 @@ import asyncio
 import itertools
 import logging
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
@@ -94,6 +95,13 @@ from app.detection.suppression import filter_suppressed
 from app.detection.verdict import run_verdict
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DetectionDiagnostics:
+    """알림 반환 계약과 분리해 운영 배치가 수집하는 탐지 보강 단계 진단."""
+
+    cause_failures: list[dict[str, str]] = field(default_factory=list)
 
 ALL_ASPECTS: list[str] = [a.value for a in Aspect]
 """[0] 그리드에 방출할 aspect 택소노미. 탐지는 전 aspect, 원인분류만 스코프 제한."""
@@ -420,7 +428,12 @@ def _build_stats(
 # ── [6] 원인 분류 ────────────────────────────────────────────────
 
 
-async def _diagnose(candidates: dict, texts: dict, client: Any) -> None:
+async def _diagnose(
+    candidates: dict,
+    texts: dict,
+    client: Any,
+    diagnostics: DetectionDiagnostics | None = None,
+) -> None:
     """편중형 & 스코프 내 후보에만 [6] 을 돌린다. 결과를 후보에 제자리로 채운다.
 
     소스별로 독립 수행한다 (로직 §116). 전역·구분불가·스코프 밖은 호출 자체를 안 해
@@ -439,12 +452,34 @@ async def _diagnose(candidates: dict, texts: dict, client: Any) -> None:
         aspect = candidate["aspect"]
         source = candidate["stats"].source.value
         items = texts.get((product, aspect, channel, source), [])
-        candidate["diagnosis"] = await diagnose_cause(
-            aspect,
-            items,
-            client=client,
-            trace_key=f"product={product} aspect={aspect} channel={channel} source={source}",
+        trace_key = (
+            f"product={product} aspect={aspect} channel={channel} source={source}"
         )
+        try:
+            candidate["diagnosis"] = await diagnose_cause(
+                aspect,
+                items,
+                client=client,
+                trace_key=trace_key,
+            )
+        except Exception as exc:
+            # 원인 분류는 탐지 이후의 보강 단계다. 후보 하나의 LLM/검증 실패가 다른
+            # 상품의 탐지까지 중단시키지 않되, 이 후보는 원인 근거 없이 낮은 확신도로
+            # 내려가 개선안을 자동 생성하지 않게 한다.
+            candidate["diagnosis"] = None
+            candidate["inquiry_ids"] = []
+            if diagnostics is not None:
+                diagnostics.cause_failures.append(
+                    {
+                        "product": product,
+                        "aspect": aspect,
+                        "channel": channel,
+                        "source": source,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+            logger.exception("원인 분류 후보 실패 — 탐지는 계속합니다 [%s]", trace_key)
+            return
         # 인용 경계 = 원인 집계에 실제로 쓴 문의 (aspect_match 통과분).
         # 스키마 §3 이 inquiry_ids 를 "투입 문의 전체(= root_cause.total 건)"로 정의하므로
         # 걷어낸 문의를 남기면 개수가 total 과 어긋나고, Agent3 가 다른 aspect 불만을
@@ -469,6 +504,7 @@ async def detect_anomaly(
     change_log: dict | None = None,
     unreliable_denominators: set | None = None,
     client: Any = None,
+    diagnostics: DetectionDiagnostics | None = None,
 ) -> tuple[list[DetectionAlert], list[DetectionAlert]]:
     """[0]~[8] 전체 파이프라인. ClassifiedItem 집합 → 발행할 DetectionAlert.
 
@@ -477,12 +513,10 @@ async def detect_anomaly(
         documents: 원본 문서(문의·리뷰). **분모의 출처.** 주면 loader.build_rows() 로
             조인하고, 안 주면 items 에서 분모를 센다(normalize).
 
-            ⚠️ **리뷰를 판정하려면 반드시 줘야 한다.** aspect 가 0개인 리뷰는
-            `classified_item` 에 행이 아예 없어서(explode_to_rows 가 aspect 마다 1행),
-            items 만으로 분모를 세면 그 문서가 통째로 빠지고 부정률이 부풀려진다
-            — 오탐 방향이다(탐지 분모 산출 방식 §1, loader 모듈 docstring).
-            CS 는 `_cs_empty_fallback` 이 aspect >= 1 을 보장해 items 만으로도 맞지만,
-            운영과 같은 경로를 쓰는 편이 회귀에 강하다.
+            ⚠️ **운영에서는 반드시 줘야 한다.** 정상 분류된 빈 aspect 리뷰는
+            `classified_item` 부모 행으로 남아 items 에도 들어오지만, 분류 자체가 실패한
+            원문은 items 에 없다. documents 가 있어야 원문 대비 부모 레코드 coverage를
+            계산하고 누락 슬롯을 탐지에서 제외할 수 있다(loader 모듈 docstring).
 
             필요한 키 — id · product · channel · source · created_at · text(선택)
         detected_at: 탐지 시각. 없으면 현재 시각.
@@ -505,6 +539,8 @@ async def detect_anomaly(
             안 보면 로더를 쓰는 의미가 절반이라, 안전한 쪽을 기본값으로 둔다.
             직접 넘기면 그 값을 그대로 쓴다(평가 스크립트가 자기 방식으로 계산할 때).
         client: LlmClient (테스트 목킹용 주입).
+        diagnostics: 운영 배치가 원인 분류 실패를 수집할 선택적 진단 객체. 알림 반환
+            계약에는 영향을 주지 않는다.
 
     Returns:
         (발행할 알림, 억제된 알림)
@@ -562,7 +598,9 @@ async def detect_anomaly(
     }
 
     # [6] 원인 분류 — 편중형 & 스코프 내만, 소스별 독립
-    await asyncio.gather(*(_diagnose(c, texts, client) for c in by_source.values()))
+    await asyncio.gather(
+        *(_diagnose(c, texts, client, diagnostics) for c in by_source.values())
+    )
 
     # [7] 소스별 확신도
     for candidates in by_source.values():

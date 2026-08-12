@@ -58,7 +58,7 @@ from app.core.inquiries import build_linked_inquiries
 from app.core.raw_db import connect_readonly
 from app.core.schemas import Channel, ClassifiedItem, DetectionAlert, Source
 from app.detection.loader import check_coverage, unreliable_slots
-from app.detection.service import detect_anomaly
+from app.detection.service import DetectionDiagnostics, detect_anomaly
 
 logger = logging.getLogger(__name__)
 
@@ -219,11 +219,13 @@ class CountingClient:
     현실적인 크기로 나오고, 그래야 `recommended_action` 이 실제와 비슷하게 산출된다.
     비우면 원인이 '미특정'으로 빠져 게이트 통과 수를 실제보다 적게 잡는다.
 
-    돌려주는 필드는 **`diagnose_cause` 가 실제로 읽는 3개**(`cs_id`·`cause`·
-    `aspect_match`)뿐이다. 프롬프트3 스키마엔 `confidence`·`evidence` 도 있지만 우리
-    코드는 어느 쪽도 안 읽으므로(`app/detection/cause.py`), 스텁이 채우면 흉내낸 값이
-    실측처럼 보이기만 한다. `confidence` 는 실험⑥에서 판정 기준 2개(단조증가·0.5~0.8
-    분포)를 다 못 넘겨 미사용으로 확정된 필드다.
+    응답은 실제 프롬프트3 스키마를 모두 만족시킨다. `confidence` 는 런타임 판정에 쓰지
+    않지만 Pydantic 계약의 필수 필드이고, `evidence` 는 원문 축자 인용 검증을 통과해야
+    한다. 둘을 생략하면 dry-run 만 원인분류 실패로 다운그레이드되어 비용 추정이 0으로
+    왜곡된다.
+
+    프롬프트 전체를 정규식으로 훑지 않고 마지막 `입력:` JSON만 읽는다. 앞쪽 few-shot
+    예시의 cs_id 까지 응답에 섞이면 ID 개수·순서 검증에서 청크 전체가 실패하기 때문이다.
     """
 
     def __init__(self) -> None:
@@ -233,20 +235,25 @@ class CountingClient:
     async def complete_json(
         self, prompt: str, *, trace_key: str = "-", **_: object
     ) -> dict:
-        import re
-
         self.calls += 1
-        cs_ids = re.findall(r'"cs_id"\s*:\s*"([^"]+)"', prompt)
-        if not cs_ids:
+        try:
+            input_data = json.loads(
+                prompt.rsplit("입력:", 1)[1].split("\n출력:", 1)[0]
+            )
+            items = input_data["items"]
+        except (IndexError, KeyError, TypeError, json.JSONDecodeError):
             self.empty_extractions += 1
+            items = []
         return {
             "results": [
                 {
-                    "cs_id": cs_id,
+                    "cs_id": item["cs_id"],
                     "cause": STUB_CAUSE,
+                    "confidence": 1.0,
+                    "evidence": item["raw_text"],
                     "aspect_match": True,
                 }
-                for cs_id in cs_ids
+                for item in items
             ]
         }
 
@@ -266,8 +273,8 @@ INPUT_WINDOW_DAYS = CURRENT_WINDOW_DAYS + PAST_WINDOW_DAYS
 # 분모(원문)와 분자(분류 결과)를 **따로** 읽는다. 확정 문서 §4 는 이 둘을 CTE 로 나눠
 # SQL 안에서 집계하는 형태인데, 우리는 집계를 `app/detection/aggregate.py` 가 하므로
 # 행을 그대로 가져오는 두 쿼리로 나눈다. 지켜야 할 규칙은 같다 —
-#   ① 분모는 원문(voc_document)에서만 센다. classified_item 에서 세면 aspect 0개인
-#      문서가 통째로 빠져 부정률이 부풀려진다(§2-6 경고, loader 모듈 docstring).
+#   ① 분모는 원문(voc_document)에서만 센다. classified_item_aspect 자식에서 세면
+#      aspect 0개인 문서가 통째로 빠져 부정률이 부풀려진다(§2-6 경고, loader docstring).
 #   ② `sentiment = -1` 을 WHERE 로 올리지 않는다. 올리면 LEFT JOIN 이 INNER JOIN 으로
 #      퇴화해 같은 버그가 돌아온다. 부정 여부는 읽어온 뒤 파이썬이 센다.
 _DOCUMENT_SQL = f"""
@@ -316,11 +323,10 @@ def load_inputs_from_db(
 ) -> tuple[list[ClassifiedItem], list[dict]]:
     """(items, documents) 를 원본 DB 에서 읽는다. **기본 입력원.**
 
-    items 는 워커가 분류해 `classified_item` 에 넣은 결과, documents 는 `cs`·`reviews`
-    원문이다. 둘을 따로 읽는 이유는 **분모가 documents 에서 나와야 하기 때문**이다 —
-    리뷰는 aspect 0개면 `classified_item` 에 행이 아예 없어서(`explode_to_rows` 가
-    aspect 마다 1행), items 로 분모를 세면 그 문서가 통째로 빠지고 부정률이 부풀려진다
-    (탐지 분모 산출 방식 §1).
+    items 는 워커가 분류해 `classified_item` 부모 행으로 남긴 결과, documents 는
+    `cs`·`reviews` 원문이다. 둘을 따로 읽는 이유는 **분모가 documents 에서 나와야 하고
+    부모 행 존재 여부로 분류 완료를 확인해야 하기 때문**이다. aspect 0개인 정상 리뷰도
+    부모 행은 남고 자식 행만 0개라, 미분류 원문과 구분할 수 있다(탐지 분모 산출 방식 §1).
 
     두 소스의 시각 컬럼명이 다르므로(`cs.inquired_at` / `reviews.created_at`)
     `voc_document` 뷰를 거친다 — 호출부에서 UNION 을 다시 쓰면 시각 컬럼을 잘못 고르는
@@ -499,10 +505,8 @@ def _build_inputs(
         except ValidationError:
             # 리뷰에 허용 밖 aspect 가 붙은 경우 등. 분모(문서)는 남고 분자만 빠진다.
             #
-            # ⚠️ **이건 미탐 방향이다.** 예전 주석은 "커버리지 미달로 검정에서 제외되니
-            #    안전하다" 고 했는데 **틀렸다** — `check_coverage` 는 CS 전용인데
-            #    (`COVERAGE_CHECKED_SOURCES`) 이 분기를 실제로 태우는 건 리뷰 aspect
-            #    검증이다. 리뷰가 걸리면 제외 없이 분자만 조용히 깎인다.
+            # `check_coverage` 가 부모 item 누락으로 잡아 해당 리뷰 슬롯을 검정 전에
+            # 제외하므로 결과를 조용히 오염시키지는 않는다. 그래도 정상 경로는 아니다.
             #    지금은 워커가 `ClassifiedItem` 을 만들 때 이미 걸러서 DB 에 들어올 수
             #    없으므로 **도달 불가**다. 로그로 세는 이유가 그것이다 — 0 이 아니면
             #    워커 쪽 계약이 깨진 것이다. (2026-08-11 리뷰 잔가지)
@@ -666,11 +670,29 @@ async def run_batch(
     # check_coverage 를 두 번 돌리지 않는다 — detect_anomaly 도 안에서 같은 계산을 한다.
     # 넘겨주면 128k 스캔이 한 번 줄고, "경고에 찍힌 슬롯 = 실제로 family 에서 빠진 슬롯"
     # 이 보장된다.
-    unreliable = unreliable_slots(check_coverage(documents, items))
+    coverage_gaps = check_coverage(documents, items)
+    unreliable = unreliable_slots(coverage_gaps)
     if unreliable:
-        logger.warning(
-            "분류 커버리지 미달 %d슬롯 — 검정에서 제외됩니다", len(unreliable)
+        missing_documents = sum(
+            gap["documents"] - gap["classified"] for gap in coverage_gaps
         )
+        logger.warning(
+            "분류 커버리지 미달 %d슬롯, 부모 분류 레코드 누락 %d건 — 검정에서 "
+            "제외됩니다",
+            len(unreliable),
+            missing_documents,
+        )
+        for gap in coverage_gaps:
+            logger.warning(
+                "분류 커버리지 미달 상세 product=%s channel=%s source=%s day=%s "
+                "classified=%d/%d",
+                gap["product"],
+                gap["channel"],
+                gap["source"],
+                date.fromordinal(gap["day"]),
+                gap["classified"],
+                gap["documents"],
+            )
 
     # **KST 로 오늘을 정한다.** 문서가 하나도 없어 window_end 를 데이터에서 못 정했을
     # 때만 타는 분기다. `date.today()` 는 호스트 로컬이라 UTC 컨테이너에서는 KST 보다
@@ -703,6 +725,7 @@ async def run_batch(
     # ⚠️ dry-run 이어도 [6] 원인분류는 detect_anomaly 안에서 돈다. 스텁을 안 주면
     #    "LLM 0회"라고 해놓고 실제로 과금된다.
     stub = CountingClient() if dry_run else None
+    detection_diagnostics = DetectionDiagnostics()
 
     alerts, suppressed = await detect_anomaly(
         items,
@@ -713,10 +736,21 @@ async def run_batch(
         resolved_alert_ids=set(),
         unreliable_denominators=unreliable,
         client=stub,
+        diagnostics=detection_diagnostics,
     )
 
     targets = alerts if max_alerts is None else alerts[:max_alerts]
-    failures: list[dict] = []
+    failures: list[dict] = [
+        {
+            "alert_id": (
+                f"{failure['product']}/{failure['aspect']}/"
+                f"{failure['channel']}/{failure['source']}"
+            ),
+            "stage": "원인분류",
+            "error": failure["error"],
+        }
+        for failure in detection_diagnostics.cause_failures
+    ]
     counts: Counter[str] = Counter()
     # 개선안이 안 나왔지만 **실패가 아닌** 두 사유의 건수. failures 와 분리해 두는
     # 이유는 종료코드에 안 실리게 하기 위해서다(루프 안 주석 참고).
@@ -900,6 +934,10 @@ async def run_batch(
         "elapsed_sec": round((datetime.now(timezone.utc) - started).total_seconds(), 1),
         "items": len(items),
         "documents": len(documents),
+        "coverage_gap_slots": len(unreliable),
+        "coverage_missing_documents": sum(
+            gap["documents"] - gap["classified"] for gap in coverage_gaps
+        ),
         "prior_alerts": len(prior),
         "published": len(alerts),
         # suppressed 도 정상 alert_id 를 갖고 있다. 구분 없이 세면 나중에 "발행된 건가
@@ -911,6 +949,7 @@ async def run_batch(
         "delivered": len(delivered),
         "llm_calls": dict(counts),
         "cause_calls": stub.calls if stub else None,
+        "cause_failures": len(detection_diagnostics.cause_failures),
         # 개선안이 안 나왔지만 실패가 아닌 두 사유. failures 와 **별개**라 종료코드에
         # 안 실린다. `no_evidence` 가 계속 크면 상세페이지 시딩·CS 원문 조회를,
         # `routing_miss` 가 계속 크면 라우팅 프롬프트를 볼 것.
@@ -928,6 +967,10 @@ def print_summary(summary: dict) -> None:
     print(
         f"  입력          items {summary['items']} / documents {summary['documents']}"
         f"  [{summary['input_source']}]"
+    )
+    print(
+        f"  분류 coverage 제외 슬롯 {summary.get('coverage_gap_slots', 0)} / "
+        f"부모 레코드 누락 {summary.get('coverage_missing_documents', 0)}건"
     )
     if summary["input_source"] == "load_golden_inputs":
         print(
@@ -958,6 +1001,11 @@ def print_summary(summary: dict) -> None:
         print(
             f"  라우팅 미스   {summary['routing_miss']}건  ← 근거가 있는 쪽을 모델이 안"
             " 골랐음. 실패 아님 / 프롬프트 재측정 대상"
+        )
+    if summary.get("cause_failures"):
+        print(
+            f"  원인분류 실패 {summary['cause_failures']}건  ← 탐지는 계속했지만 "
+            "배치는 실패 상태로 종료"
         )
     if summary["dry_run"]:
         print("\n  [dry-run] LLM 호출 0회. 실제로 돌리면:")

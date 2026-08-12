@@ -175,6 +175,46 @@ def _stub_inputs(window_end=None):
     return items, docs
 
 
+def _stub_in_scope_inputs(window_end=None):
+    """색상 편중형 1슬롯 — dry-run 스텁이 원인분류 계약과 실제로 대면한다."""
+    docs, items = [], []
+    base = date(2026, 8, 28).toordinal()
+    for channel in (Channel.COUPANG, Channel.NAVER, Channel.ZIGZAG):
+        for day_offset in range(-34, 1):
+            day = date.fromordinal(base + day_offset)
+            current = day_offset >= -(CURRENT_WINDOW_DAYS - 1)
+            neg = 8 if current and channel == Channel.COUPANG else 1
+            for i in range(40):
+                doc_id = f"INQ-{channel.value}-{day:%m%d}-{i:03d}"
+                aspects = (
+                    [AspectSentiment(aspect=Aspect.COLOR, sentiment=-1)]
+                    if i < neg
+                    else [AspectSentiment(aspect=Aspect.ETC, sentiment=0)]
+                )
+                items.append(
+                    ClassifiedItem(
+                        item_id=doc_id,
+                        source=Source.CS,
+                        channel=channel,
+                        product_group_id="P001",
+                        raw_text="화면과 실물 색상이 달라요",
+                        aspects=aspects,
+                        created_at=datetime.combine(day, datetime.min.time()),
+                    )
+                )
+                docs.append(
+                    {
+                        "id": doc_id,
+                        "product": "P001",
+                        "channel": channel.value,
+                        "source": "cs",
+                        "created_at": datetime.combine(day, datetime.min.time()),
+                        "text": "화면과 실물 색상이 달라요",
+                    }
+                )
+    return items, docs
+
+
 @pytest.mark.asyncio
 async def test_max_alerts_does_not_cache_untouched_alerts(tmp_path, monkeypatch):
     """⚠️ 상한으로 잘린 알림은 캐시에 안 들어간다.
@@ -476,6 +516,28 @@ async def test_dry_run_skips_recommendation_when_gate_closed(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_dry_run_counts_in_scope_cause_and_recommendation(tmp_path):
+    """인스코프 편중형에서 스텁 응답이 검증을 통과하고 비용 게이트를 연다.
+
+    기존 dry-run 테스트는 파손만 넣어 원인분류를 호출하지 않았다. 그래서 스텁이 필수
+    필드를 빼거나 few-shot ID를 섞어도 전부 통과했고, 실제 실행에서만 개선안 추정이
+    0건으로 무너졌다.
+    """
+    summary = await daily.run_batch(
+        dry_run=True,
+        state_path=tmp_path / "state.json",
+        load_inputs=_stub_in_scope_inputs,
+    )
+
+    assert summary["published"] >= 1
+    assert summary["cause_calls"] >= 1
+    assert summary["cause_failures"] == 0
+    assert summary["failures"] == []
+    assert summary["llm_calls"].get("개선안", 0) == summary["processed"] >= 1
+    assert summary["llm_calls"].get("가이드라인", 0) == summary["processed"]
+
+
+@pytest.mark.asyncio
 async def test_guideline_not_counted_when_it_was_not_a_target(tmp_path, monkeypatch):
     """실제 경로도 dry-run 과 **같은 것**을 센다 — `None`(대상 아님)은 안 센다.
 
@@ -560,6 +622,38 @@ async def test_mq_connection_is_closed_on_the_normal_path(tmp_path, monkeypatch)
     await daily.run_batch(state_path=tmp_path / "state.json", load_inputs=_stub_inputs)
 
     assert closed
+
+
+@pytest.mark.asyncio
+async def test_cause_failure_is_reported_as_batch_failure(tmp_path, monkeypatch):
+    """Agent2 보강 실패를 알림 발행 성공과 별개로 실패 종료 근거에 남긴다."""
+
+    async def fake_detect(_items, *, diagnostics, **_kwargs):
+        diagnostics.cause_failures.append(
+            {
+                "product": "P001",
+                "aspect": "색상",
+                "channel": "COUPANG",
+                "source": "cs",
+                "error": "CauseValidationError: 응답 ID 누락",
+            }
+        )
+        return [], []
+
+    monkeypatch.setattr(daily, "detect_anomaly", fake_detect)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json", load_inputs=_stub_inputs
+    )
+
+    assert summary["cause_failures"] == 1
+    assert summary["failures"] == [
+        {
+            "alert_id": "P001/색상/COUPANG/cs",
+            "stage": "원인분류",
+            "error": "CauseValidationError: 응답 ID 누락",
+        }
+    ]
 
 
 def test_main_switches_encoding_before_printing(monkeypatch):
