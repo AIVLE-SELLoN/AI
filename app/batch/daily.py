@@ -335,13 +335,20 @@ def _active_version_params() -> tuple[str, str, str, str]:
 
 
 def _aspect_window_clause(where: str) -> str:
-    """분모용 조건절을 분자 쿼리에 붙일 형태로 바꾼다.
+    """분모용 조건절을 `classified_item` 조인 쿼리에 붙일 형태로 바꾼다.
 
     두 가지를 고친다:
-      - `occurred_at` → `v.occurred_at` (분자 쿼리는 뷰에 별칭이 붙어 있다)
-      - 첫 `WHERE` → `AND` (분자 쿼리는 이미 버전 필터로 WHERE 를 쓰고 있다)
+      - `occurred_at` → `v.occurred_at` (그쪽 쿼리는 뷰에 별칭이 붙어 있다)
+      - 첫 `WHERE` → `AND`
 
-    윈도우가 없으면(`where == ""`) 그대로 빈 문자열이라 버전 필터만 남는다.
+    윈도우가 없으면(`where == ""`) 그대로 빈 문자열이다.
+
+    ⚠️ **붙는 자리가 호출부마다 다르다.** `_ASPECT_SQL` 은 버전 필터로 `WHERE` 를 이미
+       쓰고 있어 이 절이 그 뒤에 `AND` 로 붙지만, `_VERSION_COUNT_SQL` 은 `WHERE` 가 없어서
+       **`JOIN ... ON` 뒤에** 붙는다. 지금은 둘 다 INNER JOIN 이라 결과가 같다.
+       🔴 그 조인을 LEFT JOIN 으로 바꾸면 **조용히 의미가 달라진다** — ON 절의 조건은 행을
+          안 지우고 NULL 로 채우기 때문이다. 바꿀 일이 생기면 이 함수 대신 명시적인
+          `WHERE` 를 그 쿼리에 직접 넣을 것. (2026-08-12 리뷰 잔가지)
     """
     return where.replace("occurred_at", "v.occurred_at").replace(" WHERE ", " AND ", 1)
 
@@ -394,9 +401,10 @@ def load_inputs_from_db(
     주입한다 — 골든을 `app/` 안에서 읽지 않기 위해 밖으로 뺐다(eval/README §232).
 
     ⚠️ **items 는 활성 분류기로 만든 결과만 담는다**(`_ACTIVE_VERSION_PREDICATE`).
-       35일 창에 두 프롬프트 결과가 섞이면 라벨러 교체가 고객 이상으로 둔갑하기
-       때문이다. 걸러진 건수는 `_check_version_cutover()` 가 경고로 남기고, 전부
-       걸러지는 상태면 거기서 세운다.
+       35일 창에 두 분류기의 결과가 섞이면 라벨러 교체가 고객 이상으로 둔갑하기
+       때문이다. 다만 그 필터는 **분자에만** 걸리므로 걸러진 상태로 검정을 돌리면 안 된다 —
+       `_check_version_cutover()` 가 옛 버전 행이 **1건이라도 있으면 여기서 세운다**
+       (fail-closed). 근거는 그 함수 docstring.
 
     Args:
         window_end: 현재 윈도우 마지막 날. 주면 `[window_end-34, window_end]` 35일만
@@ -461,27 +469,43 @@ def _classifier_versions_for(loader: Callable) -> dict | None:
 
 
 def _check_version_cutover(conn: sqlite3.Connection, aspect_where: str, params: tuple) -> None:
-    """윈도우 안 분류 결과가 **활성 분류기 기준인지** 확인한다.
+    """윈도우 안에 옛 분류기 결과가 **하나라도** 있으면 세운다 (fail-closed).
 
-    `_ASPECT_SQL` 이 활성 버전 행만 읽는 덕에 분류기가 섞인 검정은 안 나가지만, 그
-    필터는 **조용하다** — 걸러진 만큼 분자만 비고 분모(원문)는 그대로라, 부정률이
-    낮아진 것처럼 보인다. 미탐 방향이라 알림이 안 나가는 것으로 끝나고, 배치는 정상
-    종료한다. 그래서 얼마나 잘려 나갔는지 여기서 따로 센다.
+    🔴 **경고로 넘기면 오탐이 난다 — 그것도 최대 강도로.** 활성 버전 필터는 `_ASPECT_SQL`
+       에만, 즉 **분자에만** 걸린다. 분모(`_DOCUMENT_SQL` → documents)는 원문이라 필터를
+       안 타므로, 과거 구간이 stale 이면 `past_neg` 만 0 이 되고 `past_total` 은 그대로다.
+       기준선이 작아지는 게 아니라 **0 이 된다.**
 
-    가르는 기준:
-      - 활성 0건 + 옛 버전 있음 → **세운다.** 분류기를 올렸는데 backfill 을 안 돌린
-        상태다. 그대로 두면 분자가 통째로 비어 "이상 없음"으로 끝나는데, 그건 관측이
-        아니라 우리가 라벨을 못 읽은 것이다. 무동작을 성공으로 보고하지 않는다
-        (`_require_classified_tables` 가 막는 것과 같은 종류의 상태다).
-      - 활성 · 옛 버전이 섞임 → 경고. 지금 나가는 알림은 활성 버전만 본 것이라 통계적으로
-        올바르지만, 옛 구간이 빠진 만큼 기준선 표본이 작다.
+           진짜 부정률을 양쪽 다 5% 로 고정(변화 없음)하고 리뷰 소스로 실측:
+               대조군(전부 활성)   documents 1000 / items 1000  →  알림 0건
+               섞임(과거=옛 버전)  documents 1000 / items  200  →  알림 1건 🚨
+               (past_rate=0.0000 cur_rate=0.0500 delta=+0.0500 p=8.52e-08)
+
+       같은 데이터를 필터가 없던 시절에 돌리면 0건이다. 즉 **필터가 새로 여는 오탐 경로**라,
+       막으려던 병이 뒤집힌 채로 재발한다. (2026-08-12 서영님 리뷰 §1, 실측)
+
+    ⚠️ **CS 는 우연히 안전하고 리뷰만 뚫린다.** CS 는 과거 구간 aspect 가 0 이 되면
+       `check_coverage` 가 갭으로 잡아 `unreliable_slots` 로 빠진다. 리뷰는
+       `COVERAGE_CHECKED_SOURCES` 가 CS 전용이라 안 잡히고, 리뷰 커버리지는 그 방법으로
+       **원리적으로 검증이 안 된다**(`detection/loader.py` docstring). 방어선이 없다.
+
+    **왜 분모에서 같이 빼지 않고 세우는가** (2026-08-12 결정, 2안):
+      혼재는 표본이 줄어든 게 아니라 **검정 전제가 깨진 것**이다. Fisher 검정은 같은
+      분류기로 완전히 라벨링된 현재 7일과 과거 28일을 비교한다는 전제 위에 서 있다.
+      stale 원문을 분모에서도 빼면 그 전제를 복원하는 대신 **비무작위 결측**을 들인다 —
+      `FETCH_STALE_SQL` 이 `ORDER BY r.occurred_at` 이라 `--limit` 으로 나눠 backfill 하면
+      오래된 것부터 채워져, 남는 분모가 시간순 앞쪽 조각만 된다. 윈도우 안에 추세가 있으면
+      교란되고, 무엇보다 **불완전한 윈도우를 정상 검정으로 간주**하게 된다.
+      가용성보다 통계적 정합성을 택한다 — 재현 가능하고 설명도 명확하다.
+      (한 건 때문에 배치가 서는 비용이 실제로 크다고 확인되면, 그때 측정과 합의를 거쳐
+       슬롯 단위 보류를 설계한다. 조용히 우회하지는 않는다.)
 
     ⚠️ **`LLM_MODEL` 오타도 여기로 온다.** 설정이 틀리면 전량이 stale 로 잡혀 배치가
        선다. 메시지에 활성 3축을 다 찍는 이유가 그것이다 — "backfill 이 필요하다"와
        "설정이 틀렸다"를 사람이 값을 보고 가를 수 있어야 한다.
 
     Raises:
-        RuntimeError: 윈도우 안 분류 결과가 전부 옛 분류기 기준일 때.
+        RuntimeError: 윈도우 안에 옛 분류기 결과가 1건이라도 있을 때.
     """
     row = conn.execute(
         _VERSION_COUNT_SQL + aspect_where, (*_active_version_params(), *params)
@@ -496,23 +520,15 @@ def _check_version_cutover(conn: sqlite3.Connection, aspect_where: str, params: 
         return
 
     prompt_cs, prompt_review, model, pipeline = _active_version_params()
-    versions = (
-        f"cs={prompt_cs}, review={prompt_review}, model={model}, pipeline={pipeline}"
-    )
-    if not active:
-        raise RuntimeError(
-            f"윈도우 안 분류 결과 {total}건이 전부 옛 분류기 기준입니다(활성: {versions}). "
-            "이대로 돌리면 분자가 비어 '이상 없음'으로 끝납니다 — 관측 결과가 아니라 "
-            "라벨을 못 읽은 것입니다. 활성 값이 의도한 것인지 먼저 확인하고"
-            "(LLM_MODEL 오타면 설정을 고치세요), 맞다면 "
-            "`python scripts/classification_worker.py --reclassify-stale` 로 backfill 한 뒤 "
-            "다시 실행하세요."
-        )
-
-    logger.warning(
-        f"[VERSION] 윈도우 안 분류 결과 {total}건 중 {stale}건이 옛 프롬프트 기준이라 "
-        f"탐지에서 제외됩니다(활성: {versions}). 그만큼 기준선 표본이 작아집니다 — "
-        "`scripts/classification_worker.py --reclassify-stale` 로 맞추세요."
+    raise RuntimeError(
+        f"윈도우 안 분류 결과 {total}건 중 {stale}건이 옛 분류기 기준입니다"
+        f"(활성 {active}건 / 옛 버전 {stale}건). "
+        f"활성: cs={prompt_cs}, review={prompt_review}, model={model}, pipeline={pipeline}\n"
+        "  섞인 채로는 돌리지 않습니다 — 필터가 분자에만 걸려서, 과거 구간이 옛 버전이면 "
+        "기준선 부정률이 작아지는 게 아니라 0 이 되고 그대로 오탐이 됩니다.\n"
+        "  활성 값이 의도한 것인지 먼저 확인하고(LLM_MODEL 오타면 설정을 고치세요), "
+        "맞다면 `python scripts/classification_worker.py --reclassify-stale` 로 "
+        "backfill 을 **끝까지** 돌린 뒤 다시 실행하세요."
     )
 
 
