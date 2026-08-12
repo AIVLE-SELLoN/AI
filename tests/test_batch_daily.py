@@ -623,12 +623,15 @@ def test_main_switches_encoding_before_printing(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_window_end_fallback_uses_kst_today(tmp_path, monkeypatch):
-    """🔴 문서가 0건이라 window_end 를 못 정할 때, 오늘 날짜를 **KST 로 정한다.**
+    """문서가 0건이라 window_end 를 못 정할 때, 오늘 날짜를 **KST 로 정한다.**
 
-    이 날짜가 `load_prior_alerts` 의 보관 컷오프 기준이다
-    (`cutoff = window_end - STATE_RETENTION_DAYS`). `date.today()` 는 호스트 로컬이라
-    **UTC 컨테이너에서 KST 오전 9시 이전에 돌면 하루 전 날짜**가 나오고, 그만큼 컷오프가
-    당겨져 아직 억제 중이어야 할 발행 기록이 하루 일찍 잘린다 → 재알림이 하루 일찍 나간다.
+    §3(KST 경계)을 이 폴백에서도 지키는지만 본다. `date.today()` 는 호스트 로컬이라
+    UTC 컨테이너에서는 KST 보다 하루 이른 날짜가 나온다.
+
+    ⚠️ **retention 동작을 재는 테스트가 아니다** (서영님 사후 리뷰, PR #68). 이 분기의
+       `prior` 는 로그 건수에만 쓰인다 — documents 가 0건이면 `detect_anomaly` 가 즉시
+       반환하고 `save_published` 도 건너뛴다. 컷오프 경계 자체는 위
+       `test_state_roundtrip_drops_outside_retention` 이 이미 덮는다.
 
     UTC 호스트를 시계 monkeypatch 로 흉내낸다 — 서브프로세스가 필요 없다.
     ⚠️ **기준 순간을 오늘과 멀리 잡는 게 중요하다.** 오늘 근처로 잡으면 `date.today()`
