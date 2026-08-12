@@ -32,19 +32,25 @@ statsmodels==0.14.6
 # 순수 파이썬이라 네이티브 의존성이 없어 이미지에 넣어도 부담이 없다.
 jinja2==3.1.6
 
-# ⚠️ weasyprint(PDF 렌더링)는 여기 없다 — requirements.lock 에만 있다.
-#    GTK 네이티브 라이브러리를 쓰는데 python:3.12-slim 에는 없어서, 넣어도 이미지
-#    안에서는 PDF 가 안 나온다. 리포팅 라우터도 아직 501 스텁이라 컨테이너가 PDF
-#    경로를 타지 않는다. pdf_compiler 는 weasyprint 를 함수 안에서 import 하므로
-#    없어도 import 는 통과한다.
-#    ⚠️ (2026-08-04) 리포팅 라우터는 구현됐지만 PDF 를 만들지 않는다 — 월간 합본 PDF 는
-#    scripts/generate_monthly_reports.py 배치가 만든다. **컨테이너에서 이 배치를 돌릴
-#    계획이면** weasyprint + GTK apt 단계를 Dockerfile 에 추가해야 한다. 현재 compose 에
-#    배치 서비스는 없고 호스트에서 실행하는 전제다.
-#    나중에 실제로 이미지에 넣게 되면 Dockerfile 에 apt-get(libpango·libcairo 등)
-#    단계를 함께 추가해야 한다.
-#    로컬 설치 — Windows: GTK3-Runtime Win64(환경변수 추가 옵션 필수)
-#                macOS:   brew install cairo pango gdk-pixbuf libffi
+# --- 리포팅: PDF 렌더링 ---
+# 🔴 **2026-08-12 이전까지 여기 없었다.** 그때의 근거는 "리포팅 라우터가 501 스텁이라
+#    컨테이너가 PDF 경로를 안 탄다"였는데, 그 전제가 이미 깨져 있었다 —
+#    `POST /api/v1/replies`(→ cs_reply_service.py `compile_report_to_pdf`)와
+#    `python -m app.batch.daily`(→ generate_guideline) 둘 다 **이미지 안에 들어가는
+#    app/ 코드**이고 둘 다 PDF 를 만든다. 없는 채로 두면 pip 설치·import 는 다 통과하고
+#    (pdf_compiler 가 함수 안에서 import 하므로) **호출 순간에만** ModuleNotFoundError 가
+#    나서, 컨테이너를 띄워봐도 그 경로를 안 밟으면 안 잡힌다.
+#    → 넣는다. 버전은 requirements.lock 과 같은 값이다.
+#
+# ⚠️ **pip 만으로는 안 끝난다.** Pango 네이티브 라이브러리와 한글 폰트가 있어야
+#    실제로 렌더링된다. Dockerfile 의 apt-get 단계와 **세트로 움직인다** — 한쪽만
+#    지우면 다시 호출 시점 폭발이다.
+#    로컬 설치 — Windows: GTK3-Runtime Win64(환경변수 추가 옵션 필수.
+#                         pdf_compiler.py 가 그 경로를 PATH 에 넣는다)
+#                macOS:   brew install pango libffi
+#                Debian:  apt install libpango-1.0-0 libpangoft2-1.0-0 \
+#                             libharfbuzz-subset0 fonts-noto-cjk
+weasyprint==63.1
 
 # --- 리포팅: S3 적재 + Pre-signed URL 서명 ---
 # app/reporting/s3_uploader.py 가 **함수 안에서** import 한다(S3 경로를 안 타는 실행에는

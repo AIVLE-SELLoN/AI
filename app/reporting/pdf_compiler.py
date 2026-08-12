@@ -43,7 +43,19 @@ _BASE_CSS = """
        화면이 첫 페이지만 미리보기로 띄우는데 내용이 두 장으로 갈리면 뒷장이 안 보인다.
        세로 여유가 8mm 늘어난다. */
     @page { size: A4 landscape; margin: 8mm 12mm; }
-    body { font-family: 'Malgun Gothic', 'Noto Sans KR', sans-serif; font-size: 9pt; color: #1a1a1a; }
+    /* ⚠️ 'Noto Sans CJK KR' 은 리눅스 컨테이너용이고 **빼면 안 된다.** Docker 이미지가
+       설치하는 fonts-noto-cjk 의 실제 패밀리명이 이것이다. 'Malgun Gothic'(개발자
+       Windows 용)과 'Noto Sans KR' 은 **컨테이너에서 둘 다 안 잡힌다** — fontconfig 에
+       'Noto Sans KR' → 'Noto Sans CJK KR' 별칭이 없어서, 실측하면 둘 다 DejaVu Sans 로
+       해석된다(`fc-match "Noto Sans KR"` → DejaVuSans.ttf).
+
+       그때 무슨 일이 나는지가 함정이다. DejaVu 에 한글 글리프가 없으니 Pango 가 글리프
+       단위로 폴백하는데, **한국어 폰트를 고른다는 보장이 없다** — 이 스택으로 실측하면
+       `Noto Sans CJK JP` + `DejaVu Sans` 두 벌이 박힌다(2026-08-12 컨테이너 측정).
+       한글은 그려지지만 한자가 일본어 자형이고 폰트가 둘로 갈린다. **에러는 안 난다.**
+       CJK 폰트가 아예 없는 환경이면 같은 자리에서 네모(두부)가 된다.
+       명시하면 `Noto Sans CJK KR` 한 벌로 정리된다(Regular/Bold 만 임베드). */
+    body { font-family: 'Malgun Gothic', 'Noto Sans KR', 'Noto Sans CJK KR', sans-serif; font-size: 9pt; color: #1a1a1a; }
     /* ⚠️ 한글 어절 단위 줄바꿈(word-break: keep-all)은 weasyprint 63.1 이 무시한다.
        줄 끝에 한 글자만 넘어가는 것은 폭·글자 크기로 조절할 수밖에 없다. */
     h1 { font-size: 13pt; margin: 0 0 1mm; }
