@@ -567,6 +567,44 @@ def test_mixed_window_stops_before_detection(tmp_path):
         daily.load_inputs_from_db(WINDOW_END, db_path=db)
 
 
+def test_blank_content_stale_row_does_not_deadlock_the_batch(tmp_path):
+    """🔴 **불변식: 배치를 세우는 집합 ⊆ `--reclassify-stale` 이 고칠 수 있는 집합.**
+
+    워커의 stale 조회는 `TRIM(content) <> ''` 를 요구한다. 탐지의 cutover 가드가 같은
+    조건을 안 걸면, 본문이 빈 원문의 stale 분류행 하나로 **빠져나갈 길이 없는 교착**이 난다:
+
+        워커 count_stale()       = 0   ← 재분류 대상 없음
+        워커 fetch_stale_batch() = 0 rows
+        배치                     = RuntimeError 로 매일 중단
+
+    에러가 시키는 `--reclassify-stale` 은 "재분류할 문서가 없습니다"로 끝나고, 손으로
+    SQL 을 치는 것 말고는 방법이 없다. 경고만 하던 때는 무해했고 fail-closed 로 바뀌면서
+    교착이 됐다. (2026-08-12 리뷰 §1 후속)
+    """
+    db = _db(
+        tmp_path,
+        cs_rows=[
+            ("INQ-1", "P001", "COUPANG", "색이 달라요", _at(WINDOW_END)),
+            # 본문이 공백만 남은 원문 — 워커는 이 문서를 재분류 대상으로 안 잡는다.
+            ("INQ-BLANK", "P001", "COUPANG", "   ", _at(WINDOW_END)),
+        ],
+        classified=[("INQ-1", "cs", [("색상", -1)])],
+    )
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO classified_item (item_id, source, prompt_version) VALUES (?, ?, ?)",
+        ("INQ-BLANK", "cs", "classify_aspect_v4"),
+    )
+    conn.commit()
+    conn.close()
+
+    # 고칠 수 없는 행이므로 세우지 않는다. 나머지는 정상적으로 읽힌다.
+    items, documents = daily.load_inputs_from_db(WINDOW_END, db_path=db)
+
+    assert [i.item_id for i in items] == ["INQ-1"]
+    assert {d["id"] for d in documents} == {"INQ-1", "INQ-BLANK"}
+
+
 def test_missing_db_fails_loudly(tmp_path):
     """경로가 틀렸을 때 빈 파일을 새로 만들어 '문서 0건' 으로 통과하면 안 된다.
 
