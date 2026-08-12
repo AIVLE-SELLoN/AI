@@ -654,7 +654,11 @@ async def run_batch(
     """
     loader = load_inputs or load_inputs_from_db
     trace_id = new_trace_id()
-    started = datetime.now()
+    # 경과시간 전용이라 시간대는 UTC 로 고정한다 — 벽시계 값이 아니라 **차이만** 쓴다.
+    # naive `datetime.now()` 는 로컬 시각이라 배치가 도는 중 DST·시간대 변경이 걸리면
+    # elapsed_sec 가 통째로 어긋난다. 아래 `elapsed_sec` 와 **짝이라 같이 바꿔야 한다**
+    # (한쪽만 aware 로 두면 뺄셈이 TypeError 다).
+    started = datetime.now(timezone.utc)
     logger.info("배치 시작 trace_id=%s dry_run=%s", trace_id, dry_run)
 
     items, documents = loader(window_end)
@@ -676,7 +680,12 @@ async def run_batch(
             "분류 커버리지 미달 %d슬롯 — 검정에서 제외됩니다", len(unreliable)
         )
 
-    prior = load_prior_alerts(window_end or date.today(), state_path)
+    # 🔴 **KST 로 오늘을 정한다.** 이 값은 캐시 만료를 재는 날짜 경계라 §3 대상이다 —
+    #    `date.today()` 는 호스트 로컬이라 **UTC 컨테이너에서 KST 오전 9시 이전에 돌면
+    #    하루 전 날짜**가 나오고, 그날치 발행 기록이 보관 기간 밖으로 밀려 억제가 하루
+    #    일찍 풀린다(`_to_kst` 가 막는 것과 같은 모양의 사고). 문서가 하나도 없어
+    #    window_end 를 못 정했을 때만 타는 분기다.
+    prior = load_prior_alerts(window_end or datetime.now(KST).date(), state_path)
     logger.info(
         "입력 items=%d documents=%d prior_alerts=%d window_end=%s",
         len(items),
@@ -882,7 +891,7 @@ async def run_batch(
         # 인용하는 사고를 막는 게 목적이다. eval/README §68 이 실험① 에 붙인 경고와
         # 같은 이유이고, 거기서는 사람이 문서에 적었지만 여기서는 코드가 매번 낸다.
         "input_source": getattr(loader, "__name__", str(loader)),
-        "elapsed_sec": round((datetime.now() - started).total_seconds(), 1),
+        "elapsed_sec": round((datetime.now(timezone.utc) - started).total_seconds(), 1),
         "items": len(items),
         "documents": len(documents),
         "prior_alerts": len(prior),
