@@ -99,6 +99,76 @@ def test_records_rejected_outcome_with_reason(monkeypatch, biased_alert):
     assert metadata["rejection_reason_text"] == "근거가 약함"
 
 
+def test_edited_approved_records_the_edited_text(monkeypatch, biased_alert):
+    """수정후승인이면 셀러가 고쳐 쓴 문장이 적재된다 — 원래 제안문은 안 들어간다.
+
+    실제 승인 내용과 다른 문장이 "승인" 사례로 쌓이면 컬렉션2가 학습 자료로서
+    거짓이 된다. 원래 제안문 부재까지 같이 검사하는 이유: 둘을 이어 붙이는 식으로
+    고치면 "수정문이 들어간다"만으로는 통과해버린다.
+    """
+    fake_collection = _FakeCollection()
+    monkeypatch.setattr(pipeline, "get_rejection_reasons", lambda: fake_collection)
+
+    recommendation = _recommendation(
+        biased_alert.alert_id,
+        hitl_status=HitlStatus.EDITED_APPROVED,
+        hitl_feedback=HitlFeedback(
+            processed_at="2026-05-29T09:00:00",
+            processed_by="seller-001",
+            edited_text="자연광에서 재촬영하고 색상 보정은 하지 마세요.",
+        ),
+    )
+
+    pipeline.record_hitl_outcome(biased_alert, recommendation)
+
+    document = fake_collection.upsert_calls[0]["documents"][0]
+    assert "색상 보정은 하지 마세요" in document
+    assert "자연광에서 재촬영을 진행하세요." not in document
+    # 스코프: metadata에 수정후승인 구분값은 이번에 안 넣는다(스키마 확장은 별건).
+    assert fake_collection.upsert_calls[0]["metadatas"][0]["outcome"] == "승인"
+
+
+@pytest.mark.parametrize("hitl_status", [HitlStatus.APPROVED, HitlStatus.REJECTED])
+def test_records_proposed_text_when_no_edited_text(monkeypatch, biased_alert, hitl_status):
+    """edited_text가 없는 기존 승인·반려 경로는 동작이 안 바뀐다."""
+    fake_collection = _FakeCollection()
+    monkeypatch.setattr(pipeline, "get_rejection_reasons", lambda: fake_collection)
+
+    recommendation = _recommendation(
+        biased_alert.alert_id,
+        hitl_status=hitl_status,
+        hitl_feedback=HitlFeedback(processed_at="2026-05-29T09:00:00", processed_by="seller-001"),
+    )
+
+    pipeline.record_hitl_outcome(biased_alert, recommendation)
+
+    assert "자연광에서 재촬영을 진행하세요." in fake_collection.upsert_calls[0]["documents"][0]
+
+
+def test_edited_approved_without_edited_text_falls_back_to_proposed_text(monkeypatch, biased_alert):
+    """수정후승인인데 백엔드가 edited_text를 안 실어주면 제안문으로 폴백한다.
+
+    edited_text는 선택 필드라 도달 가능한 상태다. 여기서 던지거나 빈 문서를 넣으면
+    승인 사례 1건이 통째로 유실된다 — 원문에 가장 가까운 값을 남기는 쪽이 낫다.
+    """
+    fake_collection = _FakeCollection()
+    monkeypatch.setattr(pipeline, "get_rejection_reasons", lambda: fake_collection)
+
+    recommendation = _recommendation(
+        biased_alert.alert_id,
+        hitl_status=HitlStatus.EDITED_APPROVED,
+        hitl_feedback=HitlFeedback(
+            processed_at="2026-05-29T09:00:00",
+            processed_by="seller-001",
+            edited_text=None,
+        ),
+    )
+
+    pipeline.record_hitl_outcome(biased_alert, recommendation)
+
+    assert "자연광에서 재촬영을 진행하세요." in fake_collection.upsert_calls[0]["documents"][0]
+
+
 def test_raises_when_hitl_status_still_pending(biased_alert):
     recommendation = _recommendation(biased_alert.alert_id, hitl_status=HitlStatus.PENDING)
 

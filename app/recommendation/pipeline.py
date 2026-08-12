@@ -1017,6 +1017,9 @@ def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -
     승인·반려 둘 다 적재 대상이다(§4-2: "승인 또는 반려된 개선안 1건 = 문서 1건").
     id는 recommendation_id로 결정적 — 같은 건에 대해 재호출해도 upsert라 중복 없음.
 
+    적재 본문은 `hitl_feedback.edited_text`가 있으면 그 값, 없으면
+    `proposal.proposed_text`다 — 셀러가 실제로 승인한 문장을 학습 사례로 남긴다.
+
     Raises:
         ValueError: alert/recommendation이 서로 다른 건을 가리키거나, hitl_status가
             아직 PENDING(결정 전)이라 적재할 결과가 없는 경우.
@@ -1031,10 +1034,17 @@ def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -
 
     root_cause_label = alert.root_cause.label if alert.root_cause else "미상"
     proposed_text = recommendation.proposal.proposed_text if recommendation.proposal else ""
+    # hitl_status가 EDITED_APPROVED(수정후승인)면 셀러가 승인한 건 우리 제안문이 아니라
+    # 셀러가 고쳐 쓴 문장이다 — 그쪽을 적재해야 다음 유사 케이스가 실제 승인본을 참고한다.
+    # hitl_status로 분기하지 않고 값 유무로 고르는 이유: EDITED_APPROVED인데 백엔드가
+    # edited_text를 안 실어주는 경우가 있어(선택 필드) 어차피 폴백이 필요하고, 그러면
+    # 상태 분기는 같은 판정을 두 번 하는 꼴이라 한쪽만 바뀌었을 때 조용히 갈린다.
+    edited_text = recommendation.hitl_feedback.edited_text if recommendation.hitl_feedback else None
+    approved_text = edited_text if edited_text else proposed_text
     # §4-2 스펙: "원인 라벨 + CS 요약 + 개선안 본문". 예전엔 CS 요약 대신 aspect를 넣는
     # 실수가 있었다(2026-07-27 발견·수정) — _summarize_cs_evidence()로 실제 CS 요약을 쓴다.
     cs_summary = _summarize_cs_evidence(alert)
-    document = f"{root_cause_label} {cs_summary} {proposed_text}"
+    document = f"{root_cause_label} {cs_summary} {approved_text}"
 
     outcome = "반려" if recommendation.hitl_status == HitlStatus.REJECTED else "승인"
     decided_at = (
