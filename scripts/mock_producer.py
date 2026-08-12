@@ -26,6 +26,7 @@ raw DB 는 stdlib sqlite3 로 구성한다(추가 의존성 없음). 운영 DB(P
 """
 
 import argparse
+import csv
 import json
 import logging
 import sqlite3
@@ -222,6 +223,88 @@ def seed_channels(conn: sqlite3.Connection, observed: set[str]) -> None:
         )
 
 
+def seed_product_catalog(
+    conn: sqlite3.Connection,
+    products: list[dict[str, str]],
+    group_of_variant: dict[str, str],
+) -> None:
+    """§2-2 products · §2-3 mapped_data 를 채운다.
+
+    운영에서는 **백엔드(Spring Boot)가 상품 매핑을 수행해 이 두 테이블에 적재한다**
+    (2026-08-11 확정). producer 는 목 파이프라인에서 main server 자리를 대신할 뿐이라,
+    여기서 하는 일은 그 적재를 흉내 내는 것이지 매핑 규칙을 정하는 것이 아니다.
+
+    ⚠️ `channel` 다음에 불러야 한다 — products.channel_id 가 채널 마스터를 참조한다.
+
+    ⚠️ mapped_data 는 products 에 있는 variant 만 넣는다. 없는 variant 를 넣으면 FK 위반으로
+       행이 통째로 빠지는데, 그러면 "매핑은 했는데 조회는 안 되는" 상태가 되어 원인을
+       찾기 어렵다. 빠진 건수를 세어 알린다.
+    """
+    if not products:
+        logger.warning(
+            f"[RAW DB] {CHANNEL_PRODUCTS_FILE} 없음 — products·mapped_data 를 비워 둡니다. "
+            "월간 리포트의 상품 표기명 조회가 product_group_id 로 대체됩니다."
+        )
+        return
+
+    # 수집·매핑 시각. 대본 CSV 에는 없어서 **적재 시각**으로 둔다 — 목에서는 producer 가
+    # main server 자리를 대신하므로 그게 실제로 이 행이 생긴 시각이다.
+    #
+    # ⚠️ `mapping_method`·`mapping_confidence` 는 채우지 않는다(§2-3). "무엇으로 묶었는지"
+    #    (sim_embedding/rule_naming/manual)와 그 확신도는 **백엔드 매핑의 산물**이라 우리가
+    #    아는 값이 아니다. 그럴듯한 값을 넣으면 나중에 실제 매핑 품질을 볼 때 지어낸 수치가
+    #    섞인다. 모르는 것은 NULL 로 둔다.
+    now = datetime.now(KST).isoformat()
+
+    # ⚠️ `known` 과 INSERT 가 **같은 값**을 봐야 한다. 예전에는 여기서만 strip 하고 INSERT 는
+    #    원본을 넣어서, CSV 에 공백이 섞이면 products 엔 공백 포함으로 들어가고 mapped_data
+    #    는 orphan 으로 빠졌다 — 매핑은 했는데 조회가 안 되는, 제일 찾기 어려운 형태다.
+    known: set[str] = set()
+    for row in products:
+        variant_row_id = str(row.get("variant_row_id") or "").strip()
+        known.add(variant_row_id)
+        conn.execute(
+            "INSERT OR REPLACE INTO products (variant_row_id, channel_id, channel_product_id, "
+            "channel_product_name, option_group_names, channel_option_name, sale_price, "
+            "original_price, fetched_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                variant_row_id,
+                row.get("channel"),
+                row.get("channel_product_id"),
+                row.get("channel_product_name"),
+                row.get("option_group_names"),
+                row.get("channel_option_name"),
+                row.get("sale_price") or None,
+                row.get("original_price") or None,
+                now,
+                now,
+            ),
+        )
+
+    orphan = 0
+    for vrid, group in group_of_variant.items():
+        if vrid not in known:
+            orphan += 1
+            continue
+        conn.execute(
+            "INSERT OR REPLACE INTO mapped_data (variant_row_id, product_group_id, mapped_at) "
+            "VALUES (?, ?, ?)",
+            (vrid, group, now),
+        )
+    conn.commit()
+
+    mapped = len(group_of_variant) - orphan
+    logger.info(
+        f"[RAW DB] products {len(products)}행 · mapped_data {mapped}행 적재 "
+        f"(상품그룹 {len(set(group_of_variant.values()))}종)"
+    )
+    if orphan:
+        logger.error(
+            f"[RAW DB] mapped_data 에 products 에 없는 variant {orphan}건 — 적재하지 않았습니다. "
+            f"{CHANNEL_PRODUCTS_FILE} 와 {MAPPED_DATA_FILE} 이 같은 생성분인지 확인하세요."
+        )
+
+
 def build_db_row(event: dict[str, Any]) -> tuple | None:
     """이벤트 1건 → 대상 테이블의 INSERT 파라미터. 적재 대상이 아니면 None.
 
@@ -370,6 +453,113 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
+# §2-2 products 의 대본. 채널 쪽 사실만 들어 있고 **상품 그룹은 없다**(그건 매핑 결과라
+# mapped_data 소관). 컬럼은 `raw_schema.PRODUCTS_DDL` 과 1:1 이다.
+CHANNEL_PRODUCTS_FILE = "input_channel_products.csv"
+
+# §2-3 mapped_data 의 대본. variant → 상품 그룹.
+#
+# ⚠️ 매핑 자체는 **백엔드(Spring Boot)가 수행해 적재한다**(2026-08-11 확정). 여기서 읽는
+#    파일은 그 결과를 목으로 흉내 낸 것뿐이고, 규칙을 정하는 쪽은 producer 가 아니다.
+#
+# 🔴 **이 파일은 백엔드가 준다. 저장소 안에 만드는 코드가 없다**(2026-08-11 기준).
+#    상품 매핑은 백엔드 소관이라 그 결과물을 받아 `data/input/` 에 두는 구조다.
+#    받기 전까지는 매핑 없이 돌고, 그 상태에서 무엇이 어긋나는지는 아래 로더 docstring 참고.
+#
+#    ⚠️ 예전 주석은 "생성기가 `--golden-mapping-dir` 로 조인해 만들어 준다" 였는데 **틀렸다.**
+#       `generate_cs_review_data.py` 는 golden 매핑을 자기 입력으로 읽을 뿐 이 파일을 내지
+#       않는다. 출처가 두 갈래로 적혀 있으면 다음 사람이 없는 생성기 기능을 고치러 간다.
+#       (`data/golden/golden_mapping.csv` 로 임시로 만들어 쓸 수는 있지만 — producer 는
+#        golden 을 못 읽으므로(`validate_data_directory` 가드 · CLAUDE.md 9) 그 변환은
+#        사람이 한 번 해서 input 쪽에 둬야 한다.)
+MAPPED_DATA_FILE = "input_mapped_data.csv"
+
+
+def _resolve_group(
+    channel: str,
+    channel_product_id: str,
+    group_of: dict[tuple[str, str], str],
+    unmapped: set[tuple[str, str]],
+) -> str:
+    """채널 상품 → 상품 그룹. 매핑에 없으면 채널 상품 ID 를 그대로 쓰고 기록해 둔다.
+
+    빈 문자열을 돌려주지 않는다 — 호출부의 `or None` 이 빈 값을 None 으로 접기 때문에
+    여기서 넘긴 대체값이 그대로 살아야 한다.
+    """
+    if not channel_product_id:
+        return ""
+    key = (channel, channel_product_id)
+    resolved = group_of.get(key)
+    if resolved:
+        return resolved
+    if group_of:  # 매핑은 있는데 이 상품만 빠진 경우 — 파일 부재와 구분해서 센다
+        unmapped.add(key)
+    return channel_product_id
+
+
+def load_product_catalog(data_dir: Path) -> tuple[list[dict[str, str]], dict[str, str]]:
+    """§2-2 products · §2-3 mapped_data 대본을 읽는다. 적재와 조인에 둘 다 쓴다.
+
+    Returns:
+        (products 행 목록, variant_row_id → product_group_id)
+    """
+    products: list[dict[str, str]] = []
+    path = data_dir / CHANNEL_PRODUCTS_FILE
+    if path.exists():
+        with path.open(encoding="utf-8-sig", newline="") as f:
+            products = [dict(row) for row in csv.DictReader(f)]
+
+    group_of_variant: dict[str, str] = {}
+    map_path = data_dir / MAPPED_DATA_FILE
+    if map_path.exists():
+        with map_path.open(encoding="utf-8-sig", newline="") as f:
+            for row in csv.DictReader(f):
+                vrid = str(row.get("variant_row_id") or "").strip()
+                group = str(row.get("product_group_id") or "").strip()
+                if vrid and group:
+                    group_of_variant[vrid] = group
+
+    return products, group_of_variant
+
+
+def build_channel_product_map(
+    products: list[dict[str, str]], group_of_variant: dict[str, str]
+) -> dict[tuple[str, str], str]:
+    """`products ⋈ mapped_data` 를 (channel, channel_product_id) → product_group_id 로 편다.
+
+    운영에서 백엔드가 두 테이블에 적재해 두면 읽는 쪽이 SQL 로 하는 그 조인이다. 여기서는
+    적재 **전에** 이벤트 필드를 채워야 해서 메모리에서 같은 조인을 한다 — 기준이 갈리지
+    않도록 원본은 어디까지나 위 두 대본 하나씩이다.
+
+    ⚠️ 이 매핑이 비면 **채널마다 다른 그룹으로 갈린다.** 상품 하나가 쿠팡·네이버·지그재그
+       에서 서로 다른 `product_group_id` 가 되어:
+         - 탐지의 채널 간 비교(편중형/전역형)가 성립하지 않는다
+         - 월간 리포트의 채널 격차(JSD)도 같은 이유로 무의미해진다
+         - ChromaDB 컬렉션1(상세페이지)은 `P001` 로 적재돼 있어 조회가 **전부** 빗나간다
+           (2026-08-11 실측: 적중 0% → 개선안이 전부 근거없음 경로로 떨어졌다)
+       전부 조용히 틀리는 실패라, 비면 아래에서 경고를 남긴다.
+    """
+    mapping: dict[tuple[str, str], str] = {}
+    for row in products:
+        group = group_of_variant.get(str(row.get("variant_row_id") or "").strip())
+        channel = str(row.get("channel") or "").strip()
+        channel_product_id = str(row.get("channel_product_id") or "").strip()
+        if group and channel and channel_product_id:
+            mapping[(channel, channel_product_id)] = group
+
+    if not mapping:
+        logger.warning(
+            f"상품 매핑 없음({CHANNEL_PRODUCTS_FILE} + {MAPPED_DATA_FILE}) — 채널 상품 ID 를 "
+            f"그룹 키로 대체합니다. 채널 간 비교와 상세페이지(ChromaDB) 조회가 빗나갑니다."
+        )
+    else:
+        logger.info(
+            f"[MAP] products {len(products)}행 ⋈ mapped_data {len(group_of_variant)}행 "
+            f"→ 채널상품 {len(mapping)}종 / 상품그룹 {len(set(mapping.values()))}종"
+        )
+    return mapping
+
+
 def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[dict[str, Any]]:
     """대본 CSV 들을 읽어 이벤트 리스트로 합친다.
 
@@ -377,6 +567,9 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
        data/ 는 gitignore 라 팀원마다 파일이 다른데, 경고 한 줄만 남기고 "0건 발행"으로
        조용히 끝나면 파일명이 틀린 건지 정상인지 구분할 수가 없다.
     """
+    products, group_of_variant = load_product_catalog(data_dir)
+    group_of = build_channel_product_map(products, group_of_variant)
+    unmapped: set[tuple[str, str]] = set()
     merged_events: list[dict[str, Any]] = []
     topics_filter = [t.strip() for t in topics_filter_str.split(",")] if topics_filter_str else []
     missing_files: list[Path] = []
@@ -438,10 +631,13 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
                 "channel": channel or None,
                 "channel_product_id": channel_product_id or None,
                 # ⚠️ 마스터 상품 그룹(P001…)은 답 노출 방지 설계상 input CSV 에 없다
-                #    (generate_mock_data.py 참고). 매핑 테이블이 붙기 전까지는 채널 상품 ID 를
-                #    그대로 그룹 키로 쓴다 — 실제 연동 시 이 한 줄만 조인으로 바꾸면 된다.
+                #    (generate_mock_data.py 참고). 그래서 매핑으로 되찾는다 —
+                #    운영에서는 `products ⋈ mapped_data` 가 하는 일이다.
+                #    매핑에 없으면 채널 상품 ID 를 그대로 쓰되 아래에서 건수를 남긴다.
                 "product_group_id": (
-                    sanitized_payload.get("product_group_id") or channel_product_id or None
+                    sanitized_payload.get("product_group_id")
+                    or _resolve_group(channel, channel_product_id, group_of, unmapped)
+                    or None
                 ),
                 "raw_text": str(raw_text) if raw_text else None,
                 "message_key": message_key,
@@ -458,6 +654,15 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
             "  data/ 는 git 에 없으므로 scripts/generate_mock_data.py 로 먼저 생성해야 합니다.\n"
         )
         sys.exit(1)
+
+    if unmapped:
+        # 매핑 파일은 있는데 일부 상품이 빠진 경우. 그 상품만 채널별로 갈리므로
+        # "일부만 조용히 틀리는" 상태가 된다 — 전량 실패보다 찾기 어렵다.
+        sample = ", ".join(f"{ch}:{cpid}" for ch, cpid in sorted(unmapped)[:3])
+        logger.warning(
+            f"[MAP] 매핑에 없는 채널 상품 {len(unmapped)}종 — 채널 상품 ID 를 그룹 키로 대체합니다. "
+            f"예: {sample}"
+        )
 
     return merged_events
 
@@ -559,6 +764,9 @@ def main() -> None:
         conn = open_raw_db(args.raw_db)
         # channel 마스터를 먼저 채운다 — cs·reviews·orders 의 channel_id 가 참조한다.
         seed_channels(conn, {e["channel"] for e in events if e["channel"]})
+        # 그다음 상품 카탈로그 — products.channel_id 가 channel 을,
+        # mapped_data.variant_row_id 가 products 를 참조한다(§2-2 → §2-3 순서).
+        seed_product_catalog(conn, *load_product_catalog(data_dir))
         sink = RawDbSink(conn)
 
     summary_counts: dict[str, int] = {config["topic"]: 0 for config in STREAMING_FILE_CONFIGS.values()}

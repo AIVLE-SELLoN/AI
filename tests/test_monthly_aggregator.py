@@ -191,24 +191,19 @@ def test_unknown_channel_is_excluded_and_logged(conn: sqlite3.Connection, caplog
     assert "11ST" in caplog.text
 
 
-def test_product_name_falls_back_when_tables_absent(conn: sqlite3.Connection) -> None:
-    """products/mapped_data 가 없으면 None — 이름을 지어내지 않는다.
+def test_product_name_falls_back_when_catalog_is_empty(conn: sqlite3.Connection) -> None:
+    """카탈로그가 비어 있으면 None — 이름을 지어내지 않는다. 호출부가 코드를 그대로 쓴다.
 
-    목 파이프라인에는 아직 두 테이블이 없다. 호출부가 product_group_id 를 그대로 쓴다.
+    ⚠️ 예전에는 "테이블이 아예 없을 때"를 재는 테스트였다. 2026-08-11 에 확정 스키마
+       §2-2·§2-3 이 `raw_schema` 로 들어와 두 테이블이 **항상 생기므로**, 이제 남은 경우는
+       "테이블은 있는데 그 상품이 아직 매핑되지 않음" 이다. 백엔드가 매핑을 적재하기 전
+       구간이 정확히 이 상태다.
     """
     assert _fetch_product_names(conn, "P001") is None
 
 
 def test_product_name_uses_mode_across_channels(conn: sqlite3.Connection) -> None:
     """products ⋈ mapped_data 에서 채널별 표기명을 모아 최빈값을 고른다."""
-    conn.executescript(
-        """
-        CREATE TABLE products (
-            variant_row_id TEXT PRIMARY KEY, channel_id TEXT, channel_product_name TEXT
-        );
-        CREATE TABLE mapped_data (variant_row_id TEXT PRIMARY KEY, product_group_id TEXT);
-        """
-    )
     # 쿠팡 2개 variant·네이버 1개가 같은 이름, 지그재그만 다른 표기
     for variant, channel, name in [
         ("v1", "COUPANG", "미디 원피스"),
@@ -216,8 +211,16 @@ def test_product_name_uses_mode_across_channels(conn: sqlite3.Connection) -> Non
         ("v3", "NAVER", "미디 원피스"),
         ("v4", "ZIGZAG", "미디원피스"),
     ]:
-        conn.execute("INSERT INTO products VALUES (?,?,?)", (variant, channel, name))
-        conn.execute("INSERT INTO mapped_data VALUES (?,?)", (variant, "P001"))
+        # 컬럼을 명시한다 — 실제 products 는 8컬럼이라 위치 INSERT 는 스키마가 늘 때 깨진다.
+        conn.execute(
+            "INSERT INTO products (variant_row_id, channel_id, channel_product_id, "
+            "channel_product_name) VALUES (?,?,?,?)",
+            (variant, channel, f"CP-{variant}", name),
+        )
+        conn.execute(
+            "INSERT INTO mapped_data (variant_row_id, product_group_id) VALUES (?,?)",
+            (variant, "P001"),
+        )
     conn.commit()
 
     assert _fetch_product_names(conn, "P001") == "미디 원피스"

@@ -41,6 +41,7 @@ from app.core.schemas import (
     PdfS3Meta,
     RecommendedAction,
     Severity,
+    Source,
     Verdict,
 )
 from app.reporting import cs_reply_service, monthly_report_service, s3_uploader
@@ -1238,9 +1239,86 @@ def test_cs_prompt_sanitizes_table_breakers(cs_input) -> None:
     cs_input.linked_inquiries[0].raw_text = "색상이 다름 | 사이즈도\n작아요"
     prompt = cs_reply_service.build_prompt(cs_input)
 
-    table = prompt.split("[문의] 문의ID|원문\n")[1].split("\n\n")[0]
+    table = prompt.split("[원문] ID|출처|내용\n")[1].split("\n\n")[0]
     assert len(table.splitlines()) == len(cs_input.linked_inquiries)
     assert "색상이 다름 / 사이즈도 작아요" in prompt
+
+
+def test_cs_prompt_labels_review_rows(cs_input) -> None:
+    """🔴 리뷰 원문은 표에 **리뷰**로 표기된다 — 접두사 추측에 맡기지 않는다.
+
+    리뷰를 CS 가이드라인 근거로 쓰는 것이 확정 정책이다(2026-08-11). 그런데 리뷰는
+    **공개 답글**이라 응대가 다르다 — 답글로는 반품·교환을 접수할 수 없다. 표에 출처가
+    없으면 모델이 전부 1:1 문의로 답해서 **지키지 못할 약속**("무상 교환·반품을
+    도와드리겠습니다")이 리뷰 답글로 나간다.
+
+    `RVW-` 접두사로 추측시키지 않는 이유: ID 규칙이 바뀌면 조용히 틀린다.
+    """
+    cs_input.linked_inquiries[0].source = Source.CS
+    cs_input.linked_inquiries.append(
+        LinkedCSInquiry(
+            item_id="RVW-000002",
+            raw_text="실물 색이 더 어둡네요",
+            created_at=datetime(2026, 5, 27, 11, 0, tzinfo=UTC),
+            source=Source.REVIEW,
+        )
+    )
+
+    table = cs_reply_service._build_inquiry_table(cs_input)
+    rows = {line.split("|")[0]: line.split("|")[1] for line in table.splitlines()}
+
+    assert rows["INQ-000001"] == "문의"
+    assert rows["RVW-000002"] == "리뷰"
+
+
+def test_unknown_source_is_treated_as_inquiry(cs_input) -> None:
+    """⚠️ 출처 미상(None)은 **문의**로 본다 — 어긋났을 때 덜 나쁜 쪽이다.
+
+    `build_linked_inquiries` 는 `source` 값이 이상하거나 키가 없으면 None 을 넣는다
+    (2026-08-11, PR #58). 그때 "리뷰 답글" 톤으로 쓰면 **답변을 기다리는 고객에게
+    "고객센터로 연락 주세요" 가 나간다.** 반대(리뷰에 문의 답변 톤)는 어색할 뿐이지만
+    이쪽은 응대 자체가 어긋나므로, 모르면 문의 쪽으로 기운다.
+    """
+    cs_input.linked_inquiries[0].source = None
+
+    table = cs_reply_service._build_inquiry_table(cs_input)
+
+    assert table.splitlines()[0].split("|")[1] == "문의"
+
+
+def test_old_prompt_versions_keep_the_two_column_table(cs_input) -> None:
+    """⚠️ 구버전에는 출처 열을 넣지 않는다 — 버전 비교 실험의 조건이 달라진다.
+
+    v4 의 헤더는 `[문의] 문의ID|원문` 이라 2열이다. 3열을 주면 자기가 선언하지 않은 열을
+    받게 되고, 구버전을 남겨 둔 이유(정량 비교 — CLAUDE.md 4)가 무너진다. 예전에 잰
+    토큰·정확도와 지금 수치를 나란히 놓을 수 없게 된다.
+    """
+    cs_input.linked_inquiries[0].source = Source.REVIEW
+
+    v4 = cs_reply_service.build_prompt(cs_input, prompt_version="cs_reply_v4")
+    v5 = cs_reply_service.build_prompt(cs_input)
+
+    v4_row = v4.split("[문의] 문의ID|원문\n")[1].splitlines()[0]
+    v5_row = v5.split("[원문] ID|출처|내용\n")[1].splitlines()[0]
+
+    assert v4_row.count("|") == 1, f"v4 표에 열이 늘었다: {v4_row}"
+    assert v5_row.count("|") == 2, f"v5 표에 출처 열이 없다: {v5_row}"
+    assert "|리뷰|" in v5_row and "리뷰" not in v4_row
+
+
+def test_v5_tells_the_model_reviews_cannot_accept_returns(cs_input) -> None:
+    """v5 프롬프트가 리뷰 답글의 **조치 한계**를 지시한다.
+
+    이게 v5 를 만든 이유다. v4 는 `draft_reply` 를 "사과 → 원인 설명 → 즉시 조치(무상
+    교환·반품)" 로 못박아서, 리뷰에 그대로 쓰면 답글로는 못 하는 일을 약속한다.
+    """
+    prompt = cs_reply_service.build_prompt(cs_input)
+
+    assert "리뷰 답글" in prompt
+    assert "고객센터" in prompt, "답글로 접수가 안 된다면 어디로 유도할지 알려줘야 한다"
+
+    v4 = cs_reply_service.build_prompt(cs_input, prompt_version="cs_reply_v4")
+    assert "리뷰" not in v4, "v4 는 리뷰를 모른다 — 그래서 v5 를 만들었다(구버전은 보존)"
 
 
 def test_compact_prompt_is_smaller_than_previous_version(monthly_input, cs_input) -> None:
