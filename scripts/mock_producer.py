@@ -32,7 +32,7 @@ import logging
 import sqlite3
 import sys
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +41,7 @@ import pandas as pd
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from app.core import raw_schema
+from app.core.constants import KST
 from app.core.schemas import Channel
 
 # §2-1 channel 마스터에 넣을 채널. `Channel` enum 이 정본이다.
@@ -159,7 +160,13 @@ TABLE_INSERTS: dict[str, str] = {
 
 # §3 날짜 경계는 Asia/Seoul 로 통일한다. 대본 CSV 의 시각은 오프셋 없는 한국 벽시계라
 # 그대로 넣으면 TIMESTAMPTZ 로 옮길 때 어느 지역 시각인지 알 수 없어 하루가 밀린다.
-KST = timezone(timedelta(hours=9))
+#
+# 🔴 **`KST` 를 여기서 다시 정의하지 말 것 — `app.core.constants` 것을 쓴다.**
+#    이 파일은 오프셋을 붙여 **쓰는** 쪽이고, `app/batch/daily.py::_to_kst` 가 그걸 읽어
+#    날짜를 **자르는** 쪽이다. 두 벌이 되면 한쪽만 바뀌었을 때 행 수도 `verify_counts` 도
+#    전부 통과하는데 **날짜 경계의 문서만 다른 날로 집계된다** — 08-11 밤 생성기
+#    비결정성과 같은 모양(집계는 같은데 행이 갈림)이라 집계 검산으로는 안 잡힌다.
+#    (PR #68 후속)
 
 
 def to_kst_iso(value: datetime) -> str:
