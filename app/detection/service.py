@@ -69,7 +69,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
+from app.core.constants import CURRENT_WINDOW_DAYS, KST, PAST_WINDOW_DAYS
 from app.core.schemas import (
     Aspect,
     Channel,
@@ -518,7 +518,19 @@ async def detect_anomaly(
     if not rows:
         return [], []
 
-    detected_at = detected_at or datetime.now()
+    # 🔴 **KST 벽시계로 정한다 — 호스트 시간대를 보지 않는다.** 이 값의 날짜 부분이
+    #    그대로 `alert_id`(`ALT-{detected_at:%Y%m%d}`, alert.make_alert_id)와 CS
+    #    가이드라인 기간(`%Y-%m`, reporting/cs_reply_service)이 되므로 §3(KST 경계)
+    #    대상이다. naive `datetime.now()` 는 로컬 시각이라 **UTC 컨테이너에서 KST
+    #    오전 9시 이전에 돌면 alert_id 가 하루 전 날짜**로 찍힌다 — 개발 머신이 KST 라
+    #    로컬 테스트로는 영원히 안 잡히는, `_to_kst` 가 막는 것과 같은 모양의 사고다.
+    #
+    # ⚠️ **tzinfo 를 떼서 naive 로 내보낸다 — 발행 계약을 안 바꾸려는 것이다.**
+    #    `detected_at` 은 `ai.anomaly.analyzed` payload 로 나가고 문서의 예시가
+    #    오프셋 없는 형태다(docs/mq_events.md §4.1 · docs/detection_schema.md).
+    #    aware 로 바꾸면 `"...+09:00"` 이 붙어 백엔드 파싱 계약이 조용히 달라지므로,
+    #    그건 별건으로 합의할 일이다. 값 자체는 위에서 KST 로 확정됐다.
+    detected_at = detected_at or datetime.now(KST).replace(tzinfo=None)
     cur_start, cur_end, window_start_date, window_end_date = _window_bounds(
         rows, window_end
     )

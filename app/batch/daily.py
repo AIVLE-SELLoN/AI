@@ -43,7 +43,7 @@ import sys
 import uuid
 from collections import Counter
 from collections.abc import Callable
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -53,7 +53,7 @@ from pydantic import ValidationError
 from app.config import get_settings
 from app.core import raw_schema
 from app.core.console import force_utf8_output
-from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
+from app.core.constants import CURRENT_WINDOW_DAYS, KST, PAST_WINDOW_DAYS
 from app.core.inquiries import build_linked_inquiries
 from app.core.raw_db import connect_readonly
 from app.core.schemas import Channel, ClassifiedItem, DetectionAlert, Source
@@ -261,16 +261,6 @@ INPUT_WINDOW_DAYS = CURRENT_WINDOW_DAYS + PAST_WINDOW_DAYS
 `[window_end - 34, window_end]` 다. 값이 `STATE_RETENTION_DAYS` 와 같지만 **사유가
 다르다** — 저쪽은 캐시 보관 기간이다. 한쪽을 바꿀 일이 생겼을 때 다른 쪽이 조용히
 따라가지 않도록 따로 둔다.
-"""
-
-KST = timezone(timedelta(hours=9))
-"""날짜 경계의 기준 시간대. **확정 문서 §3 이 KST 로 못박았다.**
-
-UTC 로 자르면 KST 오전 9시 이전 문의가 전날로 밀려서, 매일 도는 배치가 날짜 경계에서
-매번 어긋난다. 문서의 쿼리는 `(컬럼 AT TIME ZONE 'Asia/Seoul')::date` 인데 그건
-Postgres 문법이라 로컬 sqlite 에 없다 — 그래서 **절단을 파이썬에서 한다**
-(`_to_kst`). 원문은 오프셋이 붙은 ISO 문자열로 저장되므로(raw_schema 모듈 docstring)
-변환에 필요한 정보가 값 안에 다 있다.
 """
 
 # 분모(원문)와 분자(분류 결과)를 **따로** 읽는다. 확정 문서 §4 는 이 둘을 CTE 로 나눠
@@ -654,7 +644,11 @@ async def run_batch(
     """
     loader = load_inputs or load_inputs_from_db
     trace_id = new_trace_id()
-    started = datetime.now()
+    # 경과시간 전용이라 시간대는 UTC 로 고정한다 — 벽시계 값이 아니라 **차이만** 쓴다.
+    # naive `datetime.now()` 는 로컬 시각이라 배치가 도는 중 DST·시간대 변경이 걸리면
+    # elapsed_sec 가 통째로 어긋난다. 아래 `elapsed_sec` 와 **짝이라 같이 바꿔야 한다**
+    # (한쪽만 aware 로 두면 뺄셈이 TypeError 다).
+    started = datetime.now(timezone.utc)
     logger.info("배치 시작 trace_id=%s dry_run=%s", trace_id, dry_run)
 
     items, documents = loader(window_end)
@@ -676,7 +670,12 @@ async def run_batch(
             "분류 커버리지 미달 %d슬롯 — 검정에서 제외됩니다", len(unreliable)
         )
 
-    prior = load_prior_alerts(window_end or date.today(), state_path)
+    # 🔴 **KST 로 오늘을 정한다.** 이 값은 캐시 만료를 재는 날짜 경계라 §3 대상이다 —
+    #    `date.today()` 는 호스트 로컬이라 **UTC 컨테이너에서 KST 오전 9시 이전에 돌면
+    #    하루 전 날짜**가 나오고, 그날치 발행 기록이 보관 기간 밖으로 밀려 억제가 하루
+    #    일찍 풀린다(`_to_kst` 가 막는 것과 같은 모양의 사고). 문서가 하나도 없어
+    #    window_end 를 못 정했을 때만 타는 분기다.
+    prior = load_prior_alerts(window_end or datetime.now(KST).date(), state_path)
     logger.info(
         "입력 items=%d documents=%d prior_alerts=%d window_end=%s",
         len(items),
@@ -882,7 +881,7 @@ async def run_batch(
         # 인용하는 사고를 막는 게 목적이다. eval/README §68 이 실험① 에 붙인 경고와
         # 같은 이유이고, 거기서는 사람이 문서에 적었지만 여기서는 코드가 매번 낸다.
         "input_source": getattr(loader, "__name__", str(loader)),
-        "elapsed_sec": round((datetime.now() - started).total_seconds(), 1),
+        "elapsed_sec": round((datetime.now(timezone.utc) - started).total_seconds(), 1),
         "items": len(items),
         "documents": len(documents),
         "prior_alerts": len(prior),

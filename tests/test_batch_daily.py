@@ -600,3 +600,42 @@ def test_main_switches_encoding_before_printing(monkeypatch):
     assert "utf8" in calls, "main() 이 force_utf8_output() 을 부르지 않았습니다"
     # 출력·로깅보다 먼저 불려야 한다.
     assert calls.index("utf8") < calls.index("run_batch")
+
+
+@pytest.mark.asyncio
+async def test_window_end_fallback_uses_kst_today(tmp_path, monkeypatch):
+    """🔴 문서가 0건이라 window_end 를 못 정할 때, 오늘 날짜를 **KST 로 정한다.**
+
+    이 날짜가 `load_prior_alerts` 의 보관 컷오프 기준이다
+    (`cutoff = window_end - STATE_RETENTION_DAYS`). `date.today()` 는 호스트 로컬이라
+    **UTC 컨테이너에서 KST 오전 9시 이전에 돌면 하루 전 날짜**가 나오고, 그만큼 컷오프가
+    당겨져 아직 억제 중이어야 할 발행 기록이 하루 일찍 잘린다 → 재알림이 하루 일찍 나간다.
+
+    UTC 호스트를 시계 monkeypatch 로 흉내낸다 — 서브프로세스가 필요 없다.
+    ⚠️ **기준 순간을 오늘과 멀리 잡는 게 중요하다.** 오늘 근처로 잡으면 `date.today()`
+       로 되돌려도 우연히 같은 값이 나와 뮤테이션이 안 물린다.
+        UTC 2026-03-04 23:30  =  KST 2026-03-05 08:30  (두 날짜가 갈리는 순간)
+    """
+
+    class _UtcHostClock(datetime):
+        """UTC 호스트의 시계. `tz` 를 안 주면 UTC 벽시계를 naive 로 돌려준다."""
+
+        @classmethod
+        def now(cls, tz=None):
+            moment = datetime(2026, 3, 4, 23, 30, tzinfo=timezone.utc)
+            return moment.astimezone(tz) if tz else moment.replace(tzinfo=None)
+
+    monkeypatch.setattr(daily, "datetime", _UtcHostClock)
+
+    seen: list[date] = []
+    monkeypatch.setattr(
+        daily, "load_prior_alerts", lambda window_end, path: seen.append(window_end) or []
+    )
+
+    await daily.run_batch(
+        dry_run=True,
+        state_path=tmp_path / "state.json",
+        load_inputs=lambda window_end: ([], []),
+    )
+
+    assert seen == [date(2026, 3, 5)], "UTC 호스트에서 오늘 날짜가 하루 밀렸습니다"

@@ -287,6 +287,35 @@ def test_source_only_db_fails_loudly(tmp_path):
         daily.load_inputs_from_db(WINDOW_END, db_path=str(path))
 
 
+def test_child_table_alone_missing_fails_loudly(tmp_path):
+    """🔴 `classified_item` 은 있고 **`classified_item_aspect` 만 없는** DB 도 막는다.
+
+    위 `test_source_only_db_fails_loudly` 는 두 테이블이 **다 없는** 경우라, 가드를
+    `classified_item` 하나만 보게 좁혀도 그대로 통과한다 — 이 경우가 그 구멍이다.
+
+    안 막으면 조회 단계에서 `no such table: main.classified_item_aspect` 가 그대로
+    올라온다. 가드가 있는 이유가 정확히 그 원문을 안 보여주려는 것이라(어느 테이블을
+    누가 만들어야 하는지가 메시지에 안 드러난다) **막는 지점이 여기여야 한다.**
+
+    부모만 만들어지는 건 지어낸 상태가 아니다 — `create_classified_tables` 는
+    `IF NOT EXISTS` 라 중간에 끊긴 실행·부분 덤프가 이 모양으로 남는다.
+    """
+    path = tmp_path / "raw.db"
+    conn = sqlite3.connect(str(path))
+    raw_schema.create_source_tables(conn)
+    # 확정 DDL 을 그대로 쓴다 — 여기에 CREATE TABLE 을 다시 적으면 `find_legacy_tables`
+    # 가 옛 스키마로 오인해서, 이 테스트가 **다른 가드**를 재게 된다.
+    conn.execute(raw_schema.CLASSIFIED_ITEM_DDL)
+    # 뷰까지 만들어 둔다. 없으면 가드를 지웠을 때 `voc_document` 쪽에서 먼저 터져
+    # "aspect 테이블이 없어서 터졌다" 를 확인하지 못한다.
+    conn.execute(raw_schema.VOC_DOCUMENT_VIEW)
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError, match="classified_item_aspect"):
+        daily.load_inputs_from_db(WINDOW_END, db_path=str(path))
+
+
 def test_legacy_schema_fails_before_the_query(tmp_path):
     """8/7 확정 이전 구조로 남은 DB 는 조회가 아니라 여기서 막는다.
 
