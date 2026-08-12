@@ -1017,6 +1017,10 @@ def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -
     승인·반려 둘 다 적재 대상이다(§4-2: "승인 또는 반려된 개선안 1건 = 문서 1건").
     id는 recommendation_id로 결정적 — 같은 건에 대해 재호출해도 upsert라 중복 없음.
 
+    적재 본문은 **수정후승인·승인**이면 `hitl_feedback.edited_text`(비었으면
+    `proposal.proposed_text`), **반려**면 항상 `proposal.proposed_text`다 — 정예시엔
+    셀러가 실제로 승인한 문장을, 부예시엔 거절당한 우리 제안문을 남긴다.
+
     Raises:
         ValueError: alert/recommendation이 서로 다른 건을 가리키거나, hitl_status가
             아직 PENDING(결정 전)이라 적재할 결과가 없는 경우.
@@ -1031,10 +1035,27 @@ def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -
 
     root_cause_label = alert.root_cause.label if alert.root_cause else "미상"
     proposed_text = recommendation.proposal.proposed_text if recommendation.proposal else ""
+    # 수정후승인이면 셀러가 승인한 건 우리 제안문이 아니라 셀러가 고쳐 쓴 문장이다 —
+    # 그쪽을 적재해야 다음 유사 케이스가 실제 승인본을 참고한다.
+    # 반려는 제외한다: 부예시의 뜻이 "이런 제안이 거절당했다"라 본문은 우리 제안문이어야
+    # 한다. 스키마상 반려 시 edited_text는 null이지만(recommenation_schema.md §3 "대기·
+    # 승인·반려 시 null"), 실려 오더라도 셀러 문장이 반려 사례로 새지 않게 막는다.
+    # strip 하는 이유: 빈 문자열·공백만 있는 값(셀러가 입력칸을 비우고 저장)을 그대로
+    # 쓰면 문서에서 개선안 본문이 통째로 빠진다 — 폴백 대상으로 정규화한다.
+    edited_text = (
+        (recommendation.hitl_feedback.edited_text or "").strip()
+        if recommendation.hitl_feedback
+        else ""
+    )
+    approved_text = (
+        edited_text
+        if edited_text and recommendation.hitl_status != HitlStatus.REJECTED
+        else proposed_text
+    )
     # §4-2 스펙: "원인 라벨 + CS 요약 + 개선안 본문". 예전엔 CS 요약 대신 aspect를 넣는
     # 실수가 있었다(2026-07-27 발견·수정) — _summarize_cs_evidence()로 실제 CS 요약을 쓴다.
     cs_summary = _summarize_cs_evidence(alert)
-    document = f"{root_cause_label} {cs_summary} {proposed_text}"
+    document = f"{root_cause_label} {cs_summary} {approved_text}"
 
     outcome = "반려" if recommendation.hitl_status == HitlStatus.REJECTED else "승인"
     decided_at = (
