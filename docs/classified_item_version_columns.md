@@ -1,6 +1,14 @@
 # `classified_item` 버전 컬럼 추가 명세
 
-- 상태: **적용 완료** (2026-08-12). 백엔드 확인 후 이 명세대로 반영했다.
+- 상태: **코드 반영 완료 / 확정 문서 갱신 대기** (2026-08-12)
+  - 🔴 **확정 문서가 아직 이 상태를 반영하지 않았다.** 노션 「RAW DB 스키마」 DDL 전문의
+    `classified_item` 은 여전히 4컬럼이고, 노션 명세 페이지도 "제안 — 적용 전" 이다.
+    **코드가 문서보다 먼저 나간 상태**이며, 아래 §4 적용 절차 1번("문서 먼저")을 지키지
+    못했다. `raw_schema.py` 모듈 docstring 이 "문서가 바뀌지 않는 한 이 파일도 바뀌지
+    않아야 한다"고 못박은 것과도 어긋난다.
+  - 남은 일: 노션 2곳(명세 페이지 상태 + DDL 전문 §2-6 컬럼표) 갱신 → 그 뒤 이 줄을
+    "적용 완료"로 바꾼다. PR #65 에서 잡았던 것과 같은 종류의 드리프트라(방향만 반대)
+    **머지 전에 끝내는 것이 맞다** — 머지되면 강제력이 사라진다.
 - 작성: 2026-08-12
 - 대상 테이블: `classified_item` (「Raw DB 스키마 확정 (8/7)」 §2-6)
 - 소유권: **AI 노드** (§1). 백엔드는 이 테이블을 읽지도 쓰지도 않음 —
@@ -133,7 +141,7 @@ CREATE INDEX IF NOT EXISTS idx_classified_item_versions
 | `app/core/raw_schema.py` | DDL 2컬럼 + 인덱스 + `active_version_predicate()`·`version_params()` | 완료 |
 | `app/core/versions.py` | `CLASSIFIER_PIPELINE_VERSION` (신규 파일) | 완료 |
 | `scripts/classification_worker.py` | upsert 2컬럼, stale 판정 3축, 버전 분포 로그 | 완료 |
-| `app/batch/daily.py` | 탐지 필터 3축, cutover 가드 메시지에 3축 표기 | 완료 |
+| `app/batch/daily.py` | 탐지 필터 3축, cutover 가드(fail-closed) + 본문 조건 정합 | 완료 |
 | `app/batch/daily.py` | `_classifier_versions_for()` 에 `model`·`pipeline` 추가 | 완료 |
 | `app/core/mq.py` | 변경 없음 — payload 는 넘겨받은 dict 를 그대로 싣는다 | — |
 
@@ -201,6 +209,28 @@ CS 는 우연히 안전하다(과거 aspect 가 0 이 되면 `check_coverage` �
 회귀 테스트: `tests/test_load_inputs_from_db.py` 의 대조군/혼재군 2개
 (`test_control_window_without_stale_raises_no_alert`, `test_mixed_window_stops_before_detection`).
 필터가 거르는지까지만 보던 단위 테스트로는 이 오탐을 못 잡았다.
+
+#### 🔴 불변식: 세우는 집합 ⊆ 고칠 수 있는 집합
+
+fail-closed 는 교착을 만들 수 있다. 워커의 stale 조회(`FETCH_STALE_SQL`·`COUNT_STALE_SQL`)는
+`TRIM(content) <> ''` 를 요구하는데 탐지의 `_VERSION_COUNT_SQL` 이 같은 조건을 안 걸면,
+**본문이 빈 원문의 stale 분류행 1건으로 빠져나갈 길이 없어진다**:
+
+```
+워커 count_stale()       = 0     ← --reclassify-stale 대상 없음
+워커 fetch_stale_batch() = 0 rows
+배치                     = RuntimeError 로 매일 중단
+```
+
+에러가 시키는 `--reclassify-stale` 은 "재분류할 문서가 없습니다"로 끝난다. 경고만 하던
+때는 무해했고 fail-closed 로 바뀌면서 교착이 됐다.
+
+→ `_VERSION_COUNT_SQL` 에 같은 본문 조건을 건다. **세우는 조건을 바꿀 때는 워커가 고칠 수
+있는 집합과 같은지 반드시 확인할 것.** 회귀:
+`test_blank_content_stale_row_does_not_deadlock_the_batch`.
+
+고칠 수 없는 행은 `count_orphan_stale()` 로 따로 세어 경고 문구를 가른다 —
+"backfill 하세요"와 "backfill 로는 못 없앤다"는 사람이 할 일이 다르다.
 
 ---
 
