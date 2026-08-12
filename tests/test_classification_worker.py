@@ -189,7 +189,12 @@ def test_no_raw_text_copy_is_persisted() -> None:
     conn = _open_memory_db()
     columns = {row[1] for row in conn.execute("PRAGMA table_info(classified_item)")}
 
-    assert columns == {"item_id", "source", "classified_at", "prompt_version"}
+    assert columns == {
+        "item_id", "source", "classified_at",
+        # 버전 3종은 감사용 메타가 아니라 **탐지의 조회 조건**이다 — 35일 창에 서로
+        # 다른 분류기의 결과가 섞이면 분류기 개선이 고객 이상 알림으로 발화한다.
+        *raw_schema.VERSION_COLUMNS,
+    }
     for leaked in ("raw_text", "channel", "product_group_id", "created_at"):
         assert leaked not in columns
 
@@ -218,15 +223,44 @@ def test_item_with_no_aspect_still_has_parent_row() -> None:
 
 
 def test_reinsert_is_idempotent() -> None:
-    """같은 배치를 다시 적재해도 행이 늘지 않는다(재시도·재실행 안전)."""
+    """같은 배치를 다시 적재해도 행이 늘지 않는다(재시도·재실행 안전).
+
+    ⚠️ 반환값은 이제 **다시 쓴 aspect 행 수**다(예전엔 0 이었다). 적재가 upsert +
+       aspect 교체로 바뀌어서, 재적재는 "무시"가 아니라 "같은 값으로 덮어쓰기"다.
+       DB 상태가 안 변한다는 계약은 그대로이므로 아래 두 COUNT 로 확인한다.
+    """
     conn = _open_memory_db()
     items = [_classified("I-1", Aspect.COLOR, Aspect.SIZE)]
     _save(conn, items)
     second = _save(conn, items)
 
-    assert second == 0
+    assert second == 2
     assert conn.execute("SELECT COUNT(*) FROM classified_item").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM classified_item_aspect").fetchone()[0] == 2
+
+
+def test_reclassification_replaces_the_previous_result() -> None:
+    """프롬프트를 바꿔 재분류하면 **옛 결과가 덮인다.**
+
+    🔴 이게 예전 `INSERT OR IGNORE` 의 실제 버그다. 이미 있는 item_id 를 통째로 무시해서,
+       프롬프트를 갈아끼우고 재분류를 돌려도 `prompt_version` 도 aspect 도 옛 값 그대로
+       남았다. 그러면 탐지가 읽는 35일 창에 두 프롬프트 결과가 섞이고, 라벨러 교체가
+       고객 이상처럼 발화한다.
+
+    두 축을 다 본다:
+      - 부모의 `prompt_version` 이 새 값으로 갱신되는가
+      - **새 프롬프트가 더 이상 안 내는 aspect 가 사라지는가** (upsert 만으로는 안 되고
+        옛 aspect 를 지워야 한다 — 안 지우면 부모는 새 버전인데 자식은 섞인 상태가 된다)
+    """
+    conn = _open_memory_db()
+    _save(conn, [_classified("I-1", Aspect.COLOR, Aspect.SIZE)])
+
+    with patch.object(worker.service_module, "PROMPT_SENTIMENT_VERSION", "classify_x_v99"):
+        _save(conn, [_classified("I-1", Aspect.COLOR)])
+
+    assert conn.execute("SELECT prompt_version FROM classified_item").fetchone()[0] == "classify_x_v99"
+    aspects = {row[0] for row in conn.execute("SELECT aspect FROM classified_item_aspect")}
+    assert aspects == {Aspect.COLOR.value}, "새 프롬프트가 안 낸 사이즈 행이 남았다"
 
 
 # ── 전량 실패 감지 ───────────────────────────────────────────────────────
@@ -425,7 +459,8 @@ def test_denominator_counts_source_not_classified_rows() -> None:
         )
     # 3건 중 1건만 분류됐다 — 나머지 2건은 실패했거나 아직 안 돌았다.
     conn.execute(
-        worker.CLASSIFIED_ITEM_INSERT, ("INQ-1", "cs", "2026-05-01T11:00:00+09:00", "v1")
+        worker.CLASSIFIED_ITEM_UPSERT,
+        ("INQ-1", "cs", "2026-05-01T11:00:00+09:00", "v1", "m1", "p1"),
     )
     conn.commit()
 
@@ -490,7 +525,9 @@ def test_schema_matches_the_confirmed_ddl() -> None:
             "id", "channel_product_id", "product_group_id", "channel_id",
             "content", "rating", "created_at",
         },
-        "classified_item": {"item_id", "source", "classified_at", "prompt_version"},
+        "classified_item": {
+            "item_id", "source", "classified_at", *raw_schema.VERSION_COLUMNS,
+        },
         "classified_item_aspect": {"id", "item_id", "aspect", "sentiment", "mixed_signal"},
         "classification_failure": {
             "item_id", "occurred_at", "stage", "error",
@@ -576,9 +613,141 @@ def test_foreign_keys_are_actually_enforced(tmp_path) -> None:
 
     # 대조군: OR IGNORE 가 실제로 삼키는 것(UNIQUE 중복)은 그대로 통과해야 한다.
     # 이게 없으면 위 단언이 "OR IGNORE 가 아무것도 안 삼킨다"로 오해될 수 있다.
-    conn.execute(worker.CLASSIFIED_ITEM_INSERT, ("INQ-1", "cs", None, "v1"))
+    conn.execute(worker.CLASSIFIED_ITEM_UPSERT, ("INQ-1", "cs", None, "v1", "m1", "p1"))
     conn.execute(worker.CLASSIFIED_ITEM_ASPECT_INSERT, ("INQ-1", "색상", -1, None))
     conn.execute(worker.CLASSIFIED_ITEM_ASPECT_INSERT, ("INQ-1", "색상", -1, None))  # 중복
     assert conn.execute("SELECT COUNT(*) FROM classified_item_aspect").fetchone()[0] == 1
 
     conn.close()
+
+
+# ── 분류기 버전 backfill (--reclassify-stale, 2026-08-12) ────────────────────
+
+
+def _active_of(source: str) -> tuple[str, str, str]:
+    """그 source 의 활성 3축 — `(프롬프트, 모델, 파이프라인)`."""
+    prompt_cs, prompt_review, model, pipeline = worker.active_version_params()
+    return (prompt_cs if source == "cs" else prompt_review), model, pipeline
+
+
+def _mark_classified(
+    conn: sqlite3.Connection,
+    item_id: str,
+    source: str,
+    prompt=None,
+    model=None,
+    pipeline=None,
+    *,
+    active: bool = False,
+) -> None:
+    """분류 결과 1행. `active=True` 면 3축을 전부 활성 값으로 채운다."""
+    if active:
+        prompt, model, pipeline = _active_of(source)
+    conn.execute(
+        "INSERT INTO classified_item"
+        " (item_id, source, prompt_version, model_version, pipeline_version)"
+        " VALUES (?,?,?,?,?)",
+        (item_id, source, prompt, model, pipeline),
+    )
+
+
+def test_stale_scan_finds_only_old_version_rows(worker_instance) -> None:
+    """활성 버전이 아닌 행만 재분류 대상이다.
+
+    ⚠️ **신규 조회(FETCH_BATCH_SQL)로는 절대 안 잡히는 행들이다.** 그쪽은 커서보다 뒤에
+       있는 원문만 보는데, 이 행들은 커서가 이미 지나간 자리에 있다 — 분류기를 바꿔도
+       지난 문서가 영원히 옛 라벨로 남던 이유가 이것이다.
+    """
+    conn = _open_pipeline_db()
+    worker_instance.conn = conn
+    for i in (1, 2, 3):
+        _insert_cs(conn, f"INQ-{i}", f"2026-05-0{i}T10:00:00+09:00")
+    _mark_classified(conn, "INQ-1", "cs", active=True)
+    _mark_classified(conn, "INQ-2", "cs", "classify_aspect_v4", *_active_of("cs")[1:])
+    _mark_classified(conn, "INQ-3", "cs")  # 버전을 안 남기던 시절 (전부 NULL)
+    conn.commit()
+
+    stale = worker_instance.fetch_stale_batch()
+
+    assert [row["item_id"] for row in stale] == ["INQ-2", "INQ-3"]
+    assert worker_instance.count_stale() == 2
+
+
+def test_stale_scan_covers_model_and_pipeline_axes(worker_instance) -> None:
+    """🔴 프롬프트가 같아도 **모델·파이프라인이 다르면 stale 이다.**
+
+    프롬프트 축만 보면 "같은 프롬프트, 다른 라벨러" 가 통째로 새어 나간다 — 모델을
+    갈아끼우거나 후처리·폴백을 손보면 프롬프트 파일은 한 글자도 안 바뀌었는데 분포가
+    달라진다(`CLASSIFIER_PIPELINE_VERSION` 실측 2.1%). 그 행들이 35일 창에 섞이면
+    분류기 변경이 고객 이상 알림으로 발화한다.
+    """
+    conn = _open_pipeline_db()
+    worker_instance.conn = conn
+    for i in (1, 2, 3):
+        _insert_cs(conn, f"INQ-{i}", f"2026-05-0{i}T10:00:00+09:00")
+    prompt, model, pipeline = _active_of("cs")
+    _mark_classified(conn, "INQ-1", "cs", prompt, model, pipeline)  # 전부 활성
+    _mark_classified(conn, "INQ-2", "cs", prompt, "other-model", pipeline)  # 모델만 다름
+    _mark_classified(conn, "INQ-3", "cs", prompt, model, "classify_pipeline_v0")  # 파이프라인만
+    conn.commit()
+
+    assert [row["item_id"] for row in worker_instance.fetch_stale_batch()] == [
+        "INQ-2",
+        "INQ-3",
+    ]
+
+
+def test_stale_scan_is_per_source(worker_instance) -> None:
+    """🔴 활성 버전은 source 마다 다르다 — CS 는 프롬프트1, 리뷰는 프롬프트2.
+
+    값 하나로 거르면 한쪽 source 전체가 stale 로 잡혀서, 멀쩡한 96,524건을 통째로 다시
+    LLM 에 태우게 된다(= 비용 전액 재지불).
+    """
+    conn = _open_pipeline_db()
+    worker_instance.conn = conn
+    _insert_cs(conn, "INQ-1", "2026-05-01T10:00:00+09:00")
+    conn.execute(
+        "INSERT INTO reviews (id, channel_product_id, product_group_id, channel_id,"
+        " content, rating, created_at) VALUES (?,?,?,?,?,?,?)",
+        ("RVW-1", "cp", "P001", "NAVER", "소재가 얇아요", 2, "2026-05-02T10:00:00+09:00"),
+    )
+    _mark_classified(conn, "INQ-1", "cs", active=True)
+    _mark_classified(conn, "RVW-1", "review", active=True)
+    conn.commit()
+
+    assert worker_instance.count_stale() == 0, "각자 자기 프롬프트를 쓰고 있는데 stale 로 잡혔다"
+
+    # CS 쪽 프롬프트만 올린다 → CS 행만 대상이 되어야 한다.
+    with patch.object(worker.service_module, "PROMPT_ASPECT_VERSION", "classify_aspect_v6"):
+        assert [row["item_id"] for row in worker_instance.fetch_stale_batch()] == ["INQ-1"]
+
+
+def test_reclassified_rows_leave_the_stale_scan(worker_instance) -> None:
+    """재분류된 행은 다음 조회에서 빠진다 — 나눠 돌린 backfill 이 이어진다는 계약.
+
+    이게 깨지면 `--limit` 로 나눠 돌릴 때 매번 같은 앞부분만 다시 태운다.
+    """
+    conn = _open_pipeline_db()
+    worker_instance.conn = conn
+    _insert_cs(conn, "INQ-1", "2026-05-01T10:00:00+09:00")
+    _mark_classified(conn, "INQ-1", "cs", "classify_aspect_v4", *_active_of("cs")[1:])
+    conn.commit()
+
+    assert worker_instance.count_stale() == 1
+
+    worker_instance.save_classified_items(
+        [
+            ClassifiedItem(
+                item_id="INQ-1",
+                source=Source.CS,
+                channel=Channel.COUPANG,
+                product_group_id="P001",
+                raw_text="색이 달라요",
+                aspects=[AspectSentiment(aspect=Aspect.COLOR, sentiment=Sentiment.NEGATIVE)],
+                created_at=datetime(2026, 5, 1, 10, 0, tzinfo=UTC),
+            )
+        ]
+    )
+
+    assert worker_instance.count_stale() == 0
+    assert worker_instance.fetch_stale_batch() == []

@@ -99,7 +99,8 @@ def conn() -> sqlite3.Connection:
         # ⚠️ 분류 시각은 일부러 **8월**로 둔다. 기간 절단이 발생 시각 기준이 아니면
         #    7월 건이 통째로 빠져 아래 단언이 깨진다.
         db.execute(
-            "INSERT INTO classified_item VALUES (?,?,?,?)",
+            "INSERT INTO classified_item (item_id, source, classified_at, prompt_version)"
+            " VALUES (?,?,?,?)",
             (item_id, source, "2026-08-01T03:00:00+09:00", "v1"),
         )
         db.execute(
@@ -147,7 +148,11 @@ def _insert(db: sqlite3.Connection, item_id: str, channel: str, aspect: str) -> 
         "content, inquired_at, created_at) VALUES (?,?,?,?,?,?,?)",
         (item_id, "C1", "P002", channel, "원문", occurred, occurred),
     )
-    db.execute("INSERT INTO classified_item VALUES (?,?,?,?)", (item_id, "cs", occurred, "v1"))
+    db.execute(
+        "INSERT INTO classified_item (item_id, source, classified_at, prompt_version)"
+        " VALUES (?,?,?,?)",
+        (item_id, "cs", occurred, "v1"),
+    )
     db.execute(
         "INSERT INTO classified_item_aspect (item_id, aspect, sentiment, mixed_signal) "
         "VALUES (?,?,?,?)",

@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from app.batch import daily
+from app.config import get_settings
 from app.core import raw_schema
 
 KST = timezone(timedelta(hours=9))
@@ -31,13 +32,18 @@ WINDOW_END = date(2026, 8, 28)
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _db(tmp_path, cs_rows=(), review_rows=(), classified=()):
+def _db(tmp_path, cs_rows=(), review_rows=(), classified=(), prompt_version=None):
     """확정 DDL 로 raw DB 를 만든다. 반환값은 경로 문자열.
 
     Args:
         cs_rows: (id, product_group_id, channel_id, content, inquired_at)
         review_rows: (id, product_group_id, channel_id, content, created_at)
         classified: (item_id, source, [(aspect, sentiment), ...])
+        prompt_version: 분류 결과에 남길 프롬프트 버전. 기본은 **활성 버전** — 워커가
+            실제로 적재하는 값이다. 탐지가 활성 버전 행만 읽으므로(2026-08-12), 이걸
+            안 채우면 픽스처가 "옛 분류기로 분류된 DB" 가 되어 전 테스트가 cutover
+            에러로 죽는다. 그 상태 자체를 검증하는 테스트만 다른 값을 넘긴다.
+            모델·파이프라인 축은 항상 활성 값으로 채운다(프롬프트 축만 흔들어 본다).
     """
     path = tmp_path / "raw.db"
     conn = sqlite3.connect(str(path))
@@ -57,10 +63,16 @@ def _db(tmp_path, cs_rows=(), review_rows=(), classified=()):
         " VALUES (?, ?, ?, ?, ?)",
         review_rows,
     )
+    # 활성 3축은 탐지가 실제로 거르는 값에서 그대로 가져온다 — 여기서 따로 적으면
+    # 필터를 고쳤을 때 픽스처만 옛 값으로 남아 전 테스트가 cutover 에러로 죽는다.
+    active_cs, active_review, active_model, active_pipeline = daily._active_version_params()
     for item_id, source, aspects in classified:
+        version = prompt_version or (active_cs if source == "cs" else active_review)
         conn.execute(
-            "INSERT INTO classified_item (item_id, source) VALUES (?, ?)",
-            (item_id, source),
+            "INSERT INTO classified_item"
+            " (item_id, source, prompt_version, model_version, pipeline_version)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (item_id, source, version, active_model, active_pipeline),
         )
         conn.executemany(
             "INSERT INTO classified_item_aspect (item_id, aspect, sentiment)"
@@ -331,6 +343,144 @@ def test_legacy_schema_fails_before_the_query(tmp_path):
 
     with pytest.raises(RuntimeError, match="확정 이전 스키마"):
         daily.load_inputs_from_db(WINDOW_END, db_path=str(path))
+
+
+# ── 프롬프트 버전 (2026-08-12) ──────────────────────────────────────────────
+#
+# 탐지는 35일(현재 7 + 과거 28)을 한 번에 읽는다. 그 사이 분류 프롬프트가 바뀌면 한
+# 검정 안에 두 라벨러의 결과가 섞여, **프롬프트 개선이 고객 이상 알림으로 발화한다.**
+
+
+def test_old_prompt_version_rows_are_not_read(tmp_path):
+    """🔴 옛 프롬프트로 분류된 행은 분자에서 빠진다 — 섞인 채로 검정하지 않는다.
+
+    분모(documents)는 그대로여야 한다. 원문은 실제로 있었고, 우리가 못 읽는 것은
+    라벨뿐이기 때문이다 — 분모까지 빼면 "그 문서가 없었다"는 다른 주장이 된다.
+    """
+    db = _db(
+        tmp_path,
+        cs_rows=[
+            ("INQ-1", "P001", "COUPANG", "색이 달라요", _at(WINDOW_END)),
+            ("INQ-2", "P001", "COUPANG", "사이즈가 작아요", _at(WINDOW_END)),
+        ],
+        classified=[("INQ-1", "cs", [("색상", -1)])],
+    )
+    # INQ-2 만 옛 프롬프트로 분류된 상태를 만든다(프롬프트 교체 직후의 실제 모양).
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO classified_item (item_id, source, prompt_version) VALUES (?, ?, ?)",
+        ("INQ-2", "cs", "classify_aspect_v4"),
+    )
+    conn.execute(
+        "INSERT INTO classified_item_aspect (item_id, aspect, sentiment) VALUES (?, ?, ?)",
+        ("INQ-2", "사이즈", -1),
+    )
+    conn.commit()
+    conn.close()
+
+    items, documents = daily.load_inputs_from_db(WINDOW_END, db_path=db)
+
+    assert [i.item_id for i in items] == ["INQ-1"], "옛 버전 행이 분자에 섞였다"
+    assert {d["id"] for d in documents} == {"INQ-1", "INQ-2"}, "분모는 원문 그대로여야 한다"
+
+
+def test_null_prompt_version_counts_as_old(tmp_path):
+    """버전을 안 남기던 시절의 행(`NULL`)도 옛것으로 본다.
+
+    `=` 비교로 거르면 NULL 이 **어느 쪽으로도 안 걸려** 조용히 빠진다. 여기서는 결과가
+    같지만, 세는 쪽(`_check_version_cutover`)이 같은 실수를 하면 "거르긴 했는데 몇 건인지
+    모르는" 상태가 되므로 두 곳 다 null-safe 비교(`IS`)를 쓴다.
+    """
+    db = _db(
+        tmp_path,
+        cs_rows=[
+            ("INQ-1", "P001", "COUPANG", "색이 달라요", _at(WINDOW_END)),
+            ("INQ-2", "P001", "COUPANG", "사이즈가 작아요", _at(WINDOW_END)),
+        ],
+        classified=[("INQ-1", "cs", [("색상", -1)])],
+    )
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO classified_item (item_id, source) VALUES (?, ?)", ("INQ-2", "cs"))
+    conn.commit()
+    conn.close()
+
+    items, _ = daily.load_inputs_from_db(WINDOW_END, db_path=db)
+
+    assert [i.item_id for i in items] == ["INQ-1"]
+
+
+def test_full_stale_window_fails_loudly(tmp_path):
+    """🔴 윈도우가 통째로 옛 프롬프트면 **세운다** — 조용한 무동작이 제일 나쁘다.
+
+    그냥 두면 분자가 통째로 비어 배치가 "이상 없음"으로 정상 종료한다. 그건 관측 결과가
+    아니라 우리가 라벨을 못 읽은 것인데, 로그만 보면 구분이 안 된다. 미탐 방향이라
+    아무도 눈치채지 못한 채 며칠이 지나간다.
+    """
+    db = _db(
+        tmp_path,
+        cs_rows=[("INQ-1", "P001", "COUPANG", "색이 달라요", _at(WINDOW_END))],
+        classified=[("INQ-1", "cs", [("색상", -1)])],
+        prompt_version="classify_aspect_v4",
+    )
+
+    with pytest.raises(RuntimeError, match="옛 분류기"):
+        daily.load_inputs_from_db(WINDOW_END, db_path=db)
+
+
+def test_model_change_alone_makes_rows_unreadable(tmp_path, monkeypatch):
+    """🔴 프롬프트가 그대로여도 **모델이 바뀌면** 그 행은 안 읽는다.
+
+    프롬프트 축만 거르면 "같은 프롬프트, 다른 라벨러" 가 통째로 새어 나간다 — `LLM_MODEL`
+    을 갈아끼우면 프롬프트 파일은 한 글자도 안 바뀌었는데 라벨이 달라진다. 그 행들이 35일
+    창에 섞이면 모델 교체가 고객 이상 알림으로 발화한다.
+
+    세우는 쪽으로 도는 것이 맞다 — `LLM_MODEL` 오타면 설정을 고치면 되고, 의도한 교체면
+    backfill 하면 된다. 둘 다 사람이 보고 정할 일이지 조용히 섞을 일이 아니다.
+    """
+    db = _db(
+        tmp_path,
+        cs_rows=[("INQ-1", "P001", "COUPANG", "색이 달라요", _at(WINDOW_END))],
+        classified=[("INQ-1", "cs", [("색상", -1)])],
+    )
+    # 픽스처는 적재 시점 모델로 채워졌다. 탐지 시점 설정만 바꾼다.
+    settings = get_settings()
+    monkeypatch.setattr(settings, "llm_model", "other-model", raising=False)
+
+    with pytest.raises(RuntimeError, match="옛 분류기"):
+        daily.load_inputs_from_db(WINDOW_END, db_path=db)
+
+
+def test_pipeline_version_change_alone_makes_rows_unreadable(tmp_path, monkeypatch):
+    """파이프라인 버전만 올려도 같다 — 후처리·폴백 변경이 분포를 움직이기 때문이다.
+
+    `_cs_empty_fallback` 이 실측 2.1%(284건 중 6건)를 채운다. 프롬프트도 모델도 그대로인데
+    그 폴백을 끄면 CS 의 aspect 분포가 달라진다.
+    """
+    db = _db(
+        tmp_path,
+        cs_rows=[("INQ-1", "P001", "COUPANG", "색이 달라요", _at(WINDOW_END))],
+        classified=[("INQ-1", "cs", [("색상", -1)])],
+    )
+    monkeypatch.setattr(daily, "CLASSIFIER_PIPELINE_VERSION", "classify_pipeline_v2")
+
+    with pytest.raises(RuntimeError, match="옛 분류기"):
+        daily.load_inputs_from_db(WINDOW_END, db_path=db)
+
+
+def test_unclassified_window_does_not_trip_the_version_guard(tmp_path):
+    """아직 분류를 안 돌린 DB 는 버전 문제가 아니다 — 커버리지 쪽이 잡을 일이다.
+
+    여기서까지 세우면 "워커를 안 돌렸다"가 "프롬프트를 안 맞췄다"로 잘못 안내된다.
+    """
+    db = _db(
+        tmp_path,
+        cs_rows=[("INQ-1", "P001", "COUPANG", "색이 달라요", _at(WINDOW_END))],
+    )
+
+    items, documents = daily.load_inputs_from_db(WINDOW_END, db_path=db)
+
+    assert items == []
+    assert len(documents) == 1
 
 
 def test_missing_db_fails_loudly(tmp_path):

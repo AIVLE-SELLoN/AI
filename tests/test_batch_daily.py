@@ -133,6 +133,25 @@ def test_optional_wiring_is_actually_connected():
     assert daily.GUIDELINE_AVAILABLE, "가이드라인이 있는데 폴백을 타고 있다"
 
 
+def test_classifier_versions_only_when_the_filter_guaranteed_them():
+    """🔴 payload 의 분류기 신원은 **필터가 보장할 때만** 값이 있다.
+
+    실을 수 있는 근거가 `_ASPECT_SQL` 의 활성 버전 필터뿐이다 — 그 필터가 "이 알림에
+    기여한 모든 행의 버전 3종이 활성 값"임을 쿼리로 강제하므로 주장이 아니라 관측이다.
+    골든 입력(`--input-source golden`)은 CSV 를 그대로 읽어 그 필터를 안 타므로, 같은 값을
+    실으면 **검증한 적 없는 것을 검증된 것처럼 보고**하게 된다. 골든은 분류 오차가 0 인
+    oracle 이라 애초에 분류기를 안 거쳤다 — `null` 이 정확한 답이다.
+    """
+    versions = daily._classifier_versions_for(daily.load_inputs_from_db)
+
+    assert set(versions) == {"prompt_cs", "prompt_review", "model", "pipeline"}
+    # 필터가 쓰는 값과 **같은 값**이어야 한다. 따로 조립하면 payload 가 실제로 읽은 것과
+    # 다른 버전을 말하게 된다.
+    assert tuple(versions.values()) == daily._active_version_params()
+
+    assert daily._classifier_versions_for(_stub_inputs) is None
+
+
 def _stub_inputs(window_end=None):
     """[6] 도 Agent3 도 안 타는 최소 입력 — 파손(스코프 밖) 1슬롯만 발화시킨다.
 
@@ -200,7 +219,7 @@ async def test_publish_failure_is_not_cached(tmp_path, monkeypatch):
     """발행이 터진 알림도 캐시에 안 들어간다 — MQ 가 잠깐 죽었다고 7일 침묵하면 안 된다."""
     path = tmp_path / "state.json"
 
-    async def boom(alert, rec, trace_id):
+    async def boom(alert, rec, trace_id, versions=None):
         raise RuntimeError("MQ down")
 
     monkeypatch.setattr(daily, "publish_anomaly_analyzed", boom)
@@ -223,7 +242,7 @@ async def test_window_end_is_taken_from_data_not_clock(tmp_path, monkeypatch):
 
     # 발행을 명시적으로 막는다. 예전엔 app.core.mq 가 없어서 import 폴백(no-op)이
     # 대신 막아줬는데, 발행기가 생기면 실물이 불려 이 테스트가 MQ 상태에 딸려간다.
-    async def _sent(alert, rec, trace_id):
+    async def _sent(alert, rec, trace_id, versions=None):
         return None
 
     monkeypatch.setattr(daily, "publish_anomaly_analyzed", _sent)
@@ -267,7 +286,7 @@ async def test_cs_inquiries_are_built_once_and_shared(tmp_path, monkeypatch):
     async def fake_guideline(alert, inquiries, *, product_name=None):
         seen["가이드라인"] = inquiries
 
-    async def sent(alert, rec, trace_id):
+    async def sent(alert, rec, trace_id, versions=None):
         return None
 
     monkeypatch.setattr(daily, "should_generate", lambda _alert: True)
@@ -299,7 +318,7 @@ async def test_cs_mapping_failure_does_not_kill_the_batch(tmp_path, monkeypatch)
     def boom(alert, documents):
         raise ValueError("documents 한 행의 형식이 이상함")
 
-    async def sent(alert, rec, trace_id):
+    async def sent(alert, rec, trace_id, versions=None):
         return None
 
     monkeypatch.setattr(daily, "build_linked_inquiries", boom)
@@ -332,7 +351,7 @@ async def test_silent_recommendation_failure_still_shows_up(tmp_path, monkeypatc
             reason=SkipReason.ERROR, detail="RuntimeError('Chroma 접속 실패')"
         )
 
-    async def sent(alert, rec, trace_id):
+    async def sent(alert, rec, trace_id, versions=None):
         return None
 
     monkeypatch.setattr(daily, "should_generate", lambda _alert: True)
@@ -372,7 +391,7 @@ async def test_routing_miss_is_counted_but_not_a_failure(tmp_path, monkeypatch):
             detail="copy_draft 로 라우팅됐으나 그쪽 근거가 없음",
         )
 
-    async def sent(alert, rec, trace_id):
+    async def sent(alert, rec, trace_id, versions=None):
         return None
 
     monkeypatch.setattr(daily, "should_generate", lambda _alert: True)
@@ -404,7 +423,7 @@ async def test_no_evidence_is_counted_but_not_a_failure(tmp_path, monkeypatch):
             reason=SkipReason.NO_EVIDENCE, detail="상세페이지·CS 원문이 둘 다 없음"
         )
 
-    async def sent(alert, rec, trace_id):
+    async def sent(alert, rec, trace_id, versions=None):
         return None
 
     monkeypatch.setattr(daily, "should_generate", lambda _alert: True)
@@ -434,7 +453,7 @@ async def test_raised_recommendation_failure_is_counted_once(tmp_path, monkeypat
     async def blows_up(alert, inquiries):
         raise RuntimeError("LLM 폭발")
 
-    async def sent(alert, rec, trace_id):
+    async def sent(alert, rec, trace_id, versions=None):
         return None
 
     monkeypatch.setattr(daily, "should_generate", lambda _alert: True)
@@ -486,7 +505,7 @@ async def test_guideline_not_counted_when_it_was_not_a_target(tmp_path, monkeypa
     async def not_a_target(alert, inquiries, *, product_name=None):
         return None
 
-    async def sent(alert, rec, trace_id):
+    async def sent(alert, rec, trace_id, versions=None):
         return None
 
     monkeypatch.setattr(daily, "generate_guideline", not_a_target)
@@ -529,7 +548,7 @@ async def test_mq_connection_is_closed_even_when_batch_blows_up(tmp_path, monkey
     async def spy_close():
         closed.append(True)
 
-    async def boom(alert, rec, trace_id):
+    async def boom(alert, rec, trace_id, versions=None):
         raise KeyboardInterrupt  # 배치 격리 except 를 통과해 밖으로 나가는 예외
 
     monkeypatch.setattr(daily, "close_mq", spy_close)
@@ -551,7 +570,7 @@ async def test_mq_connection_is_closed_on_the_normal_path(tmp_path, monkeypatch)
     async def spy_close():
         closed.append(True)
 
-    async def sent(alert, rec, trace_id):
+    async def sent(alert, rec, trace_id, versions=None):
         return None
 
     monkeypatch.setattr(daily, "close_mq", spy_close)
