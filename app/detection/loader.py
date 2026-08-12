@@ -2,10 +2,11 @@
 
 왜 이 모듈이 따로 있나
 ----------------------
-`classified_item` 은 "문서 목록"이 아니라 **"aspect 언급 목록"** 이다. aspect 가
-0개인 문서는 행이 아예 안 생겨서, **거기서 분모(총 문서 수)를 세면 안 된다.**
+`classified_item_aspect` 는 문서 목록이 아니라 **aspect 언급 목록**이다. aspect 가
+0개인 문서는 자식 행이 생기지 않으므로, **자식 테이블에서 분모를 세면 안 된다.**
+반면 `classified_item` 부모 테이블에는 정상 분류된 문서가 aspect 0개여도 1행 남는다.
 
-    RVW-4 "배송 빨랐고 포장도 깔끔합니다"  →  aspects=[]  →  classified_item 0행
+    RVW-4 "배송 빨랐고 포장도 깔끔합니다"  →  부모 1행 + aspect 자식 0행
 
 리뷰는 허용 aspect 가 색상·사이즈·소재 3개뿐이고(`REVIEW_ALLOWED_ASPECTS`),
 프롬프트2가 "언급된 속성이 하나도 없으면 []" 를 지시한다. 그래서 빈 배열이 정상 출력이다.
@@ -39,9 +40,10 @@ Fisher 검정은 비율이 아니라 (부정건수, 총건수) 원시 카운트�
 전제조건 — 분류 커버리지
 ------------------------
 분자는 분류에 성공한 문서에서만 나온다. 커버리지가 100% 가 아니면 부정률이
-과소추정된다(미탐 방향). `check_coverage()` 로 **일자별** 검증한다 — 윈도우 총합만
-비교하면 특정 날짜만 통째로 빠진 걸 못 잡는다(aggregate §99 "분자와 분모를 같은
-날짜 집합에서 세야 비율이 성립한다").
+과소추정된다(미탐 방향). `classified_item` 부모 행의 존재로 성공 여부를 판단하고,
+`check_coverage()` 로 **CS와 리뷰 모두 일자별** 검증한다. 윈도우 총합만 비교하면 특정
+날짜만 통째로 빠진 걸 못 잡는다(aggregate §99 "분자와 분모를 같은 날짜 집합에서 세야
+비율이 성립한다").
 """
 
 from __future__ import annotations
@@ -52,8 +54,10 @@ from datetime import datetime
 
 from app.core.schemas import ClassifiedItem, Sentiment, Source
 
-COVERAGE_CHECKED_SOURCES: frozenset[str] = frozenset({Source.CS.value})
-"""check_coverage 가 커버리지를 검증할 수 있는 source. 근거는 그 함수 ⚠️ 참고."""
+COVERAGE_CHECKED_SOURCES: frozenset[str] = frozenset(
+    {Source.CS.value, Source.REVIEW.value}
+)
+"""부모 분류 레코드 존재 여부로 커버리지를 검증하는 source."""
 
 
 def _neg_aspects(item: ClassifiedItem) -> list[str]:
@@ -115,22 +119,13 @@ def check_coverage(
     **일자별로 센다.** 윈도우 총합만 맞춰보면 "3일치가 통째로 빠지고 다른 날이 더
     들어온" 상황을 못 잡는데, 그러면 그날 분자가 0 이 되면서 비율이 조용히 깎인다.
 
-    여기서 '분류됨'은 **aspect 가 1개 이상 나온 문서**를 뜻한다. 그래서 **CS 에만
-    적용한다**(`sources` 기본값).
-
-    ⚠️ 리뷰에 쓰면 안 되는 이유 — 빈 배열이 리뷰의 **정상 출력**이기 때문이다.
-       허용 aspect 가 3개뿐이라 무관 리뷰는 []를 내고(모듈 docstring 의 RVW-4),
-       그러면 분류가 100% 성공해도 이 함수가 gap 으로 잡아 `unreliable_slots()` 이
-       그 슬롯을 BH family 에서 통째로 뺀다. 긍정 리뷰가 하나라도 섞이면 그 슬롯의
-       리뷰 탐지가 죽는다.
-       더 근본적으로, `explode_to_rows()` 가 aspect 마다 1행을 만들므로 빈 배열은
-       `classified_item` 에 **0행**이다. DB 관점에서 "무관 리뷰"와 "분류 안 됨"이
-       같은 모양이라, 리뷰 커버리지는 이 방법으로는 원리적으로 검증할 수 없다.
-       CS 는 `classification.service._cs_empty_fallback` 이 aspect >= 1 을 보장하므로
-       이 검사가 성립한다.
+    여기서 '분류됨'은 aspect 개수가 아니라 **`classified_item` 부모 레코드가 존재하는
+    문서**를 뜻한다. 워커는 정상 분류 결과가 빈 배열이어도 부모 행을 저장하고, 일일
+    로더는 LEFT JOIN으로 그 행을 `ClassifiedItem(aspects=[])`로 복원한다. 따라서 무관
+    리뷰의 정상 빈 배열과 아직 분류하지 않은 리뷰를 구분해 두 source 모두 검사할 수 있다.
 
     Args:
-        sources: 검사할 source 집합. 기본은 CS 만. 확장하려면 위 ⚠️ 를 먼저 읽을 것.
+        sources: 검사할 source 집합. 기본은 CS와 리뷰 모두.
 
     Returns:
         [{"product", "channel", "source", "day", "documents", "classified"}, ...]
@@ -156,7 +151,10 @@ def check_coverage(
     seen: dict[tuple, set] = defaultdict(set)
     for item in classified:
         key = doc_key_of.get(item.item_id)
-        if key is not None and item.aspects:
+        item_source = (
+            item.source.value if isinstance(item.source, Source) else item.source
+        )
+        if key is not None and item_source == key[2]:
             seen[key].add(item.item_id)
 
     gaps: list[dict] = []

@@ -266,8 +266,8 @@ INPUT_WINDOW_DAYS = CURRENT_WINDOW_DAYS + PAST_WINDOW_DAYS
 # 분모(원문)와 분자(분류 결과)를 **따로** 읽는다. 확정 문서 §4 는 이 둘을 CTE 로 나눠
 # SQL 안에서 집계하는 형태인데, 우리는 집계를 `app/detection/aggregate.py` 가 하므로
 # 행을 그대로 가져오는 두 쿼리로 나눈다. 지켜야 할 규칙은 같다 —
-#   ① 분모는 원문(voc_document)에서만 센다. classified_item 에서 세면 aspect 0개인
-#      문서가 통째로 빠져 부정률이 부풀려진다(§2-6 경고, loader 모듈 docstring).
+#   ① 분모는 원문(voc_document)에서만 센다. classified_item_aspect 자식에서 세면
+#      aspect 0개인 문서가 통째로 빠져 부정률이 부풀려진다(§2-6 경고, loader docstring).
 #   ② `sentiment = -1` 을 WHERE 로 올리지 않는다. 올리면 LEFT JOIN 이 INNER JOIN 으로
 #      퇴화해 같은 버그가 돌아온다. 부정 여부는 읽어온 뒤 파이썬이 센다.
 _DOCUMENT_SQL = f"""
@@ -314,11 +314,10 @@ def load_inputs_from_db(
 ) -> tuple[list[ClassifiedItem], list[dict]]:
     """(items, documents) 를 원본 DB 에서 읽는다. **기본 입력원.**
 
-    items 는 워커가 분류해 `classified_item` 에 넣은 결과, documents 는 `cs`·`reviews`
-    원문이다. 둘을 따로 읽는 이유는 **분모가 documents 에서 나와야 하기 때문**이다 —
-    리뷰는 aspect 0개면 `classified_item` 에 행이 아예 없어서(`explode_to_rows` 가
-    aspect 마다 1행), items 로 분모를 세면 그 문서가 통째로 빠지고 부정률이 부풀려진다
-    (탐지 분모 산출 방식 §1).
+    items 는 워커가 분류해 `classified_item` 부모 행으로 남긴 결과, documents 는
+    `cs`·`reviews` 원문이다. 둘을 따로 읽는 이유는 **분모가 documents 에서 나와야 하고
+    부모 행 존재 여부로 분류 완료를 확인해야 하기 때문**이다. aspect 0개인 정상 리뷰도
+    부모 행은 남고 자식 행만 0개라, 미분류 원문과 구분할 수 있다(탐지 분모 산출 방식 §1).
 
     두 소스의 시각 컬럼명이 다르므로(`cs.inquired_at` / `reviews.created_at`)
     `voc_document` 뷰를 거친다 — 호출부에서 UNION 을 다시 쓰면 시각 컬럼을 잘못 고르는
@@ -497,10 +496,8 @@ def _build_inputs(
         except ValidationError:
             # 리뷰에 허용 밖 aspect 가 붙은 경우 등. 분모(문서)는 남고 분자만 빠진다.
             #
-            # ⚠️ **이건 미탐 방향이다.** 예전 주석은 "커버리지 미달로 검정에서 제외되니
-            #    안전하다" 고 했는데 **틀렸다** — `check_coverage` 는 CS 전용인데
-            #    (`COVERAGE_CHECKED_SOURCES`) 이 분기를 실제로 태우는 건 리뷰 aspect
-            #    검증이다. 리뷰가 걸리면 제외 없이 분자만 조용히 깎인다.
+            # `check_coverage` 가 부모 item 누락으로 잡아 해당 리뷰 슬롯을 검정 전에
+            # 제외하므로 결과를 조용히 오염시키지는 않는다. 그래도 정상 경로는 아니다.
             #    지금은 워커가 `ClassifiedItem` 을 만들 때 이미 걸러서 DB 에 들어올 수
             #    없으므로 **도달 불가**다. 로그로 세는 이유가 그것이다 — 0 이 아니면
             #    워커 쪽 계약이 깨진 것이다. (2026-08-11 리뷰 잔가지)
@@ -664,11 +661,29 @@ async def run_batch(
     # check_coverage 를 두 번 돌리지 않는다 — detect_anomaly 도 안에서 같은 계산을 한다.
     # 넘겨주면 128k 스캔이 한 번 줄고, "경고에 찍힌 슬롯 = 실제로 family 에서 빠진 슬롯"
     # 이 보장된다.
-    unreliable = unreliable_slots(check_coverage(documents, items))
+    coverage_gaps = check_coverage(documents, items)
+    unreliable = unreliable_slots(coverage_gaps)
     if unreliable:
-        logger.warning(
-            "분류 커버리지 미달 %d슬롯 — 검정에서 제외됩니다", len(unreliable)
+        missing_documents = sum(
+            gap["documents"] - gap["classified"] for gap in coverage_gaps
         )
+        logger.warning(
+            "분류 커버리지 미달 %d슬롯, 부모 분류 레코드 누락 %d건 — 검정에서 "
+            "제외됩니다",
+            len(unreliable),
+            missing_documents,
+        )
+        for gap in coverage_gaps:
+            logger.warning(
+                "분류 커버리지 미달 상세 product=%s channel=%s source=%s day=%s "
+                "classified=%d/%d",
+                gap["product"],
+                gap["channel"],
+                gap["source"],
+                date.fromordinal(gap["day"]),
+                gap["classified"],
+                gap["documents"],
+            )
 
     # **KST 로 오늘을 정한다.** 문서가 하나도 없어 window_end 를 데이터에서 못 정했을
     # 때만 타는 분기다. `date.today()` 는 호스트 로컬이라 UTC 컨테이너에서는 KST 보다
@@ -894,6 +909,10 @@ async def run_batch(
         "elapsed_sec": round((datetime.now(timezone.utc) - started).total_seconds(), 1),
         "items": len(items),
         "documents": len(documents),
+        "coverage_gap_slots": len(unreliable),
+        "coverage_missing_documents": sum(
+            gap["documents"] - gap["classified"] for gap in coverage_gaps
+        ),
         "prior_alerts": len(prior),
         "published": len(alerts),
         # suppressed 도 정상 alert_id 를 갖고 있다. 구분 없이 세면 나중에 "발행된 건가
@@ -922,6 +941,10 @@ def print_summary(summary: dict) -> None:
     print(
         f"  입력          items {summary['items']} / documents {summary['documents']}"
         f"  [{summary['input_source']}]"
+    )
+    print(
+        f"  분류 coverage 제외 슬롯 {summary.get('coverage_gap_slots', 0)} / "
+        f"부모 레코드 누락 {summary.get('coverage_missing_documents', 0)}건"
     )
     if summary["input_source"] == "load_golden_inputs":
         print(

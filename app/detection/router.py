@@ -51,12 +51,12 @@ async def detect(request: DetectRequest) -> DetectResponse:
     if request.documents is None and any(
         i.source == Source.REVIEW for i in request.items
     ):
-        # 리뷰는 aspect 0개면 classified_item 에 행이 아예 없다. items 로 분모를 세면
-        # 그 문서가 통째로 빠져 부정률이 부풀려진다 — **오탐 방향**이라 조용히 두면 안 된다.
-        # CS 는 _cs_empty_fallback 이 aspect >= 1 을 보장해 items 만으로도 맞다.
+        # 정상 빈 배열 리뷰도 부모 item 으로 들어오지만, documents 없이는 분류 자체가
+        # 누락된 원문이 있는지 확인할 수 없다. 누락 시 분모가 줄어 부정률이 부풀 수 있다.
         logger.warning(
-            "documents 없이 리뷰가 섞인 요청 — 분모를 items 에서 세므로 부정률이 "
-            "과대추정되고 운영 경로와 결과가 달라집니다. documents 를 함께 보내세요."
+            "documents 없이 리뷰가 섞인 요청 — 원문 대비 부모 분류 레코드 coverage를 "
+            "검증할 수 없어 운영 경로와 결과가 달라질 수 있습니다. documents 를 함께 "
+            "보내세요."
         )
 
     alerts, suppressed = await detect_anomaly(

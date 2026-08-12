@@ -11,13 +11,150 @@ judge_cause 는 순수라 숫자만으로 테스트하고, classify_cause 는 LL
 """
 
 import json
+import logging
 from collections import Counter
 from string import Template
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
 from app.core.constants import CONSISTENT_COUNT, CONSISTENT_RATIO
 from app.core.llm_client import get_llm_client
 from app.core.prompts import load_prompt
+
+logger = logging.getLogger(__name__)
+
+CAUSE_TAXONOMY: dict[str, frozenset[str]] = {
+    "색상": frozenset({"사진_색감_오차", "조명_보정_차이", "실물_염색_편차", "기타"}),
+    "사이즈": frozenset(
+        {"표기_오타", "실측_표기_편차", "채널_사이즈_표준차이", "기타"}
+    ),
+    "소재": frozenset(
+        {"소재_정보_누락", "이미지_질감표현_부족", "실제_원단_문제", "기타"}
+    ),
+}
+"""프롬프트3의 aspect별 허용 원인 라벨. 출력 검증의 단일 허용 목록."""
+
+CAUSE_CHUNK_SIZE = 20
+"""한 LLM 호출에 넣는 최대 문의 수. 검증된 평가 배치 크기와 같은 값."""
+
+CAUSE_MAX_PROMPT_CHARS = 24_000
+"""렌더링된 요청의 문자 상한. tokenizer 의존성 없이 요청 크기를 보수적으로 제한한다."""
+
+
+class CauseValidationError(ValueError):
+    """원인 분류 입출력이 프롬프트3 계약을 어겼을 때."""
+
+
+class CauseResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cs_id: str = Field(min_length=1)
+    cause: str = Field(min_length=1)
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: str
+    aspect_match: bool
+
+
+class CauseResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    results: list[CauseResult]
+
+
+def _aspect_value(aspect: Any) -> str:
+    return str(getattr(aspect, "value", aspect))
+
+
+def _render_prompt(template: Template, aspect: str, items: list[dict]) -> str:
+    input_json = json.dumps({"aspect": aspect, "items": items}, ensure_ascii=False)
+    return template.substitute(input_json=input_json)
+
+
+def _chunk_cause_items(
+    template: Template, aspect: str, items: list[dict]
+) -> list[list[dict]]:
+    """건수와 렌더링 문자 수를 모두 지키며 입력 순서를 보존해 나눈다."""
+    chunks: list[list[dict]] = []
+    current: list[dict] = []
+
+    for item in items:
+        candidate = [*current, item]
+        too_many = len(candidate) > CAUSE_CHUNK_SIZE
+        too_large = (
+            len(_render_prompt(template, aspect, candidate)) > CAUSE_MAX_PROMPT_CHARS
+        )
+        if current and (too_many or too_large):
+            chunks.append(current)
+            current = [item]
+        else:
+            current = candidate
+
+        if len(_render_prompt(template, aspect, current)) > CAUSE_MAX_PROMPT_CHARS:
+            raise CauseValidationError(
+                f"원인 분류 문의 1건이 요청 크기 상한을 초과했습니다: "
+                f"cs_id={item['cs_id']} limit={CAUSE_MAX_PROMPT_CHARS}chars"
+            )
+
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _validate_items(aspect: str, items: list) -> list[dict]:
+    if aspect not in CAUSE_TAXONOMY:
+        raise CauseValidationError(f"원인 분류를 지원하지 않는 aspect입니다: {aspect}")
+
+    normalized: list[dict] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise CauseValidationError(f"items[{index}]가 객체가 아닙니다")
+        cs_id = item.get("cs_id")
+        raw_text = item.get("raw_text")
+        if not isinstance(cs_id, str) or not cs_id:
+            raise CauseValidationError(f"items[{index}].cs_id가 비어있습니다")
+        if not isinstance(raw_text, str):
+            raise CauseValidationError(f"items[{index}].raw_text가 문자열이 아닙니다")
+        normalized.append({"cs_id": cs_id, "raw_text": raw_text})
+
+    ids = [item["cs_id"] for item in normalized]
+    if len(ids) != len(set(ids)):
+        raise CauseValidationError("원인 분류 입력 cs_id가 중복됐습니다")
+    return normalized
+
+
+def _validate_response(aspect: str, items: list[dict], data: Any) -> list[dict]:
+    try:
+        response = CauseResponse.model_validate(data)
+    except ValidationError as exc:
+        raise CauseValidationError(f"원인 분류 응답 스키마 오류: {exc}") from exc
+
+    expected_ids = [item["cs_id"] for item in items]
+    actual_ids = [result.cs_id for result in response.results]
+    if actual_ids != expected_ids:
+        raise CauseValidationError(
+            "원인 분류 응답 ID가 입력과 같은 개수·순서가 아닙니다: "
+            f"expected={expected_ids} actual={actual_ids}"
+        )
+
+    raw_by_id = {item["cs_id"]: item["raw_text"] for item in items}
+    allowed = CAUSE_TAXONOMY[aspect]
+    for result in response.results:
+        if result.cause not in allowed:
+            raise CauseValidationError(
+                f"aspect={aspect}에 허용되지 않은 cause입니다: "
+                f"cs_id={result.cs_id} cause={result.cause}"
+            )
+        if result.aspect_match and not result.evidence:
+            raise CauseValidationError(
+                f"aspect_match=true인데 evidence가 비어있습니다: cs_id={result.cs_id}"
+            )
+        if result.evidence and result.evidence not in raw_by_id[result.cs_id]:
+            raise CauseValidationError(
+                f"evidence가 원문에 존재하지 않습니다: cs_id={result.cs_id}"
+            )
+
+    return [result.model_dump() for result in response.results]
 
 
 def judge_cause(classified_causes: list) -> tuple:
@@ -68,13 +205,18 @@ async def classify_cause(
     if client is None:
         client = get_llm_client()
 
+    aspect = _aspect_value(aspect)
+    items = _validate_items(aspect, items)
     template = Template(load_prompt("detection", "classify_cause_v1"))
-    input_json = json.dumps({"aspect": aspect, "items": items}, ensure_ascii=False)
-    prompt = template.substitute(input_json=input_json)
+    chunks = _chunk_cause_items(template, aspect, items)
 
-    data = await client.complete_json(prompt, trace_key=trace_key)
-    results = data.get("results", [])
-    return results if isinstance(results, list) else []
+    results: list[dict] = []
+    for index, chunk in enumerate(chunks, start=1):
+        prompt = _render_prompt(template, aspect, chunk)
+        chunk_trace = f"{trace_key} chunk={index}/{len(chunks)}"
+        data = await client.complete_json(prompt, trace_key=chunk_trace)
+        results.extend(_validate_response(aspect, chunk, data))
+    return results
 
 
 async def diagnose_cause(

@@ -6,7 +6,13 @@ OpenAI 실호출 없음 (비용 0).
 
 import pytest
 
-from app.detection.cause import classify_cause, diagnose_cause, judge_cause
+from app.detection.cause import (
+    CAUSE_CHUNK_SIZE,
+    CauseValidationError,
+    classify_cause,
+    diagnose_cause,
+    judge_cause,
+)
 
 
 # ── judge_cause (순수, 로직 §[6]) ─────────────────────────────────
@@ -89,12 +95,19 @@ async def test_classify_cause_empty_skips_llm():
 
 @pytest.mark.asyncio
 async def test_diagnose_cause_consistent():
-    payload = {"results": (
-        [{"cs_id": str(i), "cause": "사진_색감_오차", "aspect_match": True} for i in range(14)]
-        + [{"cs_id": f"x{i}", "cause": "조명_보정_차이", "aspect_match": True} for i in range(6)]
-    )}
+    ids = [str(i) for i in range(14)] + [f"x{i}" for i in range(6)]
+    payload = {"results": [
+        {
+            "cs_id": cs_id,
+            "cause": "사진_색감_오차" if index < 14 else "조명_보정_차이",
+            "confidence": 0.9,
+            "evidence": "원문",
+            "aspect_match": True,
+        }
+        for index, cs_id in enumerate(ids)
+    ]}
     client = _FakeClient(payload)
-    items = [{"cs_id": str(i), "raw_text": "t"} for i in range(20)]
+    items = [{"cs_id": cs_id, "raw_text": "원문"} for cs_id in ids]
 
     r = await diagnose_cause("색상", items, client=client)
 
@@ -108,12 +121,15 @@ async def test_diagnose_cause_consistent():
 async def test_diagnose_cause_excludes_aspect_mismatch():
     """aspect_match=false(오라우팅)는 집계에서 제외 — total·분포에서 빠진다."""
     payload = {"results": [
-        {"cs_id": "1", "cause": "사진_색감_오차", "aspect_match": True},
-        {"cs_id": "2", "cause": "사진_색감_오차", "aspect_match": True},
-        {"cs_id": "3", "cause": "기타", "aspect_match": False},  # 배송불만 오라우팅
+        {"cs_id": "1", "cause": "사진_색감_오차", "confidence": 0.9,
+         "evidence": "원문", "aspect_match": True},
+        {"cs_id": "2", "cause": "사진_색감_오차", "confidence": 0.9,
+         "evidence": "원문", "aspect_match": True},
+        {"cs_id": "3", "cause": "기타", "confidence": 0.3,
+         "evidence": "", "aspect_match": False},  # 배송불만 오라우팅
     ]}
     client = _FakeClient(payload)
-    items = [{"cs_id": str(i), "raw_text": "t"} for i in range(3)]
+    items = [{"cs_id": str(i), "raw_text": "원문"} for i in range(1, 4)]
 
     r = await diagnose_cause("색상", items, client=client)
 
@@ -123,3 +139,84 @@ async def test_diagnose_cause_excludes_aspect_mismatch():
     assert r["cs_ids"] == ["1", "2"]
     assert len(r["cs_ids"]) == r["total"]
     assert "기타" not in r["freq"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"results": []},
+        {"results": [{
+            "cs_id": "unknown", "cause": "사진_색감_오차", "confidence": 0.9,
+            "evidence": "사진", "aspect_match": True,
+        }]},
+    ],
+)
+async def test_classify_cause_rejects_missing_or_unknown_ids(payload):
+    client = _FakeClient(payload)
+    with pytest.raises(CauseValidationError, match="ID"):
+        await classify_cause(
+            "색상", [{"cs_id": "a1", "raw_text": "사진이 달라요"}], client=client
+        )
+
+
+@pytest.mark.asyncio
+async def test_classify_cause_rejects_taxonomy_mismatch():
+    client = _FakeClient({"results": [{
+        "cs_id": "a1", "cause": "실제_원단_문제", "confidence": 0.9,
+        "evidence": "사진", "aspect_match": True,
+    }]})
+    with pytest.raises(CauseValidationError, match="허용되지 않은 cause"):
+        await classify_cause(
+            "색상", [{"cs_id": "a1", "raw_text": "사진이 달라요"}], client=client
+        )
+
+
+@pytest.mark.asyncio
+async def test_classify_cause_rejects_evidence_not_in_source():
+    client = _FakeClient({"results": [{
+        "cs_id": "a1", "cause": "사진_색감_오차", "confidence": 0.9,
+        "evidence": "실물과 완전히 다름", "aspect_match": True,
+    }]})
+    with pytest.raises(CauseValidationError, match="원문에 존재하지"):
+        await classify_cause(
+            "색상", [{"cs_id": "a1", "raw_text": "사진이 달라요"}], client=client
+        )
+
+
+class _SequenceClient:
+    def __init__(self, payloads):
+        self.payloads = iter(payloads)
+        self.calls = 0
+
+    async def complete_json(self, prompt, *, trace_key="-", temperature=0.0):
+        self.calls += 1
+        return next(self.payloads)
+
+
+@pytest.mark.asyncio
+async def test_classify_cause_chunks_large_batches_in_order():
+    items = [
+        {"cs_id": f"a{i}", "raw_text": f"사진이 달라요 {i}"}
+        for i in range(CAUSE_CHUNK_SIZE + 1)
+    ]
+
+    def payload(rows):
+        return {"results": [
+            {
+                "cs_id": row["cs_id"],
+                "cause": "사진_색감_오차",
+                "confidence": 0.9,
+                "evidence": row["raw_text"],
+                "aspect_match": True,
+            }
+            for row in rows
+        ]}
+
+    client = _SequenceClient(
+        [payload(items[:CAUSE_CHUNK_SIZE]), payload(items[CAUSE_CHUNK_SIZE:])]
+    )
+    results = await classify_cause("색상", items, client=client)
+
+    assert client.calls == 2
+    assert [row["cs_id"] for row in results] == [row["cs_id"] for row in items]

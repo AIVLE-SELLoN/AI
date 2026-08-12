@@ -5,6 +5,7 @@ LLM 은 목킹한다 (비용 0). 통합 테스트는 "숫자를 넣으면 몇 �
 """
 
 import itertools
+import json
 import logging
 from datetime import date, datetime, timedelta, timezone
 
@@ -43,15 +44,17 @@ class _FakeClient:
 
     async def complete_json(self, prompt, *, trace_key="-", temperature=0.0):
         self.calls += 1
+        input_data = json.loads(prompt.rsplit("입력:", 1)[1].split("\n출력:", 1)[0])
         return {
             "results": [
                 {
-                    "cs_id": f"C{i}",
+                    "cs_id": item["cs_id"],
                     "cause": self._cause,
                     "confidence": 0.9,
+                    "evidence": item["raw_text"],
                     "aspect_match": True,
                 }
-                for i in range(12)
+                for item in input_data["items"]
             ]
         }
 
@@ -561,10 +564,17 @@ async def test_pipeline_scattered_cause_gives_low_confidence():
 
         async def complete_json(self, prompt, *, trace_key="-", temperature=0.0):
             causes = ["사진_색감_오차", "조명_보정_차이", "실물_염색_편차", "기타"]
+            input_data = json.loads(prompt.rsplit("입력:", 1)[1].split("\n출력:", 1)[0])
             return {
                 "results": [
-                    {"cs_id": f"C{i}", "cause": causes[i % 4], "aspect_match": True}
-                    for i in range(12)
+                    {
+                        "cs_id": item["cs_id"],
+                        "cause": causes[i % 4],
+                        "confidence": 0.9,
+                        "evidence": item["raw_text"],
+                        "aspect_match": True,
+                    }
+                    for i, item in enumerate(input_data["items"])
                 ]
             }
 
@@ -577,6 +587,29 @@ async def test_pipeline_scattered_cause_gives_low_confidence():
     assert alerts[0].detection_confidence == DetectionConfidence.LOW
     assert alerts[0].recommended_action == RecommendedAction.CHANNEL_OPERATION_CHECK
     assert alerts[0].root_cause.label == UNSPECIFIED_CAUSE
+
+
+@pytest.mark.asyncio
+async def test_cause_validation_failure_does_not_stop_detection(caplog):
+    """후보 하나의 잘못된 LLM 응답은 탐지를 중단하지 않고 자동 개선안만 막는다."""
+
+    class _InvalidClient:
+        async def complete_json(self, prompt, *, trace_key="-", temperature=0.0):
+            return {"results": []}  # 입력 ID 전체 누락
+
+    with caplog.at_level(logging.ERROR, logger="app.detection.service"):
+        alerts, _ = await detect_anomaly(
+            _scenario_items(),
+            detected_at=datetime(2026, 7, 7, 9, 0),
+            window_end=date(2026, 7, 7),
+            client=_InvalidClient(),
+        )
+
+    assert len(alerts) == 1
+    assert alerts[0].root_cause is None
+    assert alerts[0].detection_confidence == DetectionConfidence.LOW
+    assert alerts[0].recommended_action == RecommendedAction.CHANNEL_OPERATION_CHECK
+    assert any("원인 분류 후보 실패" in record.message for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -628,17 +661,16 @@ async def test_detected_at_default_is_kst_not_host_local(monkeypatch):
 def _review_scenario():
     """**부정률은 그대로인데 무관 리뷰만 늘어난** 리뷰 시나리오.
 
-    무관 리뷰(aspect 0개)는 classified_item 에 행이 없다 — explode_to_rows 가 aspect
-    마다 1행을 만들기 때문이다. 그래서 items 만으로 분모를 세면 그 문서가 통째로 빠진다.
+    무관 리뷰(aspect 0개)는 classified_item 부모 행은 있고 자식 행만 없다. 운영 로더는
+    부모를 `ClassifiedItem(aspects=[])`로 복원하므로 정상 빈 배열도 분모에 남는다.
 
         과거 28일  리뷰 200건 = 색상부정 40 + 색상긍정 160 + 무관 0
         현재 7일   리뷰 100건 = 색상부정 20 + 색상긍정 30  + 무관 50
 
         원본으로 세면(정답)   과거 40/200=20%  →  현재 20/100=20%   변화 없음
-        items 로 세면(버그)   과거 40/200=20%  →  현재 20/50 =40%   +20%p 급등
+        부모 items로 세면     과거 40/200=20%  →  현재 20/100=20%   변화 없음
 
-    즉 **"칭찬 리뷰가 늘었다"가 "불만이 두 배로 늘었다"로 둔갑**한다. 채널마다 같은
-    모양으로 깔아 3채널 전부 이 착시를 겪게 한다.
+    documents는 같은 분모를 보존하는 동시에 미분류 부모가 있는지 검사하는 정본이다.
     """
     documents: list[dict] = []
     items: list[ClassifiedItem] = []
@@ -656,8 +688,6 @@ def _review_scenario():
                 "text": "리뷰 원문",
             }
         )
-        if aspects is None:  # 무관 리뷰 — ClassifiedItem 자체가 안 만들어진다
-            return
         items.append(
             ClassifiedItem(
                 item_id=doc_id,
@@ -665,7 +695,8 @@ def _review_scenario():
                 channel=channel,
                 product_group_id="P001",
                 raw_text="리뷰 원문",
-                aspects=aspects,
+                # 무관 리뷰도 워커가 classified_item 부모 행을 남긴다.
+                aspects=aspects or [],
                 created_at=day,
             )
         )
@@ -683,13 +714,8 @@ def _review_scenario():
 
 
 @pytest.mark.asyncio
-async def test_documents_prevent_review_false_positive_end_to_end():
-    """무관 리뷰가 늘었을 뿐인데 알림이 나가면 안 된다 — documents 배선 확인.
-
-    ⚠️ build_rows 를 직접 부르는 것만으로는 검증이 안 된다. detect_anomaly 가 실제로
-       그 경로를 타는지 봐야 한다(인자만 만들어두고 안 쓰는 실수를 이미 한 적 있다).
-       그래서 **파이프라인 끝에서 알림 유무가 갈리는지**로 확인한다.
-    """
+async def test_empty_review_parent_rows_keep_denominator_end_to_end():
+    """정상 빈 배열 리뷰의 부모 행이 있으면 items 경로도 분모를 보존한다."""
     documents, items = _review_scenario()
     kwargs = {
         "detected_at": datetime(2026, 7, 7, 9, 0),
@@ -697,29 +723,24 @@ async def test_documents_prevent_review_false_positive_end_to_end():
         "client": _FakeClient(),
     }
 
-    # items 만 주면 분모가 깎여 20% → 40% 로 보이고 오탐이 난다.
-    wrong, _ = await detect_anomaly(items, **kwargs)
-    assert wrong, "이 시나리오는 items 만 주면 오탐이 나야 한다(테스트 전제)"
+    without_docs, _ = await detect_anomaly(items, **kwargs)
+    assert without_docs == []
 
-    # documents 를 주면 분모가 원본 기준이라 부정률이 그대로 20% → 알림 없음.
-    right, _ = await detect_anomaly(items, documents=documents, **kwargs)
-    assert right == []
+    # 운영 경로는 documents로 원문 대비 부모 레코드 coverage까지 함께 확인한다.
+    with_docs, _ = await detect_anomaly(items, documents=documents, **kwargs)
+    assert with_docs == []
 
 
 def test_documents_row_count_is_document_count():
     """분모의 출처가 원본이라는 것 자체를 숫자로 못박는다."""
     documents, items = _review_scenario()
     assert len(build_rows(documents, items)) == len(documents) == 900
-    assert len(normalize(items)) == len(items) == 750  # 무관 150건이 빠진다
+    assert len(normalize(items)) == len(items) == 900
 
 
 @pytest.mark.asyncio
-async def test_documents_auto_coverage_ignores_review():
-    """documents 를 주면 커버리지를 자동 계산하는데, 리뷰는 대상이 아니다.
-
-    check_coverage 가 리뷰까지 봤다면 무관 리뷰 150건 때문에 이 슬롯들이 통째로
-    검정에서 빠졌을 것이다(지인 리뷰 2026-08-04).
-    """
+async def test_documents_auto_coverage_accepts_empty_review_parents():
+    """documents 기준 검사에서 빈 배열 리뷰의 부모 행을 완료로 인정한다."""
     documents, items = _review_scenario()
     assert unreliable_slots(check_coverage(documents, items)) == set()
 
@@ -766,17 +787,19 @@ def _review_payload() -> tuple[list[dict], list[dict]]:
 
 
 def test_detect_endpoint_passes_documents_through(monkeypatch):
-    """documents 를 실으면 라우터가 그걸 분모로 쓴다 — 오탐이 사라져야 한다."""
+    """documents를 실으면 누락된 리뷰 부모를 찾아 오염 슬롯을 제외한다."""
     docs, items = _review_payload()
-    base = {"items": items, "window_end": "2026-07-07"}
+    # 정상 빈 배열 리뷰의 부모 레코드를 일부러 누락시켜 실제 분류 실패를 만든다.
+    incomplete = [item for item in items if item["aspects"]]
+    base = {"items": incomplete, "window_end": "2026-07-07"}
 
-    # documents 없이 = 옛 경로. 무관 리뷰가 분모에서 빠져 오탐이 난다.
+    # documents 없이는 누락 사실을 몰라 줄어든 items 분모로 오탐이 난다.
     without = _detect_via_http(base, monkeypatch)
     assert without["alerts"], (
         "이 시나리오는 documents 가 없으면 오탐이 나야 한다(테스트 전제)"
     )
 
-    # documents 를 실으면 분모가 원본 기준 → 알림 0건.
+    # documents를 실으면 review coverage gap을 잡아 해당 슬롯을 검정 전에 제외한다.
     with_docs = _detect_via_http({**base, "documents": docs}, monkeypatch)
     assert with_docs["alerts"] == []
     assert with_docs["suppressed"] == []

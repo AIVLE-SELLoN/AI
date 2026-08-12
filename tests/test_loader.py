@@ -46,7 +46,7 @@ def test_empty_aspect_document_still_counts_in_denominator():
         _classified("RVW-1", [("색상", -1)]),
         _classified("RVW-2", [("색상", 1), ("사이즈", 1)]),
         _classified("RVW-3", [("소재", 0)]),
-        # RVW-4 는 aspects 가 비어 classified_item 에 행이 없다 → 목록에도 없음
+        _classified("RVW-4", []),  # 정상 빈 배열도 classified_item 부모 행은 남는다
     ]
 
     rows = build_rows(docs, classified)
@@ -116,18 +116,8 @@ def test_full_coverage_reports_no_gap():
     assert check_coverage(docs, classified) == []
 
 
-def test_coverage_skips_review_because_empty_aspects_are_normal():
-    """리뷰는 검사 대상이 아니다 — 빈 배열이 **정상 출력**이라서. (지인 리뷰 2026-08-04)
-
-    허용 aspect 가 색상·사이즈·소재 3개뿐이라 무관 리뷰는 [] 를 낸다(모듈 docstring
-    의 RVW-4 "배송 빨랐고 포장도 깔끔합니다"). 이걸 미분류로 세면 **분류가 100%
-    성공해도** 그 슬롯이 gap 으로 잡히고, unreliable_slots() 이 BH family 에서
-    통째로 빼버린다 — 긍정 리뷰가 하나만 섞여도 그 슬롯의 리뷰 탐지가 죽는다.
-
-    더 근본적으로 explode_to_rows() 가 aspect 마다 1행을 만들므로 빈 배열은
-    classified_item 에 0행이다. DB 에서 "무관 리뷰"와 "분류 안 됨"이 같은 모양이라
-    리뷰 커버리지는 이 방법으로 원리적으로 검증할 수 없다.
-    """
+def test_coverage_accepts_empty_aspect_review_parent():
+    """빈 배열 리뷰도 부모 분류 레코드가 있으면 정상 완료로 센다."""
     docs = [_doc(f"RVW-{i}", day=1) for i in range(1, 5)]  # _doc 기본이 review
     classified = [
         _classified("RVW-1", [("색상", -1)]),
@@ -137,6 +127,19 @@ def test_coverage_skips_review_because_empty_aspects_are_normal():
     ]
     assert check_coverage(docs, classified) == []
     assert unreliable_slots(check_coverage(docs, classified)) == set()
+
+
+def test_coverage_flags_missing_review_parent():
+    """원문은 있는데 부모 분류 레코드가 없는 리뷰를 coverage gap으로 잡는다."""
+    docs = [_doc("RVW-1", day=1), _doc("RVW-2", day=1)]
+    classified = [_classified("RVW-1", [])]
+
+    gaps = check_coverage(docs, classified)
+
+    assert len(gaps) == 1
+    assert gaps[0]["source"] == "review"
+    assert (gaps[0]["documents"], gaps[0]["classified"]) == (2, 1)
+    assert unreliable_slots(gaps) == {("P001", "COUPANG", "review")}
 
 
 def test_coverage_checks_cs_because_fallback_guarantees_one_aspect():
@@ -151,8 +154,8 @@ def test_coverage_checks_cs_because_fallback_guarantees_one_aspect():
     assert (gaps[0]["documents"], gaps[0]["classified"]) == (2, 1)
 
 
-def test_coverage_mixed_sources_only_flags_cs():
-    """CS·리뷰가 섞여 들어와도 리뷰 쪽은 gap 을 만들지 않는다."""
+def test_coverage_mixed_sources_flags_only_the_missing_parent():
+    """CS·리뷰를 함께 검사하되 부모가 있는 빈 리뷰는 정상 완료로 센다."""
     docs = [_doc("C1", day=1, source="cs"), _doc("R1", day=1)]
     classified = [_classified("R1", [])]  # CS 는 누락, 리뷰는 정상 빈 배열
 

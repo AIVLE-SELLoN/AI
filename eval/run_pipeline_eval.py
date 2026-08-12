@@ -17,9 +17,9 @@
 
 분모는 원본에서 센다
 --------------------
-`loader.build_rows()` 경유. 분류 결과에서 분모를 세면 aspect 가 0개로 나온 문서가
-통째로 빠져 부정률이 부풀려진다(탐지 분모 산출 방식 §1). CS 는 '기타' 가 있어
-실무상 안전하지만, 운영과 같은 경로를 쓰는 편이 회귀에 강하다.
+`loader.build_rows()` 경유. aspect 결과 자식 행에서 분모를 세면 aspect 가 0개로 나온
+문서가 통째로 빠져 부정률이 부풀려진다(탐지 분모 산출 방식 §1). 실제 분류 캐시에 키가
+없는 문서는 미분류로 남기고, 정상 빈 배열은 캐시 키가 있는 부모 완료 건으로 구분한다.
 
 비용 — `--mode` 로 호출 방식을 고른다
 ------------------------------------
@@ -280,8 +280,17 @@ def take_whole_products(documents: list[dict], limit: int) -> list[dict]:
 
 
 def _to_items(
-    documents: list[dict], aspects_of: dict[str, list]
+    documents: list[dict],
+    aspects_of: dict[str, list],
+    *,
+    include_missing: bool = False,
 ) -> list[ClassifiedItem]:
+    """부모 분류 레코드를 `ClassifiedItem`으로 복원한다.
+
+    실제 분류 캐시는 키가 있는 문서만 완료된 것이다. 누락 키까지 빈 aspects 부모로
+    만들면 리뷰 무응답과 정상 빈 배열을 다시 구분할 수 없으므로 기본은 제외한다.
+    oracle은 모든 문서가 골든으로 분류 완료된 것으로 보아 `include_missing=True`를 쓴다.
+    """
     return [
         ClassifiedItem(
             item_id=d["id"],
@@ -296,6 +305,7 @@ def _to_items(
             created_at=d["created_at"],
         )
         for d in documents
+        if include_missing or d["id"] in aspects_of
     ]
 
 
@@ -537,7 +547,7 @@ def oracle_classified(documents: list[dict]) -> list[ClassifiedItem]:
                     "sentiment": int(label["true_sentiment"]),
                 }
             ]
-    return _to_items(documents, aspects_of)
+    return _to_items(documents, aspects_of, include_missing=True)
 
 
 # ── 예측 (①의 배치에 실측 카운트만 덮어쓴다) ─────────────────────
