@@ -50,6 +50,11 @@ from typing import Any
 
 from pydantic import ValidationError
 
+# 🔴 **활성 프롬프트 버전 — 탐지의 조회 조건이다.** 이 배치는 조립부라 모듈을 가로질러
+#    import 하지만(개선안·가이드라인도 같은 방식), 여기만은 **폴백을 두지 않는다.**
+#    나머지 셋과 달리 값이 틀리면 조회가 0건이 되고, 그건 "알림이 안 나간다" 라서 조용하다
+#    — 미연결 폴백이 오히려 더 위험한 자리다. 못 읽으면 ImportError 로 세우는 게 맞다.
+from app.classification.service import PROMPT_ASPECT_VERSION, PROMPT_SENTIMENT_VERSION
 from app.config import get_settings
 from app.core import raw_schema
 from app.core.console import force_utf8_output
@@ -57,6 +62,7 @@ from app.core.constants import CURRENT_WINDOW_DAYS, KST, PAST_WINDOW_DAYS
 from app.core.inquiries import build_linked_inquiries
 from app.core.raw_db import connect_readonly
 from app.core.schemas import Channel, ClassifiedItem, DetectionAlert, Source
+from app.core.versions import CLASSIFIER_PIPELINE_VERSION
 from app.detection.loader import check_coverage, unreliable_slots
 from app.detection.service import DetectionDiagnostics, detect_anomaly
 
@@ -129,7 +135,9 @@ except ImportError as exc:  # pragma: no cover - 인프라 도입 전
     def new_trace_id() -> str:
         return f"trace-{uuid.uuid4().hex[:16]}"
 
-    async def publish_anomaly_analyzed(alert: Any, rec: Any, trace_id: str) -> None:
+    async def publish_anomaly_analyzed(
+        alert: Any, rec: Any, trace_id: str, classifier_versions: dict | None = None
+    ) -> None:
         logger.info(
             "[MQ 미구현] ai.anomaly.analyzed 발행 생략 alert=%s", alert.alert_id
         )
@@ -282,12 +290,95 @@ _DOCUMENT_SQL = f"""
     FROM {raw_schema.VOC_DOCUMENT}
 """
 
+# 🔴 **활성 분류기 버전 필터 (2026-08-12).**
+#
+# 이 배치가 읽는 구간은 35일(현재 7 + 과거 28)이다. 그 사이에 분류 프롬프트를 바꾸면
+# **과거 구간은 옛 프롬프트 · 현재 구간은 새 프롬프트** 결과로 한 검정을 돌리게 된다.
+# 부정률이 움직인 원인이 "고객이 달라졌다"가 아니라 "우리가 라벨러를 바꿨다"인데,
+# Fisher 검정은 그 둘을 구분하지 못한다 — **프롬프트 개선이 그대로 고객 이상 알림으로
+# 발화한다.** 컬럼에 버전을 남기고는 있었지만 읽는 쪽이 아무도 안 봐서 조용했다.
+#
+# 술어와 파라미터 순서는 `raw_schema` 가 정본이다 — 적재(`scripts/classification_worker.py`)와
+# 조회(여기)가 각자 적으면 한쪽만 고쳐졌을 때 조회가 0건이 되고, 그건 미탐이라 조용하다.
+#
+# ⚠️ 거르는 축이 셋(prompt·model·pipeline)인 이유: 프롬프트가 그대로여도 라벨러는 바뀐다.
+#    모델을 갈아끼우면 같은 프롬프트로 다른 라벨이 나오고, 후처리·폴백을 손봐도 분포가
+#    움직인다(`CLASSIFIER_PIPELINE_VERSION` docstring 의 실측 2.1% 참고).
+_ACTIVE_VERSION_PREDICATE = raw_schema.active_version_predicate("ci")
+
 _ASPECT_SQL = f"""
     SELECT ci.item_id AS item_id, a.aspect AS aspect, a.sentiment AS sentiment
     FROM classified_item ci
     JOIN {raw_schema.VOC_DOCUMENT} v ON v.item_id = ci.item_id
     LEFT JOIN classified_item_aspect a ON a.item_id = ci.item_id
+    WHERE {_ACTIVE_VERSION_PREDICATE}
 """
+
+# 윈도우 안에서 활성/전체가 각각 몇 행인지. 위 필터가 **얼마나 잘라냈는지**를 세는 쿼리라
+# 필터와 같은 조인·같은 비교식을 써야 한다(다르면 세는 대상과 거르는 대상이 어긋난다).
+_VERSION_COUNT_SQL = f"""
+    SELECT
+        SUM(CASE WHEN {_ACTIVE_VERSION_PREDICATE} THEN 1 ELSE 0 END) AS active,
+        COUNT(*) AS total
+    FROM classified_item ci
+    JOIN {raw_schema.VOC_DOCUMENT} v ON v.item_id = ci.item_id
+    WHERE v.content IS NOT NULL AND TRIM(v.content) <> ''
+"""
+"""윈도우 안 활성/전체 행 수. **세우는 판정의 근거라 집합을 정확히 맞춰야 한다.**
+
+🔴 **불변식: 배치를 세우는 집합 ⊆ `--reclassify-stale` 이 고칠 수 있는 집합.**
+   본문 조건(`TRIM(content) <> ''`)이 여기 있는 이유가 그것이다. 워커의
+   `FETCH_STALE_SQL`·`COUNT_STALE_SQL` 이 같은 조건을 요구하므로, 여기서만 빼면
+   **고칠 수단이 없는 상태로 배치가 매일 선다**:
+
+       원문은 있는데 본문이 비어('   ') 있는 stale 행이 1건이라도 있으면
+           워커 count_stale()       = 0   ← 재분류 대상 없음
+           워커 fetch_stale_batch() = 0 rows
+           배치                     = RuntimeError 로 중단
+       에러가 시키는 `--reclassify-stale` 은 "재분류할 문서가 없습니다"로 끝나고,
+       손으로 SQL 을 치는 것 말고 빠져나갈 길이 없다.
+
+   경고만 하던 때는 무해했고 fail-closed 로 바뀌면서 교착이 됐다.
+   (2026-08-12 리뷰 §1 후속, 지인님 실측)
+
+⚠️ 위 필터가 **얼마나 잘라냈는지**를 세는 쿼리이므로 `_ASPECT_SQL` 과 같은 조인·같은
+   비교식을 쓴다. 다르면 세는 대상과 거르는 대상이 어긋난다.
+"""
+
+
+def _active_version_params() -> tuple[str, str, str, str]:
+    """`_ACTIVE_VERSION_PREDICATE` 의 `?` 에 넣을 값. 워커의 `active_version_params()` 와 짝이다.
+
+    ⚠️ **모델을 설정에서 매번 읽는다.** `LLM_MODEL` 을 바꾸면 그 순간부터 옛 행이 안 읽히고,
+       윈도우가 통째로 옛 버전이면 `_check_version_cutover()` 가 배치를 세운다. 오타 하나로
+       세워지는 건 거칠지만, 다른 모델이 만든 라벨을 같은 검정에 섞는 것보다 낫다 —
+       그쪽은 조용하다.
+    """
+    return raw_schema.version_params(
+        PROMPT_ASPECT_VERSION,
+        PROMPT_SENTIMENT_VERSION,
+        get_settings().llm_model,
+        CLASSIFIER_PIPELINE_VERSION,
+    )
+
+
+def _aspect_window_clause(where: str) -> str:
+    """분모용 조건절을 `classified_item` 조인 쿼리에 붙일 형태로 바꾼다.
+
+    두 가지를 고친다:
+      - `occurred_at` → `v.occurred_at` (그쪽 쿼리는 뷰에 별칭이 붙어 있다)
+      - 첫 `WHERE` → `AND`
+
+    윈도우가 없으면(`where == ""`) 그대로 빈 문자열이다.
+
+    ⚠️ **두 호출부(`_ASPECT_SQL`·`_VERSION_COUNT_SQL`)가 모두 `WHERE` 로 시작해야 한다.**
+       그래야 이 절이 `AND` 로 이어붙는다. `WHERE` 가 없는 쿼리에 붙이면 조건이
+       **`JOIN ... ON` 뒤로** 들어가는데, INNER JOIN 이면 결과가 같아 통과하지만 나중에
+       LEFT JOIN 으로 바꾸는 순간 **조용히 의미가 달라진다** — ON 절의 조건은 행을 안 지우고
+       NULL 로 채우기 때문이다. 새 호출부를 만들면 `WHERE` 를 먼저 두거나 이 함수를 쓰지
+       말 것. (2026-08-12 리뷰 잔가지)
+    """
+    return where.replace("occurred_at", "v.occurred_at").replace(" WHERE ", " AND ", 1)
 
 
 def _to_kst(value: str) -> datetime:
@@ -338,6 +429,12 @@ def load_inputs_from_db(
     평가·재현으로 배치를 돌리려면 `scripts/golden_inputs.load_golden_inputs` 를
     주입한다 — 골든을 `app/` 안에서 읽지 않기 위해 밖으로 뺐다(eval/README §232).
 
+    ⚠️ **items 는 활성 분류기로 만든 결과만 담는다**(`_ACTIVE_VERSION_PREDICATE`).
+       35일 창에 두 분류기의 결과가 섞이면 라벨러 교체가 고객 이상으로 둔갑하기
+       때문이다. 다만 그 필터는 **분자에만** 걸리므로 걸러진 상태로 검정을 돌리면 안 된다 —
+       `_check_version_cutover()` 가 옛 버전 행이 **1건이라도 있으면 여기서 세운다**
+       (fail-closed). 근거는 그 함수 docstring.
+
     Args:
         window_end: 현재 윈도우 마지막 날. 주면 `[window_end-34, window_end]` 35일만
             읽는다(현재 7 + 과거 28 — `build_baseline` 의 과거 윈도우가 현재 윈도우
@@ -353,19 +450,115 @@ def load_inputs_from_db(
     Raises:
         FileNotFoundError: DB 파일이 없을 때. 목 파이프라인은 `scripts/mock_producer.py`
             가 먼저 돌아야 원문이 생긴다.
+        RuntimeError: 분류 결과 테이블이 없거나 구버전일 때
+            (`_require_classified_tables`), 또는 윈도우 안 분류 결과가 전부 옛 프롬프트
+            기준일 때(`_check_version_cutover`).
     """
     where, params = _window_clause(window_end)
+    aspect_where = _aspect_window_clause(where)
     conn = connect_readonly(db_path)
     try:
         _require_classified_tables(conn, db_path or get_settings().raw_db_path)
+        _check_version_cutover(conn, aspect_where, params)
         doc_rows = conn.execute(_DOCUMENT_SQL + where, params).fetchall()
+        # 버전 파라미터가 먼저다 — WHERE 절이 윈도우 조건절보다 앞에 있다.
         aspect_rows = conn.execute(
-            _ASPECT_SQL + where.replace("occurred_at", "v.occurred_at"), params
+            _ASPECT_SQL + aspect_where, (*_active_version_params(), *params)
         ).fetchall()
     finally:
         conn.close()
 
     return _build_inputs(doc_rows, aspect_rows, window_end)
+
+
+def _classifier_versions_for(loader: Callable) -> dict | None:
+    """이 배치가 발행할 알림에 실을 분류기 신원. 모르면 None(=payload 에 `null`).
+
+    🔴 **입력원이 `load_inputs_from_db` 일 때만 값이 있다.** 실을 수 있는 근거가
+       `_ASPECT_SQL` 의 활성 버전 필터뿐이기 때문이다 — 그 필터가 "이 알림에 기여한 모든
+       행의 버전 3종이 활성 값"임을 쿼리로 강제한다. 그래서 이건 주장이 아니라 관측이다.
+
+       `--input-source golden` 은 CSV 를 그대로 읽어 그 필터를 안 탄다. 거기서도 같은 값을
+       실으면 **검증한 적 없는 것을 검증된 것처럼 보고**하게 된다. 골든은 분류 오차가 0 인
+       oracle 입력이라 애초에 분류기를 안 거쳤다 — `null` 이 정확한 답이다.
+
+    ⚠️ 값을 `_active_version_params()` 에서 가져온다 — **필터가 쓴 것과 같은 값**이다.
+       여기서 따로 조립하면 필터와 보고가 갈릴 수 있고, 그러면 payload 가 실제로 읽은
+       것과 다른 버전을 말하게 된다.
+    """
+    if loader is not load_inputs_from_db:
+        return None
+    prompt_cs, prompt_review, model, pipeline = _active_version_params()
+    return {
+        "prompt_cs": prompt_cs,
+        "prompt_review": prompt_review,
+        "model": model,
+        "pipeline": pipeline,
+    }
+
+
+def _check_version_cutover(conn: sqlite3.Connection, aspect_where: str, params: tuple) -> None:
+    """윈도우 안에 옛 분류기 결과가 **하나라도** 있으면 세운다 (fail-closed).
+
+    🔴 **경고로 넘기면 오탐이 난다 — 그것도 최대 강도로.** 활성 버전 필터는 `_ASPECT_SQL`
+       에만, 즉 **분자에만** 걸린다. 분모(`_DOCUMENT_SQL` → documents)는 원문이라 필터를
+       안 타므로, 과거 구간이 stale 이면 `past_neg` 만 0 이 되고 `past_total` 은 그대로다.
+       기준선이 작아지는 게 아니라 **0 이 된다.**
+
+           진짜 부정률을 양쪽 다 5% 로 고정(변화 없음)하고 리뷰 소스로 실측:
+               대조군(전부 활성)   documents 1000 / items 1000  →  알림 0건
+               섞임(과거=옛 버전)  documents 1000 / items  200  →  알림 1건 🚨
+               (past_rate=0.0000 cur_rate=0.0500 delta=+0.0500 p=8.52e-08)
+
+       같은 데이터를 필터가 없던 시절에 돌리면 0건이다. 즉 **필터가 새로 여는 오탐 경로**라,
+       막으려던 병이 뒤집힌 채로 재발한다. (2026-08-12 서영님 리뷰 §1, 실측)
+
+    ⚠️ **CS 는 우연히 안전하고 리뷰만 뚫린다.** CS 는 과거 구간 aspect 가 0 이 되면
+       `check_coverage` 가 갭으로 잡아 `unreliable_slots` 로 빠진다. 리뷰는
+       `COVERAGE_CHECKED_SOURCES` 가 CS 전용이라 안 잡히고, 리뷰 커버리지는 그 방법으로
+       **원리적으로 검증이 안 된다**(`detection/loader.py` docstring). 방어선이 없다.
+
+    **왜 분모에서 같이 빼지 않고 세우는가** (2026-08-12 결정, 2안):
+      혼재는 표본이 줄어든 게 아니라 **검정 전제가 깨진 것**이다. Fisher 검정은 같은
+      분류기로 완전히 라벨링된 현재 7일과 과거 28일을 비교한다는 전제 위에 서 있다.
+      stale 원문을 분모에서도 빼면 그 전제를 복원하는 대신 **비무작위 결측**을 들인다 —
+      `FETCH_STALE_SQL` 이 `ORDER BY r.occurred_at` 이라 `--limit` 으로 나눠 backfill 하면
+      오래된 것부터 채워져, 남는 분모가 시간순 앞쪽 조각만 된다. 윈도우 안에 추세가 있으면
+      교란되고, 무엇보다 **불완전한 윈도우를 정상 검정으로 간주**하게 된다.
+      가용성보다 통계적 정합성을 택한다 — 재현 가능하고 설명도 명확하다.
+      (한 건 때문에 배치가 서는 비용이 실제로 크다고 확인되면, 그때 측정과 합의를 거쳐
+       슬롯 단위 보류를 설계한다. 조용히 우회하지는 않는다.)
+
+    ⚠️ **`LLM_MODEL` 오타도 여기로 온다.** 설정이 틀리면 전량이 stale 로 잡혀 배치가
+       선다. 메시지에 활성 3축을 다 찍는 이유가 그것이다 — "backfill 이 필요하다"와
+       "설정이 틀렸다"를 사람이 값을 보고 가를 수 있어야 한다.
+
+    Raises:
+        RuntimeError: 윈도우 안에 옛 분류기 결과가 1건이라도 있을 때.
+    """
+    row = conn.execute(
+        _VERSION_COUNT_SQL + aspect_where, (*_active_version_params(), *params)
+    ).fetchone()
+
+    total = row["total"] or 0
+    active = row["active"] or 0
+    stale = total - active
+    if not stale:
+        # total==0(워커를 아직 안 돌림)도 여기로 온다 — 그건 버전 문제가 아니라 커버리지
+        # 문제라 `check_coverage` 가 일자별로 잡는다. 여기서 또 세우면 원인이 흐려진다.
+        return
+
+    prompt_cs, prompt_review, model, pipeline = _active_version_params()
+    raise RuntimeError(
+        f"윈도우 안 분류 결과 {total}건 중 {stale}건이 옛 분류기 기준입니다"
+        f"(활성 {active}건 / 옛 버전 {stale}건). "
+        f"활성: cs={prompt_cs}, review={prompt_review}, model={model}, pipeline={pipeline}\n"
+        "  섞인 채로는 돌리지 않습니다 — 필터가 분자에만 걸려서, 과거 구간이 옛 버전이면 "
+        "기준선 부정률이 작아지는 게 아니라 0 이 되고 그대로 오탐이 됩니다.\n"
+        "  활성 값이 의도한 것인지 먼저 확인하고(LLM_MODEL 오타면 설정을 고치세요), "
+        "맞다면 `python scripts/classification_worker.py --reclassify-stale` 로 "
+        "backfill 을 **끝까지** 돌린 뒤 다시 실행하세요."
+    )
 
 
 def _require_classified_tables(conn: sqlite3.Connection, path: str | Path) -> None:
@@ -649,6 +842,7 @@ async def run_batch(
         배치 요약 dict. 실패는 모아서 담고 **중간에 던지지 않는다.**
     """
     loader = load_inputs or load_inputs_from_db
+    classifier_versions = _classifier_versions_for(loader)
     trace_id = new_trace_id()
     # 경과시간 전용이라 시간대는 UTC 로 고정한다 — 벽시계 값이 아니라 **차이만** 쓴다.
     # naive `datetime.now()` 는 로컬 시각이라 배치가 도는 중 DST·시간대 변경이 걸리면
@@ -889,7 +1083,7 @@ async def run_batch(
                 )
 
             try:
-                await publish_anomaly_analyzed(alert, rec, trace_id)
+                await publish_anomaly_analyzed(alert, rec, trace_id, classifier_versions)
                 counts["발행:이상"] += 1
                 delivered.append(alert)
             except Exception as exc:  # noqa: BLE001

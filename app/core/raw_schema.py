@@ -176,14 +176,58 @@ CREATE TABLE IF NOT EXISTS orders (
 #
 # item_id 는 `cs.id` / `reviews.id` 를 그대로 재사용한다(§5-1 A안 확정) — 접두사
 # INQ-/RVW- 가 달라 두 테이블을 합쳐도 충돌하지 않는다.
+#
+# ⚠️ 버전 3종(prompt·model·pipeline)은 **감사용 메타가 아니라 조회 조건이다.** 탐지가
+#    35일(현재 7 + 과거 28)을 한 번에 읽어서, 그 사이 분류기가 바뀐 행이 섞이면 부정률
+#    변화의 원인이 고객인지 라벨러인지 구분되지 않는다 — Fisher 검정은 둘을 못 가르므로
+#    **분류기 개선이 그대로 고객 이상 알림으로 발화한다.** 그래서 `app/batch/daily.py` 는
+#    활성 버전 행만 읽는다(`active_version_predicate`).
+#    근거·적용 절차: `docs/classified_item_version_columns.md`
 CLASSIFIED_ITEM_DDL = """
 CREATE TABLE IF NOT EXISTS classified_item (
-    item_id        TEXT PRIMARY KEY,
-    source         TEXT NOT NULL,
-    classified_at  TEXT,
-    prompt_version TEXT
+    item_id          TEXT PRIMARY KEY,
+    source           TEXT NOT NULL,
+    classified_at    TEXT,
+    prompt_version   TEXT,
+    model_version    TEXT,
+    pipeline_version TEXT
 );
 """
+
+VERSION_COLUMNS = ("prompt_version", "model_version", "pipeline_version")
+"""분류 산출물의 버전 3종. 적재·조회가 같은 목록을 봐야 한다."""
+
+
+def active_version_predicate(alias: str = "ci") -> str:
+    """"이 행이 활성 분류기로 만들어졌는가" SQL 술어. 파라미터는 `version_params()` 순서.
+
+    적재(`scripts/`)와 조회(`app/`)가 **같은 술어를 써야 한다.** 각자 적으면 한쪽만
+    고쳐졌을 때 조회가 0건이 되고, 그건 알림이 안 나가는 방향(미탐)이라 조용하다.
+
+    ⚠️ **`source` 마다 프롬프트가 다르다**(CS=프롬프트1 / 리뷰=프롬프트2). 값 하나로 거를 수
+       없어 CASE 로 가른다.
+
+    ⚠️ **`=` 가 아니라 `IS` 다 — sqlite 의 null-safe 비교.** `=` 를 쓰면 버전을 안 남기던
+       시절에 적재된 `NULL` 행이 **어느 쪽으로도 안 걸려** 조용히 빠진다. 가장 오래된,
+       그래서 가장 확실히 옛것인 행들이 하필 안 잡히는 형태다. `IS` 는 NULL 을 포함해 항상
+       0/1 을 돌려주므로 `NOT (...)` 로 뒤집어도 정확하다(워커의 stale 조회가 그렇게 쓴다).
+    """
+    return (
+        f"{alias}.prompt_version IS (CASE {alias}.source WHEN 'cs' THEN ? ELSE ? END)"
+        f" AND {alias}.model_version IS ?"
+        f" AND {alias}.pipeline_version IS ?"
+    )
+
+
+def version_params(
+    prompt_cs: str, prompt_review: str, model: str, pipeline: str
+) -> tuple[str, str, str, str]:
+    """`active_version_predicate()` 의 `?` 에 넣을 값. **순서가 계약이다.**
+
+    술어와 값을 한 파일에 두는 이유: 자리 수·순서가 어긋나면 SQL 은 에러 없이 **다른 것을
+    비교**한다(전부 TEXT 라 타입으로도 안 걸린다). 그 결과는 조회 0건이고, 조용하다.
+    """
+    return prompt_cs, prompt_review, model, pipeline
 
 # §2-6 classified_item_aspect — 1문의 : N aspect.
 # 하나의 문의가 여러 속성에 걸릴 수 있어(explode 계약) 정규화한다. JSON 한 컬럼에 몰지
@@ -294,6 +338,12 @@ SOURCE_INDEXES = [
 CLASSIFIED_INDEXES = [
     # cs / reviews 와의 조인 키
     "CREATE INDEX IF NOT EXISTS idx_classified_item_aspect_item ON classified_item_aspect (item_id);",
+    # 탐지의 활성 버전 필터와 워커의 stale 스캔이 이 세 컬럼을 **전부 등호로** 거른다
+    # (`active_version_predicate`). 컬럼 순서는 술어의 비교 순서와 맞춰 둔다.
+    (
+        "CREATE INDEX IF NOT EXISTS idx_classified_item_versions"
+        " ON classified_item (prompt_version, model_version, pipeline_version);"
+    ),
 ]
 
 # 원문 테이블 — 이게 없으면 워커가 읽을 것이 없다.

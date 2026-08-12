@@ -119,6 +119,9 @@ def test_publishers_take_trace_id_as_argument():
         "alert",
         "rec",
         "trace_id",
+        # 분류기 신원. 발행 함수가 만들지 않고 **보장하는 쪽(daily.py)이 넘긴다** —
+        # trace_id 를 자체 생성하지 않는 것과 같은 이유다.
+        "classifier_versions",
     ]
     assert list(inspect.signature(mq.publish_guideline_generated).parameters) == [
         "callback",
@@ -201,6 +204,38 @@ def test_anomaly_payload_is_json_serializable(alert, recommendation):
     )
 
     assert "2026-08-28" in body
+
+
+def test_anomaly_payload_carries_classifier_versions(alert, recommendation):
+    """분류기 신원이 payload 에 실린다(§4-1).
+
+    35일 창에 두 프롬프트 결과가 섞이면 라벨러 교체가 고객 이상으로 둔갑한다. 탐지는
+    활성 버전만 읽어 섞임을 막지만, **소비 측은 그 사실을 알 길이 없다** — 교체 전후 알림을
+    나눠 보려면 알림마다 기준이 적혀 있어야 한다.
+    """
+    versions = {
+        "prompt_cs": "classify_aspect_v5",
+        "prompt_review": "classify_sentiment_v4",
+        "model": "gpt-4o-mini",
+        "pipeline": "classify_pipeline_v1",
+    }
+
+    payload = mq.build_anomaly_payload(alert, recommendation, versions)
+
+    assert payload["classifier_versions"] == versions
+
+
+def test_classifier_versions_is_explicit_null_when_unknown(alert):
+    """근거가 없으면 **null 을 싣는다** — 키를 빼지도, 지어내지도 않는다.
+
+    🔴 값의 근거는 `daily.py` 의 활성 버전 필터뿐이다. 그 필터를 안 타는 입력원
+       (`--input-source golden`)에서 발행 시점 설정으로 채우면, 검증한 적 없는 것을
+       검증된 것처럼 보고하게 된다. `recommendation` 과 같은 이유로 키는 남긴다.
+    """
+    payload = mq.build_anomaly_payload(alert, None)
+
+    assert "classifier_versions" in payload
+    assert payload["classifier_versions"] is None
 
 
 def test_recommendation_is_explicit_null_when_absent(alert):
