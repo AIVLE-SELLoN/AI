@@ -118,10 +118,18 @@ def build_anomaly_payload(
        보장하는 쪽이 값을 만들어 넘기고 여기서는 싣기만 한다.
        `None` 이면 `null` 로 나간다 — **"버전 미상"이라는 정직한 값**이지 누락이 아니다.
 
-    🔴 **지금은 프롬프트 축만 싣는다.** `model`·`pipeline` 은 `classified_item` 에 컬럼이
-       생긴 뒤에 붙인다. 그 전에 `settings.llm_model` 로 채우면 **행이 말하는 것이 아니라
-       발행 시점 설정을 보고하는 것**이라, 분류와 탐지 사이에 `LLM_MODEL` 이 바뀌면 payload
-       가 거짓말을 한다. 없는 것보다 나쁘다 — 소비 측은 실린 값을 믿는다.
+    ⚠️ **`model`·`pipeline` 을 실어도 되는 근거는 필터에 있다.** 설정값(`settings.llm_model`)
+       을 그냥 읽어 채우면 행이 말하는 것이 아니라 **발행 시점 설정을 보고하는 것**이라,
+       분류와 탐지 사이에 `LLM_MODEL` 이 바뀌면 payload 가 거짓말을 한다. 실제로 컬럼이
+       생기기 전에는 프롬프트 축만 실었다.
+
+       지금 실을 수 있는 이유는 탐지 조회가 `model_version IS ?`·`pipeline_version IS ?`
+       까지 등호로 강제하고(`app/batch/daily.py` `_ACTIVE_VERSION_PREDICATE`), 안 맞는 행이
+       하나라도 있으면 `_check_version_cutover()` 가 배치를 세우기 때문이다. 즉 알림이
+       나갔다는 것 자체가 "기여한 모든 행이 이 3축"이라는 증거다 — 주장이 아니라 관측이다.
+
+       🔴 **그 강제를 느슨하게 하면 이 필드도 같이 거짓이 된다.** 필터에서 축을 빼거나
+          cutover 가드를 경고로 되돌리면 여기 실리는 값의 근거가 사라진다.
        (컬럼 명세: `docs/classified_item_version_columns.md`)
     """
     payload = alert.model_dump(mode="json")
