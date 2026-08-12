@@ -125,6 +125,7 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
 | `scope_in` | bool | 개선안 생성 가능한 aspect인지 (색상·사이즈·소재=true) |
 | `recommended_action` | enum | §6 대조표 참고. 대시보드가 이 값을 그대로 셀러에게 노출 |
 | `evidence` | object | `{inquiry_ids, linked_change_id}` — 원인분류에 투입된 문의 ID 전체 |
+| `classifier_versions` | object \| null | **이 알림의 숫자를 만든 분류기 신원.** `{prompt_cs, prompt_review, model, pipeline}`. §4.1.2 |
 | `recommendation` | object \| null | **개선안 1건.** §4.2 |
 
 **주의 3건**
@@ -168,6 +169,45 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
 ⚠️ **변화폭(현재−과거)을 막대 길이로 그려도 유의 채널이 제일 길다는 보장이 없다.**
 실측 예: 쿠팡 +5.6%p(유의) vs 네이버 +12.5%p(표본 42건, 유의 아님). 채널 강조는 크기가
 아니라 `significant_channels`로 할 것.
+
+### 4.1.2 `classifier_versions` 상세 (2026-08-12 추가)
+
+이 알림의 숫자를 만든 **분류기 신원**. 소비 측이 "이 알림은 어느 라벨러 기준인가"를
+되물을 수 있어야 분류기 교체 전후의 알림을 나눠 볼 수 있다.
+
+```json
+"classifier_versions": {
+  "prompt_cs": "classify_aspect_v5",
+  "prompt_review": "classify_sentiment_v4",
+  "model": "gpt-4o-mini",
+  "pipeline": "classify_pipeline_v1"
+}
+```
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `prompt_cs` | string | CS 분류 프롬프트 버전 |
+| `prompt_review` | string | 리뷰 분류 프롬프트 버전 |
+| `model` | string | 분류에 쓴 LLM 모델 |
+| `pipeline` | string | 프롬프트 밖 분류 로직 버전 (후처리·폴백 포함) |
+
+**왜 필요한가.** 탐지는 35일(현재 7 + 과거 28)을 한 번에 읽는다. 그 사이 분류기가
+바뀌면 한 검정 안에 두 라벨러의 결과가 섞여, **분류기 개선이 고객 이상 알림으로 발화한다.**
+AI 쪽은 활성 버전 행만 읽어 섞임 자체를 막지만, 그 사실은 payload 에 적히지 않으면
+소비 측이 알 길이 없다.
+
+**축이 셋인 이유.** 프롬프트가 그대로여도 라벨러는 바뀐다 — 모델을 갈아끼우면 같은
+프롬프트로 다른 라벨이 나오고, 후처리·폴백을 손봐도 분포가 움직인다(실측: CS 의 2.1%가
+빈 배열 폴백 경로였다). 셋 중 하나만 달라도 비교 가능성이 깨진다.
+
+**CS·리뷰를 둘 다 싣는다.** 알림 1건이 `stats` 로는 채택 소스 하나만 들고 있지만,
+판정 자체(`source_signals`)는 두 소스를 다 보고 내린다.
+
+⚠️ **`null` 은 "버전 미상"이라는 정직한 값이지 누락이 아니다.** 값의 근거는 탐지 쪽
+활성 버전 필터뿐이라, 그 필터를 안 타는 입력원(평가·재현용 golden 입력)에서는 `null` 로
+나간다. 그 경우 검증한 적 없는 값을 지어내지 않는다.
+
+> 컬럼 정의·적용 절차는 `docs/classified_item_version_columns.md`.
 
 ### 4.2 `recommendation` 객체 (Agent3 산출물)
 
