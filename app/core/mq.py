@@ -91,15 +91,42 @@ def build_envelope(
     }
 
 
-def build_anomaly_payload(alert: DetectionAlert, rec: Recommendation | None) -> dict:
-    """`ai.anomaly.analyzed` payload — 알림 전 필드 + 개선안 1건(§4).
+def build_anomaly_payload(
+    alert: DetectionAlert,
+    rec: Recommendation | None,
+    classifier_versions: dict | None = None,
+) -> dict:
+    """`ai.anomaly.analyzed` payload — 알림 전 필드 + 개선안 1건 + 분류기 신원(§4).
 
     `rec` 는 `recommended_action == "개선안 생성"` 일 때만 채워지고, 그 외 조치 6종에서는
     `"recommendation": null` 로 나간다. 키를 빼지 않고 명시적 null 을 보낸다 — 소비 측이
     "필드가 없음"과 "개선안이 없음"을 구분할 필요가 없게.
+
+    ⚠️ **`classifier_versions` 는 `DetectionAlert` 에 없는 필드다.** 스키마가 아니라 여기서
+       붙이는 이유가 둘이다:
+
+       1. `POST /recommendations/hitl` 의 `ProcessHitlRequest.alert` 가 `DetectionAlert` 라,
+          백엔드가 저장해 둔 알림이 그대로 되돌아온다. 모델 필드로 만들면 이 필드가 생기기
+          전 알림이 전부 422 가 되거나(필수), 뜻이 둘인 `None` 을 떠안는다(선택).
+          payload 시점에만 붙이면 되돌아온 여분 키는 pydantic 이 그냥 버린다
+          (`extra="ignore"` 기본값 — schemas.py 에 `forbid` 가 한 곳도 없다).
+       2. **값의 근거가 알림이 아니라 입력 경로에 있다.** 아래 ⚠️ 참고.
+
+    ⚠️ **호출부가 넘긴다 — 여기서 만들지 않는다.** "이 알림은 프롬프트 X 로 분류된 행에서
+       나왔다"를 보장하는 것은 `app/batch/daily.py` 의 활성 버전 필터(`_ASPECT_SQL`)뿐이다.
+       그 필터를 안 타는 입력원(`--input-source golden`)에서는 같은 주장이 성립하지 않으므로,
+       보장하는 쪽이 값을 만들어 넘기고 여기서는 싣기만 한다.
+       `None` 이면 `null` 로 나간다 — **"버전 미상"이라는 정직한 값**이지 누락이 아니다.
+
+    🔴 **지금은 프롬프트 축만 싣는다.** `model`·`pipeline` 은 `classified_item` 에 컬럼이
+       생긴 뒤에 붙인다. 그 전에 `settings.llm_model` 로 채우면 **행이 말하는 것이 아니라
+       발행 시점 설정을 보고하는 것**이라, 분류와 탐지 사이에 `LLM_MODEL` 이 바뀌면 payload
+       가 거짓말을 한다. 없는 것보다 나쁘다 — 소비 측은 실린 값을 믿는다.
+       (컬럼 명세: `docs/classified_item_version_columns.md`)
     """
     payload = alert.model_dump(mode="json")
     payload["recommendation"] = rec.model_dump(mode="json") if rec else None
+    payload["classifier_versions"] = classifier_versions
     return payload
 
 
@@ -203,6 +230,7 @@ async def publish_anomaly_analyzed(
     alert: DetectionAlert,
     rec: Recommendation | None,
     trace_id: str,
+    classifier_versions: dict | None = None,
 ) -> None:
     """`ai.anomaly.analyzed` 발행 — 알림 1건 + 개선안 1건(없으면 null). 멱등 키 `alert_id`.
 
@@ -210,6 +238,8 @@ async def publish_anomaly_analyzed(
         alert: 탐지 알림. payload 최상위가 이 필드들 그대로다(§4-1).
         rec: 개선안. 게이트 밖이면 None.
         trace_id: 배치가 만든 값. 이 함수가 생성하지 않는다.
+        classifier_versions: 이 알림의 숫자를 만든 분류기 신원. **보장하는 쪽이 만들어
+            넘긴다** — `build_anomaly_payload` 의 ⚠️ 참고. 모르면 None(=`null` 로 발행).
 
     Raises:
         MqDisabledError: `MQ_ENABLED=false`. **삼키지 말 것** — 안 나간 알림이다.
@@ -218,7 +248,7 @@ async def publish_anomaly_analyzed(
     """
     await _publish(
         ANOMALY_ANALYZED,
-        build_anomaly_payload(alert, rec),
+        build_anomaly_payload(alert, rec, classifier_versions),
         trace_id,
         key=alert.alert_id,
     )
