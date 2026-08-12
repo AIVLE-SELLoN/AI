@@ -340,7 +340,8 @@ WHERE {_STALE_PREDICATE}
   AND r.content IS NOT NULL AND TRIM(r.content) <> ''
 """
 
-# 원문이 사라져 재분류할 수 없는 stale 행. 위 조인에서 빠지는 나머지다.
+# 재분류할 수 없는 stale 행 — 원문이 사라졌거나 본문이 비어 있어 LLM 에 태울 것이 없다.
+# 위 조인에서 빠지는 나머지다.
 #
 # ⚠️ 이 건수는 **탐지를 막지 않는다.** `app/batch/daily.py` 의 cutover 가드도 원문 뷰와
 #    조인하므로 원문 없는 행은 애초에 안 센다. 그래서 경고 문구를 가르기만 한다 —
@@ -707,10 +708,11 @@ class ClassificationWorker:
         return self.conn.execute(COUNT_STALE_SQL, active_version_params()).fetchone()[0]
 
     def count_orphan_stale(self) -> int:
-        """원문이 없어 **재분류로는 없앨 수 없는** 옛 분류기 행 수.
+        """**재분류로는 없앨 수 없는** 옛 분류기 행 수 — 태울 본문이 없는 것들이다.
 
-        목 데이터를 다시 만들면(원문 테이블만 갈아끼우면) 생긴다. 탐지는 원문과 조인해
-        읽으므로 이 행들은 애초에 탐지 대상이 아니고, 배치를 막지도 않는다.
+        원문이 사라졌거나(목 데이터 재생성) 본문이 공백만 남은 경우다. 탐지의 cutover
+        가드도 같은 조건으로 이 행들을 빼므로 배치를 세우지 않는다 — 그 불변식이
+        `daily._VERSION_COUNT_SQL` 에 적혀 있다.
         """
         return self.conn.execute(
             COUNT_ORPHAN_STALE_SQL, active_version_params()
@@ -1021,9 +1023,9 @@ class ClassificationWorker:
             )
         if orphan:
             lines.append(
-                f"  이 중 {orphan}건은 원문이 없어 재분류로 없앨 수 없습니다"
-                "(목 데이터 재생성 등). 탐지는 원문과 조인해 읽으므로 배치를 막지는"
-                " 않습니다 — 필요하면 해당 행을 정리하세요."
+                f"  이 중 {orphan}건은 태울 본문이 없어 재분류로 없앨 수 없습니다"
+                "(원문 삭제·본문 공백). 탐지도 같은 조건으로 빼므로 배치를 막지는"
+                " 않습니다 — 필요하면 해당 행을 직접 정리하세요."
             )
         logger.warning("\n".join(lines))
 

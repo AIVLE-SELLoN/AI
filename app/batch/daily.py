@@ -315,6 +315,27 @@ _VERSION_COUNT_SQL = f"""
         COUNT(*) AS total
     FROM classified_item ci
     JOIN {raw_schema.VOC_DOCUMENT} v ON v.item_id = ci.item_id
+    WHERE v.content IS NOT NULL AND TRIM(v.content) <> ''
+"""
+"""윈도우 안 활성/전체 행 수. **세우는 판정의 근거라 집합을 정확히 맞춰야 한다.**
+
+🔴 **불변식: 배치를 세우는 집합 ⊆ `--reclassify-stale` 이 고칠 수 있는 집합.**
+   본문 조건(`TRIM(content) <> ''`)이 여기 있는 이유가 그것이다. 워커의
+   `FETCH_STALE_SQL`·`COUNT_STALE_SQL` 이 같은 조건을 요구하므로, 여기서만 빼면
+   **고칠 수단이 없는 상태로 배치가 매일 선다**:
+
+       원문은 있는데 본문이 비어('   ') 있는 stale 행이 1건이라도 있으면
+           워커 count_stale()       = 0   ← 재분류 대상 없음
+           워커 fetch_stale_batch() = 0 rows
+           배치                     = RuntimeError 로 중단
+       에러가 시키는 `--reclassify-stale` 은 "재분류할 문서가 없습니다"로 끝나고,
+       손으로 SQL 을 치는 것 말고 빠져나갈 길이 없다.
+
+   경고만 하던 때는 무해했고 fail-closed 로 바뀌면서 교착이 됐다.
+   (2026-08-12 리뷰 §1 후속, 지인님 실측)
+
+⚠️ 위 필터가 **얼마나 잘라냈는지**를 세는 쿼리이므로 `_ASPECT_SQL` 과 같은 조인·같은
+   비교식을 쓴다. 다르면 세는 대상과 거르는 대상이 어긋난다.
 """
 
 
@@ -343,12 +364,12 @@ def _aspect_window_clause(where: str) -> str:
 
     윈도우가 없으면(`where == ""`) 그대로 빈 문자열이다.
 
-    ⚠️ **붙는 자리가 호출부마다 다르다.** `_ASPECT_SQL` 은 버전 필터로 `WHERE` 를 이미
-       쓰고 있어 이 절이 그 뒤에 `AND` 로 붙지만, `_VERSION_COUNT_SQL` 은 `WHERE` 가 없어서
-       **`JOIN ... ON` 뒤에** 붙는다. 지금은 둘 다 INNER JOIN 이라 결과가 같다.
-       🔴 그 조인을 LEFT JOIN 으로 바꾸면 **조용히 의미가 달라진다** — ON 절의 조건은 행을
-          안 지우고 NULL 로 채우기 때문이다. 바꿀 일이 생기면 이 함수 대신 명시적인
-          `WHERE` 를 그 쿼리에 직접 넣을 것. (2026-08-12 리뷰 잔가지)
+    ⚠️ **두 호출부(`_ASPECT_SQL`·`_VERSION_COUNT_SQL`)가 모두 `WHERE` 로 시작해야 한다.**
+       그래야 이 절이 `AND` 로 이어붙는다. `WHERE` 가 없는 쿼리에 붙이면 조건이
+       **`JOIN ... ON` 뒤로** 들어가는데, INNER JOIN 이면 결과가 같아 통과하지만 나중에
+       LEFT JOIN 으로 바꾸는 순간 **조용히 의미가 달라진다** — ON 절의 조건은 행을 안 지우고
+       NULL 로 채우기 때문이다. 새 호출부를 만들면 `WHERE` 를 먼저 두거나 이 함수를 쓰지
+       말 것. (2026-08-12 리뷰 잔가지)
     """
     return where.replace("occurred_at", "v.occurred_at").replace(" WHERE ", " AND ", 1)
 
