@@ -8,13 +8,14 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
 from app.batch import daily
 from app.core import constants, raw_schema
 from app.core.schemas import Channel
+from app.detection import service as detection_service
 from scripts import mock_producer
 
 
@@ -145,18 +146,31 @@ def test_writer_and_reader_share_one_kst_definition():
     행 수도 `verify_counts` 도 전부 통과하는데 날짜 경계의 문서만 다른 날로 집계된다
     (08-11 밤 생성기 비결정성과 같은 모양: 집계는 같은데 행이 갈림).
 
-    `is` 로 본다. 값 비교(`==`)면 각자 정의해도 통과해서 이 회귀를 못 잡는다. (PR #68 후속)
+    `is` 로 본다. 값 비교(`==`)면 각자 정의해도 통과해서 이 회귀를 못 잡는다 —
+    `timezone` 은 UTC(offset 0)만 캐시해서 `timezone(timedelta(hours=9))` 두 개는
+    서로 다른 객체인데 `==` 는 True 다. (PR #68 후속)
+
+    🔴 **이 목록은 손으로 등록하는 화이트리스트다.** `constants.KST` 를 import 하는
+       모듈이 늘면 여기에 한 줄 추가해야 한다 — 안 그러면 그 모듈이 로컬 재정의로
+       빠져나가도 아무것도 안 물린다. (용준님 PR #70 리뷰 ②)
     """
-    assert mock_producer.KST is constants.KST
-    assert daily.KST is constants.KST
+    assert mock_producer.KST is constants.KST, "오프셋을 쓰는 쪽"
+    assert daily.KST is constants.KST, "날짜를 자르는 쪽"
+    # detected_at → alert_id(`ALT-%Y%m%d`)·가이드라인 기간(`%Y-%m`) 이라 §3 대상이다.
+    assert detection_service.KST is constants.KST, "탐지 시각을 찍는 쪽"
 
 
-def test_stored_offset_is_kst():
-    """저장 형식이 `+09:00` 인지 못박는다 — 위 계약이 실제로 어떤 문자열을 내는지.
+def test_aware_input_is_converted_not_relabeled():
+    """오프셋이 **있는** 입력은 라벨을 갈아치우지 않고 **변환**한다.
 
-    입력이 **naive 인 게 요점이다.** 대본 CSV 의 시각에 오프셋이 없어서
-    `to_kst_iso` 가 "naive 면 KST 로 간주한다" 를 지키는지 보는 것이라, tzinfo 를
-    붙이면 검사가 성립하지 않는다(그건 astimezone 경로다).
+    `to_kst_iso` 는 두 갈래다 — naive 면 KST 로 간주(`replace`), aware 면 KST 로
+    변환(`astimezone`). naive 쪽은 위 `test_timestamps_carry_the_kst_offset` 이
+    완전일치로 이미 잠갔고, **이쪽 갈래가 비어 있었다**: `astimezone` 분기를 통째로
+    지워도 전건 통과했다(용준님 PR #70 리뷰 ①, 재현 확인).
+
+    분기를 지우면 UTC 01:00 이 `01:00+09:00` 으로 **9시간 틀어진 채** 저장된다 —
+    같은 순간이 아니게 되므로 날짜 경계에서 하루가 밀린다.
     """
-    naive = datetime(2026, 5, 1, 10, 0)  # noqa: DTZ001 — naive 입력이 검사 대상이다
-    assert mock_producer.to_kst_iso(naive).endswith("+09:00")
+    utc_1am = datetime(2026, 5, 1, 1, 0, tzinfo=timezone.utc)  # = KST 10:00
+
+    assert mock_producer.to_kst_iso(utc_1am) == "2026-05-01T10:00:00+09:00"
