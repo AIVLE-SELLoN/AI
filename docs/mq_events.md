@@ -468,6 +468,8 @@ AI 쪽은 활성 버전 행만 읽고, 윈도우에 옛 버전 행이 **하나�
 | `alert_id` | string | 원본 알림 ID |
 | `hitl_status` | enum | `승인` \| `반려` \| `수정후승인` (`대기`는 발행 대상 아님) |
 | `hitl_feedback` | object | `{processed_at, processed_by, rejection_reason{reason_code, reason_text}, edited_text}` |
+| `alert` | object | **전문 필수.** `ai.anomaly.analyzed` 로 보냈던 `payload` 최상위를 그대로 되싣는다(§4.1). 사유·주의는 **§8.1** |
+| `recommendation` | object | **전문 필수.** 같은 payload 의 `recommendation` 객체 그대로(§4.2). 사유·주의는 **§8.1** |
 
 ```json
 {
@@ -488,7 +490,9 @@ AI 쪽은 활성 버전 행만 읽고, 윈도우에 옛 버전 행이 **하나�
         "reason_text": "지난주에 상세페이지 이미 수정했습니다"
       },
       "edited_text": null
-    }
+    },
+    "alert": { "…": "ai.anomaly.analyzed 의 payload 최상위 그대로 (§4.1)" },
+    "recommendation": { "…": "그 payload 의 recommendation 객체 그대로 (§4.2)" }
   }
 }
 ```
@@ -501,6 +505,25 @@ AI 쪽은 활성 버전 행만 읽고, 윈도우에 옛 버전 행이 **하나�
 백엔드가 `alert_status = 해결됨`인 `alert_id` 배열을 다음 배치 전에 넘겨주고, 우리는
 `DetectRequest.resolved_alert_ids` / `detect_anomaly(resolved_alert_ids=...)`로 받는다.
 **열람(`is_read`)과 처리 완료(`alert_status`)는 별도 필드다** — 억제 해제에 쓰는 건 후자.
+
+### 8.1 `alert`·`recommendation` 전문을 되싣는 이유 (2026-08-12 A안 확정)
+
+컬렉션2 문서는 **원인 라벨 + CS 요약 + 개선안 본문**으로 만든다(§4-2). ID 4개로는 그
+재료가 없다. 두 안 중 **(A) 백엔드가 되싣는다**로 확정했다 — AI 쪽 코드가 안 바뀌고
+컨슈머가 무상태로 남는다. (B) AI 가 발행분을 자체 저장소에 두고 ID 로 되찾는 안은
+저장소 신설이 필요해 폐기했다.
+
+- **보관본을 그대로 실으면 된다.** 새로 만들거나 가공할 필드가 없다 — `ai.anomaly.analyzed`
+  로 받아 저장해둔 값 그대로다.
+- 🔴 **`hitl_status`·`hitl_feedback` 은 payload 최상위가 정본이다.** 되실은
+  `recommendation` 은 **발행 시점 사본이라 `hitl_status` 가 `대기`로 굳어 있다.**
+  AI 는 최상위 값으로 덮어쓴 뒤 처리하므로(`mq_consumer.load_hitl_context()`), 그 안의
+  값을 굳이 맞춰 보낼 필요는 없다.
+- ⚠️ **빠지면 조용히 무시되지 않는다.** AI 스키마상 두 필드는 **옵셔널**이지만
+  (필드 추가는 옵셔널로만 — §11), 없으면 `HitlContextUnavailableError` 로 그 메시지
+  처리가 실패한다. **그 알림의 승인·반려는 컬렉션2에 영영 안 쌓인다** — 재전달로도
+  복구되지 않으므로(같은 payload 가 다시 와도 같은 이유로 실패) 누락을 조용한 열화로
+  두지 않으려는 것이다.
 
 ### `feedback.report.created` (메인 → AI)
 
@@ -562,7 +585,8 @@ AI 쪽은 활성 버전 행만 읽고, 윈도우에 옛 버전 행이 **하나�
 | `ai.inbound`에 `feedback.#` 바인딩 추가 | 백엔드 미완 |
 | 메인 서버 컨슈머 (upsert + 멱등) | 백엔드 미완 |
 | **AI 발행자(Publisher)** | ✅ **완료** — `app/core/mq.py` (`aio-pika==9.5.7`). 로컬 브로커로 발행→수신 검증 (`scripts/smoke_mq.py`) |
-| **AI 컨슈머 (`feedback.#` 수신)** | ✅ **코드 완료** — `app/core/mq_consumer.py`. ⚠️ 실행 진입점 미구현(아무도 `consume()` 을 안 부른다) · `feedback.recommendation.reviewed` 적재는 §8 확장 대기 |
+| **AI 컨슈머 (`feedback.#` 수신)** | ✅ **완료** — `app/core/mq_consumer.py` + 실행 진입점 `app/consumer.py`(`python -m app.consumer`). `feedback.recommendation.reviewed` 적재도 §8 A안 확정으로 **코드 변경 없이 동작**한다(`load_hitl_context()`) |
+| `feedback.recommendation.reviewed` 에 `alert`·`recommendation` 전문 싣기 | **백엔드 미완** — §8·§8.1. 빠지면 그 알림의 승인·반려가 컬렉션2에 안 쌓인다 |
 | enum 동기화 확인 | §9 대조표 전달 완료, 백엔드 반영 확인 대기 |
 | Publisher Confirm(AI) · Manual ACK(양쪽) | ✅ AI 쪽 완료 (`publisher_confirms=True` · 컨슈머 Manual ACK) |
 | `MQ_COMPANY_ID` 실제 값 | **백엔드 대기** — 없으면 발행이 막힌다 |
