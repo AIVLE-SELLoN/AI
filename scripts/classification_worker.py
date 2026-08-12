@@ -38,8 +38,10 @@
   축이 셋인 이유: 프롬프트가 그대로여도 라벨러는 바뀐다. 모델(`LLM_MODEL`)을 갈아끼우거나
   후처리·폴백을 손보면 프롬프트 파일은 한 글자도 안 바뀌었는데 분포가 달라진다.
 
-  그래서 어느 축이든 올렸으면 `--reclassify-stale` 로 지난 구간을 맞춰야 한다. 안 맞추면
-  탐지 쪽이 옛 행을 안 읽어 과거 기준선이 빈 채로 남는다(daily.py 가 그 상태를 세운다).
+  🔴 **어느 축이든 올렸으면 `--reclassify-stale` 을 끝까지 돌려야 배치가 돈다.** 탐지는
+  윈도우에 옛 버전 행이 하나라도 있으면 **중단**한다(fail-closed). 부분 backfill 상태로는
+  탐지가 아예 안 도므로 "조금씩 나눠 돌리다 중간에 두는" 상태를 남기지 말 것 —
+  `--limit` 으로 쪼개 돌리는 것은 되지만 마지막까지 채워야 한다.
   적재가 upsert 라 재분류 결과가 옛 결과를 덮어쓴다 — 예전 `INSERT OR IGNORE` 시절에는
   재분류를 돌려도 아무것도 안 바뀌었다.
 
@@ -325,7 +327,34 @@ ORDER BY r.occurred_at, r.item_id
 LIMIT ?
 """
 
-COUNT_STALE_SQL = f"SELECT COUNT(*) FROM classified_item c WHERE {_STALE_PREDICATE}"
+# 🔴 **재분류 조회와 같은 조인·같은 조건을 탄다.** 예전에는 `classified_item` 만 세서
+#    `FETCH_STALE_SQL`(원문 뷰와 INNER JOIN + 본문 비어있지 않음)과 범위가 갈렸다.
+#    원문이 사라진 행이 있으면 `count_stale()=1` 인데 `fetch_stale_batch()=0` 이 되어,
+#    "1건 남았다"고 알리고 곧바로 "대상을 모두 처리했습니다"로 끝난 뒤 종료 경고가
+#    **영원히 남는다** — 고치라는데 고칠 수단이 없는 경고다. (2026-08-12 리뷰 §5)
+COUNT_STALE_SQL = f"""
+SELECT COUNT(*)
+FROM classified_item c
+JOIN {SOURCE_VIEW} r ON r.item_id = c.item_id
+WHERE {_STALE_PREDICATE}
+  AND r.content IS NOT NULL AND TRIM(r.content) <> ''
+"""
+
+# 원문이 사라져 재분류할 수 없는 stale 행. 위 조인에서 빠지는 나머지다.
+#
+# ⚠️ 이 건수는 **탐지를 막지 않는다.** `app/batch/daily.py` 의 cutover 가드도 원문 뷰와
+#    조인하므로 원문 없는 행은 애초에 안 센다. 그래서 경고 문구를 가르기만 한다 —
+#    "backfill 하세요"와 "backfill 로는 못 없앤다"는 사람이 할 일이 다르다.
+COUNT_ORPHAN_STALE_SQL = f"""
+SELECT COUNT(*)
+FROM classified_item c
+WHERE {_STALE_PREDICATE}
+  AND NOT EXISTS (
+      SELECT 1 FROM {SOURCE_VIEW} r
+      WHERE r.item_id = c.item_id
+        AND r.content IS NOT NULL AND TRIM(r.content) <> ''
+  )
+"""
 
 # 적재된 분류 결과의 버전 분포. 섞여 있으면 탐지가 그만큼 조용히 틀어진다.
 COUNT_BY_VERSION_SQL = """
@@ -670,8 +699,22 @@ class ClassificationWorker:
         ).fetchall()
 
     def count_stale(self) -> int:
-        """옛 분류기로 남은 문서 수. 0 이면 탐지가 읽을 구간이 전부 활성 버전이다."""
+        """**재분류할 수 있는** 옛 분류기 행 수. `fetch_stale_batch()` 와 같은 범위다.
+
+        0 이면 `--reclassify-stale` 이 할 일이 없다는 뜻이다. 원문이 사라져 못 고치는
+        행은 여기 안 들어간다 — `count_orphan_stale()` 로 따로 센다.
+        """
         return self.conn.execute(COUNT_STALE_SQL, active_version_params()).fetchone()[0]
+
+    def count_orphan_stale(self) -> int:
+        """원문이 없어 **재분류로는 없앨 수 없는** 옛 분류기 행 수.
+
+        목 데이터를 다시 만들면(원문 테이블만 갈아끼우면) 생긴다. 탐지는 원문과 조인해
+        읽으므로 이 행들은 애초에 탐지 대상이 아니고, 배치를 막지도 않는다.
+        """
+        return self.conn.execute(
+            COUNT_ORPHAN_STALE_SQL, active_version_params()
+        ).fetchone()[0]
 
     # ── 처리 ────────────────────────────────────────────────────────────────
 
@@ -936,14 +979,19 @@ class ClassificationWorker:
         """적재된 분류 결과의 분류기 버전 분포를 남긴다.
 
         커버리지(몇 건이 분류됐나)와 **별개의 축**이다. 전량이 분류돼 있어도 버전이
-        섞여 있으면 탐지는 그중 활성 버전만 읽으므로 분자가 그만큼 빈다 — 커버리지
-        숫자만 보면 100% 라 아무 문제 없어 보이는 상태다. 그래서 따로 찍는다.
+        섞여 있으면 탐지가 **아예 안 돈다**(`daily._check_version_cutover` 가 세운다) —
+        커버리지 숫자만 보면 100% 라 아무 문제 없어 보이는 상태다. 그래서 따로 찍는다.
+
+        ⚠️ **고칠 수 있는 것과 없는 것을 가른다.** 원문이 사라진 stale 행은
+           `--reclassify-stale` 로 없앨 수 없다. 안 가르면 "backfill 하세요" 경고가
+           영원히 남아 다음 사람이 시간을 쓴다.
         """
         if self.conn is None:
             return
         try:
             rows = self.conn.execute(COUNT_BY_VERSION_SQL).fetchall()
             stale = self.count_stale()
+            orphan = self.count_orphan_stale()
         except sqlite3.Error as exc:
             logger.warning(f"[VERSION] 집계 실패: {exc}")
             return
@@ -954,17 +1002,30 @@ class ClassificationWorker:
         breakdown = " | ".join(
             f"{r['source']}:{r['prompt']}/{r['model']}/{r['pipeline']}={r['n']}" for r in rows
         )
-        prompt_cs, prompt_review, model, pipeline = active_version_params()
-        if stale:
-            logger.warning(
-                f"[VERSION] 분류기 버전이 섞여 있습니다 — {breakdown}\n"
-                f"  활성: cs={prompt_cs}, review={prompt_review},"
-                f" model={model}, pipeline={pipeline}\n"
-                f"  옛 버전 {stale}건은 탐지가 읽지 않습니다(그만큼 분자가 빕니다). "
-                "`--reclassify-stale` 로 backfill 하세요."
-            )
-        else:
+        if not stale and not orphan:
             logger.info(f"[VERSION] {breakdown}")
+            return
+
+        prompt_cs, prompt_review, model, pipeline = active_version_params()
+        lines = [
+            f"[VERSION] 분류기 버전이 섞여 있습니다 — {breakdown}",
+            (
+                f"  활성: cs={prompt_cs}, review={prompt_review},"
+                f" model={model}, pipeline={pipeline}"
+            ),
+        ]
+        if stale:
+            lines.append(
+                f"  옛 버전 {stale}건이 남아 있어 **탐지 배치가 서 있습니다.** "
+                "`--reclassify-stale` 로 끝까지 backfill 하세요."
+            )
+        if orphan:
+            lines.append(
+                f"  이 중 {orphan}건은 원문이 없어 재분류로 없앨 수 없습니다"
+                "(목 데이터 재생성 등). 탐지는 원문과 조인해 읽으므로 배치를 막지는"
+                " 않습니다 — 필요하면 해당 행을 정리하세요."
+            )
+        logger.warning("\n".join(lines))
 
     def save_classified_items(self, items: list[ClassifiedItem]) -> int:
         """분류 결과를 §2-6 두 테이블에 적재. 반환값은 실제 INSERT 된 aspect 행 수.
