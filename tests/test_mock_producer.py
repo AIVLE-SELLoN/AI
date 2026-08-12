@@ -8,10 +8,12 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 
 import pytest
 
-from app.core import raw_schema
+from app.batch import daily
+from app.core import constants, raw_schema
 from app.core.schemas import Channel
 from scripts import mock_producer
 
@@ -132,3 +134,29 @@ def test_timestamps_carry_the_kst_offset(tmp_path) -> None:
 
     occurred = conn.execute(f"SELECT occurred_at FROM {raw_schema.VOC_DOCUMENT}").fetchone()[0]
     assert occurred == "2026-05-01T10:00:00+09:00"
+
+
+def test_writer_and_reader_share_one_kst_definition():
+    """🔴 오프셋을 **쓰는** 쪽과 날짜를 **자르는** 쪽이 같은 KST 객체를 봐야 한다.
+
+    `mock_producer.to_kst_iso()` 가 원문에 오프셋을 붙여 저장하고,
+    `app/batch/daily.py::_to_kst()` 가 그걸 읽어 KST 날짜로 자른다. 두 파일이 각자
+    `timezone(timedelta(hours=9))` 를 들고 있으면 **한쪽만 바뀌었을 때 조용히 갈린다** —
+    행 수도 `verify_counts` 도 전부 통과하는데 날짜 경계의 문서만 다른 날로 집계된다
+    (08-11 밤 생성기 비결정성과 같은 모양: 집계는 같은데 행이 갈림).
+
+    `is` 로 본다. 값 비교(`==`)면 각자 정의해도 통과해서 이 회귀를 못 잡는다. (PR #68 후속)
+    """
+    assert mock_producer.KST is constants.KST
+    assert daily.KST is constants.KST
+
+
+def test_stored_offset_is_kst():
+    """저장 형식이 `+09:00` 인지 못박는다 — 위 계약이 실제로 어떤 문자열을 내는지.
+
+    입력이 **naive 인 게 요점이다.** 대본 CSV 의 시각에 오프셋이 없어서
+    `to_kst_iso` 가 "naive 면 KST 로 간주한다" 를 지키는지 보는 것이라, tzinfo 를
+    붙이면 검사가 성립하지 않는다(그건 astimezone 경로다).
+    """
+    naive = datetime(2026, 5, 1, 10, 0)  # noqa: DTZ001 — naive 입력이 검사 대상이다
+    assert mock_producer.to_kst_iso(naive).endswith("+09:00")
