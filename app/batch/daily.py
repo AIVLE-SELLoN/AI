@@ -682,9 +682,13 @@ async def run_batch(
     #    읽기 전용이라 상태 파일도 안 바뀐다.
     #
     #    처음엔 "기록이 하루 일찍 잘려 억제가 빨리 풀린다"고 적었는데 **방향이 반대다** —
-    #    `cutoff = window_end - STATE_RETENTION_DAYS` 이고 `window_end >= cutoff` 를
-    #    보관하므로, 날짜가 이르면 cutoff 도 일러져 오히려 **더 오래** 남는다
+    #    여기서 넘긴 날짜로 `cutoff = 그 날짜 - STATE_RETENTION_DAYS` 를 잡고
+    #    **`alert.window_end >= cutoff`** 인 기록을 보관하므로(`load_prior_alerts`),
+    #    날짜가 이르면 cutoff 도 일러져 오히려 **더 오래** 남는다
     #    (실측: today=1/28 → 3건 보관, today=1/29 → 2건).
+    #    ⚠️ 두 `window_end` 는 다른 값이다 — 앞은 이 함수의 인자(기준일), 뒤는 보관
+    #       후보 알림의 필드다. 이름이 같아 자기 자신과 비교하는 것처럼 읽힌다.
+    #       (서영님 PR #69 리뷰 잔가지)
     prior = load_prior_alerts(window_end or datetime.now(KST).date(), state_path)
     logger.info(
         "입력 items=%d documents=%d prior_alerts=%d window_end=%s",
