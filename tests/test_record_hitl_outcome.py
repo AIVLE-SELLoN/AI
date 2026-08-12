@@ -99,19 +99,25 @@ def test_records_rejected_outcome_with_reason(monkeypatch, biased_alert):
     assert metadata["rejection_reason_text"] == "근거가 약함"
 
 
-def test_edited_approved_records_the_edited_text(monkeypatch, biased_alert):
-    """수정후승인이면 셀러가 고쳐 쓴 문장이 적재된다 — 원래 제안문은 안 들어간다.
+@pytest.mark.parametrize("hitl_status", [HitlStatus.EDITED_APPROVED, HitlStatus.APPROVED])
+def test_approved_records_the_edited_text(monkeypatch, biased_alert, hitl_status):
+    """승인 계열이면 셀러가 고쳐 쓴 문장이 적재된다 — 원래 제안문은 안 들어간다.
 
     실제 승인 내용과 다른 문장이 "승인" 사례로 쌓이면 컬렉션2가 학습 자료로서
     거짓이 된다. 원래 제안문 부재까지 같이 검사하는 이유: 둘을 이어 붙이는 식으로
     고치면 "수정문이 들어간다"만으로는 통과해버린다.
+
+    `승인`도 같이 도는 이유: 정예시 자리에 들어갈 건 "셀러가 최종 승인한 문장"이지
+    상태 이름이 아니다(백엔드가 수정본을 `수정후승인` 아닌 `승인`으로 표시해도 그
+    문장을 살려야 한다). 이 파라미터가 없으면 가드를 `== EDITED_APPROVED`로 좁히는
+    변경이 아무 테스트도 안 물고 통과한다.
     """
     fake_collection = _FakeCollection()
     monkeypatch.setattr(pipeline, "get_rejection_reasons", lambda: fake_collection)
 
     recommendation = _recommendation(
         biased_alert.alert_id,
-        hitl_status=HitlStatus.EDITED_APPROVED,
+        hitl_status=hitl_status,
         hitl_feedback=HitlFeedback(
             processed_at="2026-05-29T09:00:00",
             processed_by="seller-001",
