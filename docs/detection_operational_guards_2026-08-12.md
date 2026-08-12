@@ -71,10 +71,15 @@ taxonomy 불일치, 빈 evidence, 원문에 없는 evidence는 해당 항목만 
 배치를 격리한다. 성공 응답은 끝까지 채점하고 실패 문항은 무응답으로 남기며, 실패 상세를
 결과 JSON에 저장한 뒤 프로세스는 비정상 종료한다. 일부 결과를 완전 성공처럼 보고하지 않는다.
 
+비용 추정용 `CountingClient`도 프롬프트3과 같은 응답 스키마를 사용한다. 프롬프트의
+few-shot 예시가 아니라 마지막 실제 입력 JSON만 파싱하고, 필수 confidence와 원문 evidence를
+채운다. 인스코프 편중형 dry-run에서 원인분류·개선안·가이드라인 호출 추정이 모두 유지되는지
+끝단 테스트로 고정했다.
+
 ## 검증
 
-- 관련 테스트: `81 passed`
-- 전체 테스트: `655 passed, 0 failed`
+- 관련 테스트: `82 passed`
+- 전체 테스트: `656 passed, 0 failed`
 - 재현 환경: `requirements.txt`의 `boto3==1.43.65`, `requirements.lock`의
   `botocore==1.43.66` 동기화
 - Ruff: 이번 변경 관련 규칙 통과

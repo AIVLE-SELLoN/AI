@@ -219,11 +219,13 @@ class CountingClient:
     현실적인 크기로 나오고, 그래야 `recommended_action` 이 실제와 비슷하게 산출된다.
     비우면 원인이 '미특정'으로 빠져 게이트 통과 수를 실제보다 적게 잡는다.
 
-    돌려주는 필드는 **`diagnose_cause` 가 실제로 읽는 3개**(`cs_id`·`cause`·
-    `aspect_match`)뿐이다. 프롬프트3 스키마엔 `confidence`·`evidence` 도 있지만 우리
-    코드는 어느 쪽도 안 읽으므로(`app/detection/cause.py`), 스텁이 채우면 흉내낸 값이
-    실측처럼 보이기만 한다. `confidence` 는 실험⑥에서 판정 기준 2개(단조증가·0.5~0.8
-    분포)를 다 못 넘겨 미사용으로 확정된 필드다.
+    응답은 실제 프롬프트3 스키마를 모두 만족시킨다. `confidence` 는 런타임 판정에 쓰지
+    않지만 Pydantic 계약의 필수 필드이고, `evidence` 는 원문 축자 인용 검증을 통과해야
+    한다. 둘을 생략하면 dry-run 만 원인분류 실패로 다운그레이드되어 비용 추정이 0으로
+    왜곡된다.
+
+    프롬프트 전체를 정규식으로 훑지 않고 마지막 `입력:` JSON만 읽는다. 앞쪽 few-shot
+    예시의 cs_id 까지 응답에 섞이면 ID 개수·순서 검증에서 청크 전체가 실패하기 때문이다.
     """
 
     def __init__(self) -> None:
@@ -233,20 +235,25 @@ class CountingClient:
     async def complete_json(
         self, prompt: str, *, trace_key: str = "-", **_: object
     ) -> dict:
-        import re
-
         self.calls += 1
-        cs_ids = re.findall(r'"cs_id"\s*:\s*"([^"]+)"', prompt)
-        if not cs_ids:
+        try:
+            input_data = json.loads(
+                prompt.rsplit("입력:", 1)[1].split("\n출력:", 1)[0]
+            )
+            items = input_data["items"]
+        except (IndexError, KeyError, TypeError, json.JSONDecodeError):
             self.empty_extractions += 1
+            items = []
         return {
             "results": [
                 {
-                    "cs_id": cs_id,
+                    "cs_id": item["cs_id"],
                     "cause": STUB_CAUSE,
+                    "confidence": 1.0,
+                    "evidence": item["raw_text"],
                     "aspect_match": True,
                 }
-                for cs_id in cs_ids
+                for item in items
             ]
         }
 
