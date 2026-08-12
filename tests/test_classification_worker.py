@@ -189,11 +189,19 @@ def test_no_raw_text_copy_is_persisted() -> None:
     conn = _open_memory_db()
     columns = {row[1] for row in conn.execute("PRAGMA table_info(classified_item)")}
 
+    # ⚠️ **리터럴로 적는다 — `raw_schema.VERSION_COLUMNS` 를 펼치지 말 것.** 검사 대상
+    #    코드를 그대로 참조하면 그 상수에 오타가 나도, 확정 문서와 갈려도 통과한다.
+    #    "테스트가 정답을 잘못 베꼈으면 테스트도 같이 통과한다"를 막는 게 이 단언의
+    #    존재 이유다. (2026-08-12 리뷰 §3)
     assert columns == {
-        "item_id", "source", "classified_at",
+        "item_id",
+        "source",
+        "classified_at",
         # 버전 3종은 감사용 메타가 아니라 **탐지의 조회 조건**이다 — 35일 창에 서로
         # 다른 분류기의 결과가 섞이면 분류기 개선이 고객 이상 알림으로 발화한다.
-        *raw_schema.VERSION_COLUMNS,
+        "prompt_version",
+        "model_version",
+        "pipeline_version",
     }
     for leaked in ("raw_text", "channel", "product_group_id", "created_at"):
         assert leaked not in columns
@@ -525,8 +533,11 @@ def test_schema_matches_the_confirmed_ddl() -> None:
             "id", "channel_product_id", "product_group_id", "channel_id",
             "content", "rating", "created_at",
         },
+        # ⚠️ 다른 테이블과 마찬가지로 **리터럴이다.** `raw_schema.VERSION_COLUMNS` 를
+        #    펼치면 검사 대상 코드를 정답지로 쓰는 셈이라 이 테스트가 눈을 감는다.
         "classified_item": {
-            "item_id", "source", "classified_at", *raw_schema.VERSION_COLUMNS,
+            "item_id", "source", "classified_at",
+            "prompt_version", "model_version", "pipeline_version",
         },
         "classified_item_aspect": {"id", "item_id", "aspect", "sentiment", "mixed_signal"},
         "classification_failure": {
@@ -720,6 +731,30 @@ def test_stale_scan_is_per_source(worker_instance) -> None:
     # CS 쪽 프롬프트만 올린다 → CS 행만 대상이 되어야 한다.
     with patch.object(worker.service_module, "PROMPT_ASPECT_VERSION", "classify_aspect_v6"):
         assert [row["item_id"] for row in worker_instance.fetch_stale_batch()] == ["INQ-1"]
+
+
+def test_orphan_stale_rows_are_counted_separately(worker_instance) -> None:
+    """🔴 원문이 사라진 stale 행은 **재분류로 없앨 수 없다** — 따로 센다.
+
+    예전에는 `count_stale()` 이 `classified_item` 만 세고 `fetch_stale_batch()` 는 원문 뷰와
+    INNER JOIN 을 타서 범위가 갈렸다. 그러면 `--reclassify-stale` 이 "1건 남았다"고 알리고
+    곧바로 "대상을 모두 처리했습니다"로 끝난 뒤 종료 경고가 **영원히 남는다** — 고치라는데
+    고칠 수단이 없는 경고라 다음 사람이 시간을 쓴다. (2026-08-12 리뷰 §5)
+
+    목 데이터를 다시 만들면(원문만 갈아끼우면) 실제로 나는 상태다.
+    """
+    conn = _open_pipeline_db()
+    worker_instance.conn = conn
+    _insert_cs(conn, "INQ-1", "2026-05-01T10:00:00+09:00")
+    _mark_classified(conn, "INQ-1", "cs", "classify_aspect_v4", *_active_of("cs")[1:])
+    # 원문만 사라진 분류 결과 — 재분류하려 해도 태울 본문이 없다.
+    _mark_classified(conn, "INQ-GONE", "cs", "classify_aspect_v4", *_active_of("cs")[1:])
+    conn.commit()
+
+    # 두 값이 갈리지 않는다: 셀 수 있는 것 = 고칠 수 있는 것
+    assert worker_instance.count_stale() == 1
+    assert [row["item_id"] for row in worker_instance.fetch_stale_batch()] == ["INQ-1"]
+    assert worker_instance.count_orphan_stale() == 1
 
 
 def test_reclassified_rows_leave_the_stale_scan(worker_instance) -> None:

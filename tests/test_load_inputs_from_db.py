@@ -12,6 +12,7 @@ TABLE 을 다시 적으면 확정 문서가 바뀔 때 테스트만 옛 스키�
 LLM·네트워크 없음. sqlite 파일만 만든다.
 """
 
+import asyncio
 import os
 import sqlite3
 import subprocess
@@ -24,6 +25,7 @@ import pytest
 from app.batch import daily
 from app.config import get_settings
 from app.core import raw_schema
+from app.detection.service import detect_anomaly
 
 KST = timezone(timedelta(hours=9))
 
@@ -345,17 +347,19 @@ def test_legacy_schema_fails_before_the_query(tmp_path):
         daily.load_inputs_from_db(WINDOW_END, db_path=str(path))
 
 
-# ── 프롬프트 버전 (2026-08-12) ──────────────────────────────────────────────
+# ── 분류기 버전 (2026-08-12) ────────────────────────────────────────────────
 #
-# 탐지는 35일(현재 7 + 과거 28)을 한 번에 읽는다. 그 사이 분류 프롬프트가 바뀌면 한
-# 검정 안에 두 라벨러의 결과가 섞여, **프롬프트 개선이 고객 이상 알림으로 발화한다.**
+# 탐지는 35일(현재 7 + 과거 28)을 한 번에 읽는다. 그 사이 분류기가 바뀌면 한 검정 안에
+# 두 라벨러의 결과가 섞인다. **혼재는 표본이 준 것이 아니라 검정 전제가 깨진 것**이라
+# 경고가 아니라 중단으로 처리한다(fail-closed, 2026-08-12 결정).
 
 
-def test_old_prompt_version_rows_are_not_read(tmp_path):
-    """🔴 옛 프롬프트로 분류된 행은 분자에서 빠진다 — 섞인 채로 검정하지 않는다.
+def test_partially_stale_window_stops_the_batch(tmp_path):
+    """🔴 일부만 옛 버전이어도 **세운다** — 경고로 넘기면 오탐이 난다.
 
-    분모(documents)는 그대로여야 한다. 원문은 실제로 있었고, 우리가 못 읽는 것은
-    라벨뿐이기 때문이다 — 분모까지 빼면 "그 문서가 없었다"는 다른 주장이 된다.
+    필터가 분자에만 걸리기 때문이다. 분모(documents)는 원문이라 필터를 안 타므로, 과거
+    구간이 옛 버전이면 기준선 부정률이 작아지는 게 아니라 **0 이 되고 그대로 오탐**이 된다
+    (아래 통합 테스트에서 실제 발화까지 재현한다).
     """
     db = _db(
         tmp_path,
@@ -371,25 +375,26 @@ def test_old_prompt_version_rows_are_not_read(tmp_path):
         "INSERT INTO classified_item (item_id, source, prompt_version) VALUES (?, ?, ?)",
         ("INQ-2", "cs", "classify_aspect_v4"),
     )
-    conn.execute(
-        "INSERT INTO classified_item_aspect (item_id, aspect, sentiment) VALUES (?, ?, ?)",
-        ("INQ-2", "사이즈", -1),
-    )
     conn.commit()
     conn.close()
 
-    items, documents = daily.load_inputs_from_db(WINDOW_END, db_path=db)
+    with pytest.raises(RuntimeError, match="옛 분류기") as exc:
+        daily.load_inputs_from_db(WINDOW_END, db_path=db)
 
-    assert [i.item_id for i in items] == ["INQ-1"], "옛 버전 행이 분자에 섞였다"
-    assert {d["id"] for d in documents} == {"INQ-1", "INQ-2"}, "분모는 원문 그대로여야 한다"
+    # 메시지가 활성 3축과 건수를 다 담아야 "설정 오타"와 "backfill 필요"를 가를 수 있다.
+    message = str(exc.value)
+    assert "활성 1건" in message and "옛 버전 1건" in message
+    for axis in ("cs=", "review=", "model=", "pipeline="):
+        assert axis in message
+    assert "--reclassify-stale" in message
 
 
 def test_null_prompt_version_counts_as_old(tmp_path):
     """버전을 안 남기던 시절의 행(`NULL`)도 옛것으로 본다.
 
-    `=` 비교로 거르면 NULL 이 **어느 쪽으로도 안 걸려** 조용히 빠진다. 여기서는 결과가
-    같지만, 세는 쪽(`_check_version_cutover`)이 같은 실수를 하면 "거르긴 했는데 몇 건인지
-    모르는" 상태가 되므로 두 곳 다 null-safe 비교(`IS`)를 쓴다.
+    `=` 비교로 세면 NULL 이 **어느 쪽으로도 안 걸려** stale 집계에서 조용히 빠진다 —
+    가장 오래된, 그래서 가장 확실히 옛것인 행이 하필 안 잡힌다. 두 곳 다 null-safe
+    비교(`IS`)를 쓴다.
     """
     db = _db(
         tmp_path,
@@ -404,9 +409,8 @@ def test_null_prompt_version_counts_as_old(tmp_path):
     conn.commit()
     conn.close()
 
-    items, _ = daily.load_inputs_from_db(WINDOW_END, db_path=db)
-
-    assert [i.item_id for i in items] == ["INQ-1"]
+    with pytest.raises(RuntimeError, match="옛 분류기"):
+        daily.load_inputs_from_db(WINDOW_END, db_path=db)
 
 
 def test_full_stale_window_fails_loudly(tmp_path):
@@ -481,6 +485,86 @@ def test_unclassified_window_does_not_trip_the_version_guard(tmp_path):
 
     assert items == []
     assert len(documents) == 1
+
+
+# ── 혼재 윈도우의 다운스트림 결과 (통합) ────────────────────────────────────
+#
+# 🔴 **위 단위 테스트들은 "필터가 거르는가"까지만 본다.** 걸러진 결과로 실제 검정을 돌리면
+#    무슨 일이 나는지는 안 본다 — 그 자리가 비어서 "경고만 하고 통과" 설계의 오탐을
+#    놓쳤다(2026-08-12 리뷰 §1). 여기서 다운스트림까지 본다.
+
+
+def _mixed_window_db(tmp_path, *, past_stale: bool):
+    """현재·과거 부정률이 **똑같은**(변화 없음) 리뷰 데이터. 알림이 나오면 안 되는 상태다.
+
+    리뷰 소스인 이유: CS 는 과거 구간 aspect 가 0 이 되면 `check_coverage` 가 갭으로 잡아
+    `unreliable_slots` 로 빠지지만, 리뷰는 `COVERAGE_CHECKED_SOURCES` 가 CS 전용이라 안
+    잡힌다. **방어선이 없는 쪽**이라 여기서 재야 한다.
+
+    Args:
+        past_stale: True 면 과거 28일 구간만 옛 프롬프트로 분류된 상태로 만든다.
+    """
+    days = [date.fromordinal(WINDOW_END.toordinal() - i) for i in range(35)]
+    current_start = date.fromordinal(WINDOW_END.toordinal() - 6)  # 현재 7일
+
+    review_rows, classified = [], []
+    stale_ids = set()
+    for day_no, day in enumerate(days):
+        for i in range(20):  # 하루 20건 × 35일 = 700건
+            rid = f"RVW-{day_no:02d}-{i:02d}"
+            review_rows.append((rid, "P001", "NAVER", "리뷰 원문", _at(day)))
+            # 부정률을 현재·과거 똑같이 5% 로 고정한다 — 진짜 변화가 없는 데이터다.
+            sentiment = -1 if i == 0 else 1
+            classified.append((rid, "review", [("색상", sentiment)]))
+            if day < current_start:
+                stale_ids.add(rid)
+
+    db = _db(tmp_path, review_rows=review_rows, classified=classified)
+    if past_stale:
+        conn = sqlite3.connect(db)
+        conn.executemany(
+            "UPDATE classified_item SET prompt_version = 'classify_sentiment_v3'"
+            " WHERE item_id = ?",
+            [(rid,) for rid in sorted(stale_ids)],
+        )
+        conn.commit()
+        conn.close()
+    return db
+
+
+def test_control_window_without_stale_raises_no_alert(tmp_path):
+    """대조군 — 전부 활성 버전이면 부정률 변화가 없으니 **알림 0건**이다.
+
+    아래 혼재군과 짝이다. 이게 0건이어야 혼재군의 발화가 "데이터 탓"이 아니라
+    "버전 혼재 탓"임이 성립한다.
+    """
+    db = _mixed_window_db(tmp_path, past_stale=False)
+
+    items, documents = daily.load_inputs_from_db(WINDOW_END, db_path=db)
+    alerts, _ = asyncio.run(
+        detect_anomaly(items, documents=documents, window_end=WINDOW_END)
+    )
+
+    assert alerts == [], f"변화 없는 데이터에서 알림이 나왔다: {alerts}"
+
+
+def test_mixed_window_stops_before_detection(tmp_path):
+    """🔴 과거 구간만 옛 버전이면 **탐지 전에 세운다.**
+
+    경고만 하고 통과시키면 여기서 최대 강도 오탐이 난다. 필터가 분자에만 걸려서
+    `past_neg` 만 0 이 되고 `past_total` 은 그대로 남기 때문이다 — 기준선이 작아지는 게
+    아니라 0 이 된다:
+
+        대조군(전부 활성)   documents 700 / items 700  →  알림 0건
+        섞임(과거=옛 버전)  documents 700 / items 140  →  past_rate 0.0000 vs
+                                                          cur_rate 0.0500 로 발화 🚨
+
+    데이터는 대조군과 **한 글자도 다르지 않고** 과거 구간의 `prompt_version` 만 다르다.
+    """
+    db = _mixed_window_db(tmp_path, past_stale=True)
+
+    with pytest.raises(RuntimeError, match="옛 분류기"):
+        daily.load_inputs_from_db(WINDOW_END, db_path=db)
 
 
 def test_missing_db_fails_loudly(tmp_path):
