@@ -74,8 +74,9 @@ taxonomy 불일치, 빈 evidence, 원문에 없는 evidence는 해당 항목만 
 ## 검증
 
 - 관련 테스트: `81 passed`
-- 전체 테스트 수집: `655건` (`645 passed, 10 failed`)
-- 전체 실패 10건: 로컬 환경에 `boto3`, `botocore`가 없어 발생한 기존 reporting/S3 실패
+- 전체 테스트: `655 passed, 0 failed`
+- 재현 환경: `requirements.txt`의 `boto3==1.43.65`, `requirements.lock`의
+  `botocore==1.43.66` 동기화
 - Ruff: 이번 변경 관련 규칙 통과
 - `git diff --check`: 통과
 
