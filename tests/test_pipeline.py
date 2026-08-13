@@ -7,12 +7,17 @@ LLM 은 목킹한다 (비용 0). 통합 테스트는 "숫자를 넣으면 몇 �
 import itertools
 import json
 import logging
+import os
+import subprocess
+import sys
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
 from app.core.constants import CURRENT_WINDOW_DAYS, KST, RENOTIFY_BLOCK_DAYS
 from app.core.schemas import (
+    Aspect,
     AspectSentiment,
     Channel,
     ClassifiedItem,
@@ -27,6 +32,7 @@ from app.detection.alert import (
     UNSPECIFIED_CAUSE,
     build_alert,
     build_root_cause,
+    make_alert_id,
     resolve_channel,
 )
 from app.detection.loader import build_rows, check_coverage, unreliable_slots
@@ -38,6 +44,8 @@ from app.detection.service import (
 )
 from app.detection.suppression import filter_suppressed
 from app.detection.verdict import run_verdict
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class _FakeClient:
@@ -141,9 +149,8 @@ def test_build_alert_biased_generates_recommendation():
         detected_at=datetime(2026, 7, 7, 9, 0),
         window_start=date(2026, 7, 1),
         window_end=date(2026, 7, 7),
-        seq=itertools.count(1),
     )
-    assert alert.alert_id == "ALT-20260707-0001"
+    assert alert.alert_id == "ALT-20260707-P001-COLOR-COUPANG"
     assert alert.channel == Channel.COUPANG
     assert alert.recommended_action == RecommendedAction.GENERATE_RECOMMENDATION
     assert alert.scope_in is True
@@ -162,7 +169,6 @@ def test_build_alert_scattered_cause_downgrades_action():
         detected_at=datetime(2026, 7, 7),
         window_start=date(2026, 7, 1),
         window_end=date(2026, 7, 7),
-        seq=itertools.count(1),
     )
     assert alert.recommended_action == RecommendedAction.CHANNEL_OPERATION_CHECK
     assert alert.root_cause.label == UNSPECIFIED_CAUSE
@@ -175,7 +181,6 @@ def test_build_alert_out_of_scope_aspect_keeps_scope_in_false():
         detected_at=datetime(2026, 7, 7),
         window_start=date(2026, 7, 1),
         window_end=date(2026, 7, 7),
-        seq=itertools.count(1),
     )
     assert alert.scope_in is False
     assert alert.recommended_action == RecommendedAction.LOGISTICS_CHECK
@@ -200,7 +205,6 @@ def test_scope_in_ignores_verdict(verdict):
         detected_at=datetime(2026, 7, 7),
         window_start=date(2026, 7, 1),
         window_end=date(2026, 7, 7),
-        seq=itertools.count(1),
     )
     assert alert.scope_in is True
     assert alert.recommended_action != RecommendedAction.GENERATE_RECOMMENDATION
@@ -213,10 +217,14 @@ def _alert(
     channel="COUPANG",
     cur_rate=0.13,
     day=7,
-    alert_id="A1",
     run_at=None,
 ):
-    """day = 데이터 시각(window_end). run_at 을 주면 실행 시각만 따로 움직인다."""
+    """day = 데이터 시각(window_end). run_at 을 주면 실행 시각만 따로 움직인다.
+
+    ⚠️ `alert_id` 를 따로 못박는 인자가 없다 — `alert_id` 는 이제 (window_end, 상품,
+       aspect, 채널)에서 **결정론적으로 나온다.** 그래서 `day` 를 바꾸면 ID 도 같이
+       바뀌고, `day` 를 같게 두면 ID 도 같아진다. 아래 억제 테스트들이 그 성질에 기댄다.
+    """
     return build_alert(
         _judgement(
             product=product,
@@ -235,7 +243,6 @@ def _alert(
         detected_at=run_at or datetime(2026, 7, day),
         window_start=date(2026, 7, 1),
         window_end=date(2026, 7, day),
-        seq=itertools.count(int(alert_id[1:])),
     )
 
 
@@ -318,6 +325,162 @@ def test_different_channel_is_not_suppressed():
     published, suppressed = filter_suppressed([current], [prior])
     assert len(published) == 1
     assert suppressed == []
+
+
+# ── 결정론적 alert_id 와 갱신 체인 (백엔드 멱등 upsert 계약) ──────
+def test_same_window_update_reuses_id_and_does_not_self_reference():
+    """🔴 같은 구간 재실행 → **같은 ID** · `updates_alert_id`는 **None**.
+
+    `alert_id` 가 (window_end, 상품, aspect, 채널)에서 나오므로 같은 구간을 다시 돌리면
+    글자까지 같은 ID 가 나온다 — 백엔드가 그 값으로 upsert 하니 그래야 맞다.
+
+    그런데 그때 `filter_suppressed` 는 여전히 갱신 경로를 탄다(`elapsed_days == 0` 인데
+    `+5%p` 는 넘음). 가드가 없으면 `updates_alert_id` 에 **자기 자신의 ID** 가 들어가서,
+    백엔드가 한 행을 갱신하면서 그 행이 자기 자신의 갱신 대상이라는 상태가 된다.
+    """
+    prior = _alert(day=7, cur_rate=0.13)
+    current = _alert(day=7, cur_rate=0.18)  # 같은 window_end, +5%p
+
+    assert current.alert_id == prior.alert_id  # 결정론적 — 같은 입력 같은 ID
+
+    published, suppressed = filter_suppressed([current], [prior])
+
+    assert suppressed == []  # 수치가 뛰었으니 갱신으로는 나간다
+    assert published[0].updates_alert_id is None  # 자기 자신을 가리키지 않는다
+
+
+def test_later_window_update_points_at_the_previous_id():
+    """이후 구간 갱신 → **새 ID** · `updates_alert_id`에 **이전 ID**.
+
+    위 테스트의 반대편이다. `window_end` 가 움직였으니 ID 가 달라지고, 그때는 갱신 체인이
+    정상적으로 이어져야 한다 — 가드를 "항상 None" 으로 넓히면 이쪽이 끊긴다.
+    """
+    prior = _alert(day=5, cur_rate=0.13)
+    current = _alert(day=7, cur_rate=0.18)  # 억제 기간 안(2일) + 5%p
+
+    assert current.alert_id != prior.alert_id
+    assert current.alert_id == "ALT-20260707-P001-COLOR-COUPANG"
+    assert prior.alert_id == "ALT-20260705-P001-COLOR-COUPANG"
+
+    published, suppressed = filter_suppressed([current], [prior])
+
+    assert suppressed == []
+    assert published[0].updates_alert_id == prior.alert_id
+
+
+def test_legacy_id_in_prior_cache_still_links_the_update_chain():
+    """구형 ID 과도기 — `prior_alerts` 캐시에 옛 형식이 남아 있어도 갱신이 이어진다.
+
+    억제 매칭은 `_key`(상품, aspect, 채널)로 하고 ID 를 대조하지 않으므로, 캐시에
+    `ALT-20260705-0001` 같은 옛 형식이 남아 있어도 **매칭 자체는 된다.** 그때
+    `updates_alert_id` 에는 **옛 형식 ID 가 그대로** 들어간다 — 백엔드가 가리키는 행이
+    실제로 그 ID 로 저장돼 있으므로 새 형식으로 고쳐 쓰면 오히려 링크가 깨진다.
+
+    캐시가 새 형식으로 자연 교체될 때까지(최대 `STATE_RETENTION_DAYS`) 이 동작이 유지된다.
+    """
+    prior = _alert(day=5, cur_rate=0.13).model_copy(
+        update={"alert_id": "ALT-20260705-0001"}
+    )
+    current = _alert(day=7, cur_rate=0.18)
+
+    published, suppressed = filter_suppressed([current], [prior])
+
+    assert suppressed == []
+    assert published[0].alert_id == "ALT-20260707-P001-COLOR-COUPANG"  # 새 형식
+    assert published[0].updates_alert_id == "ALT-20260705-0001"  # 옛 형식 그대로
+
+
+def test_alert_id_axes_all_change_the_id():
+    """네 축이 **전부** ID 에 들어간다 — 하나라도 빠지면 다른 알림이 서로를 덮는다.
+
+    aspect 축이 특히 그렇다. 알림의 논리 키가 원래 (상품, main_aspect, 채널)인데
+    aspect 를 빼면 색상 알림과 사이즈 알림이 같은 ID 를 받고, 백엔드 멱등 upsert 가
+    나중 것으로 앞엣것을 덮어 **원인·근거·권장조치·개선안이 통째로 바뀐다**
+    (PR #22 `guideline_id` 사고와 같은 모양).
+    """
+    base = _alert()
+    assert base.alert_id == "ALT-20260707-P001-COLOR-COUPANG"
+
+    assert _alert(day=8).alert_id != base.alert_id  # window_end
+    assert _alert(product="P002").alert_id != base.alert_id  # 상품
+    assert _alert(aspect="사이즈").alert_id != base.alert_id  # aspect
+    assert _alert(channel="NAVER").alert_id != base.alert_id  # 채널
+
+
+def test_global_verdict_id_uses_the_folded_all_channel():
+    """전역형은 channel 이 ALL 로 접히고 **ID 도 그 값을 쓴다.**
+
+    ID 를 `judgement["channel"]`(발화 채널)로 만들면 `...-COUPANG` 인데 필드는 ALL 인
+    알림이 나온다 — 상품당 1건이어야 할 전역형이 발화 채널마다 다른 ID 를 받아, 백엔드가
+    같은 이상을 채널 수만큼 별개 행으로 저장한다.
+    """
+    alert = build_alert(
+        _judgement(verdict=Verdict.GLOBAL, channel="COUPANG", root_cause=None),
+        detected_at=datetime(2026, 7, 7, tzinfo=KST),
+        window_start=date(2026, 7, 1),
+        window_end=date(2026, 7, 7),
+    )
+
+    assert alert.channel == Channel.ALL
+    assert alert.alert_id == "ALT-20260707-P001-COLOR-ALL"
+
+
+def test_alert_id_length_formula_holds_for_the_worst_case():
+    """길이 = `33 + len(product_group_id)`. 백엔드 컬럼이 `varchar(72)` 라 상한을 못박는다.
+
+    33 = `ALT-`(4) + 날짜(8) + 구분자 3 + 최장 aspect `MISDELIVERY`(11) +
+    최장 channel `COUPANG`(7). 축을 늘리면 이 테스트가 먼저 터진다 — 그때 백엔드
+    컬럼 길이를 같이 확인해야 한다.
+    """
+    longest = make_alert_id(
+        window_end=date(2026, 8, 28),
+        product_group_id="P001",
+        aspect="오배송",  # MISDELIVERY — 멤버명이 가장 길다
+        channel=Channel.COUPANG,
+    )
+
+    assert longest == "ALT-20260828-P001-MISDELIVERY-COUPANG"
+    assert len(longest) == 33 + len("P001")
+    assert len(longest) <= 72  # 백엔드 alert_code varchar(72)
+
+
+def test_make_alert_id_accepts_plain_str_aspect():
+    """🔴 호출부는 평범한 `str`(`'색상'`)을 넘긴다 — `Aspect` 멤버가 아니다.
+
+    `build_alert:aspect` 는 `judgement["aspect"]` 를 그대로 받고, `Aspect` 로 바뀌는 건
+    `DetectionAlert` 생성 시 Pydantic 이 변환하는 시점이라 **ID 만드는 자리는 그 이전**
+    이다. `aspect.name` 을 바로 쓰면 `AttributeError` 로 죽는다.
+
+    enum 멤버를 넘겨도 같은 값이 나오는 것까지 고정한다 — 그래야 호출부가 어느 쪽을
+    넘기든 ID 가 안 갈린다.
+    """
+    kwargs = {
+        "window_end": date(2026, 8, 28),
+        "product_group_id": "P001",
+        "channel": Channel.COUPANG,
+    }
+    from_str = make_alert_id(aspect="색상", **kwargs)
+    from_enum = make_alert_id(aspect=Aspect.COLOR, **kwargs)
+
+    assert from_str == "ALT-20260828-P001-COLOR-COUPANG"
+    assert from_str == from_enum
+
+
+def test_aspect_codes_match_the_backend_mapping_table():
+    """aspect 코드 = `Aspect` **멤버명**이고 백엔드 대조표(노션 §6)와 정확히 일치한다.
+
+    새 매핑 테이블을 만들지 말라는 근거를 못박는다 — 두 벌이 되면 한쪽만 바뀌었을 때
+    ID 가 조용히 갈린다. 여기가 터지면 enum 멤버명이 바뀐 것이고, 그건 백엔드와 다시
+    합의할 일이다(이미 저장된 alert_id 가 전부 어긋난다).
+    """
+    assert [a.name for a in Aspect] == [
+        "COLOR",
+        "SIZE",
+        "MATERIAL",
+        "DAMAGE",
+        "MISDELIVERY",
+        "ETC",
+    ]
 
 
 # ── [3]~[5] 후보 접기 — aspect별 보류 채널 귀속 (PR #14 리뷰) ────
@@ -630,16 +793,19 @@ async def test_pipeline_empty_input_returns_nothing():
 async def test_detected_at_default_is_kst_not_host_local(monkeypatch):
     """🔴 `detected_at` 기본값은 **KST 벽시계**다 — 호스트 시간대를 보지 않는다.
 
-    이 값의 날짜 부분이 그대로 `alert_id`(`ALT-%Y%m%d`)가 되고 CS 가이드라인 기간
-    (`%Y-%m`)이 된다. naive `datetime.now()` 는 로컬 시각이라, 배치를 **UTC 컨테이너**
-    로 올리면 KST 오전 9시 이전에 도는 배치의 alert_id 가 **하루 전 날짜**로 찍힌다.
-    개발 머신이 KST 라 로컬에서는 영원히 안 보이는 종류다(`_to_kst` 와 같은 모양).
+    이 값의 날짜 부분이 CS 가이드라인 기간(`%Y-%m`, `reporting/cs_reply_service`)이
+    된다. naive `datetime.now()` 는 로컬 시각이라, 배치를 **UTC 컨테이너**로 올리면
+    KST 오전 9시 이전에 도는 배치가 **하루 전 날짜**로 찍힌다. 개발 머신이 KST 라
+    로컬에서는 영원히 안 보이는 종류다(`_to_kst` 와 같은 모양).
 
     시계를 UTC 호스트로 고정해 재현한다 — UTC 8/11 23:30 은 KST 로 **8/12 08:30** 이라
-    두 시간대의 날짜가 갈리는 순간이다. 옛 코드면 `ALT-20260811-...` 이 나온다.
+    두 시간대의 날짜가 갈리는 순간이다. 옛 코드면 8/11 이 나온다.
 
-    ⚠️ 값은 **naive 로 남는다**(발행 계약 유지). `docs/mq_events.md` §4.1 예시가
-       오프셋 없는 형태라 aware 로 바꾸면 백엔드 파싱 계약이 조용히 달라진다.
+    ⚠️ **`alert_id` 로는 이 회귀를 못 잡는다** — 그쪽은 `window_end`(데이터 시각)를 쓰기
+       때문이다. 예전엔 ID 에 `detected_at` 의 날짜가 들어가서 그걸 프록시로 볼 수 있었고,
+       이 테스트도 그렇게 검사했다. 지금은 **`detected_at` 자체를 직접 봐야 한다.**
+       (아래 assert 가 그렇게 바뀐 이유다 — 프록시가 사라졌는데 assert 를 안 옮기면
+       시간대 회귀가 조용해진다.)
     """
 
     class _UtcHostClock(datetime):
@@ -658,12 +824,91 @@ async def test_detected_at_default_is_kst_not_host_local(monkeypatch):
         client=_FakeClient(),
     )
 
-    # KST 벽시계 8/12 08:30. `tzinfo` 를 떼는 건 발행 계약이 naive 라서다(위 ⚠️).
-    expected = datetime(2026, 8, 12, 8, 30, tzinfo=KST).replace(tzinfo=None)
+    # KST 벽시계 8/12 08:30 + `+09:00` 라벨. 백엔드가 OffsetDateTime 으로 받는다.
+    assert alerts[0].detected_at == datetime(2026, 8, 12, 8, 30, tzinfo=KST)
+    assert alerts[0].detected_at.utcoffset() == timedelta(hours=9)
 
-    assert alerts[0].detected_at == expected
-    assert alerts[0].detected_at.tzinfo is None
-    assert alerts[0].alert_id.startswith("ALT-20260812-")
+    # ID 는 `detected_at`(8/12)이 아니라 `window_end`(7/7)를 쓴다 — 같은 구간을 다시
+    # 돌려도 같은 ID 여야 하므로 실행 시각이 섞이면 안 된다.
+    assert alerts[0].alert_id.startswith("ALT-20260707-")
+
+
+@pytest.mark.asyncio
+async def test_aware_detected_at_argument_is_converted_not_relabeled():
+    """오프셋이 **있는** 인자는 라벨을 갈아치우지 않고 **변환**한다.
+
+    🔴 **인자도 정규화한다** — 기본값만 KST 로 두면 호출부가 넘긴 값이 그대로 나가서
+       naive·aware·비KST 가 한 배치 안에서 섞이고, 백엔드 파싱이 호출 경로에 따라 갈린다.
+
+    ⚠️ **`==` 로만 재면 이 회귀를 못 잡는다.** aware datetime 의 `==` 는 **같은 순간인지**
+       를 보므로 UTC 00:30 과 KST 09:30 이 같다고 나온다 — 정규화를 통째로 지워도 통과한다.
+       그래서 `isoformat()` 문자열로 잰다(발행 payload 에 실제로 실리는 형태다).
+    """
+    alerts, _ = await detect_anomaly(
+        _scenario_items(),
+        detected_at=datetime(2026, 7, 7, 0, 30, tzinfo=timezone.utc),
+        window_end=date(2026, 7, 7),
+        client=_FakeClient(),
+    )
+
+    assert alerts[0].detected_at.isoformat() == "2026-07-07T09:30:00+09:00"
+    assert alerts[0].detected_at.utcoffset() == timedelta(hours=9)
+
+
+@pytest.mark.asyncio
+async def test_naive_detected_at_argument_is_treated_as_kst():
+    """오프셋이 **없는** 인자는 KST 로 **간주**한다 — 벽시계 값을 옮기지 않는다.
+
+    위 테스트의 반대편 갈래다. 둘 중 하나만 두면 `_to_kst_aware` 를 한 줄로 뭉개는
+    변경(`replace` 만 / `astimezone` 만)이 조용히 통과한다.
+
+    ⚠️ **이 테스트만으로는 `astimezone` 단독 구현을 못 잡는다** — 개발 머신이 KST 라
+       naive 를 호스트 로컬로 읽어도 같은 값이 나온다. 그쪽은 아래 `TZ=UTC` 서브프로세스
+       테스트가 잡는다. **한 쌍이므로 하나만 지우지 말 것.**
+    """
+    alerts, _ = await detect_anomaly(
+        _scenario_items(),
+        # 오프셋을 일부러 안 붙인다 — naive 인 것이 **이 테스트의 대상**이다.
+        # (DTZ001 억제: 오프셋을 붙이면 검사할 것이 사라진다.)
+        detected_at=datetime(2026, 7, 7, 8, 30),  # noqa: DTZ001
+        window_end=date(2026, 7, 7),
+        client=_FakeClient(),
+    )
+
+    assert alerts[0].detected_at.isoformat() == "2026-07-07T08:30:00+09:00"
+
+
+def test_naive_detected_at_is_kst_even_on_a_utc_host():
+    """🔴 위 계약을 **UTC 호스트에서** 확인한다 — 개발 머신이 KST 라 여기서만 잡힌다.
+
+    같은 프로세스에서 재면 호스트가 마침 KST 라 `.astimezone()` 단독 구현도 통과한다.
+    `TZ=UTC` 서브프로세스로 띄워서 잰다 — 배치를 컨테이너(UTC)로 올렸을 때 실제로 도는
+    조건이다. `test_load_inputs_from_db.test_naive_timestamp_is_kst_even_on_a_utc_host`
+    와 같은 레시피이고, 그쪽(`daily._to_kst`, 읽는 쪽)과 **이쪽(탐지 시각을 찍는 쪽)은
+    같은 규칙을 공유하는 한 쌍**이다.
+    """
+    code = (
+        "from datetime import datetime;"
+        "from app.detection import service;"
+        "print(service._to_kst_aware(datetime(2026, 7, 7, 8, 30)).isoformat())"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        # 인코딩을 양쪽 다 못박는다 — 한글 traceback 을 부모가 cp949 로 디코드하면
+        # 깨지면서 `stderr` 가 통째로 `None` 이 되고, 아래 assert 메시지가 사라진다.
+        env={**os.environ, "TZ": "UTC", "PYTHONIOENCODING": "utf-8"},
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=180,
+        check=False,  # 종료코드를 직접 본다 — stderr 를 assert 메시지에 실으려고
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "2026-07-07T08:30:00+09:00", (
+        "UTC 호스트에서 시각이 밀렸습니다 — naive 값을 호스트 로컬로 해석하고 있습니다"
+    )
 
 
 # ── documents 경유(로더) — 리뷰 분모 (탐지 분모 산출 방식 §1) ──────

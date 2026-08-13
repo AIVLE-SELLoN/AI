@@ -11,10 +11,26 @@ from __future__ import annotations
 
 ALERT_ID_PREFIX = "ALT-"
 GUIDELINE_ID_PREFIX = "GD-"
+RECOMMENDATION_ID_PREFIX = "REC-"
+
+
+def _swap_alert_prefix(prefix: str, alert_id: str) -> str:
+    """`ALT-` 접두어만 갈아끼운 파생 ID. 파생 산출물이 **전부 이 한 규칙**을 쓴다.
+
+    alert_id 형식(`ALT-{window_end}-{상품}-{ASPECT}-{채널}`)을 파서가 알 필요가 없다 —
+    접두어만 보므로 알림 ID 형식이 바뀌어도 파생 ID 가 자동으로 따라간다.
+    그 형식이 아니면 통째로 뒤에 붙여 **어떤 입력에서도 alert_id 와 1:1** 을 보장한다
+    (구형 `ALT-20260528-0001` 도 포함).
+    """
+    if alert_id.startswith(ALERT_ID_PREFIX):
+        return f"{prefix}{alert_id[len(ALERT_ID_PREFIX) :]}"
+    return f"{prefix}{alert_id}"
 
 
 def build_guideline_id(alert_id: str) -> str:
-    """alert_id → guideline_id. 예: ALT-20260528-P001-COUPANG → GD-20260528-P001-COUPANG
+    """alert_id → guideline_id.
+
+    예: ALT-20260828-P001-COLOR-COUPANG → GD-20260828-P001-COLOR-COUPANG
 
     가이드라인은 알림 1건과 1:1 이므로 ID 도 alert_id 와 **1:1** 이어야 한다.
 
@@ -22,10 +38,22 @@ def build_guideline_id(alert_id: str) -> str:
        발화하므로 같은 날 같은 상품의 다른 알림이 전부 같은 ID 가 됐고, 백엔드가 멱등
        upsert 를 하므로 나중에 도착한 가이드라인이 앞의 것을 조용히 덮어썼다
        (쿠팡 색상 가이드가 네이버 사이즈 가이드로 바뀌는 식).
-
-    `ALT-` 접두어만 `GD-` 로 바꿔 기존 형태를 유지하고, 그 형식이 아니면 통째로 뒤에
-    붙여 **어떤 입력에서도 alert_id 와 1:1** 을 보장한다.
     """
-    if alert_id.startswith(ALERT_ID_PREFIX):
-        return f"{GUIDELINE_ID_PREFIX}{alert_id[len(ALERT_ID_PREFIX) :]}"
-    return f"{GUIDELINE_ID_PREFIX}{alert_id}"
+    return _swap_alert_prefix(GUIDELINE_ID_PREFIX, alert_id)
+
+
+def build_recommendation_id(alert_id: str) -> str:
+    """alert_id → recommendation_id.
+
+    예: ALT-20260828-P001-COLOR-COUPANG → REC-20260828-P001-COLOR-COUPANG
+
+    개선안은 알림 1건과 1:1 이다(선생성 — 알림을 만든 배치가 이어서 만든다). 그래서
+    `guideline_id` 와 **같은 규칙**으로 alert_id 에서 파생한다.
+
+    ⚠️ 예전 규칙(`REC-{uuid4[:12]}`)은 같은 알림을 재처리할 때마다 다른 ID 를 냈다.
+       백엔드 중복 판정에는 영향이 없다 — `Proposal` 한 행에 `alert_id` 와 개선안
+       필드가 같이 들어가고 그 컬럼에 유니크 제약이 걸려 있어 **중복 INSERT 가
+       구조적으로 불가능**하다. 바꾸는 이유는 **재발행 시 payload 가 완전히 같아져서**
+       우리 쪽 재현·테스트가 쉬워지는 것이다.
+    """
+    return _swap_alert_prefix(RECOMMENDATION_ID_PREFIX, alert_id)

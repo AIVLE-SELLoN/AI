@@ -31,8 +31,8 @@
 
 ```json
 {
-  "alert_id": "ALT-20260528-0001",
-  "detected_at": "2026-05-28T10:30:00",
+  "alert_id": "ALT-20260528-P001-COLOR-COUPANG",
+  "detected_at": "2026-05-28T10:30:00+09:00",
   "updates_alert_id": null,
 
   "product_group_id": "P001",
@@ -92,8 +92,8 @@
 
 | 필드 | 타입 | 값 범위 | 설명 | 주 소비자 |
 | --- | --- | --- | --- | --- |
-| alert_id | string | ALT-날짜-일련번호 | 알림 고유 ID | 전체 |
-| detected_at | datetime |  | 탐지 시각 | 대시보드 |
+| alert_id | string | `ALT-{window_end}-{상품}-{ASPECT}-{채널}` | 알림 고유 ID (백엔드 멱등 키). 결정론적 — 같은 구간 재실행 시 동일. 구 형식 `ALT-날짜-일련번호`는 폐기 | 전체 |
+| detected_at | datetime | KST aware (`+09:00`) | 탐지 시각. **KST 오프셋을 항상 붙인다** — 백엔드가 `OffsetDateTime`으로 수신하므로 오프셋이 없으면 파싱이 실패한다.<br>⚠️ `alert_id`의 날짜와 **다를 수 있다**(그쪽은 `window_end`). 실행 시각이라 같은 구간을 재실행하면 바뀐다 | 대시보드 |
 | updates_alert_id | string/null |  | 갱신 알림일 때 원본 ID (신규면 null) | 대시보드 |
 | product_group_id | string | P001~ | 매핑 산출 상품 그룹 ID.  | 전체 |
 | channel | enum | COUPANG / NAVER / ZIGZAG / ALL | 전역형·잠정전역형은 ALL | 전체 |
@@ -186,7 +186,7 @@ verdict 필드에 들어갈 수 있는 값은 아래 **5개뿐**이다.
 | 2채널 편중 | 편중형 | 채널별 alert 2건 각각 발행 (alert 단위 원칙). 새 값 아님 |
 | 원인 미특정 ([6] 수행·분산) | 편중형 | root_cause={label:"미특정", consistent:false}, confidence="낮음", action="채널 운영 요소 점검 권장" |
 | 채널 보류 (표본<10) | — | verdict 아니라 채널 단위 상태. 다른 채널이 유의하면 그 alert의 excluded_channels에 기록. 전 채널 보류 시 미발행(정상과 동일, 평가 영향 없음) |
-| 재알림 억제 (7일) | — | 같은 (상품,aspect,채널) 7일 미발행. 단 +5%p 추가 상승 시 갱신 — 새 alert_id + updates_alert_id에 원본 |
+| 재알림 억제 (7일) | — | 같은 (상품,aspect,채널) 7일 미발행. 단 +5%p 추가 상승 시 갱신 — `updates_alert_id`에 원본.<br>⚠️ **`alert_id`가 결정론적이라 "새 ID"가 아닐 수 있다** — 같은 `window_end`를 다시 돌린 갱신이면 새 ID가 원본과 **글자까지 같다**. 그때는 `updates_alert_id=null`이다(자기 자신을 가리키지 않는다). `window_end`가 움직인 갱신만 새 ID + 원본 ID를 갖는다 |
 | 컷오프 변동으로 미발화 | — | 후속 배치에서 미발화해도 **기존 alert 철회·삭제 안 함**. 미발화는 새 alert 미생성일 뿐 기존 alert 상태 불변. BH 컷오프가 배치 구성에 따라 변동하는 것은 정상 거동(로직 부록 A). 상세 근거는 로직 [확정] §6 |
 
 **root_cause 2상태:** ① [6] 미수행(전역/잠정전역/구분불가/스코프밖) → root_cause=null. ② [6] 수행·분산 → {label:"미특정", consistent:false}. 평가 join은 null 허용.

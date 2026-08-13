@@ -33,8 +33,8 @@ Agent3(개선안 생성)가 내보내는 JSON의 정의.
 
 ```json
 {
-  "recommendation_id": "REC-20260528-0001",
-  "alert_id": "ALT-20260528-0001",
+  "recommendation_id": "REC-20260528-P001-COLOR-COUPANG",
+  "alert_id": "ALT-20260528-P001-COLOR-COUPANG",
   "created_at": "2026-05-28T10:31:40",
 
   "proposal": {
@@ -99,8 +99,8 @@ Agent3(개선안 생성)가 내보내는 JSON의 정의.
 
 | 필드 | 타입 | 값 범위 | 설명 | 주 소비자 |
 | --- | --- | --- | --- | --- |
-| recommendation_id | string | REC-날짜-일련번호 | 개선안 고유 ID | 전체 |
-| alert_id | string |  | 원본 탐지 알림 ID — **탐지 결과 스키마와 1:1 join 키** | 전체 |
+| recommendation_id | string | `alert_id` 의 `ALT-` → `REC-` | 개선안 고유 ID. 알림과 **1:1** 이라 재생성해도 같은 값이다(`app/core/ids.py`). 구 형식 `REC-{uuid4[:12]}`·`REC-날짜-일련번호`는 폐기 | 전체 |
+| alert_id | string | `ALT-{window_end}-{상품}-{ASPECT}-{채널}` | 원본 탐지 알림 ID — **탐지 결과 스키마와 1:1 join 키** | 전체 |
 | created_at | datetime |  | 생성 시각 | 대시보드 |
 | proposal.type | enum | copy_draft / image_guide | 문구 초안 도구 / 이미지 가이드 도구 중 무엇의 산출물인지 | HITL 화면 |
 | proposal.target_field | string |  | 수정 대상 위치 (예: 상세설명 색상 안내) | HITL 화면 |

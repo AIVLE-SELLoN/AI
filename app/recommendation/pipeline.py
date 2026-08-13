@@ -23,7 +23,6 @@ grounding이 MAX_RETRY번 실패했을 때 타는 별도 개념)는 다르다. �
 from __future__ import annotations
 
 import logging
-import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -35,6 +34,7 @@ from langsmith import traceable
 
 from app.core.constants import CS_QUOTE_TOP_N, MAX_RETRY, SIMILAR_CASE_TOP_N
 from app.core.exceptions import EvidenceNotFoundError, LlmParseError
+from app.core.ids import build_recommendation_id
 from app.core.llm_client import get_llm_client
 from app.core.schemas import (
     Citation,
@@ -711,9 +711,9 @@ def assemble(
     confidence, confidence_reason, capped = score_confidence(proposal, context, alert, evaluator)
 
     return Recommendation(
-        # TODO(2026-08-03): 같은 alert_id가 재처리되면(백엔드 재시도·배치 재실행)
-        # 문구가 다른 개선안이 중복 저장된다. 백엔드가 alert_id 유니크 키로 upsert.
-        recommendation_id=f"REC-{uuid.uuid4().hex[:12]}",
+        # alert_id 에서 파생 — 같은 알림을 재처리하면 같은 ID 다(guideline_id 와 같은 규칙).
+        # 예전 uuid4 는 재실행마다 달라져서 payload 를 글자 단위로 대조할 수 없었다.
+        recommendation_id=build_recommendation_id(alert.alert_id),
         alert_id=alert.alert_id,
         created_at=datetime.now(timezone.utc),
         proposal=proposal,
