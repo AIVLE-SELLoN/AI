@@ -5,13 +5,14 @@
 
 발화 판정은 3관문 AND:
     ① 표본 가드   (상품,채널) 총문의 >= MIN_SAMPLE_SIZE           ← 아니면 보류
-    ② BH-FDR      윈도우 전체 p값에 BH 보정 후 유의               ← run_batch
+    ② BH-FDR      상품별 family 안의 p값에 BH 보정 후 유의         ← run_batch
     ③ min_delta   상승폭 >= MIN_DELTA                             ← run_one_test
 
-주의 — 적용 순서: BH(②)를 전체 검정에 먼저 적용한 뒤 min_delta(③)를 AND 로 겹친다.
-min_delta 로 먼저 거르면 '관측된 delta 데이터로 검정 집합을 고르는 것'이 되어 FDR
-보장이 깨지고 컷오프가 흔들린다. 그래서 run_one_test 는 delta 정보만 담고 발화는
-안 정하며, 발화 확정은 run_batch 가 배치 전체를 보고 한다.
+주의 — 적용 순서: 상품별 family의 **모든 검정**에 BH(②)를 먼저 적용한 뒤
+min_delta(③)를 AND 로 겹친다. min_delta 로 먼저 거르면 '관측된 delta 데이터로 검정
+집합을 고르는 것'이 되어 FDR 제어 전제가 깨지고 컷오프가 흔들린다. 그래서
+run_one_test 는 delta 정보만 담고 발화는 안 정하며, 발화 확정은 run_batch 가 각 상품의
+완전한 family를 보고 한다.
 """
 
 from collections import defaultdict
@@ -28,7 +29,8 @@ def run_one_test(cur_neg: int, cur_total: int, past_neg: int, past_total: int) -
     '현재 윈도우 vs 자기 과거 윈도우'를 Fisher 단측 검정한다. 채널간 비교가 아니라
     각 채널이 자기 평소와만 싸우므로 채널간 baseline 차이가 판정에 안 끼어든다.
 
-    반환값에 '발화 여부'는 없다. 발화는 배치 전체를 봐야 정해지므로 run_batch 에서.
+    반환값에 '발화 여부'는 없다. 발화는 같은 상품 family 전체를 봐야 정해지므로
+    run_batch 에서 확정한다.
 
     Returns:
         {"p_value", "delta", "meaningful"}
@@ -85,12 +87,11 @@ def build_batch(
          CS 가 빠졌다고 리뷰 분모까지 틀린 건 아니다.
 
     ③을 **검정 전에** 빼는 이유: 분모가 깎인 슬롯은 부정률이 부풀려져 p값이 실제보다
-    작게 나온다. BH 는 step-up 이라 가짜로 작은 p값 하나가 기각 개수(k)를 늘려
-    **나머지 검정의 임계까지 완화**시킨다 — 한 상품의 데이터 결함이 다른 상품을
-    오탐시킨다. 반대로 빼는 쪽은 m 이 조금 줄 뿐이라 영향이 작다(실측: 1슬롯 제외 시
-    m 1,464→1,428, 다른 상품 발화 변화 없음).
+    작게 나온다. BH 는 step-up 이라 가짜로 작은 p값 하나가 그 상품 family의 기각
+    개수(k)를 늘려 **같은 상품의 다른 검정 임계까지 완화**시킨다. 상품별 family이므로
+    다른 상품의 컷오프에는 전파되지 않는다.
 
-    ①을 source 별로 좁히면 family 크기(m)가 달라져 BH 컷오프가 어긋난다.
+    ①을 source 별로 좁히면 그 상품 family 크기(m)가 달라져 BH 컷오프가 어긋난다.
     반대로 ②를 채널 단위로 넓히면 aspect 격리(로직 §150)가 깨진다. 범위를 섞지 말 것.
     """
     unreliable = unreliable_denominators or set()
@@ -164,9 +165,10 @@ def decide_fires(batch: list, q: float = BH_FDR_Q) -> list:
         전부 파손·오배송이었다 — 평소 부정률이 1~2%라 p 가 가장 작기 때문이다. 즉
         **개선안 스코프(색상·사이즈·소재)는 0/13 으로 Agent3 가 한 번도 못 돈다.**
 
-        상품은 **데이터에 근거하지 않은 분할 단위**라(관측된 delta 로 검정 집합을 고르는
-        것이 아니다) 각 상품에 대한 FDR <= q 보장이 유지된다. 바뀌는 것은 *무엇에 대한
-        FDR 인가* 이지 보장의 유무가 아니다.
+        상품은 **검정 결과를 보기 전에 정해지는 분할 단위**다(관측된 delta 로 family를
+        고르지 않는다). 따라서 BH 가정 아래에서 상품별 기각 집합의 기대 FDR을 q로
+        제어한다. 전체 상품을 합친 최종 발행 알림의 실현 헛알림률 5%를 보장하는 것은
+        아니며, 그 값은 데모 시뮬레이션에서 별도로 잰다.
 
     ⚠️ **`(상품, source)` 로 더 쪼개지 말 것.** 32일 데모 시뮬(oracle) 실측에서 양쪽
        축이 다 나쁘다 — 헛알림률 35.0% / 케이스 도달 25·26 (상품별은 15.6% / 26·26).

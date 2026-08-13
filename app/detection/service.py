@@ -556,7 +556,7 @@ async def detect_anomaly(
         unreliable_denominators: 분류 커버리지 미달로 **분모를 믿을 수 없는**
             (product, channel, source) 집합. 검정 전에 family 에서 빠진다 — 분모가
             깎인 슬롯은 p값이 실제보다 작게 나오고, BH 는 step-up 이라 그 하나가 기각
-            개수를 늘려 **다른 상품의 임계까지 완화**시키기 때문이다.
+            개수를 늘려 **같은 상품 family의 임계까지 완화**시키기 때문이다.
 
             **documents 를 줬는데 이 값을 안 주면 여기서 직접 계산한다**
             (`check_coverage` → `unreliable_slots`). 분모의 출처를 넘겨놓고 커버리지를
