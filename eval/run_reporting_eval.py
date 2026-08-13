@@ -54,6 +54,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import get_settings
+from app.core.constants import KST
 from app.core import constants
 from app.core.llm_client import get_llm_client
 from app.core.schemas import (
@@ -574,12 +575,12 @@ def _print_sensitivity(result: dict[str, Any]) -> None:
 
 async def main_async(args: argparse.Namespace) -> None:
     settings = get_settings()
-    stamp = datetime.now(UTC).astimezone().strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.now(KST).strftime("%Y%m%d_%H%M%S")
 
     result: dict[str, Any] = {
         # README 원칙: 실행일·모델명·프롬프트 버전·시드·표본 수 다섯 개를 반드시 남긴다
         "meta": {
-            "실행일": datetime.now(UTC).astimezone().isoformat(),
+            "실행일": datetime.now(KST).isoformat(),
             "모델": settings.llm_model,
             "프롬프트_버전": {
                 "monthly": monthly_report_service.PROMPT_VERSION,

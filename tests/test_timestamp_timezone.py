@@ -35,7 +35,18 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-SCANNED_DIRS = ("app", "scripts")
+SCANNED_DIRS = ("app", "scripts", "eval")
+"""훑을 폴더.
+
+⚠️ **`eval/` 을 빼지 말 것.** 처음엔 `("app", "scripts")` 였는데, 그 상태로도 가드는
+   초록이었고 `eval/` 에 5건이 남아 있었다 — 그중 `run_classify_eval.py` 의 결과 파일명
+   스탬프는 같은 커밋에서 `scripts/verify_hybrid_eval_sets.py` 에 고친 것과 **완전히 같은
+   버그**였다. 바로 옆 파일인데 스캔 범위 밖이라 안 잡혔다. (2026-08-13 리뷰)
+
+   `eval/` 산출물은 실험 기록이라 파일명·`run_at` 날짜가 하루 밀리면 같은 실행분이 두
+   날짜로 흩어진다. `tests/` 는 0건이라 넣지 않았다 — 넣어도 되지만, 픽스처가 고정 시각을
+   쓰는 곳이라 규칙의 대상이 아니다.
+"""
 
 # 호스트 로컬에 의존하는 관용구 셋.
 #   - `datetime.now()`  / `date.today()`      : naive = 호스트 로컬
