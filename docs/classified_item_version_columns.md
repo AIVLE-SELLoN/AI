@@ -38,10 +38,23 @@ Fisher 검정은 그 둘을 가르지 못한다. 결과적으로 **분류기 개
 | model | `LLM_MODEL` 을 `gpt-4o-mini` → 다른 모델로 | 아니오 |
 | pipeline | `_cs_empty_fallback` 켜기/끄기, 허용 aspect 집합 변경, 후처리·정규화 수정 | 아니오 |
 
-`pipeline` 축이 필요한 근거(실측): CS 전량 96,524건 중 **2.1%(284건 중 6건)** 가
-LLM 이 빈 배열을 내서 `app/classification/service._cs_empty_fallback` 이 `기타` 를
-채운 경로다. 이 폴백을 끄고 켜는 것만으로 CS 의 aspect 분포가 움직인다 —
-프롬프트 파일은 그대로인데 숫자가 바뀐다.
+`pipeline` 축이 필요한 근거: `app/classification/service._cs_empty_fallback` 이 LLM 의 빈
+배열을 `기타` 로 채운다. **이 폴백을 끄고 켜는 것만으로 CS 의 aspect 분포가 움직인다** —
+프롬프트 파일은 한 글자도 안 바뀌었는데 숫자가 바뀐다. 결론은 실측 규모와 무관하게
+성립한다(폴백이 존재한다는 것만으로 분포가 갈린다).
+
+관련 실측: **284건 중 6건(2.1%)** 이 빈 배열이었다. 프롬프트1이 "반드시 하나 이상"을
+지시함에도 나온 값이다.
+
+> ⚠️ **분모 정정 (2026-08-13).** 이 문단이 처음엔 "CS 전량 96,524건 중 2.1%(284건 중 6건)"
+> 였는데 **한 문장에 분모가 둘 섞여 있었다.** 6/284 는 284건 표본 기준이고 96,524(= `cs`
+> 테이블 전체 행수)와는 관계가 없다. 전량 기준 비율은 측정된 적이 없다.
+>
+> **출처**: 이 수치는 이 문서가 만든 것이 아니라 2026-08-04 서영님 측정이고, 원문은
+> `app/classification/service.py` `_cs_empty_fallback` docstring 과
+> `app/detection/loader.py` 모듈 docstring 에 있다(커밋 `9a1cc84` · `b67bd04`).
+> **재현 명령은 그 커밋에도 남아 있지 않다** — 표본 284건이 어느 실행분인지 확인하려면
+> 그쪽 측정 기록을 봐야 한다. 여기서 명령을 지어내지 않는다.
 
 ---
 
@@ -133,6 +146,14 @@ CREATE INDEX IF NOT EXISTS idx_classified_item_versions
    — 원문 `cs`·`reviews` 는 건드리지 않는다
 4. 워커·탐지 코드를 3축 비교로 확장 (§5)
 
+⚠️ **3번은 이제 사람이 기억할 절차가 아니다 (2026-08-13).** `LEGACY_MARKERS` 의 마커를
+`pipeline_version` 으로 옮겨서, 옛 테이블이 남아 있으면 워커·배치가 시작 시점에 안내와
+함께 멈춘다. 그 전에는 마커가 `prompt_version` 이라 4컬럼 테이블이 구버전으로 안 잡혔고,
+`no such column: model_version` 으로 터졌다 — 가드가 막으려던 바로 그 모양이었다.
+
+🔴 **컬럼을 또 추가하면 마커도 같이 옮길 것.** 판정이 "마커가 없으면 옛것"이라, 마커를
+안 옮기면 그 사이 버전의 테이블이 전부 최신으로 통과한다.
+
 ---
 
 ## 5. 컬럼이 생긴 뒤 따라오는 코드 변경
@@ -140,6 +161,7 @@ CREATE INDEX IF NOT EXISTS idx_classified_item_versions
 | 위치 | 변경 | 상태 |
 |---|---|---|
 | `app/core/raw_schema.py` | DDL 2컬럼 + 인덱스 + `active_version_predicate()`·`version_params()` | 완료 |
+| `app/core/raw_schema.py` | **`LEGACY_MARKERS` 의 `classified_item` 마커를 `pipeline_version` 으로** | 2026-08-13 |
 | `app/core/versions.py` | `CLASSIFIER_PIPELINE_VERSION` (신규 파일) | 완료 |
 | `scripts/classification_worker.py` | upsert 2컬럼, stale 판정 3축, 버전 분포 로그 | 완료 |
 | `app/batch/daily.py` | 탐지 필터 3축, cutover 가드(fail-closed) + 본문 조건 정합 | 완료 |
