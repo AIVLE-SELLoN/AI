@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from app.core import raw_schema
+from app.core.raw_db import connect_readonly
 from app.reporting.monthly_aggregator import (
     aggregate_monthly_inputs,
     list_product_groups,
@@ -31,7 +32,7 @@ def _enum_value(value):
 
 def build_oracle_connection(db_path: Path) -> tuple[sqlite3.Connection, int, int]:
     """읽기 전용 원본을 메모리에 복사하고 골든 매핑·분류 결과를 주입한다."""
-    source = sqlite3.connect(f"file:{db_path.resolve().as_posix()}?mode=ro", uri=True)
+    source = connect_readonly(str(db_path))
     conn = sqlite3.connect(":memory:")
     try:
         source.backup(conn)

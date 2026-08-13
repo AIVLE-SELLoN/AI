@@ -15,6 +15,16 @@ sys.path.insert(
 import demo_sim
 
 
+def test_legacy_global_family_is_an_explicit_grouping_function():
+    """구정책 대조군이 현재 운영 기본값(None)으로 조용히 바뀌면 안 된다."""
+    keyfn = demo_sim.FAMILIES["전체(구정책)"]
+
+    assert keyfn is not None
+    assert keyfn(("P001", "색상", "COUPANG", "cs")) == keyfn(
+        ("P002", "소재", "NAVER", "review")
+    )
+
+
 def test_check_ideal_import_has_no_execution_side_effect(capsys):
     """도구를 import만 해도 전량 데이터·캐시 검사가 시작되면 안 된다."""
     sys.modules.pop("check_ideal", None)

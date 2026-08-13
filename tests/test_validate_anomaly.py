@@ -36,3 +36,47 @@ def test_validator_bh_family_is_per_product(monkeypatch):
     assert result[0]["bh_significant"] is True
     assert result[0]["fired"] is True
     assert not any(item["fired"] for item in result[1:])
+
+
+def test_robustness_check_recalculates_only_the_changed_product_family(monkeypatch):
+    """다른 상품의 귀무 검정이 강건성 재계산의 BH 임계를 희석하지 않아야 한다."""
+    monkeypatch.setattr(
+        validate_anomaly,
+        "run_fisher",
+        lambda *_args: (0.02, 0.10),
+    )
+    batch = [
+        {
+            "case_id": "SC-001",
+            "product": "A",
+            "channel": "COUPANG",
+            "aspect": "색상",
+            "source": "cs",
+            "cur_neg": 2,
+            "cur_total": 100,
+            "past_neg": 0,
+            "past_total": 100,
+            "p_value": 0.02,
+            "intended_answer": "TRUE",
+        }
+    ]
+    batch.extend(
+        {
+            "case_id": f"BG-{n}",
+            "product": "B",
+            "channel": "NAVER",
+            "aspect": "소재",
+            "source": "review",
+            "cur_neg": n,
+            "cur_total": 100,
+            "past_neg": 0,
+            "past_total": 100,
+            "p_value": 0.9,
+            "intended_answer": "",
+        }
+        for n in range(2, 11)
+    )
+
+    result = validate_anomaly.robustness_check(batch)
+
+    assert result["흔들린_케이스"] == []
