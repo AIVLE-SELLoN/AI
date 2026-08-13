@@ -63,6 +63,15 @@ def pin_company_id(monkeypatch):
 
     폴백 자체를 재는 테스트는 이 값을 `""` 로 덮어 쓴다
     (`test_record_hitl_outcome.test_local_fallback_when_company_id_is_unset`).
+
+    🔴 **`get_settings.cache_clear()` 를 부르는 테스트를 추가하면 이 가드가 조용히
+       무력화된다.** 여기서 고정하는 건 `@lru_cache` 가 들고 있는 **그 인스턴스**이고
+       (`app/config.get_settings`), 캐시를 비우면 다음 호출이 **새 Settings 를 만들어
+       `.env` 를 다시 읽는다.** 그 순간 위 사고가 그대로 재발한다 — 실패가 아니라
+       **환경에 따라 갈리는 통과**로 나타나므로 눈에 안 띈다.
+       → 설정 재로딩을 재는 테스트는 `monkeypatch.setenv("MQ_COMPANY_ID", ...)` 로
+       **환경변수까지 명시적으로 고정**할 것. (서영님 PR #79 사후 리뷰 지적. 현재
+       저장소에 `cache_clear()` 호출은 0건이라 지금은 안전하다.)
     """
     monkeypatch.setattr(get_settings(), "mq_company_id", TEST_COMPANY_ID)
 
