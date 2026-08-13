@@ -572,6 +572,33 @@ def test_fresh_db_is_not_flagged_as_legacy() -> None:
     assert raw_schema.find_legacy_tables(empty) == []
 
 
+def test_version_columns_missing_is_flagged_as_legacy() -> None:
+    """🔴 버전 컬럼이 없는 옛 `classified_item` 도 구버전으로 잡힌다.
+
+    `LEGACY_MARKERS` 의 판정이 "마커 컬럼이 없으면 옛것"이라 **마커는 그 테이블에 가장
+    나중에 들어온 컬럼이어야 한다.** 컬럼을 추가하고 마커를 안 옮기면 그 사이 버전의
+    테이블이 전부 최신으로 통과한다.
+
+    실제로 버전 컬럼 2개를 넣으면서(2026-08-12) 마커가 `prompt_version` 에 남아 있었고,
+    4컬럼 시절 테이블이 이 함수를 통과했다. `IF NOT EXISTS` 가 옛 테이블을 그대로 두는데
+    인덱스는 새 컬럼을 참조해서, 가드가 막으려던 자리(`no such column`)로 되돌아갔다:
+
+        find_legacy_tables()       = []
+        create_classified_tables() → OperationalError: no such column: model_version
+
+    ⚠️ **컬럼명을 리터럴로 적는다** — `raw_schema.VERSION_COLUMNS[-1]` 로 쓰면 마커를
+       안 옮겼을 때 이 테스트도 같이 통과해서 아무것도 못 잡는다.
+    """
+    old = sqlite3.connect(":memory:")
+    old.execute(
+        "CREATE TABLE classified_item ("
+        " item_id TEXT PRIMARY KEY, source TEXT NOT NULL,"
+        " classified_at TEXT, prompt_version TEXT)"
+    )
+
+    assert raw_schema.find_legacy_tables(old) == ["classified_item"]
+
+
 def test_legacy_raw_db_is_rejected_with_guidance(tmp_path, caplog) -> None:
     """확정 이전 구조가 남아 있으면 안내하고 멈춘다.
 
