@@ -14,15 +14,18 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from app.core import raw_schema
+from app.core.constants import KST
 from app.reporting.monthly_aggregator import (
     _fetch_aspect_sentiments,
     _fetch_negative_aspect_counts_by_channel,
     _fetch_product_names,
     _fetch_total_voc,
+    aggregate_monthly_inputs,
     list_product_groups,
     resolve_product_name,
 )
@@ -229,3 +232,45 @@ def test_product_name_uses_mode_across_channels(conn: sqlite3.Connection) -> Non
     conn.commit()
 
     assert _fetch_product_names(conn, "P001") == "미디 원피스"
+
+
+# ── calculated_at 타임존 (2026-08-13 리뷰 §1) ────────────────────────────
+
+
+def test_calculated_at_is_kst_not_host_or_utc(conn: sqlite3.Connection) -> None:
+    """🔴 `calculated_at` 은 **KST 여야 한다.** 소스 스캔 가드가 못 잠그는 반대편이다.
+
+    `tests/test_timestamp_timezone.py` 의 가드는 호스트 로컬 관용구만 금지하고
+    `datetime.now(timezone.utc)` 는 **일부러 통과시킨다** — `mq.py` 의 `occurredAt` 은
+    계약이 UTC 라 그래야 하기 때문이다. 그런데 이 값에는 그 허용이 **막으려던 버그를
+    그대로 다시 연다**:
+
+        `pdf_compiler` 가 `calculated_at[:16]` 으로 **오프셋을 잘라내고 벽시계만** 인쇄한다.
+        UTC 로 찍으면 셀러 지면에 tz 표기 없이 9시간 이른 시각이 그대로 나간다.
+
+    실측으로 확인한 구멍이다 — `datetime.now(timezone.utc)` 로 되돌려도 소스 스캔만으로는
+    **682건 전부 통과했다.** 관용구는 막았는데 "이 값은 KST 여야 한다"는 요건은 아무 데서도
+    안 지켜지고 있었다. 같은 모양(가드를 만들면서 반대편을 안 잠금)이 PR #68·#70·#77 에서
+    이미 세 번 났다.
+
+    ⚠️ **지면에 찍히는 문자열까지 잰다.** `utcoffset()` 만 보면 절단 폭·포맷이 바뀌었을 때
+       못 잡는다 — 증상은 어디까지나 "셀러가 보는 시각"이다.
+    """
+    before = datetime.now(KST)
+    inputs = aggregate_monthly_inputs(conn, MONTH, n_permutations=1)
+    after = datetime.now(KST)
+
+    assert inputs, "픽스처 전제가 깨졌다 — 집계 결과가 비었다"
+    calculated_at = inputs[0].channel_divergence.calculated_at
+
+    assert calculated_at.utcoffset() == timedelta(hours=9), (
+        f"calculated_at 이 KST 가 아니다: {calculated_at.isoformat()}"
+    )
+    assert before <= calculated_at <= after
+
+    # pdf_compiler 의 `calculated_at[:16]|replace('T',' ')` 와 같은 절단
+    rendered = calculated_at.isoformat()[:16].replace("T", " ")
+    assert rendered == calculated_at.strftime("%Y-%m-%d %H:%M")
+    assert rendered != calculated_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M"), (
+        "KST 와 UTC 벽시계가 같게 나왔다 — 이 단언이 아무것도 안 재고 있다"
+    )
