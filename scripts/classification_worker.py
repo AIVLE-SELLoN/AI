@@ -416,9 +416,14 @@ def open_db(db_path_str: str) -> sqlite3.Connection:
         #    — 원문이 그대로 있으니 옛 분류기 라벨이 계속 리포트에 잡힌다.
         #    문서 §4-3 이 두 테이블을 지우라고 하는데 안내가 하나만 내면 끝 상태가 갈린다.
         #    (2026-08-13 리뷰 §3)
+        #
+        # ⚠️ **자식을 먼저 지운다.** `PRAGMA foreign_keys=ON` 인 세션에서 부모부터 지우면
+        #    `FOREIGN KEY constraint failed` 로 막힌다(실측). sqlite3 CLI 는 기본이 OFF 라
+        #    보통은 그냥 돌지만, 켜 둔 셸에 붙여넣으면 안내가 통째로 실패한다 —
+        #    순서만 바꾸면 양쪽 다 된다. (2026-08-13 리뷰 §4)
         targets = [*legacy]
         if "classified_item" in legacy and "classified_item_aspect" not in targets:
-            targets.append("classified_item_aspect")
+            targets.insert(targets.index("classified_item"), "classified_item_aspect")
         drops = " ".join(f"DROP TABLE IF EXISTS {t};" for t in targets)
         logger.error(
             # 이 메시지는 cp949 로 나가도 읽혀야 한다. 윈도우 stderr 는 errors=backslashreplace

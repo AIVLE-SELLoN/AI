@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 CLASSIFIER_PIPELINE_VERSION = "classify_pipeline_v1"
-"""프롬프트 **밖** 분류 로직의 버전. 후처리·정규화·폴백·허용 aspect 집합을 바꾸면 올린다.
+"""프롬프트 **밖** 분류 로직의 버전. 허용 aspect 집합·후처리·정규화를 바꾸면 올린다.
 
 프롬프트 버전만으로는 못 잡는 변화가 실제로 있다. **분자를 직접 바꾸는 트리거 둘**이
 기준이다:

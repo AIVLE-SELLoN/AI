@@ -617,9 +617,16 @@ def test_legacy_raw_db_is_rejected_with_guidance(tmp_path, caplog) -> None:
         worker.open_db(str(db_path))
 
     assert "classification_cursor" in caplog.text
-    # 원문까지 지우라고 하면 12.8만 행을 다시 재생해야 한다 — AI 소유 테이블만 지운다
     assert "DROP TABLE IF EXISTS classification_cursor;" in caplog.text
-    assert "DROP TABLE IF EXISTS cs;" not in caplog.text
+
+    # 🔴 **원문 보호 가드 — 문구를 좁히지 말 것.** 원문까지 지우라고 하면 12.8만 행을
+    #    다시 재생해야 한다. `"DROP TABLE IF EXISTS cs;"` 처럼 정확한 문장으로 단언하면
+    #    안내가 `DROP TABLE cs;`(IF EXISTS 없이)로 바뀌었을 때 **그냥 통과한다.**
+    #    실제로 IF EXISTS 를 붙이면서 한 번 좁혔다(2026-08-13 리뷰 §2). 테이블 이름이
+    #    DROP 문에 등장하는지로 넓게 본다.
+    for protected in ("cs", "reviews", "channel", "products", "mapped_data", "orders"):
+        assert f"DROP TABLE IF EXISTS {protected};" not in caplog.text
+        assert f"DROP TABLE {protected};" not in caplog.text
 
 
 def test_legacy_guidance_always_drops_the_child_table(tmp_path, caplog) -> None:
@@ -655,6 +662,13 @@ def test_legacy_guidance_always_drops_the_child_table(tmp_path, caplog) -> None:
 
     assert "DROP TABLE IF EXISTS classified_item;" in caplog.text
     assert "DROP TABLE IF EXISTS classified_item_aspect;" in caplog.text
+
+    # 🔴 **자식이 부모보다 앞에 와야 한다.** `PRAGMA foreign_keys=ON` 세션에서 부모부터
+    #    지우면 `FOREIGN KEY constraint failed` 로 안내가 통째로 실패한다. sqlite3 CLI 는
+    #    기본이 OFF 라 보통은 돌지만, 켜 둔 셸에서는 안 돈다. (2026-08-13 리뷰 §4)
+    assert caplog.text.index("DROP TABLE IF EXISTS classified_item_aspect;") < caplog.text.index(
+        "DROP TABLE IF EXISTS classified_item;"
+    )
 
 
 # ── FK 실효성 (리뷰 3번) ─────────────────────────────────────────────────

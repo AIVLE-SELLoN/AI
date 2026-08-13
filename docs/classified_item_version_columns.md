@@ -36,7 +36,7 @@ Fisher 검정은 그 둘을 가르지 못한다. 결과적으로 **분류기 개
 |---|---|---|
 | prompt | `classify_aspect_v5` → `v6` | **예** (2026-08-12 적용) |
 | model | `LLM_MODEL` 을 `gpt-4o-mini` → 다른 모델로 | 아니오 |
-| pipeline | `_cs_empty_fallback` 켜기/끄기, 허용 aspect 집합 변경, 후처리·정규화 수정 | 아니오 |
+| pipeline | 허용 aspect 집합 변경, 후처리·정규화 수정 | 아니오 |
 
 `pipeline` 축이 필요한 근거는 **분자를 직접 바꾸는 두 트리거**다:
 
@@ -90,7 +90,7 @@ Fisher 검정은 그 둘을 가르지 못한다. 결과적으로 **분류기 개
 | 컬럼 | 타입 | Null | 설명 |
 |---|---|---|---|
 | `model_version` | `TEXT` | 허용 | 분류에 쓴 LLM 모델 식별자. `settings.llm_model`(`LLM_MODEL`) 값을 그대로 기록. 예: `gpt-4o-mini` |
-| `pipeline_version` | `TEXT` | 허용 | 프롬프트 **밖** 분류 로직의 버전. 후처리·정규화·폴백·허용 aspect 집합을 바꾸면 올린다. 예: `classify_pipeline_v1` |
+| `pipeline_version` | `TEXT` | 허용 | 프롬프트 **밖** 분류 로직의 버전. 허용 aspect 집합·후처리·정규화를 바꾸면 올린다. 예: `classify_pipeline_v1` |
 
 기존 컬럼은 **그대로 둔다**(변경·삭제 없음):
 
