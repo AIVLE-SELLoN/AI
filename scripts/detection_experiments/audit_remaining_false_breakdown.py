@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import csv
-import json
 import sys
 from collections import Counter, defaultdict
 from datetime import date
@@ -29,21 +28,21 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent))
 
-import app.detection.statistics as stats_mod
-from app.batch.daily import STATE_RETENTION_DAYS, CountingClient
-from app.detection.service import detect_anomaly
 from demo_sim import (
-    CACHE,
-    FAMILIES,
     _ORIGINAL_DECIDE,
+    FAMILIES,
     classify_alert,
     day_date,
     load_truth_sets,
     make_decide,
-    swap_real,
+    require_full_real_cache,
 )
-from scripts.golden_inputs import load_golden_inputs as load_inputs
 from validate_anomaly import BASELINE_RATE
+
+import app.detection.statistics as stats_mod
+from app.batch.daily import STATE_RETENTION_DAYS, CountingClient
+from app.detection.service import detect_anomaly
+from scripts.golden_inputs import load_golden_inputs as load_inputs
 
 OUT_CSV = ROOT / "eval/results/remaining_false_breakdown_20260807.csv"
 OUT_MD = ROOT / "eval/results/remaining_false_breakdown_20260807.md"
@@ -289,8 +288,9 @@ def write_outputs(rows: list[dict], real_count: int, oracle_count: int) -> None:
 
 async def main() -> None:
     gold_items, documents = load_inputs()
-    cache = json.loads(CACHE.read_text(encoding="utf-8"))
-    real_items, _swapped = swap_real(gold_items, cache)
+    _path, _cache, real_items, _swapped, _coverage = require_full_real_cache(
+        gold_items
+    )
     truth, ignored = load_truth_sets()
     by_truth = truth_by_pas(truth)
     by_ignored = ignored_by_pas(ignored)

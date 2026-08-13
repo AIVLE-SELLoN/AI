@@ -1,6 +1,5 @@
 """이상화가 케이스 신호를 보존했는지 검산 — config 의도 vs 실제 vs 이상화."""
 import csv
-import json
 import random
 import sys
 from pathlib import Path
@@ -10,7 +9,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).parent))
 
-from demo_sim import ANCHOR, CACHE, swap_real
+from demo_sim import ANCHOR, require_full_real_cache
 from ideal_bg_sim import case_regions, idealize
 
 from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
@@ -24,8 +23,7 @@ def ordinal(n: int) -> int:
 
 
 gold_items, documents = load_inputs()
-cache = json.loads(CACHE.read_text(encoding="utf-8"))
-real_items, _ = swap_real(gold_items, cache)
+_path, _cache, real_items, _swapped, _coverage = require_full_real_cache(gold_items)
 regions = case_regions()
 ideal_items, kept, redrawn = idealize(
     gold_items, real_items, regions, random.Random(11)

@@ -17,7 +17,6 @@
 """
 import asyncio
 import csv
-import json
 import random
 import statistics
 import sys
@@ -31,11 +30,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from demo_sim import (
     ANCHOR,
-    CACHE,
     FAMILIES,
     load_truth_sets,
+    require_full_real_cache,
     run_family,
-    swap_real,
 )
 
 from app.core.schemas import AspectSentiment
@@ -125,9 +123,10 @@ def idealize(gold_items, real_items, regions, rng, labels: str = "real"):
 
 async def main() -> None:
     gold_items, documents = load_inputs()
-    cache = json.loads(CACHE.read_text(encoding="utf-8"))
+    _path, _cache, real_items, _swapped, _coverage = require_full_real_cache(
+        gold_items
+    )
     truth, ignored = load_truth_sets()
-    real_items, _ = swap_real(gold_items, cache)
     regions = case_regions()
 
     acc: dict = {(name, lab): [] for name in FAMILIES for lab in ("oracle", "real")}
