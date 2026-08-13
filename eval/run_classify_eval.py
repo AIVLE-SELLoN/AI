@@ -49,6 +49,7 @@ sys.path.insert(0, str(ROOT))
 
 import app.classification.service as classification_service
 from app.classification.service import ClassifyRequestItem
+from app.core.constants import KST
 from app.core.exceptions import AiServiceError
 from app.core.llm_client import get_llm_client
 from app.core.schemas import Channel, Source
@@ -355,7 +356,7 @@ async def run_chunks(
                 channel=Channel(r["channel"]),
                 product_group_id="EVAL",  # 평가용 — product_group_id는 채점에 안 씀
                 raw_text=r["raw_text"],
-                created_at=datetime.now(),
+                created_at=datetime.now(KST),
             )
             for r in chunk
         ]
@@ -925,7 +926,7 @@ async def main_async(args: argparse.Namespace) -> None:
     result = {
         "meta": {
             "experiment": "③ 프롬프트1 aspect 분류 정확도",
-            "run_at": datetime.now().isoformat(timespec="seconds"),
+            "run_at": datetime.now(KST).isoformat(timespec="seconds"),
             "golden": golden_path.name,
             "prompt_version": classification_service.PROMPT_ASPECT_VERSION,
             "prompt_hash": prompt_hash,  # 🆕 PR 리뷰 반영 — 파일명은 같아도 제자리수정으로 내용이
@@ -959,7 +960,7 @@ async def main_async(args: argparse.Namespace) -> None:
     report(result)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.now(KST).strftime("%Y%m%d_%H%M%S")
     out = RESULTS_DIR / f"classify_eval_{stamp}.json"
     out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n결과 저장: eval/results/{out.name}")

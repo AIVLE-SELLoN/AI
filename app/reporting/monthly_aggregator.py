@@ -22,6 +22,7 @@ import sqlite3
 from datetime import date, datetime, timedelta
 
 from app.core import raw_schema
+from app.core.constants import KST
 from app.core.schemas import MONTHLY_ASPECTS as SCHEMA_MONTHLY_ASPECTS
 from app.core.schemas import (
     Aspect,
@@ -404,7 +405,12 @@ def aggregate_monthly_inputs(
         f"(BH-FDR, family=배치 전체)"
     )
 
-    calculated_at = datetime.now().astimezone()
+    # 🔴 **KST 로 찍는다 — 호스트 시간대를 보지 않는다.** 이 값은 합본 PDF 지면에 그대로
+    #    인쇄되는데(`pdf_compiler` 의 "마지막 업데이트"), 렌더링이 `calculated_at[:16]` 으로
+    #    **오프셋을 잘라내고 벽시계만** 보여준다. `datetime.now().astimezone()` 이면 UTC
+    #    컨테이너에서 셀러가 보는 시각이 9시간 이르게 찍히고 tz 표기가 없어 구분할 방법이
+    #    없다. 개발 머신이 KST 라 로컬 테스트로는 영원히 안 잡힌다. (2026-08-13)
+    calculated_at = datetime.now(KST)
     # 카탈로그 존재 여부는 실행 중에 바뀌지 않는다 — 상품마다 다시 묻지 않는다.
     catalog_ready = has_product_name_tables(conn)
     inputs: list[MonthlyReportInput] = []
