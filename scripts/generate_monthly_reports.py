@@ -57,13 +57,14 @@ import sqlite3
 import sys
 import time
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core import constants
+from app.core.constants import KST
 from app.core.console import force_utf8_output
 from app.core.mq import close_mq, new_trace_id, publish_report_generated
 from app.core.schemas import CallbackStatus, MonthlyReportInput
@@ -102,7 +103,10 @@ class DeadlineTracker:
         self.deadline: datetime | None = None
         if deadline:
             hour, minute = (int(x) for x in deadline.split(":"))
-            now = datetime.now().astimezone()
+            # 🔴 **마감 시각은 KST 벽시계다.** 운영 타임라인이 "1일 08:00 까지"로 KST 기준인데
+            #    `datetime.now().astimezone()` 이면 그 08:00 이 **호스트 로컬 08:00** 이 된다 —
+            #    UTC 컨테이너에서는 KST 17:00 이라 마감 경고가 9시간 늦게 뜬다. (2026-08-13)
+            now = datetime.now(KST)
             target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
             # 마감이 이미 지난 시각이면 다음 날로 본다(자정 넘겨 도는 집계 단계 대응)
             self.deadline = target if target > now else target + timedelta(days=1)
@@ -119,7 +123,7 @@ class DeadlineTracker:
             logger.info(message)
             return
 
-        remaining = (self.deadline - datetime.now().astimezone()).total_seconds()
+        remaining = (self.deadline - datetime.now(KST)).total_seconds()
         if eta > remaining:
             logger.warning(
                 f"{message} · ⚠️ 마감({self.deadline:%H:%M}) 초과 예상 "
@@ -330,7 +334,7 @@ async def run_generate(args: argparse.Namespace) -> int:
 
     summary = {
         "report_month": args.month,
-        "generated_at": datetime.now(UTC).astimezone().isoformat(),
+        "generated_at": datetime.now(KST).isoformat(),
         "concurrency": args.concurrency,
         "total": len(results),
         "status_counts": dict(counts),
