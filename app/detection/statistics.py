@@ -14,6 +14,8 @@ min_delta 로 먼저 거르면 '관측된 delta 데이터로 검정 집합을 �
 안 정하며, 발화 확정은 run_batch 가 배치 전체를 보고 한다.
 """
 
+from collections import defaultdict
+
 from scipy.stats import fisher_exact
 from statsmodels.stats.multitest import multipletests
 
@@ -143,30 +145,58 @@ def build_batch(
 
 
 def decide_fires(batch: list, q: float = BH_FDR_Q) -> list:
-    """윈도우 전체 검정에 BH-FDR(관문②)을 적용하고 min_delta(관문③)와 AND → 발화 확정.
+    """**상품별로** BH-FDR(관문②)을 적용하고 min_delta(관문③)와 AND → 발화 확정.
 
-    왜 배치로 하나:
+    왜 보정이 필요한가:
         검정을 조합마다 매일 돌리면 하루 약 1,464건. 보정 없이 각각 α=0.05 로 보면
-        정상 상품 하나도 하루 54.8% 확률로 오탐한다(부록 A). BH 는 step-up 이라
-        발견이 많으면 기준이 완화돼 참양성은 살리고 가짜만 죽인다.
+        정상 상품 하나도 하루 54.8% 확률로 오탐한다(부록 A).
 
-    각 test dict 에 "fired"(bool) 를 넣어 반환한다.
+    🔴 **왜 배치 전체가 아니라 상품별인가** (2026-08-13 변경):
+        BH 는 step-up 이라 **임계가 그 family 안의 발견 수에 비례해 올라간다.** 배치
+        전체를 한 family 로 두면, 평가 배치(전 케이스가 한 배치에 모여 참양성 41개)와
+        일별 운영 배치(하루 이상 1~3개)의 실효 임계가 **36배** 벌어진다:
+
+            평가 배치   m=1,464  기각 41  실효 컷오프 0.00122
+            일별 배치   m=1,476  기각  1  실효 컷오프 3.39e-05 (= q/m)
+
+        그래서 **채점은 통과인데 운영·데모에선 안 뜨는** 상태가 된다. 실측(oracle,
+        케이스별 자기 윈도우 끝날 기준)으로 일별 배치 탐지가 3/25 였고, 살아남은 3건은
+        전부 파손·오배송이었다 — 평소 부정률이 1~2%라 p 가 가장 작기 때문이다. 즉
+        **개선안 스코프(색상·사이즈·소재)는 0/13 으로 Agent3 가 한 번도 못 돈다.**
+
+        상품은 **데이터에 근거하지 않은 분할 단위**라(관측된 delta 로 검정 집합을 고르는
+        것이 아니다) 각 상품에 대한 FDR <= q 보장이 유지된다. 바뀌는 것은 *무엇에 대한
+        FDR 인가* 이지 보장의 유무가 아니다.
+
+    ⚠️ **`(상품, source)` 로 더 쪼개지 말 것.** 32일 데모 시뮬(oracle) 실측에서 양쪽
+       축이 다 나쁘다 — 헛알림률 35.0% / 케이스 도달 25·26 (상품별은 15.6% / 26·26).
+       근거: `eval/results/detection_review_followup_20260813.md` §3.1
+
+    각 test dict 에 "fired"(bool) 를 넣어 반환한다. `t["key"]` 는 `build_batch` 가 붙이는
+    `(product, aspect, channel, source)` 이고, **여기서는 `key[0]`(상품)만 쓴다.**
     """
     if not batch:
         return batch
 
-    p_values = [t["p_value"] for t in batch]
-    # rejected[i] = i번째 검정이 BH 기준으로 유의한가
-    rejected, _, _, _ = multipletests(p_values, alpha=q, method="fdr_bh")
+    # 상품별 family. key 가 없으면 KeyError 로 세운다 — 조용히 전체 family 로 폴백하면
+    # "key 를 안 넘기면 옛 동작"이라는 함정이 생기고, 그건 미탐이라 조용하다.
+    groups: dict[str, list] = defaultdict(list)
+    for test in batch:
+        groups[test["key"][0]].append(test)
 
-    for test, is_significant in zip(batch, rejected):
-        # bh_significant 는 BH 보정 결과 **그 자체**로 남긴다 — 스키마 §3 이 이 필드를
-        # "BH-FDR 보정 후에도 유의했는지"로 정의하고 대시보드 '유의 ✓' 배지의 근거로
-        # 쓰기 때문이다. min_delta 를 섞으면 통계적 유의성과 실무적 크기가 한 칸에
-        # 뭉개진다. 발화(fired)는 그 둘의 AND.
-        test["bh_significant"] = bool(is_significant)
-        # 이중 잠금: ② BH 보정 후 유의 AND ③ 상승폭이 실질적
-        test["fired"] = test["bh_significant"] and test["meaningful"]
+    for group in groups.values():
+        # rejected[i] = 그 family 안에서 i번째 검정이 BH 기준으로 유의한가
+        rejected, _, _, _ = multipletests(
+            [t["p_value"] for t in group], alpha=q, method="fdr_bh"
+        )
+        for test, is_significant in zip(group, rejected):
+            # bh_significant 는 BH 보정 결과 **그 자체**로 남긴다 — 스키마 §3 이 이 필드를
+            # "BH-FDR 보정 후에도 유의했는지"로 정의하고 대시보드 '유의 ✓' 배지의 근거로
+            # 쓰기 때문이다. min_delta 를 섞으면 통계적 유의성과 실무적 크기가 한 칸에
+            # 뭉개진다. 발화(fired)는 그 둘의 AND.
+            test["bh_significant"] = bool(is_significant)
+            # 이중 잠금: ② BH 보정 후 유의 AND ③ 상승폭이 실질적
+            test["fired"] = test["bh_significant"] and test["meaningful"]
 
     return batch
 

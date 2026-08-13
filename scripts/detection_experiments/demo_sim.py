@@ -65,8 +65,12 @@ swap_real 은 캐시에 없는 item_id 를 조용히 golden 으로 되돌린다.
 """
 
 FAMILIES = {
-    "현재(전체)": None,
-    "상품별": lambda k: k[0],
+    # 🔴 **전 팔을 명시 keyfn 으로 둔다 — `None`(=운영 기본값) 을 쓰지 않는다.**
+    #    2026-08-13 에 운영 기본값이 전체 → 상품별로 바뀌었다. 그때 `None` 로 두면
+    #    "전체" 라고 이름 붙은 팔이 조용히 상품별이 되어 **비교표가 거짓말을 한다.**
+    #    라벨과 실제 보정 단위가 어긋나는 것이 이 스크립트에서 제일 위험하다.
+    "전체(구정책)": lambda k: None,  # 전 검정이 한 그룹 = 2026-08-13 이전 동작
+    "상품별": lambda k: k[0],  # ← 현재 운영 정책
     "상품x source": lambda k: (k[0], k[3]),
 }
 
@@ -74,7 +78,11 @@ _ORIGINAL_DECIDE = stats_mod.decide_fires
 
 
 def make_decide(keyfn):
-    """decide_fires 를 family 별 BH 로 교체. keyfn=None 이면 원본 그대로."""
+    """decide_fires 를 family 별 BH 로 교체. keyfn=None 이면 **운영 기본값 그대로**.
+
+    ⚠️ `keyfn=None` 은 "전체 family" 가 아니라 "현재 운영 코드가 뭘 쓰든 그것" 이다.
+       전체 family 를 원하면 `lambda k: None` 을 넘길 것(위 FAMILIES 참고).
+    """
     if keyfn is None:
         return _ORIGINAL_DECIDE
 
