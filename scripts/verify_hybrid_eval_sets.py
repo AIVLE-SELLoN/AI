@@ -375,6 +375,8 @@ async def main_async(args: argparse.Namespace) -> None:
     import json
     from datetime import datetime
 
+    from app.core.constants import KST
+
     # 🔴 relabel_300 은 AI Hub 71630 리뷰다. 원문(raw_text)을 결과 JSON에 남기면 그 파일이
     # 곧 원문 사본이 되고, 커밋 시 AI Hub 이용정책 위반 소지가 생긴다(.gitignore 의
     # review_eval_*.json 주석과 같은 사유 — 2026-08-09 발견해 여기서도 막는다).
@@ -389,7 +391,9 @@ async def main_async(args: argparse.Namespace) -> None:
 
     out_dir = ROOT / "eval" / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # 결과 파일명 스탬프도 KST 로 맞춘다 — UTC 컨테이너에서 돌리면 파일명 날짜가 하루
+    # 이르게 찍혀, 같은 날 실행분이 두 날짜로 흩어진다.
+    stamp = datetime.now(KST).strftime("%Y%m%d_%H%M%S")
     out_path = out_dir / f"hybrid_verify_{stamp}.json"
     out_path.write_text(
         json.dumps({"relabel_300": relabel_result, "llm_generated_700": generated_result}, ensure_ascii=False, indent=2),
