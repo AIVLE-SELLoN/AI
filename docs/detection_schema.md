@@ -92,7 +92,7 @@
 
 | 필드 | 타입 | 값 범위 | 설명 | 주 소비자 |
 | --- | --- | --- | --- | --- |
-| alert_id | string | `ALT-{window_end}-{상품}-{ASPECT}-{채널}` | 알림 고유 ID (백엔드 멱등 키). 결정론적 — 같은 구간 재실행 시 동일. 구 형식 `ALT-날짜-일련번호`는 폐기 | 전체 |
+| alert_id | string | `ALT-{window_end}-{상품}-{ASPECT}-{채널}` | 알림 고유 ID (백엔드 멱등 키). 결정론적 — 같은 구간 재실행 시 동일. 구 형식 `ALT-날짜-일련번호`는 폐기.<br>⚠️ **회사 안에서만 유일** — `product_group_id` 가 회사별 시퀀스라 회사가 다르면 같은 값이 나온다. 백엔드가 `(companyId, alert_id)` 복합 유니크로 흡수한다. 단독 키로 쓰면 안 된다 | 전체 |
 | detected_at | datetime | KST aware (`+09:00`) | 탐지 시각. **KST 오프셋을 항상 붙인다** — 백엔드가 `OffsetDateTime`으로 수신하므로 오프셋이 없으면 파싱이 실패한다.<br>⚠️ `alert_id`의 날짜와 **다를 수 있다**(그쪽은 `window_end`). 실행 시각이라 같은 구간을 재실행하면 바뀐다 | 대시보드 |
 | updates_alert_id | string/null |  | 갱신 알림일 때 원본 ID (신규면 null) | 대시보드 |
 | product_group_id | string | P001~ | 매핑 산출 상품 그룹 ID.  | 전체 |

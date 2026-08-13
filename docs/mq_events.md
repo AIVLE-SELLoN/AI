@@ -106,7 +106,7 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
 
 | 필드 | 타입 | 설명 |
 |---|---|---|
-| `alert_id` | string | **멱등 키.** `ALT-{window_end}-{product_group_id}-{ASPECT}-{channel}`<br>예: `ALT-20260828-P001-COLOR-COUPANG` · `ALT-20260828-P001-DAMAGE-ALL`(전역형)<br>**결정론적이다** — 같은 구간을 다시 돌리면 글자까지 같은 값이 나온다. 날짜가 `window_end`(데이터 시각)이지 `detected_at`(실행 시각)이 아닌 이유가 그것이다.<br>`ASPECT` 는 `main_aspect` 의 영문 코드(§9 대조표) — `COLOR`·`SIZE`·`MATERIAL`·`DAMAGE`·`MISDELIVERY`·`ETC`. `channel` 은 접힌 값이라 전역형·잠정전역형은 `ALL`.<br>길이 = `33 + len(product_group_id)`, 백엔드 컬럼 `varchar(72)`<br>⚠️ 구 형식 `ALT-{실행일}-{4자리 일련번호}`(`ALT-20260528-0001`)는 **폐기**다. 일련번호가 후보 집합 순서라 후보 하나만 달라져도 뒤쪽이 밀렸고, 멱등 upsert 에서 뒤쪽 알림이 새 행이 되면서 옛 행이 고아로 남았다. |
+| `alert_id` | string | **멱등 키.** `ALT-{window_end}-{product_group_id}-{ASPECT}-{channel}`<br>예: `ALT-20260828-P001-COLOR-COUPANG` · `ALT-20260828-P001-DAMAGE-ALL`(전역형)<br>**결정론적이다** — 같은 구간을 다시 돌리면 글자까지 같은 값이 나온다. 날짜가 `window_end`(데이터 시각)이지 `detected_at`(실행 시각)이 아닌 이유가 그것이다.<br>`ASPECT` 는 `main_aspect` 의 영문 코드(§9 대조표) — `COLOR`·`SIZE`·`MATERIAL`·`DAMAGE`·`MISDELIVERY`·`ETC`. `channel` 은 접힌 값이라 전역형·잠정전역형은 `ALL`.<br>길이 = `33 + len(product_group_id)`, 백엔드 컬럼 `varchar(72)`<br>⚠️ 구 형식 `ALT-{실행일}-{4자리 일련번호}`(`ALT-20260528-0001`)는 **폐기**다. 일련번호가 후보 집합 순서라 후보 하나만 달라져도 뒤쪽이 밀렸고, 멱등 upsert 에서 뒤쪽 알림이 새 행이 되면서 옛 행이 고아로 남았다.<br>⚠️ **회사 안에서만 유일하다.** `product_group_id` 가 회사별 시퀀스라 A사에도 `P001`, B사에도 `P001` 이 있어 **회사가 다르면 같은 `alert_id` 가 나온다.** 그래서 회사 축을 ID 에 넣지 않고 백엔드가 `(companyId, alert_id)` 복합 유니크로 흡수한다(2026-08-12 확정). **이 값을 회사 구분 없이 단독 키로 쓰면 안 된다** — envelope 의 `companyId`(§3)와 같이 봐야 한다. |
 | `detected_at` | string (ISO 8601) | 탐지 시각. **KST 오프셋(`+09:00`)을 항상 붙인다** — 백엔드가 `OffsetDateTime` 으로 수신하므로 오프셋이 없으면 파싱이 실패한다.<br>⚠️ `alert_id` 의 날짜와 다를 수 있다(그쪽은 `window_end`). 실행 시각이라 재실행마다 바뀐다. |
 | `updates_alert_id` | string \| null | 갱신 알림일 때 원본 alert_id. 신규면 null |
 | `product_group_id` | string | 상품 그룹 ID (메인 서버 상품 매핑 산출물) |
@@ -229,7 +229,7 @@ AI 쪽은 활성 버전 행만 읽고, 윈도우에 옛 버전 행이 **하나�
 
 | 필드 | 타입 | 설명 |
 |---|---|---|
-| `recommendation_id` | string | `alert_id` 의 `ALT-` 접두어를 `REC-` 로 바꾼 값 — 예: `ALT-20260828-P001-COLOR-COUPANG` → `REC-20260828-P001-COLOR-COUPANG`<br>알림과 **1:1** 이라 재생성해도 같은 ID (`app/core/ids.py`)<br>⚠️ 구 형식 `REC-{uuid4[:12]}`(`REC-a1b2c3d4e5f6`)는 **폐기**다. |
+| `recommendation_id` | string | `alert_id` 의 `ALT-` 접두어를 `REC-` 로 바꾼 값 — 예: `ALT-20260828-P001-COLOR-COUPANG` → `REC-20260828-P001-COLOR-COUPANG`<br>알림과 **1:1** 이라 재생성해도 같은 ID (`app/core/ids.py`)<br>⚠️ 구 형식 `REC-{uuid4[:12]}`(`REC-a1b2c3d4e5f6`)는 **폐기**다.<br>⚠️ `alert_id` 파생이므로 **회사 안에서만 유일하다** — 위 `alert_id` 단서가 그대로 적용된다. |
 | `alert_id` | string | 상위 알림 ID (payload 최상위와 동일 값) |
 | `created_at` | string (ISO 8601) | 생성 시각 |
 | `proposal` | object \| null | `{type, target_field, current_text, proposed_text, rationale, detailpage_grounded}`<br>`type` = `copy_draft`(상세페이지 문구) \| `image_guide`(촬영 가이드) |

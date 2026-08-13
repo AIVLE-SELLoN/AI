@@ -142,3 +142,37 @@ def test_returns_top_similar_case_when_found(monkeypatch, biased_alert):
     context = pipeline.retrieve_context(biased_alert)
 
     assert context["similar_case"] == "지난 4월 미디원피스A, 재촬영 진행 → 정상화"
+
+
+# ── 회사 범위 격리 — 조회 경로 (서영님 PR #77 리뷰) ────────────────
+def test_similar_case_query_is_scoped_to_the_current_company(monkeypatch, biased_alert):
+    """🔴 컬렉션2 조회가 **aspect 와 회사 축을 같이** 좁힌다.
+
+    문서 ID 에 회사 접두어가 붙는 것만으로는 **조회가 안 막힌다** — 예전 필터는
+    `where={"aspect": ...}` 하나뿐이라 다른 회사의 반려 사례가 `similar_case` 로
+    새어 나왔다. ID 격리와 조회 격리는 **짝이고, 이건 그 나머지 반쪽**이다.
+
+    ⚠️ 필터를 지워도 컬렉션2 가 비어 있으면(운영 현재 0건) 아무 테스트도 안 깨진다 —
+       그래서 `where` 인자 자체를 잡아서 본다.
+    """
+    captured: dict = {}
+
+    monkeypatch.setattr(pipeline, "get_detail_pages", FakeCollection)
+    monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
+    monkeypatch.setattr(pipeline, "get_documents", lambda collection, where: [])
+    monkeypatch.setattr(pipeline, "current_tenant", lambda: "SLN-aaa")
+
+    def fake_query(collection, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(pipeline, "query_documents", fake_query)
+
+    pipeline.retrieve_context(biased_alert)
+
+    assert captured["where"] == {
+        "$and": [
+            {"aspect": "색상"},
+            {"company_id": "SLN-aaa"},
+        ]
+    }, "조회에 회사 필터가 없으면 다른 회사 반려 사례가 similar_case 로 새어 나옵니다"

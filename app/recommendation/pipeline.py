@@ -51,10 +51,13 @@ from app.core.schemas import (
     RecommendedAction,
 )
 from app.core.vectordb import (
+    TENANT_METADATA_KEY,
+    current_tenant,
     get_detail_pages,
     get_documents,
     get_rejection_reasons,
     query_documents,
+    scoped_document_id,
     upsert_documents,
 )
 from app.recommendation.grounding import has_evidence, verify_grounding
@@ -219,11 +222,20 @@ def retrieve_context(
 
     rejection_reasons = get_rejection_reasons()
     query_text = alert.root_cause.label if alert.root_cause else alert.main_aspect.value
+    tenant = current_tenant()
+    # 🔴 회사 축을 반드시 같이 좁힌다 — `aspect` 만으로 좁히면 **다른 회사의 반려 사례**가
+    #    similar_case 로 새어 나온다(`vectordb.current_tenant` docstring). 문서 ID 에
+    #    회사 접두어가 붙어도 이 필터가 없으면 조회는 그대로 뚫린다 — 둘은 짝이다.
     similar_rows = query_documents(
         rejection_reasons,
         query_text=query_text,
         n_results=SIMILAR_CASE_TOP_N,
-        where={"aspect": alert.main_aspect.value},
+        where={
+            "$and": [
+                {"aspect": alert.main_aspect.value},
+                {TENANT_METADATA_KEY: tenant},
+            ]
+        },
     )
     similar_case = similar_rows[0]["document"] if similar_rows else None
 
@@ -1057,6 +1069,9 @@ def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -
     cs_summary = _summarize_cs_evidence(alert)
     document = f"{root_cause_label} {cs_summary} {approved_text}"
 
+    # 🔴 **한 번만 읽어 ID·metadata 에 같이 쓴다** — 두 번 읽으면 어긋날 수 있고,
+    #    조회 필터(retrieve_context)까지 셋이 같은 값이어야 격리가 성립한다.
+    tenant = current_tenant()
     outcome = "반려" if recommendation.hitl_status == HitlStatus.REJECTED else "승인"
     decided_at = (
         recommendation.hitl_feedback.processed_at
@@ -1065,6 +1080,9 @@ def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -
     )
 
     metadata: dict[str, Any] = {
+        # 조회 필터가 이 키로 회사를 좁힌다(retrieve_context). 쓰기와 읽기가 짝이므로
+        # 한쪽만 지우면 조용히 다른 회사 사례가 섞인다.
+        TENANT_METADATA_KEY: tenant,
         "channel": alert.channel.value,
         "aspect": alert.main_aspect.value,
         "root_cause_label": root_cause_label,
@@ -1083,7 +1101,9 @@ def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -
 
     upsert_documents(
         get_rejection_reasons(),
-        ids=[recommendation.recommendation_id],
+        # 🔴 회사 축을 붙인다. `recommendation_id` 는 `alert_id` 파생이라 **회사 안에서만
+        #    유일**해서, 그대로 쓰면 회사가 다른 같은 논리 알림이 서로를 덮는다.
+        ids=[scoped_document_id(tenant, recommendation.recommendation_id)],
         documents=[document],
         metadatas=[metadata],
     )

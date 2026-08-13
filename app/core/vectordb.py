@@ -36,6 +36,58 @@ from app.core.exceptions import VectorDbError
 
 logger = logging.getLogger(__name__)
 
+TENANT_METADATA_KEY = "company_id"
+"""회사 범위를 가르는 metadata 키. 조회 `where` 에도 같은 키를 쓴다."""
+
+LOCAL_TENANT = "_local"
+"""`MQ_COMPANY_ID` 가 비어 있는 개발·테스트 환경의 대체값.
+
+운영은 배포마다 실제 값이 박혀 있어(`SLN-xxxxxxxxxx`) 이 값과 섞이지 않는다.
+⚠️ 빈 값으로 쌓은 뒤 `MQ_COMPANY_ID` 를 채우면 그 전 문서는 조회에서 빠진다 —
+지금은 컬렉션2가 0건이라 실害가 없고, 운영 전환 시엔 처음부터 값이 있다.
+"""
+
+
+def current_tenant() -> str:
+    """이 배포가 담당하는 회사 식별자. **벡터DB 문서를 회사 범위로 가르는 축이다.**
+
+    🔴 **왜 필요한가** — `product_group_id` 가 회사별 시퀀스라 A사에도 `P001`, B사에도
+       `P001` 이 있다(2026-08-12 백엔드 확인). 그래서 `alert_id` 와 그 파생
+       (`recommendation_id`)은 **회사 안에서만 유일**하다. 백엔드는 `(companyId, alert_id)`
+       복합 유니크로 그걸 흡수하지만, **벡터DB엔 그 축이 없었다** — 회사 두 곳이 같은
+       (window_end, 상품, aspect, 채널) 조합을 만들면 나중 HITL 결과가 먼저 저장된 다른
+       회사 문서를 조용히 덮고, 조회도 `aspect` 하나로만 좁혀 다른 회사 반려 사례가
+       `similar_case` 로 새어 나갔다. (서영님 PR #77 리뷰)
+
+    ⚠️ **지금 데모는 1회사라 위 경로가 도달 불가다.** 그래도 넣는 이유는 **컬렉션2가
+       0건인 지금이 비용 0이고, HITL 이 돌기 시작하면 기존 문서 이관 작업이 되기**
+       때문이다.
+
+    ⚠️ **분리 기제는 아직 고르지 않았다.** 지금은 metadata + 문서 ID 접두어(데이터 레벨)
+       뿐이고, 컬렉션 분리·Chroma `tenant`/`database` 인자는 후속에서 정한다
+       (`get_client()` 가 그 인자를 안 쓰고 기본값으로 연다). **어느 기제를 고르든 이
+       축이 데이터에 있어야 하므로** 축을 먼저 넣고 기제를 뒤로 미룬 것이다.
+
+    ⚠️ **컬렉션1(`detail_pages`)은 아직 이 축이 없다** — 시딩 ID 가
+       `{product_group_id}:{channel}:{aspect}` 라 같은 충돌 모양이고, PR #77 이 만든 게
+       아니라 그 전부터 main 에 있다. 504건 재시딩이 걸려 별도 후속으로 분리했다.
+    """
+    return get_settings().mq_company_id or LOCAL_TENANT
+
+
+def scoped_document_id(tenant: str, raw_id: str) -> str:
+    """회사 축을 붙인 벡터DB 문서 ID. 예: `SLN-aaa:REC-20260828-P001-COLOR-COUPANG`
+
+    ID 를 그대로 쓰면 회사가 다른 같은 논리 알림이 **서로를 덮는다**(`current_tenant`
+    docstring 참고). 접두어라 원래 ID 를 알면 역으로 만들 수 있다.
+
+    ⚠️ **`tenant` 를 인자로 받는다 — 안에서 `current_tenant()` 를 부르지 않는다.**
+       그러면 호출부가 metadata·조회 필터용으로 한 번 더 읽어서 **tenant 를 읽는 곳이
+       둘**이 된다. 쓰기 ID·쓰기 metadata·조회 필터 셋이 같은 값이어야 하므로
+       **호출부가 한 번 읽어 셋에 같이 넘기는** 형태가 맞다(그래야 어긋날 수 없다).
+    """
+    return f"{tenant}:{raw_id}"
+
 
 @lru_cache
 def get_client() -> ClientAPI:
