@@ -32,7 +32,7 @@ import logging
 import sqlite3
 import sys
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -699,7 +699,10 @@ def filter_by_time_range(
 
 def publish(event: dict[str, Any], producer: Any | None, sink: RawDbSink | None, dry_run: bool) -> bool:
     payload = event["payload"]
-    payload["published_at"] = datetime.now(timezone.utc).astimezone().isoformat()
+    # 🔴 **KST 로 찍는다.** 이 파일의 다른 시각은 전부 `to_kst_iso()` 를 거치는데 여기만
+    #    호스트 로컬 오프셋이 붙어 있었다 — UTC 컨테이너에서 돌리면 같은 이벤트 안에서
+    #    `occurred_at`(+09:00)과 `published_at`(+00:00)의 오프셋이 갈린다. (2026-08-13)
+    payload["published_at"] = datetime.now(KST).isoformat()
 
     # 원본 적재를 먼저 한다 — 워커가 참조하는 정본은 이제 raw DB 쪽이다.
     # 적재 실패는 sink 안에서 흡수·집계되고 여기까지 올라오지 않는다.

@@ -61,7 +61,7 @@ import signal
 import sqlite3
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +75,7 @@ from app.classification.service import (
 )
 from app.config import get_settings
 from app.core import constants, raw_schema
+from app.core.constants import KST
 from app.core.exceptions import LlmParseError
 from app.core.schemas import Aspect, AspectSentiment, ClassifiedItem, Sentiment, Source
 from app.core.versions import CLASSIFIER_PIPELINE_VERSION
@@ -661,7 +662,7 @@ class ClassificationWorker:
                 last_item_id     = excluded.last_item_id,
                 updated_at       = excluded.updated_at
             """,
-            (WORKER_ID, occurred_at, item_id, datetime.now(timezone.utc).astimezone().isoformat()),
+            (WORKER_ID, occurred_at, item_id, datetime.now(KST).isoformat()),
         )
 
     # ── 조회 ────────────────────────────────────────────────────────────────
@@ -929,7 +930,7 @@ class ClassificationWorker:
         """실패 건을 dead-letter 에 기록(upsert)한다. 같은 건이 또 실패하면 attempts 만 오른다."""
         if not failures:
             return
-        now = datetime.now(timezone.utc).astimezone().isoformat()
+        now = datetime.now(KST).isoformat()
         for item_id, stage, error in failures:
             self.conn.execute(
                 FAILURE_UPSERT,
@@ -1043,7 +1044,13 @@ class ClassificationWorker:
            돌려도 결과가 안 바뀌었다 — `--reclassify-stale` 이 성립하려면 여기가
            덮어쓰기여야 한다. 자세한 근거는 위 SQL 상수 주석.
         """
-        classified_at = datetime.now(timezone.utc).astimezone().isoformat()
+        # 🔴 **KST 로 찍는다 — 호스트 시간대를 보지 않는다.** raw DB 의 시각은 전부 오프셋이
+        #    붙은 ISO 문자열이고 §3 이 날짜 경계를 KST 로 못박았다(raw_schema 모듈 docstring).
+        #    `datetime.now(timezone.utc).astimezone()` 은 **실행 호스트의 로컬 오프셋**을
+        #    붙여서, UTC 컨테이너에서 돌리면 원문(mock_producer 는 KST)과 오프셋이 갈린다.
+        #    같은 컬럼에 +09:00 과 +00:00 이 섞이면 문자열 비교로 자르는 조회
+        #    (`monthly_aggregator._window`)가 경계에서 어긋난다. (2026-08-13)
+        classified_at = datetime.now(KST).isoformat()
         inserted = 0
 
         # ⚠️ 조회(`active_version_params`)와 **같은 출처를 본다.** 여기서 따로 읽으면 적재한
