@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import csv
-import json
 import sys
 from collections import Counter, defaultdict
 from datetime import date
@@ -25,22 +24,21 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent))
 
-import app.detection.statistics as stats_mod
-from app.batch.daily import STATE_RETENTION_DAYS, CountingClient
-from app.detection.service import detect_anomaly
 from demo_sim import (
-    CACHE,
-    FAMILIES,
     _ORIGINAL_DECIDE,
+    FAMILIES,
     classify_alert,
     day_date,
     load_truth_sets,
     make_decide,
-    swap_real,
+    require_full_real_cache,
 )
-from scripts.golden_inputs import load_golden_inputs as load_inputs
 from validate_anomaly import BASELINE_RATE
 
+import app.detection.statistics as stats_mod
+from app.batch.daily import STATE_RETENTION_DAYS, CountingClient
+from app.detection.service import detect_anomaly
+from scripts.golden_inputs import load_golden_inputs as load_inputs
 
 OUT_CSV = ROOT / "eval/results/demo_false_alert_audit_20260806.csv"
 OUT_MD = ROOT / "eval/results/demo_false_alert_audit_20260806.md"
@@ -77,9 +75,8 @@ def false_reason(alert, day_n: int, by_pas: dict, ignored: dict) -> str:
 
 async def collect_false_alerts():
     gold_items, documents = load_inputs()
-    cache = json.loads(CACHE.read_text(encoding="utf-8"))
+    _path, cache, real_items, swapped, _coverage = require_full_real_cache(gold_items)
     truth, ignored = load_truth_sets()
-    real_items, swapped = swap_real(gold_items, cache)
 
     family = "상품x source"
     stats_mod.decide_fires = make_decide(FAMILIES[family])

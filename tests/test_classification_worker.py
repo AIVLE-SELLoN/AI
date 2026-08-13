@@ -572,6 +572,33 @@ def test_fresh_db_is_not_flagged_as_legacy() -> None:
     assert raw_schema.find_legacy_tables(empty) == []
 
 
+def test_version_columns_missing_is_flagged_as_legacy() -> None:
+    """🔴 버전 컬럼이 없는 옛 `classified_item` 도 구버전으로 잡힌다.
+
+    `LEGACY_MARKERS` 의 판정이 "마커 컬럼이 없으면 옛것"이라 **마커는 그 테이블에 가장
+    나중에 들어온 컬럼이어야 한다.** 컬럼을 추가하고 마커를 안 옮기면 그 사이 버전의
+    테이블이 전부 최신으로 통과한다.
+
+    실제로 버전 컬럼 2개를 넣으면서(2026-08-12) 마커가 `prompt_version` 에 남아 있었고,
+    4컬럼 시절 테이블이 이 함수를 통과했다. `IF NOT EXISTS` 가 옛 테이블을 그대로 두는데
+    인덱스는 새 컬럼을 참조해서, 가드가 막으려던 자리(`no such column`)로 되돌아갔다:
+
+        find_legacy_tables()       = []
+        create_classified_tables() → OperationalError: no such column: model_version
+
+    ⚠️ **컬럼명을 리터럴로 적는다** — `raw_schema.VERSION_COLUMNS[-1]` 로 쓰면 마커를
+       안 옮겼을 때 이 테스트도 같이 통과해서 아무것도 못 잡는다.
+    """
+    old = sqlite3.connect(":memory:")
+    old.execute(
+        "CREATE TABLE classified_item ("
+        " item_id TEXT PRIMARY KEY, source TEXT NOT NULL,"
+        " classified_at TEXT, prompt_version TEXT)"
+    )
+
+    assert raw_schema.find_legacy_tables(old) == ["classified_item"]
+
+
 def test_legacy_raw_db_is_rejected_with_guidance(tmp_path, caplog) -> None:
     """확정 이전 구조가 남아 있으면 안내하고 멈춘다.
 
@@ -590,9 +617,58 @@ def test_legacy_raw_db_is_rejected_with_guidance(tmp_path, caplog) -> None:
         worker.open_db(str(db_path))
 
     assert "classification_cursor" in caplog.text
-    # 원문까지 지우라고 하면 12.8만 행을 다시 재생해야 한다 — AI 소유 테이블만 지운다
-    assert "DROP TABLE classification_cursor;" in caplog.text
-    assert "DROP TABLE cs" not in caplog.text
+    assert "DROP TABLE IF EXISTS classification_cursor;" in caplog.text
+
+    # 🔴 **원문 보호 가드 — 문구를 좁히지 말 것.** 원문까지 지우라고 하면 12.8만 행을
+    #    다시 재생해야 한다. `"DROP TABLE IF EXISTS cs;"` 처럼 정확한 문장으로 단언하면
+    #    안내가 `DROP TABLE cs;`(IF EXISTS 없이)로 바뀌었을 때 **그냥 통과한다.**
+    #    실제로 IF EXISTS 를 붙이면서 한 번 좁혔다(2026-08-13 리뷰 §2). 테이블 이름이
+    #    DROP 문에 등장하는지로 넓게 본다.
+    for protected in ("cs", "reviews", "channel", "products", "mapped_data", "orders"):
+        assert f"DROP TABLE IF EXISTS {protected};" not in caplog.text
+        assert f"DROP TABLE {protected};" not in caplog.text
+
+
+def test_legacy_guidance_always_drops_the_child_table(tmp_path, caplog) -> None:
+    """🔴 안내가 `classified_item_aspect` 도 함께 지우게 한다.
+
+    그 테이블에는 `LEGACY_MARKERS` 마커가 없어서(8/7 이전엔 아예 없던 테이블) `legacy`
+    목록에 **절대 안 들어온다.** 안내를 목록으로만 만들면 `DROP TABLE classified_item;`
+    하나만 나오고, 그대로 따르면 **부모 없는 aspect 행이 남는다.**
+
+    탐지는 `FROM classified_item ci LEFT JOIN classified_item_aspect` 라 부모를 거쳐 읽어
+    무해하지만, **월간 집계는 `FROM voc_document r JOIN classified_item_aspect a` 로 부모를
+    안 거친다** — 원문이 그대로 있으니 그 행들이 계속 집계에 잡히고 옛 분류기 라벨이
+    리포트에 섞인다.
+
+    문서 §4-3 이 두 테이블을 지우라고 하므로, 안내와 절차가 같은 끝 상태를 만들어야 한다.
+    (2026-08-13 리뷰 §3)
+    """
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    raw_schema.create_source_tables(conn)
+    # 버전 컬럼이 없는 옛 부모 + 정상 자식 = "부분적으로 지워진 DB" 의 실제 모양
+    conn.execute(
+        "CREATE TABLE classified_item ("
+        " item_id TEXT PRIMARY KEY, source TEXT NOT NULL,"
+        " classified_at TEXT, prompt_version TEXT)"
+    )
+    conn.execute(raw_schema.CLASSIFIED_ITEM_ASPECT_DDL)
+    conn.commit()
+    conn.close()
+
+    with caplog.at_level("ERROR"), pytest.raises(SystemExit):
+        worker.open_db(str(db_path))
+
+    assert "DROP TABLE IF EXISTS classified_item;" in caplog.text
+    assert "DROP TABLE IF EXISTS classified_item_aspect;" in caplog.text
+
+    # 🔴 **자식이 부모보다 앞에 와야 한다.** `PRAGMA foreign_keys=ON` 세션에서 부모부터
+    #    지우면 `FOREIGN KEY constraint failed` 로 안내가 통째로 실패한다. sqlite3 CLI 는
+    #    기본이 OFF 라 보통은 돌지만, 켜 둔 셸에서는 안 돈다. (2026-08-13 리뷰 §4)
+    assert caplog.text.index("DROP TABLE IF EXISTS classified_item_aspect;") < caplog.text.index(
+        "DROP TABLE IF EXISTS classified_item;"
+    )
 
 
 # ── FK 실효성 (리뷰 3번) ─────────────────────────────────────────────────

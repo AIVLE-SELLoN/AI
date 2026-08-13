@@ -209,9 +209,12 @@ except ImportError as exc:  # pragma: no cover
 
 # ── dry-run 스텁 ────────────────────────────────────────────────
 
-STUB_CAUSE = "사진_색감_오차"
-"""스텁이 돌려줄 원인 라벨. `SCOPE_LIMIT_LABELS`(실물_염색_편차·실제_원단_문제)를
-피한다 — 그 라벨이면 Agent3 가 라우팅·생성을 통째로 건너뛰어 호출 수 추정이 어긋난다.
+STUB_CAUSE = "기타"
+"""스텁이 돌려줄 합성 원인 라벨. 지원하는 색상·사이즈·소재 taxonomy에 모두 속한다.
+
+`SCOPE_LIMIT_LABELS`(실물_염색_편차·실제_원단_문제)도 피한다 — 그 라벨이면 Agent3가
+라우팅·생성을 통째로 건너뛰어 호출 수 추정이 어긋난다. 이 값은 실제 원인·조치 분포를
+재현하지 않는다. dry-run에서 원인 검증 이후 게이트와 호출 수를 보존하기 위한 값이다.
 
 ⚠️ `scripts/crosscheck_agent2_to_agent3.py` 도 이 값과 `CountingClient` 를 그대로
    가져다 쓴다. 두 도구가 같은 호출 수를 내야 하므로 복제하지 말 것."""
@@ -224,8 +227,8 @@ class CountingClient:
     돈 한 푼 안 쓰고 실측한다. 후보 수를 눈으로 세는 추정이 아니다.
 
     프롬프트에 박힌 cs_id 를 그대로 되돌려준다 — 개수를 맞춰야 `root_cause.total` 이
-    현실적인 크기로 나오고, 그래야 `recommended_action` 이 실제와 비슷하게 산출된다.
-    비우면 원인이 '미특정'으로 빠져 게이트 통과 수를 실제보다 적게 잡는다.
+    입력 건수와 같아지고, 그래야 원인 검증 이후 게이트와 호출 수가 유지된다. 모든 문의에
+    같은 합성 라벨을 주므로 실제 원인·조치 분포를 측정하는 스텁은 아니다.
 
     응답은 실제 프롬프트3 스키마를 모두 만족시킨다. `confidence` 는 런타임 판정에 쓰지
     않지만 Pydantic 계약의 필수 필드이고, `evidence` 는 원문 축자 인용 검증을 통과해야
@@ -936,7 +939,7 @@ async def run_batch(
     targets = alerts if max_alerts is None else alerts[:max_alerts]
     failures: list[dict] = [
         {
-            "alert_id": (
+            "target_key": (
                 f"{failure['product']}/{failure['aspect']}/"
                 f"{failure['channel']}/{failure['source']}"
             ),
@@ -1213,7 +1216,8 @@ def print_summary(summary: dict) -> None:
     if summary["failures"]:
         print(f"\n  ⚠️ 실패 {len(summary['failures'])}건 (배치는 계속 진행됨)")
         for f in summary["failures"][:10]:
-            print(f"     {f['alert_id']} [{f['stage']}] {f['error'][:80]}")
+            failure_key = f.get("alert_id") or f.get("target_key") or "식별자 없음"
+            print(f"     {failure_key} [{f['stage']}] {f['error'][:80]}")
     missing = [
         name
         for name, ok in [

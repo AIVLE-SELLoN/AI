@@ -256,6 +256,26 @@ def pick_cache(items: list):
     return max(candidates, key=lambda c: c[3])
 
 
+def require_full_real_cache(items: list):
+    """99% 이상 적용되는 실제분류 캐시를 반환하고, 아니면 측정을 중단한다."""
+    best = pick_cache(items)
+    if best is None:
+        raise RuntimeError(
+            f"쓸 수 있는 분류 캐시가 없습니다: {CACHE_DIR}/{CACHE_GLOB}"
+        )
+
+    path, cache, real_items, coverage = best
+    if coverage < MIN_CACHE_COVERAGE:
+        raise RuntimeError(
+            f"실제분류 캐시 적용률이 {coverage:.1%}로 "
+            f"최소 기준 {MIN_CACHE_COVERAGE:.0%}에 못 미칩니다 ({path.name}). "
+            "나머지를 golden으로 대체한 real 수치는 산출하지 않습니다."
+        )
+
+    swapped = sum(item.item_id in cache for item in items)
+    return path, cache, real_items, swapped, coverage
+
+
 async def main() -> None:
     items, documents = load_inputs()
     truth, ignored = load_truth_sets()

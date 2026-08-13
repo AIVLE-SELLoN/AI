@@ -7,9 +7,8 @@ same demo setup used by demo_sim.py.
 
 from __future__ import annotations
 
-import asyncio
 import argparse
-import json
+import asyncio
 import sys
 from dataclasses import dataclass
 from datetime import date
@@ -20,19 +19,19 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).parent))
 
-import app.detection.statistics as stats_mod
-from app.batch.daily import STATE_RETENTION_DAYS, CountingClient
-from app.detection.service import detect_anomaly
 from demo_sim import (
-    CACHE,
-    FAMILIES,
     _ORIGINAL_DECIDE,
+    FAMILIES,
     classify_alert,
     day_date,
     load_truth_sets,
     make_decide,
-    swap_real,
+    require_full_real_cache,
 )
+
+import app.detection.statistics as stats_mod
+from app.batch.daily import STATE_RETENTION_DAYS, CountingClient
+from app.detection.service import detect_anomaly
 from scripts.golden_inputs import load_golden_inputs as load_inputs
 
 
@@ -162,10 +161,12 @@ async def main() -> None:
     args = parser.parse_args()
 
     gold_items, documents = load_inputs()
-    cache = json.loads(CACHE.read_text(encoding="utf-8"))
+    path, cache, real_items, swapped, coverage = require_full_real_cache(gold_items)
     truth, ignored = load_truth_sets()
-    real_items, swapped = swap_real(gold_items, cache)
-    print(f"문서 {len(documents):,} / 캐시 {len(cache):,} / 실제분류로 덮음 {swapped:,}")
+    print(
+        f"문서 {len(documents):,} / 캐시 {len(cache):,} ({path.name})"
+        f" / 실제분류로 덮음 {swapped:,} ({coverage:.1%})"
+    )
 
     policy_by_name = {p.name: p for p in POLICIES}
     selected_policies = [policy_by_name[name] for name in args.policies]
