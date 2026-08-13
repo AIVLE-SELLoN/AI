@@ -23,11 +23,30 @@ class FakeCollection:
         return self._count
 
 
+def fake_get_documents(*, product_docs, tenant_docs=({"document": "다른 상품"},)):
+    """`get_documents` 대역. **컬렉션1 조회는 두 종류라 갈라줘야 한다.**
+
+    - 상품 조회: `where` 가 `$and`(회사+상품+채널+aspect)
+    - 회사 문서 존재 확인: `where` 가 `{company_id: ...}` 단독 —
+      `_log_detail_page_miss` 가 "재시딩 필요" 와 "이 상품만 미등록" 을 가르려고 부른다.
+
+    `tenant_docs` 기본값을 비우지 않는 이유: 대부분의 테스트가 재려는 건 "시딩은 정상인데
+    이 상품만 없다" 라서, 회사 문서가 있는 쪽이 기본 전제여야 한다.
+    """
+
+    def _inner(collection, where, limit=None):
+        if "$and" not in where:
+            return [dict(doc) for doc in tenant_docs]
+        return [dict(doc) for doc in product_docs]
+
+    return _inner
+
+
 def test_returns_detail_text_when_found(monkeypatch, biased_alert):
     monkeypatch.setattr(pipeline, "get_detail_pages", FakeCollection)
     monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
     monkeypatch.setattr(
-        pipeline, "get_documents", lambda collection, where: [{"document": "아이보리 컬러"}]
+        pipeline, "get_documents", fake_get_documents(product_docs=[{"document": "아이보리 컬러"}])
     )
     monkeypatch.setattr(pipeline, "query_documents", lambda collection, **kwargs: [])
 
@@ -40,7 +59,7 @@ def test_returns_detail_text_when_found(monkeypatch, biased_alert):
 def test_falls_back_when_detail_page_missing(monkeypatch, biased_alert):
     monkeypatch.setattr(pipeline, "get_detail_pages", FakeCollection)
     monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
-    monkeypatch.setattr(pipeline, "get_documents", lambda collection, where: [])
+    monkeypatch.setattr(pipeline, "get_documents", fake_get_documents(product_docs=[]))
     monkeypatch.setattr(pipeline, "query_documents", lambda collection, **kwargs: [])
 
     context = pipeline.retrieve_context(biased_alert)
@@ -56,7 +75,7 @@ def test_warns_when_detail_collection_is_empty(monkeypatch, biased_alert, caplog
     """
     monkeypatch.setattr(pipeline, "get_detail_pages", lambda: FakeCollection(count=0))
     monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
-    monkeypatch.setattr(pipeline, "get_documents", lambda collection, where: [])
+    monkeypatch.setattr(pipeline, "get_documents", fake_get_documents(product_docs=[]))
     monkeypatch.setattr(pipeline, "query_documents", lambda collection, **kwargs: [])
 
     with caplog.at_level(logging.WARNING, logger=pipeline.logger.name):
@@ -70,7 +89,7 @@ def test_does_not_warn_when_only_this_product_is_unregistered(monkeypatch, biase
     """컬렉션에 다른 상품이 들어 있으면 시딩은 된 것이다 — 경고 대상이 아니다."""
     monkeypatch.setattr(pipeline, "get_detail_pages", lambda: FakeCollection(count=504))
     monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
-    monkeypatch.setattr(pipeline, "get_documents", lambda collection, where: [])
+    monkeypatch.setattr(pipeline, "get_documents", fake_get_documents(product_docs=[]))
     monkeypatch.setattr(pipeline, "query_documents", lambda collection, **kwargs: [])
 
     with caplog.at_level(logging.WARNING, logger=pipeline.logger.name):
@@ -84,7 +103,7 @@ def test_always_includes_cs_summary_regardless_of_detail_page_result(monkeypatch
     monkeypatch.setattr(pipeline, "get_detail_pages", FakeCollection)
     monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
     monkeypatch.setattr(
-        pipeline, "get_documents", lambda collection, where: [{"document": "아이보리 컬러"}]
+        pipeline, "get_documents", fake_get_documents(product_docs=[{"document": "아이보리 컬러"}])
     )
     monkeypatch.setattr(pipeline, "query_documents", lambda collection, **kwargs: [])
 
@@ -97,7 +116,7 @@ def _stub_vectordb(monkeypatch):
     monkeypatch.setattr(pipeline, "get_detail_pages", FakeCollection)
     monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
     monkeypatch.setattr(
-        pipeline, "get_documents", lambda collection, where: [{"document": "아이보리 컬러"}]
+        pipeline, "get_documents", fake_get_documents(product_docs=[{"document": "아이보리 컬러"}])
     )
     monkeypatch.setattr(pipeline, "query_documents", lambda collection, **kwargs: [])
 
@@ -131,7 +150,7 @@ def test_returns_top_similar_case_when_found(monkeypatch, biased_alert):
     monkeypatch.setattr(pipeline, "get_detail_pages", FakeCollection)
     monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
     monkeypatch.setattr(
-        pipeline, "get_documents", lambda collection, where: [{"document": "아이보리 컬러"}]
+        pipeline, "get_documents", fake_get_documents(product_docs=[{"document": "아이보리 컬러"}])
     )
     monkeypatch.setattr(
         pipeline,
@@ -142,6 +161,62 @@ def test_returns_top_similar_case_when_found(monkeypatch, biased_alert):
     context = pipeline.retrieve_context(biased_alert)
 
     assert context["similar_case"] == "지난 4월 미디원피스A, 재촬영 진행 → 정상화"
+
+
+# ── 회사 범위 격리 — 컬렉션1 조회 경로 ─────────────────────────────
+def test_detail_page_lookup_is_scoped_to_the_current_company(monkeypatch, biased_alert):
+    """🔴 컬렉션1 조회가 **회사 축까지** 좁힌다.
+
+    `product_group_id` 는 회사별 시퀀스라 A사에도 `P001`, B사에도 `P001` 이 있다. 이
+    필터가 없으면 **다른 회사 상세페이지**가 개선안의 인용 근거가 되고, 그 문장이
+    `citations` 에 박제돼 셀러 화면까지 나간다.
+
+    ⚠️ 시딩 ID 격리만으로는 이걸 못 막는다 — ID 가 안 겹쳐도 조회는 그대로 뚫린다.
+       그래서 **시딩 테스트와 별개로** `where` 인자 자체를 잡아서 본다
+       (`tests/test_seed_vectordb.py` 가 쓰기 쪽 반쪽).
+    """
+    captured: dict = {}
+
+    def capturing_get_documents(collection, where, limit=None):
+        if "$and" in where:
+            captured["where"] = where
+        return [{"document": "아이보리 컬러"}]
+
+    monkeypatch.setattr(pipeline, "get_detail_pages", FakeCollection)
+    monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
+    monkeypatch.setattr(pipeline, "get_documents", capturing_get_documents)
+    monkeypatch.setattr(pipeline, "query_documents", lambda collection, **kwargs: [])
+    monkeypatch.setattr(pipeline, "current_tenant", lambda: "SLN-aaa")
+
+    pipeline.retrieve_context(biased_alert)
+
+    assert {"company_id": "SLN-aaa"} in captured["where"]["$and"], (
+        "컬렉션1 조회에 회사 필터가 없으면 다른 회사 상세페이지를 근거로 인용합니다"
+    )
+
+
+def test_warns_when_collection_has_no_documents_for_this_company(
+    monkeypatch, biased_alert, caplog
+):
+    """🔴 회사 축 도입이 만든 **새 실패 모드** — 축 없이 시딩된 컬렉션.
+
+    옛 문서엔 `company_id` metadata 가 없어서 조회 필터가 **전건을 걸러낸다**. 504건이
+    멀쩡히 들어 있으니 `count()` 는 0이 아니고, 그래서 옛 코드였다면 **"상세페이지
+    미등록"(INFO)** 으로 조용히 오진했다 — 사람은 상품 등록 쪽을 파는데 실제 조치는
+    재시딩이다. 팀 전원이 재시딩해야 하므로 누군가는 반드시 이 상태를 만난다.
+    """
+    monkeypatch.setattr(pipeline, "get_detail_pages", lambda: FakeCollection(count=504))
+    monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
+    monkeypatch.setattr(
+        pipeline, "get_documents", fake_get_documents(product_docs=[], tenant_docs=[])
+    )
+    monkeypatch.setattr(pipeline, "query_documents", lambda collection, **kwargs: [])
+
+    with caplog.at_level(logging.WARNING, logger=pipeline.logger.name):
+        context = pipeline.retrieve_context(biased_alert)
+
+    assert context["detail_text"] == pipeline.NO_DETAIL_TEXT
+    assert "--reset" in caplog.text, "재시딩이 조치라는 걸 로그가 말해줘야 한다"
 
 
 # ── 회사 범위 격리 — 조회 경로 (서영님 PR #77 리뷰) ────────────────
@@ -159,7 +234,7 @@ def test_similar_case_query_is_scoped_to_the_current_company(monkeypatch, biased
 
     monkeypatch.setattr(pipeline, "get_detail_pages", FakeCollection)
     monkeypatch.setattr(pipeline, "get_rejection_reasons", FakeCollection)
-    monkeypatch.setattr(pipeline, "get_documents", lambda collection, where: [])
+    monkeypatch.setattr(pipeline, "get_documents", fake_get_documents(product_docs=[]))
     monkeypatch.setattr(pipeline, "current_tenant", lambda: "SLN-aaa")
 
     def fake_query(collection, **kwargs):

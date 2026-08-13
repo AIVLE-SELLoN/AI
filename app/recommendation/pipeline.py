@@ -250,10 +250,16 @@ def retrieve_context(
 def _get_detail_page_text(alert: DetectionAlert) -> str:
     """컬렉션1(상세페이지) get — 임베딩 안 거침. 미등록 SKU/빈 값이면 NO_DETAIL_TEXT(§4-5)."""
     detail_pages = get_detail_pages()
+    tenant = current_tenant()
+    # 🔴 회사 축을 반드시 같이 좁힌다 — `product_group_id` 가 회사별 시퀀스라 A사 P001 과
+    #    B사 P001 이 구분되지 않는다. 이 필터가 없으면 **다른 회사 상세페이지**를 개선안의
+    #    인용 근거로 쓰고, 그 문장이 `citations` 에 박제돼 셀러 화면까지 나간다.
+    #    시딩 ID·metadata 와 셋이 짝이다(`scripts/seed_vectordb.py`).
     detail_rows = get_documents(
         detail_pages,
         where={
             "$and": [
+                {TENANT_METADATA_KEY: tenant},
                 {"product_group_id": alert.product_group_id},
                 {"channel": alert.channel.value},
                 {"aspect": alert.main_aspect.value},
@@ -263,17 +269,28 @@ def _get_detail_page_text(alert: DetectionAlert) -> str:
     if detail_rows:
         return detail_rows[0]["document"]
 
-    _log_detail_page_miss(alert, detail_pages)
+    _log_detail_page_miss(alert, detail_pages, tenant)
     return NO_DETAIL_TEXT
 
 
-def _log_detail_page_miss(alert: DetectionAlert, collection: Any) -> None:
-    """0건의 사유를 둘로 가른다 — 이 상품이 미등록인가, 컬렉션이 통째로 비었는가.
+def _log_detail_page_miss(alert: DetectionAlert, collection: Any, tenant: str) -> None:
+    """0건의 사유를 셋으로 가른다 — 조치가 전부 다르기 때문이다.
+
+    | 사유 | 조치 | 수준 |
+    |---|---|---|
+    | 컬렉션이 통째로 비었다 | 시딩 실행 | WARNING |
+    | 이 회사(`company_id`) 문서가 0건이다 | **재시딩** | WARNING |
+    | 이 상품만 없다 | 상품 등록 | INFO |
 
     `.chroma/` 가 gitignore 라 각자 로컬은 시딩(`scripts/seed_vectordb.py`) 전까지
     비어 있는데, 그 상태가 "상세페이지 미등록" 과 **같은 모양(조회 0건)** 으로 나와
-    구분이 안 됐다. 컬렉션이 0건이면 조회 조건과 무관하게 전건이 0건이므로 사유가
-    다르고, 조치도 다르다(상품 등록 vs 시딩 실행).
+    구분이 안 됐다.
+
+    🔴 **가운데 줄이 회사 축 도입이 만든 새 사유다.** 축을 넣기 전에 시딩한 컬렉션은
+       문서에 `company_id` metadata 가 없어서, 조회 필터가 **전건을 걸러낸다** —
+       504건이 멀쩡히 들어 있는데 조회는 0건이다. 이때 `collection.count()` 는 504 라
+       첫 줄에 안 걸리고, 옛 코드였다면 **"상세페이지 미등록"(INFO)** 으로 조용히
+       오진했다. 그러면 상품 등록 쪽을 파게 되는데 실제 조치는 재시딩이다.
 
     로그만 남기고 예외는 안 던진다 — 근거 0건의 처리는 `run()` 이 이미 한다
     (개선안 미생성 + 경고). 여기서 막으면 그 경로가 두 벌이 된다.
@@ -286,8 +303,20 @@ def _log_detail_page_miss(alert: DetectionAlert, collection: Any) -> None:
         )
         return
 
+    # 임베딩을 안 타는 get 이고 limit=1 이라 비용이 사실상 없다.
+    if not get_documents(collection, where={TENANT_METADATA_KEY: tenant}, limit=1):
+        logger.warning(
+            "[상세페이지 회사 문서 0건] 컬렉션에 문서는 있는데 company_id=%s 것이 "
+            "하나도 없습니다 — 회사 축 도입 전에 시딩됐을 수 있습니다. "
+            "`python scripts/seed_vectordb.py --reset` 으로 재시딩하세요. alert=%s",
+            tenant,
+            alert.alert_id,
+        )
+        return
+
     logger.info(
-        "[상세페이지 미등록] product_group_id=%s channel=%s aspect=%s alert=%s",
+        "[상세페이지 미등록] company_id=%s product_group_id=%s channel=%s aspect=%s alert=%s",
+        tenant,
         alert.product_group_id,
         alert.channel.value,
         alert.main_aspect.value,

@@ -37,13 +37,25 @@ from app.core.constants import (
     EMBEDDING_MODEL,
 )
 from app.core.exceptions import VectorDbError
-from app.core.vectordb import get_client, get_detail_pages, upsert_documents
+from app.core.vectordb import (
+    TENANT_METADATA_KEY,
+    current_tenant,
+    get_client,
+    get_detail_pages,
+    scoped_document_id,
+    upsert_documents,
+)
 
 CSV_PATH = Path(__file__).resolve().parent.parent / "data" / "input" / "input_detail_fields.csv"
 
 
 def _make_id(entry: dict[str, Any]) -> str:
-    """product_group_id+channel+aspect로 결정적 id 생성 — 재실행해도 중복 안 쌓인다."""
+    """product_group_id+channel+aspect로 결정적 id 생성 — 재실행해도 중복 안 쌓인다.
+
+    ⚠️ **회사 축은 여기 없다** — 호출부가 `scoped_document_id(tenant, ...)` 로 감싼다.
+    `product_group_id` 는 회사별 시퀀스라 이 값만으로는 회사 간에 유일하지 않다
+    (`vectordb.current_tenant` docstring).
+    """
     return f"{entry['product_group_id']}:{entry['channel']}:{entry['aspect']}"
 
 
@@ -78,16 +90,26 @@ def main(reset: bool = False) -> None:
         print(f"임베딩 모델 = {EMBEDDING_MODEL} / 컬렉션 초기화")
         reset_collections()
 
+    # 🔴 **한 번만 읽어 ID·metadata 에 같이 쓴다** — 두 번 읽으면 어긋날 수 있고,
+    #    조회 필터(`pipeline._get_detail_page_text`)까지 셋이 같은 값이어야 격리가
+    #    성립한다(컬렉션2 `record_hitl_outcome` 과 같은 형태).
+    tenant = current_tenant()
+
     # 적재는 문서를 임베딩하므로 네트워크와 유효한 키가 필요하다. 실패는
     # `upsert_documents` 가 VectorDbError 로 감싸 사유를 알아볼 수 있게 준다.
     collection = get_detail_pages()
     try:
         upsert_documents(
             collection,
-            ids=[_make_id(entry) for entry in entries],
+            # 🔴 회사 축을 붙인다. `product_group_id` 가 회사별 시퀀스라 A사 P001 과
+            #    B사 P001 이 **같은 ID** 를 받아 나중 시딩이 앞엣것을 덮는다.
+            ids=[scoped_document_id(tenant, _make_id(entry)) for entry in entries],
             documents=[entry["detail_text"] for entry in entries],
             metadatas=[
                 {
+                    # 조회 필터가 이 키로 회사를 좁힌다. 쓰기와 읽기가 짝이므로
+                    # 한쪽만 지우면 조용히 다른 회사 상세페이지를 근거로 쓴다.
+                    TENANT_METADATA_KEY: tenant,
                     "product_group_id": entry["product_group_id"],
                     "channel": entry["channel"],
                     "aspect": entry["aspect"],
@@ -100,7 +122,7 @@ def main(reset: bool = False) -> None:
         print("  .env 의 LLM_API_KEY 와 네트워크 연결을 확인하세요.")
         raise SystemExit(1) from exc
 
-    print(f"{len(entries)}건 적재 완료 → collection={collection.name}")
+    print(f"{len(entries)}건 적재 완료 → collection={collection.name} / company_id={tenant}")
 
 
 if __name__ == "__main__":

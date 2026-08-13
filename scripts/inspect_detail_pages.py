@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.core.vectordb import get_detail_pages
+from app.core.vectordb import TENANT_METADATA_KEY, get_detail_pages
 
 
 def main() -> None:
@@ -26,15 +26,20 @@ def main() -> None:
     collection = get_detail_pages()
     rows = collection.get()
 
+    # company_id 를 같이 내보낸다 — 이 컬럼이 비어 있으면 **회사 축 도입 전에 시딩된
+    # 컬렉션**이고, 그 상태에서는 조회가 전건 0건이 된다(재시딩 필요).
     with out_path.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["id", "product_group_id", "channel", "aspect", "document"])
+        writer.writerow(
+            ["id", "company_id", "product_group_id", "channel", "aspect", "document"]
+        )
         for doc_id, metadata, document in zip(
             rows["ids"], rows["metadatas"], rows["documents"]
         ):
             writer.writerow(
                 [
                     doc_id,
+                    metadata.get(TENANT_METADATA_KEY, ""),
                     metadata.get("product_group_id", ""),
                     metadata.get("channel", ""),
                     metadata.get("aspect", ""),
