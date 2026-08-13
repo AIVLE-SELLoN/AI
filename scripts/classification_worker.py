@@ -1060,12 +1060,17 @@ class ClassificationWorker:
            돌려도 결과가 안 바뀌었다 — `--reclassify-stale` 이 성립하려면 여기가
            덮어쓰기여야 한다. 자세한 근거는 위 SQL 상수 주석.
         """
-        # 🔴 **KST 로 찍는다 — 호스트 시간대를 보지 않는다.** raw DB 의 시각은 전부 오프셋이
-        #    붙은 ISO 문자열이고 §3 이 날짜 경계를 KST 로 못박았다(raw_schema 모듈 docstring).
-        #    `datetime.now(timezone.utc).astimezone()` 은 **실행 호스트의 로컬 오프셋**을
-        #    붙여서, UTC 컨테이너에서 돌리면 원문(mock_producer 는 KST)과 오프셋이 갈린다.
-        #    같은 컬럼에 +09:00 과 +00:00 이 섞이면 문자열 비교로 자르는 조회
-        #    (`monthly_aggregator._window`)가 경계에서 어긋난다. (2026-08-13)
+        # **KST 로 찍는다 — 호스트 시간대를 보지 않는다.** raw DB 의 시각은 전부 오프셋이
+        # 붙은 ISO 문자열이고 §3 이 날짜 경계를 KST 로 못박았다(raw_schema 모듈 docstring).
+        # `datetime.now(timezone.utc).astimezone()` 은 **실행 호스트의 로컬 오프셋**을 붙여서,
+        # UTC 컨테이너에서 돌리면 원문(mock_producer 는 KST)과 오프셋이 갈린다.
+        #
+        # ⚠️ **일관성 확보이지 지금 깨지는 것을 고치는 게 아니다.** `classified_at` 은
+        #    저장소 전체에서 **쓰기 전용**이다 — 읽거나 비교하는 곳이 0건이다. 특히 월간
+        #    집계는 이 컬럼을 **일부러 안 쓴다**(`monthly_aggregator` 가 `occurred_at` 으로
+        #    거르고, 그 파일이 "분류 시각으로 기간을 자르면 말일 문의를 1일 새벽에 분류했을
+        #    때 다음 달로 넘어간다"고 적어 뒀다). 소비처가 생겼을 때 한 컬럼에 +09:00 과
+        #    +00:00 이 섞여 있지 않게 미리 맞춰 두는 것이다. (2026-08-13)
         classified_at = datetime.now(KST).isoformat()
         inserted = 0
 

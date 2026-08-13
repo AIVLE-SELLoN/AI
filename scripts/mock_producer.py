@@ -699,9 +699,14 @@ def filter_by_time_range(
 
 def publish(event: dict[str, Any], producer: Any | None, sink: RawDbSink | None, dry_run: bool) -> bool:
     payload = event["payload"]
-    # 🔴 **KST 로 찍는다.** 이 파일의 다른 시각은 전부 `to_kst_iso()` 를 거치는데 여기만
-    #    호스트 로컬 오프셋이 붙어 있었다 — UTC 컨테이너에서 돌리면 같은 이벤트 안에서
-    #    `occurred_at`(+09:00)과 `published_at`(+00:00)의 오프셋이 갈린다. (2026-08-13)
+    # **KST 로 찍는다.** 이 파일의 다른 시각은 전부 `to_kst_iso()` 를 거치는데 여기만
+    # 호스트 로컬 오프셋이 붙어 있었다 — UTC 컨테이너에서 돌리면 같은 이벤트 안에서
+    # `occurred_at`(+09:00)과 `published_at`(+00:00)의 오프셋이 갈린다.
+    #
+    # ⚠️ `classified_at` 과 같은 성격이다 — **일관성 확보이지 지금 깨지는 것을 고치는 게
+    #    아니다.** `published_at` 은 payload 에 실려 Kafka 로 나가고 `--dry-run` 로그
+    #    한 줄에 찍히는 것이 전부이고, 읽어서 비교하는 소비처는 저장소에 없다.
+    #    (2026-08-13)
     payload["published_at"] = datetime.now(KST).isoformat()
 
     # 원본 적재를 먼저 한다 — 워커가 참조하는 정본은 이제 raw DB 쪽이다.
