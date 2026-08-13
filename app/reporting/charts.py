@@ -142,10 +142,35 @@ def render_divergence_gauge(
     *,
     jsd_score: float | None,
     comparison_pair: str,
+    jsd_baseline: float | None = None,
     sample_size: int | None = None,
     width: int = 430,
 ) -> str:
-    """채널 간 평판 격차 게이지 — 안전(0.0) ~ 위험(0.6+) 위에 현재 점수를 찍는다.
+    """채널 간 평판 격차 게이지 — 안전(0.0) ~ 위험(0.6+) 위에 현재 점수와 **기준선**을 찍는다.
+
+    🔴 **`jsd_baseline` 을 같이 찍는 이유 — 안 찍으면 그림이 판정과 반대로 보인다.**
+       마커는 `jsd_score` **절대값** 위치인데, severity 판정은
+       `excess = jsd_score - jsd_baseline` 기준이다(`metrics_calculator.decide_severity`,
+       경계 `JSD_DELTA_MIN`=0.10 / 0.20). 두 기준이 달라 이런 쌍이 정상적으로 나온다:
+
+           jsd   baseline  excess  판정      기준선 없이 본 게이지
+           0.54  0.50      0.04    SAFE      붉은 구역(54%) — 위험해 보인다
+           0.25  0.02      0.23    CRISIS    녹색 구역(25%) — 안전해 보인다
+
+       두 번째가 더 나쁘다. 같은 페이지 상단 `cause_title` 에는 `_validate_stage_label`
+       이 "위험 단계"를 강제로 넣는데 그림은 SAFETY ZONE 을 가리켜, **문서 안에서 문장과
+       그림이 반대**가 된다. `jsd_baseline` 은 표본이 작을수록 커지므로 드문 경우가
+       아니다. (2026-08-13 서영님 시연 검토)
+
+       기준선을 함께 찍으면 **두 마커 사이 간격이 곧 excess** 라 "얼마나 초과했는지"가
+       그림에 남는다. 절대 점수도 그대로 두는 이유는 `pair_analysis` 문장이 `jsd_score`
+       를 그대로 인용하기 때문이다 — excess 로 갈아끼우면 문장과 그림이 다시 갈린다.
+
+    ⚠️ **게이지가 아직 못 보여주는 축이 하나 남아 있다 — 유의성.** `decide_severity` 는
+       `bh_significant` 가 False 면 excess 가 아무리 커도 SAFE 로 본다("다중검정을
+       통과하지 못한 차이는 우연"). 그래서 간격이 넓은데 판정은 SAFE 인 쌍이 여전히
+       가능하다. 판정 자체를 게이지에 넘겨 마커 색으로 칠하는 안이 있었고, 배지 삭제
+       결정(아래)과의 관계 때문에 이번에는 **넣지 않았다.**
 
     ⚠️ 게이지에는 severity 배지(CRISIS DETECTED 등)를 **달지 않는다**(2026-08-04 확정).
        여기서는 점수와 위치만 보여준다.
@@ -157,7 +182,9 @@ def render_divergence_gauge(
        (2026-08-05 리뷰 확인: 배지만 삭제, 문장은 유지)
 
     판정이 보류된 채널쌍은 마커를 찍지 않는다 — 표본 부족으로 판정하지 않은 값을
-    위치로 표시하면 없는 근거를 만드는 셈이다.
+    위치로 표시하면 없는 근거를 만드는 셈이다. 스키마가 게이트 미충족 시 판정 6개 값을
+    전부 `null` 로 못박아서(`ChannelDivergencePair._GATED_FIELDS`) `jsd_baseline` 도
+    같이 `None` 이 되므로, 기준선만 덩그러니 남는 경우는 생기지 않는다.
     """
     # 막대 높이는 구간 라벨 두 줄(ZONE + 점수 범위)이 **안쪽에** 들어갈 만큼 필요하다.
     # 여기를 줄이면 라벨 baseline 이 막대 밖으로 나가 잘린다.
@@ -188,6 +215,33 @@ def render_divergence_gauge(
     if jsd_score is not None:
         x = pad + bar_w * max(0.0, min(1.0, jsd_score))
         label = f"Score {jsd_score:.2f}"
+
+        # 기준선(귀무 기댓값)을 **점수 마커보다 먼저** 그린다 — 겹치면 점수 쪽이 위로
+        # 오게 해서, 둘이 붙어 있을 때(= excess 가 작을 때) 판정의 주인공이 가려지지
+        # 않게 한다.
+        #
+        # ⚠️ 점수 마커와 **모양을 다르게** 한다. 같은 흰 실선으로 그리면 두 개가 나란히
+        #    선 것으로 보이고 어느 쪽이 기준인지 알 수 없다. 점수는 흰 실선, 기준선은
+        #    어두운 점선이다(둘 다 기본 도형이라 weasyprint 가 확실히 그린다 —
+        #    `_gradient_slices` 가 그라디언트를 슬라이스로 근사한 것과 같은 이유).
+        #
+        # ⚠️ 막대 **밖으로 내리지 않는다.** 아래 줄에는 "표본 N건" 이 붙어 있어서
+        #    (오른쪽 정렬) 기준선이 큰 쌍에서 도형이 그 글자 위에 겹친다.
+        if jsd_baseline is not None:
+            bx = pad + bar_w * max(0.0, min(1.0, jsd_baseline))
+            parts.append(
+                f'<line x1="{bx:.1f}" y1="{bar_y}" x2="{bx:.1f}" y2="{bar_y + bar_h}" '
+                f'stroke="{COLOR_TEXT}" stroke-width="1.4" stroke-dasharray="3 2" '
+                f'opacity="0.9"/>'
+            )
+            # 라벨은 막대 아래 줄. "표본 N건"(7.5px, 대략 56px)이 오른쪽 끝을 쓰므로
+            # 그만큼 + 자기 반폭(≈20px)을 비워 두고 클램프한다 — 안 그러면 기준선이
+            # 큰 쌍에서 두 글자가 겹쳐 둘 다 못 읽는다.
+            label_x = min(max(bx, pad + 20), width - pad - 80)
+            parts.append(
+                f'<text x="{label_x:.1f}" y="{height - 2}" text-anchor="middle" '
+                f'font-size="7.5" fill="{COLOR_MUTED}">기준 {jsd_baseline:.2f}</text>'
+            )
         # 폭은 실측 기준이다: "Score 0.42" 는 9px 산세리프에서 49.1px.
         #   점(cx +11, r 3.5) → 텍스트 시작 +19 → 텍스트 끝 ≒ +68 → 우측 여백 ≒ 10
         # 점수는 항상 `%.2f` 라 글자 수가 고정이므로 폭이 흔들리지 않는다.
