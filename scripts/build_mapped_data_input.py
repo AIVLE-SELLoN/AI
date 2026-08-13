@@ -33,10 +33,20 @@
     앞의 둘은 "부정확해지는" 게 아니라 **아예 안 나온다** — 짝이 없으면 계산이
     시작되지 않는다. 조용히 비는 실패라 리포트를 열어봐야 안다.
 
+🔴 **전제: `data/golden/golden_mapping.csv` 를 먼저 받아야 한다.**
+   `data/**` 가 `.gitignore` 대상이라 **입력도 출력도 저장소에 없다.** 새로 클론한
+   상태에서 이 스크립트만으로는 아무것도 못 만든다 — 팀 데이터 번들을 받거나
+   `scripts/generate_cs_review_data.py` 로 생성한 뒤에 돌린다.
+   (2026-08-13 지적 반영: "스크립트만 있으면 같은 상태를 만들 수 있다"는 틀린 말이었다.)
+
 실행::
 
     python scripts/build_mapped_data_input.py
     python scripts/build_mapped_data_input.py --dry-run
+
+입력이 불완전하면 **부분 파일을 만들지 않고 죽는다.** 빈 값·중복 `variant_row_id`·
+필수 컬럼 누락은 전부 사유와 행 번호를 찍고 중단한다. `input_channel_products.csv` 가
+있으면 variant 집합까지 대조한다 — 자세한 건 `build_rows` · `check_against_catalog`.
 """
 
 from __future__ import annotations
@@ -50,9 +60,36 @@ ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_SRC = ROOT / "data" / "golden" / "golden_mapping.csv"
 DEFAULT_DST = ROOT / "data" / "input" / "input_mapped_data.csv"
+# variant 집합 대조용. `mock_producer` 가 이 파일과 매핑을 조인하므로, 여기 있는 variant 가
+# 매핑에 없으면 그 채널상품이 폴백된다.
+DEFAULT_CATALOG = ROOT / "data" / "input" / "input_channel_products.csv"
 
 # `mock_producer.load_product_catalog` 이 읽는 컬럼. 그쪽이 정본이라 이름을 맞춘다.
 FIELDS = ["variant_row_id", "product_group_id"]
+
+# golden 쪽 컬럼명. 이 둘이 없으면 변환할 수 없다.
+SRC_VARIANT, SRC_GROUP = "variant_row_id", "golden_group_id"
+
+# 데이터 번들을 못 받았을 때 안내. 저장소에 없는 파일이라 경로만 찍으면 원인을 모른다.
+_BUNDLE_HINT = (
+    "`data/**` 는 .gitignore 대상이라 저장소에 들어 있지 않습니다 — "
+    "팀 데이터 번들을 먼저 받아 두세요."
+)
+
+
+def _require_columns(fieldnames: list[str] | None, src: Path) -> None:
+    """필수 헤더 확인. 없으면 어떤 컬럼이 필요한지 말하고 죽는다.
+
+    헤더가 통째로 다르면 아래 루프가 전 행을 "빈 값"으로 보고 첫 행에서 죽는데, 그러면
+    "1행이 비었다"는 엉뚱한 사유가 나온다. 원인은 컬럼명이므로 여기서 먼저 잡는다.
+    """
+    present = set(fieldnames or ())
+    missing = [c for c in (SRC_VARIANT, SRC_GROUP) if c not in present]
+    if missing:
+        raise SystemExit(
+            f"{src}: 필수 컬럼이 없습니다 — {', '.join(missing)}. "
+            f"헤더: {', '.join(fieldnames or ['(없음)'])}"
+        )
 
 
 def build_rows(src: Path) -> list[dict[str, str]]:
@@ -61,44 +98,129 @@ def build_rows(src: Path) -> list[dict[str, str]]:
     `golden_group_id` → `product_group_id` 로 컬럼명만 바꾼다. `canonical_option`·
     `mock_scenario_tag` 는 **가져오지 않는다** — 시나리오 메타데이터라 운영 테이블에
     있을 수 없는 값이고, 들고 오면 목이 운영보다 많이 아는 상태가 된다.
+
+    🔴 **불완전한 행은 건너뛰지 않고 죽는다.** 처음엔 값이 빈 행을 조건절에서 걸러
+       냈는데, 그러면 **부분 매핑 파일이 종료코드 0 으로 만들어진다**(2026-08-13
+       서영님 지적, 재현됨: 2행짜리 입력에서 1행만 나오고 성공으로 끝났다).
+       빠진 variant 는 producer 에서 채널상품 ID 로 폴백되므로, 이 PR 이 막으려던
+       "부분 매핑 때문에 채널 비교가 조용히 사라지는" 실패가 변환 단계에서 그대로
+       재현된다. 골라서 버리는 것과 다 가져오는 것 중 **하나만 맞는데, 여기서는
+       판단할 근거가 없다** — 그래서 사람에게 돌려준다.
+
+    Raises:
+        SystemExit: 필수 컬럼 없음 · 빈 값 · `variant_row_id` 중복 · 행 0건.
     """
+    rows: list[dict[str, str]] = []
+    seen: dict[str, tuple[str, int]] = {}
+
     with src.open(encoding="utf-8-sig", newline="") as f:
-        rows = [
-            {"variant_row_id": vrid, "product_group_id": group}
-            for row in csv.DictReader(f)
-            if (vrid := (row.get("variant_row_id") or "").strip())
-            and (group := (row.get("golden_group_id") or "").strip())
-        ]
+        reader = csv.DictReader(f)
+        _require_columns(reader.fieldnames, src)
+
+        for row in reader:
+            line = reader.line_num  # 헤더가 1행이라 데이터는 2행부터
+            vrid = (row.get(SRC_VARIANT) or "").strip()
+            group = (row.get(SRC_GROUP) or "").strip()
+
+            if not vrid or not group:
+                blank = SRC_VARIANT if not vrid else SRC_GROUP
+                raise SystemExit(
+                    f"{src}:{line} — {blank} 가 비었습니다. 매핑이 한 행이라도 빠지면 "
+                    "그 채널상품은 폴백돼 채널 간 비교에서 빠집니다. 원본을 고치거나, "
+                    "빠져도 되는 행이라면 원본에서 지우고 다시 돌리세요."
+                )
+
+            # variant_row_id 는 mapped_data 의 PRIMARY KEY 다. 중복이면 적재 시
+            # INSERT OR REPLACE 로 조용히 덮어써져서 어느 쪽이 남는지 알 수 없다.
+            #
+            # ⚠️ **그룹이 같아도 죽인다.** 지금 결과가 같다고 넘기면 원본이 1:1 이라는
+            #    전제가 깨진 것을 아무도 모르고, 나중에 한쪽만 고쳐져 갈라질 때
+            #    비로소 드러난다. 그때는 어느 행이 맞는지 알 수 없다.
+            if vrid in seen:
+                prev_group, prev_line = seen[vrid]
+                same = " (그룹은 같지만 원본이 1:1 이어야 합니다)" if prev_group == group else ""
+                raise SystemExit(
+                    f"{src}: variant_row_id 가 중복입니다 — {vrid} "
+                    f"({prev_line}행 → {prev_group} / {line}행 → {group}){same}"
+                )
+
+            seen[vrid] = (group, line)
+            rows.append({"variant_row_id": vrid, "product_group_id": group})
 
     if not rows:
-        raise SystemExit(f"매핑 행이 0건입니다: {src} — 컬럼명을 확인하세요.")
+        raise SystemExit(f"매핑 행이 0건입니다: {src} — 헤더만 있고 데이터가 없습니다.")
 
-    seen: dict[str, str] = {}
-    for row in rows:
-        vrid, group = row["variant_row_id"], row["product_group_id"]
-        # variant_row_id 는 mapped_data 의 PRIMARY KEY 다. 중복이면 적재 시
-        # INSERT OR REPLACE 로 조용히 덮어써져서 어느 쪽이 남는지 알 수 없다.
-        if vrid in seen and seen[vrid] != group:
-            raise SystemExit(
-                f"variant_row_id 가 두 그룹에 매핑돼 있습니다: "
-                f"{vrid} → {seen[vrid]} / {group}"
-            )
-        seen[vrid] = group
     return rows
+
+
+def check_against_catalog(rows: list[dict[str, str]], catalog: Path) -> None:
+    """products 대본의 variant 집합과 대조한다. **빠진 쪽만 치명적이다.**
+
+    `mock_producer.build_channel_product_map` 이 두 파일을 조인하므로, products 에 있는
+    variant 가 매핑에 없으면 그 채널상품은 `_resolve_group` 에서 채널상품 ID 로 폴백된다
+    — 파일은 멀쩡해 보이는데 채널 비교만 조용히 줄어드는, 이 PR 이 막으려는 그 상태다.
+
+    반대(매핑에만 있고 products 에 없음)는 **경고로 끝낸다.** producer 가 products 를
+    돌면서 조인하므로 남는 매핑 행은 읽히지 않아 폴백을 만들지 않는다. 다만 두 파일이
+    어긋났다는 신호이므로 조용히 넘기지는 않는다.
+
+    catalog 파일이 없으면 건너뛴다 — `data/**` 가 gitignore 라 없는 게 정상인 환경이
+    있고, 대조는 이 변환기의 본업이 아니다.
+
+    Raises:
+        SystemExit: products 에 있는 variant 가 매핑에서 빠짐.
+    """
+    if not catalog.exists():
+        print(f"  [건너뜀] products 대본이 없어 variant 집합을 대조하지 않았습니다: {catalog}")
+        return
+
+    with catalog.open(encoding="utf-8-sig", newline="") as f:
+        catalog_variants = {
+            v
+            for row in csv.DictReader(f)
+            if (v := (row.get("variant_row_id") or "").strip())
+        }
+
+    mapped = {r["variant_row_id"] for r in rows}
+    missing = sorted(catalog_variants - mapped)
+    extra = sorted(mapped - catalog_variants)
+
+    if missing:
+        raise SystemExit(
+            f"products 대본({catalog.name})에 있는 variant {len(missing)}개가 매핑에 "
+            f"없습니다 — 예: {', '.join(missing[:5])}. 이대로 적재하면 그 채널상품은 "
+            "상품 그룹 대신 채널상품 ID 로 폴백돼 채널 간 비교에서 빠집니다."
+        )
+
+    if extra:
+        print(
+            f"  [경고] 매핑에만 있는 variant {len(extra)}개 — 예: {', '.join(extra[:5])}. "
+            "producer 는 products 를 기준으로 조인하므로 무시되지만, 두 대본이 "
+            "어긋나 있습니다."
+        )
+    else:
+        print(f"  variant 집합 일치 확인: {catalog.name} {len(catalog_variants):,}개")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--src", default=str(DEFAULT_SRC), help=f"기본 {DEFAULT_SRC}")
     ap.add_argument("--out", default=str(DEFAULT_DST), help=f"기본 {DEFAULT_DST}")
+    ap.add_argument(
+        "--products", default=str(DEFAULT_CATALOG), help=f"variant 대조용. 기본 {DEFAULT_CATALOG}"
+    )
     ap.add_argument("--dry-run", action="store_true", help="파일을 쓰지 않고 요약만")
     args = ap.parse_args()
 
+    # ⚠️ **stderr 도 같이 맞춘다.** 이 스크립트의 실패는 전부 `SystemExit` 이고 그 메시지는
+    #    stderr 로 나가는데, 윈도우 콘솔 기본 코드페이지에서는 한글이 깨진다. 어느 행이
+    #    왜 틀렸는지 알려주려고 넣은 문장이 정작 안 읽히면 아무 의미가 없다.
     sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 
     src, dst = Path(args.src), Path(args.out)
     if not src.exists():
-        raise SystemExit(f"golden 매핑이 없습니다: {src}")
+        raise SystemExit(f"golden 매핑이 없습니다: {src}\n  {_BUNDLE_HINT}")
 
     rows = build_rows(src)
     groups = sorted({r["product_group_id"] for r in rows})
@@ -106,6 +228,8 @@ def main() -> None:
     print(f"변환 {src.name} → {dst.name}")
     print(f"  variant {len(rows):,}행 · 상품 그룹 {len(groups)}개")
     print(f"  예: {', '.join(groups[:5])}{' …' if len(groups) > 5 else ''}")
+
+    check_against_catalog(rows, Path(args.products))
 
     if args.dry_run:
         print("  [dry-run] 파일을 쓰지 않았습니다.")
