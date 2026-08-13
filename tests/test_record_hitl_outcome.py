@@ -6,6 +6,7 @@ upsert() 호출 인자만 모킹해서 확인한다.
 
 import pytest
 
+from app.config import get_settings
 from app.core.schemas import (
     Citation,
     Evaluator,
@@ -19,6 +20,8 @@ from app.core.schemas import (
     RejectionReasonCode,
 )
 from app.recommendation import pipeline
+
+from .conftest import TEST_COMPANY_ID
 
 
 class _FakeCollection:
@@ -65,10 +68,10 @@ def test_records_approved_outcome(monkeypatch, biased_alert):
 
     assert len(fake_collection.upsert_calls) == 1
     call = fake_collection.upsert_calls[0]
-    # 회사 축이 붙는다(vectordb.scoped_document_id). `_local` 은 MQ_COMPANY_ID 미설정 시
-    # 대체값이고, 운영은 실제 `SLN-…` 이 박힌다.
-    assert call["ids"] == ["_local:REC-HITL-TEST"]
-    assert call["metadatas"][0]["company_id"] == "_local"
+    # 회사 축이 붙는다(vectordb.scoped_document_id). 값은 conftest 의 `pin_company_id`
+    # 가 고정한다 — 개발자 `.env` 를 보면 사람마다 결과가 갈린다(그 픽스처 docstring).
+    assert call["ids"] == [f"{TEST_COMPANY_ID}:REC-HITL-TEST"]
+    assert call["metadatas"][0]["company_id"] == TEST_COMPANY_ID
     assert "사진_색감_오차" in call["documents"][0]
     # §4-2 스펙: "원인 라벨 + CS 요약 + 개선안 본문" — CS 요약이 실제로 들어가는지 확인
     # (2026-07-27 이전엔 CS 요약 대신 aspect가 들어가던 버그).
@@ -291,3 +294,32 @@ def test_same_company_reupsert_stays_one_document(monkeypatch, biased_alert):
     ids = [call["ids"][0] for call in calls]
     assert ids == ["SLN-aaa:REC-HITL-TEST", "SLN-aaa:REC-HITL-TEST"]
     assert len(set(ids)) == 1  # 같은 ID → Chroma 에서 한 문서로 덮인다
+
+
+def test_local_fallback_when_company_id_is_unset(monkeypatch, biased_alert):
+    """`MQ_COMPANY_ID` 가 비어 있으면 `_local` 로 떨어진다 — 빈 접두어를 만들지 않는다.
+
+    개발·테스트 환경의 기본값이 `""` 라(`config.mq_company_id`) 폴백이 없으면 문서 ID 가
+    `:REC-…` 가 된다. 운영은 배포마다 실제 값이 박혀 이 경로를 안 탄다.
+
+    ⚠️ conftest 의 `pin_company_id` 가 고정한 값을 **여기서만 덮어쓴다** — 폴백을 재려면
+       설정이 비어 있어야 하기 때문이다.
+    """
+    monkeypatch.setattr(get_settings(), "mq_company_id", "")
+    collection = _FakeCollection()
+    monkeypatch.setattr(pipeline, "get_rejection_reasons", lambda: collection)
+
+    pipeline.record_hitl_outcome(
+        biased_alert,
+        _recommendation(
+            biased_alert.alert_id,
+            hitl_status=HitlStatus.APPROVED,
+            hitl_feedback=HitlFeedback(
+                processed_at="2026-05-29T09:00:00", processed_by="seller-001"
+            ),
+        ),
+    )
+
+    call = collection.upsert_calls[0]
+    assert call["ids"] == ["_local:REC-HITL-TEST"]
+    assert call["metadatas"][0]["company_id"] == "_local"

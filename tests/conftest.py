@@ -43,6 +43,30 @@ def block_local_raw_db(monkeypatch, tmp_path):
     monkeypatch.setattr(get_settings(), "raw_db_path", str(tmp_path / "없는-raw.db"))
 
 
+TEST_COMPANY_ID = "SLN-test"
+"""테스트가 보는 회사 식별자. 실제 `.env` 값과 **일부러 다르게** 둔다 — 개발자 값이
+새어 들어오면 assert 가 그 값을 통과시켜 버린다."""
+
+
+@pytest.fixture(autouse=True)
+def pin_company_id(monkeypatch):
+    """`MQ_COMPANY_ID` 를 테스트 고정값으로 못박는다. **개발자 `.env` 를 못 보게 한다.**
+
+    🔴 **이걸로 막는 사고**: `core/vectordb.current_tenant()` 가 이 설정을 읽어 벡터DB
+       문서 ID·metadata·조회 필터의 회사 축을 만든다. 그래서 `.env` 가 있는 사람과 없는
+       사람이 **다른 ID 를 보고**, 같은 테스트가 한쪽에서만 통과한다.
+       실제로 PR #77 이 그렇게 통과했다 — 워크트리엔 `.env` 가 없어 폴백(`_local`)이
+       나왔고, `.env` 가 있는 메인 작업 폴더에서는 `SLN-local` 이 나와 **머지 후 main 이
+       빨개졌다.** CI 가 따로 없어 **각자 로컬이 곧 CI** 인 구조에서 반복되는 계열이다
+       (`block_local_raw_db`·`block_real_s3` 와 같은 사유. 08-07 S3 키 9 failed,
+       08-11 MQ `mq_host` 도 같은 모양이었다).
+
+    폴백 자체를 재는 테스트는 이 값을 `""` 로 덮어 쓴다
+    (`test_record_hitl_outcome.test_local_fallback_when_company_id_is_unset`).
+    """
+    monkeypatch.setattr(get_settings(), "mq_company_id", TEST_COMPANY_ID)
+
+
 @pytest.fixture
 def linked_inquiries() -> list[LinkedCSInquiry]:
     """biased_alert.evidence.inquiry_ids 에 대응하는 CS 원문.
