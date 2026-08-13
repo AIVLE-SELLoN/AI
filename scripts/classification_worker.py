@@ -409,17 +409,28 @@ def open_db(db_path_str: str) -> sqlite3.Connection:
 
     legacy = raw_schema.find_legacy_tables(conn)
     if legacy:
-        drops = " ".join(f"DROP TABLE {t};" for t in legacy)
+        # 🔴 **자식 테이블을 항상 함께 지운다.** `classified_item_aspect` 에는 마커가 없어서
+        #    `legacy` 목록에 절대 안 들어온다(그 테이블은 8/7 이전엔 아예 없었다). 그런데
+        #    부모만 지우면 **부모 없는 aspect 행이 남고**, 탐지는 부모를 거쳐 읽어서 무해하지만
+        #    월간 집계는 `FROM voc_document r JOIN classified_item_aspect a` 로 부모를 안 거친다
+        #    — 원문이 그대로 있으니 옛 분류기 라벨이 계속 리포트에 잡힌다.
+        #    문서 §4-3 이 두 테이블을 지우라고 하는데 안내가 하나만 내면 끝 상태가 갈린다.
+        #    (2026-08-13 리뷰 §3)
+        targets = [*legacy]
+        if "classified_item" in legacy and "classified_item_aspect" not in targets:
+            targets.append("classified_item_aspect")
+        drops = " ".join(f"DROP TABLE IF EXISTS {t};" for t in targets)
         logger.error(
             # 이 메시지는 cp949 로 나가도 읽혀야 한다. 윈도우 stderr 는 errors=backslashreplace
             # 라 크래시까지는 안 가지만, em dash 처럼 cp949 에 없는 문자는 "\\u2014" 로 뭉개져
             # 정작 복구 안내가 안 읽힌다. 여기서는 cp949 에 있는 문자만 쓴다.
             f"[DB ERROR] 구버전 raw DB 입니다: {db_path}\n"
             f"  {', '.join(legacy)} 가 8/7 확정 이전 구조입니다.\n"
-            "  스키마 생성은 IF NOT EXISTS 라 그냥 통과하고, 조회 단계에서 "
+            "  CREATE TABLE IF NOT EXISTS 는 옛 테이블을 그대로 두므로, 이걸 안 잡으면 "
             "'no such column' 으로 터집니다.\n"
-            "  원문(cs·reviews)은 그대로 두고 아래처럼 AI 소유 테이블만 지운 뒤 다시 실행하세요 "
-            "(분류 결과는 다시 만들어야 합니다):\n"
+            "  원문(cs·reviews)은 그대로 두고 아래처럼 AI 소유 테이블을 지운 뒤 다시 실행하세요 "
+            "(분류 결과는 다시 만들어야 합니다. 자식 테이블을 남기면 부모 없는 행이 "
+            "월간 집계에 계속 잡힙니다):\n"
             f'    sqlite3 "{db_path}" "{drops}"'
         )
         sys.exit(1)

@@ -618,8 +618,43 @@ def test_legacy_raw_db_is_rejected_with_guidance(tmp_path, caplog) -> None:
 
     assert "classification_cursor" in caplog.text
     # 원문까지 지우라고 하면 12.8만 행을 다시 재생해야 한다 — AI 소유 테이블만 지운다
-    assert "DROP TABLE classification_cursor;" in caplog.text
-    assert "DROP TABLE cs" not in caplog.text
+    assert "DROP TABLE IF EXISTS classification_cursor;" in caplog.text
+    assert "DROP TABLE IF EXISTS cs;" not in caplog.text
+
+
+def test_legacy_guidance_always_drops_the_child_table(tmp_path, caplog) -> None:
+    """🔴 안내가 `classified_item_aspect` 도 함께 지우게 한다.
+
+    그 테이블에는 `LEGACY_MARKERS` 마커가 없어서(8/7 이전엔 아예 없던 테이블) `legacy`
+    목록에 **절대 안 들어온다.** 안내를 목록으로만 만들면 `DROP TABLE classified_item;`
+    하나만 나오고, 그대로 따르면 **부모 없는 aspect 행이 남는다.**
+
+    탐지는 `FROM classified_item ci LEFT JOIN classified_item_aspect` 라 부모를 거쳐 읽어
+    무해하지만, **월간 집계는 `FROM voc_document r JOIN classified_item_aspect a` 로 부모를
+    안 거친다** — 원문이 그대로 있으니 그 행들이 계속 집계에 잡히고 옛 분류기 라벨이
+    리포트에 섞인다.
+
+    문서 §4-3 이 두 테이블을 지우라고 하므로, 안내와 절차가 같은 끝 상태를 만들어야 한다.
+    (2026-08-13 리뷰 §3)
+    """
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    raw_schema.create_source_tables(conn)
+    # 버전 컬럼이 없는 옛 부모 + 정상 자식 = "부분적으로 지워진 DB" 의 실제 모양
+    conn.execute(
+        "CREATE TABLE classified_item ("
+        " item_id TEXT PRIMARY KEY, source TEXT NOT NULL,"
+        " classified_at TEXT, prompt_version TEXT)"
+    )
+    conn.execute(raw_schema.CLASSIFIED_ITEM_ASPECT_DDL)
+    conn.commit()
+    conn.close()
+
+    with caplog.at_level("ERROR"), pytest.raises(SystemExit):
+        worker.open_db(str(db_path))
+
+    assert "DROP TABLE IF EXISTS classified_item;" in caplog.text
+    assert "DROP TABLE IF EXISTS classified_item_aspect;" in caplog.text
 
 
 # ── FK 실효성 (리뷰 3번) ─────────────────────────────────────────────────
