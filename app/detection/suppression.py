@@ -34,6 +34,27 @@ def _key(alert: DetectionAlert) -> tuple:
     return (alert.product_group_id, alert.main_aspect, alert.channel)
 
 
+def _updates_target(alert: DetectionAlert, prior: DetectionAlert) -> str | None:
+    """갱신 알림이 가리킬 원본 ID. **자기 자신은 가리키지 않는다.**
+
+    🔴 `alert_id` 가 결정론적이 된 뒤로(= 논리 키 + `window_end`) **같은 구간을 다시
+       돌리면 새 ID 가 `prior.alert_id` 와 글자까지 같아진다**(`elapsed_days == 0`).
+       그대로 넣으면 `updates_alert_id` 가 자기 자신을 가리켜서, 백엔드가 upsert 로
+       한 행을 갱신하면서 **그 행이 자기 자신의 갱신 대상**이라는 상태가 된다.
+       같은 논리 알림의 **수치 갱신**이지 새 알림이 아니므로 `None` 이 맞다.
+
+    ⚠️ 형식만 바꿔서는 안 없어지는 경로다 — aspect 축을 넣어도 남는다. 억제 기간 안에서
+       `+5%p` 조건만 충족하면 무조건 여기 오기 때문이다.
+
+    ⚠️ 구형 ID(`ALT-20260828-0001`)가 `prior_alerts` 캐시에 남아 있으면 새 ID 와 절대
+       같아지지 않으므로 **그 값이 그대로 들어간다.** 억제 매칭 자체는 `_key`
+       (상품·aspect·채널)로 하니 과도기에도 갱신 체인이 끊기지 않는다.
+    """
+    if alert.alert_id == prior.alert_id:
+        return None
+    return prior.alert_id
+
+
 def filter_suppressed(
     alerts: list[DetectionAlert],
     prior_alerts: list[DetectionAlert] | None = None,
@@ -95,7 +116,9 @@ def filter_suppressed(
         # 예) 36/200 - 26/200 = 0.049999999999999996 < 0.05 → 갱신이 조용히 죽는다.
         if alert.stats.cur_rate - prior.stats.cur_rate >= delta_jump - _RATE_EPSILON:
             published.append(
-                alert.model_copy(update={"updates_alert_id": prior.alert_id})
+                alert.model_copy(
+                    update={"updates_alert_id": _updates_target(alert, prior)}
+                )
             )
         else:
             suppressed.append(alert)

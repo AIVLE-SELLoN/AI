@@ -65,7 +65,10 @@ def test_records_approved_outcome(monkeypatch, biased_alert):
 
     assert len(fake_collection.upsert_calls) == 1
     call = fake_collection.upsert_calls[0]
-    assert call["ids"] == ["REC-HITL-TEST"]
+    # 회사 축이 붙는다(vectordb.scoped_document_id). `_local` 은 MQ_COMPANY_ID 미설정 시
+    # 대체값이고, 운영은 실제 `SLN-…` 이 박힌다.
+    assert call["ids"] == ["_local:REC-HITL-TEST"]
+    assert call["metadatas"][0]["company_id"] == "_local"
     assert "사진_색감_오차" in call["documents"][0]
     # §4-2 스펙: "원인 라벨 + CS 요약 + 개선안 본문" — CS 요약이 실제로 들어가는지 확인
     # (2026-07-27 이전엔 CS 요약 대신 aspect가 들어가던 버그).
@@ -223,3 +226,68 @@ def test_raises_when_alert_id_mismatch(biased_alert):
 
     with pytest.raises(ValueError, match="다릅니다"):
         pipeline.record_hitl_outcome(biased_alert, recommendation)
+
+
+# ── 회사 범위 격리 (서영님 PR #77 리뷰) ────────────────────────────
+def _two_company_upserts(monkeypatch, biased_alert, companies):
+    """같은 논리 알림을 회사만 바꿔 두 번 적재하고 upsert 인자를 돌려준다.
+
+    `recommendation_id` 는 `alert_id` 파생이라 **회사 안에서만 유일**하다 — 두 회사가
+    같은 (window_end, 상품, aspect, 채널) 조합을 만들면 같은 값이 나온다. 그래서 그
+    값을 벡터DB 문서 ID 로 **그대로** 쓰면 나중 회사가 앞의 회사를 덮는다.
+    """
+    collection = _FakeCollection()
+    monkeypatch.setattr(pipeline, "get_rejection_reasons", lambda: collection)
+    recommendation = _recommendation(
+        biased_alert.alert_id,
+        hitl_status=HitlStatus.APPROVED,
+        hitl_feedback=HitlFeedback(
+            processed_at="2026-05-29T09:00:00", processed_by="seller-001"
+        ),
+    )
+
+    for company in companies:
+        monkeypatch.setattr(pipeline, "current_tenant", lambda c=company: c)
+        pipeline.record_hitl_outcome(biased_alert, recommendation)
+
+    return collection.upsert_calls
+
+
+def test_two_companies_with_the_same_alert_do_not_overwrite_each_other(
+    monkeypatch, biased_alert
+):
+    """🔴 회사가 다르면 **같은 `recommendation_id` 라도 문서가 안 겹친다.**
+
+    `product_group_id` 가 회사별 시퀀스라 A사에도 `P001`, B사에도 `P001` 이 있다.
+    백엔드는 `(companyId, alert_id)` 복합 유니크로 흡수하지만 **벡터DB엔 그 축이
+    없었다** — 이 테스트가 없으면 회사 축을 지워도 조용히 통과한다(문서가 1건이 되고,
+    그게 곧 앞 회사 데이터 유실이다).
+    """
+    calls = _two_company_upserts(monkeypatch, biased_alert, ["SLN-aaa", "SLN-bbb"])
+
+    ids = [call["ids"][0] for call in calls]
+    assert ids == [
+        "SLN-aaa:REC-HITL-TEST",
+        "SLN-bbb:REC-HITL-TEST",
+    ], "회사 축이 빠져 두 회사 문서가 같은 ID 를 받았습니다 — 나중 것이 앞엣것을 덮습니다"
+    assert len(set(ids)) == 2
+
+    # metadata 로도 갈린다 — 조회 필터가 이 키를 본다(retrieve_context).
+    assert [call["metadatas"][0]["company_id"] for call in calls] == [
+        "SLN-aaa",
+        "SLN-bbb",
+    ]
+
+
+def test_same_company_reupsert_stays_one_document(monkeypatch, biased_alert):
+    """반대편 — **같은 회사**의 재전달은 문서가 하나여야 한다.
+
+    회사 축을 넣었다고 멱등성이 깨지면 안 된다. 컨슈머가 중복 제거를 안 하고
+    `recommendation_id` upsert 에 기대고 있으므로(`mq_consumer` docstring), 같은 회사
+    같은 개선안이 두 번 와도 ID 가 같아야 한다.
+    """
+    calls = _two_company_upserts(monkeypatch, biased_alert, ["SLN-aaa", "SLN-aaa"])
+
+    ids = [call["ids"][0] for call in calls]
+    assert ids == ["SLN-aaa:REC-HITL-TEST", "SLN-aaa:REC-HITL-TEST"]
+    assert len(set(ids)) == 1  # 같은 ID → Chroma 에서 한 문서로 덮인다

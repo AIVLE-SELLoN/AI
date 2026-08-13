@@ -394,8 +394,22 @@ def create_classified_tables(conn) -> None:
 # 거기에 대고 create_classified_tables() 를 불러도 `IF NOT EXISTS` 가 옛 테이블을 그대로
 # 두기 때문에, 실패가 스키마 생성이 아니라 **한참 뒤 조회 단계**에서 `no such column` 으로
 # 터진다 — 원인이 메시지에 안 드러난다. 그 전에 잡으려고 둔다.
+#
+# 🔴 **마커는 그 테이블에 가장 나중에 들어온 컬럼이어야 한다.** 판정이 "마커가 없으면
+#    옛것"이라, 컬럼을 추가하고 마커를 안 옮기면 **그 사이 버전의 테이블이 전부 최신으로
+#    통과한다.** 실제로 버전 컬럼 2개를 넣으면서(2026-08-12) 마커가 `prompt_version` 에
+#    남아 있었고, 4컬럼 시절 테이블이 구버전으로 안 잡혔다:
+#
+#        find_legacy_tables()      = []                     ← 통과
+#        create_classified_tables() → OperationalError: no such column: model_version
+#
+#    `IF NOT EXISTS` 가 옛 테이블을 그대로 두는데 인덱스는 새 컬럼을 참조해서, 가드가
+#    막으려던 바로 그 자리(원인이 안 드러나는 `no such column`)로 되돌아갔다.
+#    **컬럼을 추가하면 이 표도 같이 옮길 것.**
 LEGACY_MARKERS: dict[str, str] = {
-    "classified_item": "prompt_version",      # 구: raw_text·channel·aspect 를 들고 있던 단일 테이블
+    # 구: raw_text·channel·aspect 를 들고 있던 단일 테이블 → 8/7 확정으로 분리
+    # 이후: prompt_version 만 있던 4컬럼 → 버전 3종(2026-08-12). 마커는 마지막 것.
+    "classified_item": "pipeline_version",
     "classification_failure": "item_id",      # 구: event_id PK (§2-7 이전)
     "classification_cursor": "last_inquired_at",  # 구: last_occurred_at / last_event_id (§2-8 이전)
 }

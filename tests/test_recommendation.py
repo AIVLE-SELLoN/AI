@@ -15,6 +15,7 @@ test_generate_proposal.py에서 따로 검증한다.
 
 import pytest
 
+from app.core.ids import build_recommendation_id
 from app.core.schemas import (
     HitlStatus,
     ProposalType,
@@ -68,6 +69,9 @@ async def test_run_generates_recommendation_for_biased_alert(
 
     assert isinstance(result, Recommendation)
     assert result.alert_id == biased_alert.alert_id
+    # recommendation_id 는 alert_id 파생 — 재실행해도 같은 값이다(옛 uuid4 는 매번 달랐다).
+    # `biased_alert` 픽스처가 구형 ID(`ALT-20260528-0001`)라 과도기 입력도 같이 덮는다.
+    assert result.recommendation_id == "REC-20260528-0001"
     # route_proposal_type()·generate_proposal() 둘 다 실제 코드로 실행됨 —
     # LLM(fake)이 use_image_guide를 골랐고 그게 그대로 Proposal.type에 반영됐는지 확인.
     assert result.proposal.type == ProposalType.IMAGE_GUIDE
@@ -218,3 +222,38 @@ async def test_run_returns_none_when_trigger_not_met(global_alert):
 @pytest.mark.asyncio
 async def test_run_returns_none_for_scope_undetermined_alert(indeterminate_alert):
     assert await pipeline.run(indeterminate_alert) is None
+
+
+# ── recommendation_id 파생 (백엔드 멱등 upsert · 재현 가능한 payload) ──
+def test_recommendation_id_is_derived_from_alert_id():
+    """`ALT-` 접두어만 `REC-` 로 갈아끼운다 — `guideline_id` 와 **같은 규칙**이다.
+
+    같은 알림을 재처리하면(백엔드 재시도·배치 재실행) 같은 ID 가 나와야 한다. 옛
+    `REC-{uuid4[:12]}` 는 매번 달라져서 **재발행 payload 를 글자 단위로 대조할 수 없었다.**
+
+    ⚠️ 백엔드 중복 판정에는 영향이 없다 — `Proposal` 한 행에 `alert_id` 가 같이 들어가고
+       그 컬럼에 유니크 제약이 걸려 있어 중복 INSERT 가 구조적으로 불가능하다. 이 변경의
+       값어치는 **우리 쪽 재현·테스트**에 있다.
+    """
+    assert (
+        build_recommendation_id("ALT-20260828-P001-COLOR-COUPANG")
+        == "REC-20260828-P001-COLOR-COUPANG"
+    )
+
+    # 같은 입력 → 같은 출력. 결정론이 이 함수의 존재 이유다.
+    assert build_recommendation_id("ALT-20260828-P001-COLOR-COUPANG") == (
+        build_recommendation_id("ALT-20260828-P001-COLOR-COUPANG")
+    )
+
+
+def test_recommendation_id_handles_legacy_and_unprefixed_alert_ids():
+    """구형 ID·접두어 없는 값에서도 alert_id 와 **1:1** 을 유지한다.
+
+    `prior_alerts` 캐시에 구형 ID 가 남아 있는 과도기가 있고, 접두어가 없는 값은
+    통째로 뒤에 붙여 두 알림이 같은 ID 를 받는 일이 없게 한다.
+    """
+    assert build_recommendation_id("ALT-20260528-0001") == "REC-20260528-0001"
+    assert build_recommendation_id("CUSTOM-9") == "REC-CUSTOM-9"
+
+    # 서로 다른 alert_id 는 서로 다른 recommendation_id 로 간다 (1:1).
+    assert build_recommendation_id("ALT-X") != build_recommendation_id("ALT-Y")
