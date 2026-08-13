@@ -28,6 +28,7 @@ from app.core.schemas import (
     SourceSignals,
     Verdict,
 )
+from app.detection.cause import CAUSE_TAXONOMY, classify_cause
 from app.recommendation.pipeline import RecommendationOutcome, SkipReason
 
 
@@ -57,6 +58,19 @@ def _alert(alert_id: str, window_end: date, action=RecommendedAction.LOGISTICS_C
         recommended_action=action,
         evidence=Evidence(inquiry_ids=[]),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("aspect", ["색상", "사이즈", "소재"])
+async def test_counting_client_stub_cause_is_valid_for_every_supported_aspect(aspect):
+    """dry-run 스텁이 특정 aspect의 taxonomy에서 탈락해 후속 게이트를 닫으면 안 된다."""
+    items = [{"cs_id": f"CS-{i}", "raw_text": f"문의 {i}"} for i in range(3)]
+
+    results = await classify_cause(aspect, items, client=daily.CountingClient())
+
+    assert len(results) == len(items)
+    assert {result["cause"] for result in results} == {daily.STUB_CAUSE}
+    assert daily.STUB_CAUSE in CAUSE_TAXONOMY[aspect]
 
 
 # ── 상태 저장 왕복 · 보관 기간 ───────────────────────────────────
@@ -644,7 +658,9 @@ async def test_mq_connection_is_closed_on_the_normal_path(tmp_path, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_cause_failure_is_reported_as_batch_failure(tmp_path, monkeypatch):
+async def test_cause_failure_is_reported_as_batch_failure(
+    tmp_path, monkeypatch, capsys
+):
     """Agent2 보강 실패를 알림 발행 성공과 별개로 실패 종료 근거에 남긴다."""
 
     async def fake_detect(_items, *, diagnostics, **_kwargs):
@@ -668,11 +684,14 @@ async def test_cause_failure_is_reported_as_batch_failure(tmp_path, monkeypatch)
     assert summary["cause_failures"] == 1
     assert summary["failures"] == [
         {
-            "alert_id": "P001/색상/COUPANG/cs",
+            "target_key": "P001/색상/COUPANG/cs",
             "stage": "원인분류",
             "error": "CauseValidationError: 응답 ID 누락",
         }
     ]
+
+    daily.print_summary(summary)
+    assert "P001/색상/COUPANG/cs [원인분류]" in capsys.readouterr().out
 
 
 def test_main_switches_encoding_before_printing(monkeypatch):

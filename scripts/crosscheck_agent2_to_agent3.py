@@ -63,8 +63,6 @@ from app.recommendation.pipeline import (
     should_generate,
 )
 
-_ = STUB_CAUSE  # 리포트 문구가 이 값을 인용한다
-
 
 def build_items(
     only_products: set[str] | None,
@@ -310,7 +308,7 @@ def print_cost_estimate(stub: CountingClient, alerts: list, max_alerts: int) -> 
         )
         print("     프롬프트 포맷이 바뀌었을 수 있습니다(CountingClient 의 정규식 확인).")
     else:
-        print("\n  ⚠️ root_cause 라벨은 스텁 고정값(사진_색감_오차)입니다.")
+        print(f"\n  ⚠️ root_cause 라벨은 스텁 고정값({STUB_CAUSE})입니다.")
         print("     호출 횟수·발행 건수·게이트 통과 수는 실제 판정 로직이 낸 값입니다.")
 
 
