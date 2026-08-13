@@ -352,8 +352,13 @@ def _build_monthly_chart_context(context: dict[str, Any]) -> dict[str, Any]:
     }
     # ⚠️ `jsd_baseline` 을 **반드시 같이 넘긴다.** 마커는 `jsd_score` 절대 위치인데
     #    severity 판정은 `excess = jsd_score - jsd_baseline` 기준이라, 기준선이 없으면
-    #    같은 페이지에서 문장("위험 단계")과 그림(SAFETY ZONE)이 반대가 된다.
-    #    근거는 `charts.render_divergence_gauge` docstring. (2026-08-13)
+    #    두 마커 사이 간격(= excess)이 사라져 판정 이유가 그림에서 없어진다.
+    #
+    #    ⚠️ 게이지는 **판정을 말하지 않는다.** 절대 축이라 CRISIS 인 쌍의 마커가 막대
+    #       왼쪽에 찍힐 수 있어서, 구간 이름에서 판정어를 걷어냈다(2026-08-13).
+    #       판정은 상단 `cause_title` 문장이 한다 — `_validate_stage_label` 이 "위험
+    #       단계" 같은 라벨을 강제하는 그 자리다. 근거는
+    #       `charts.render_divergence_gauge` docstring.
     gauge_by_pair = {
         p["comparison_pair"]: render_divergence_gauge(
             jsd_score=p.get("jsd_score"),

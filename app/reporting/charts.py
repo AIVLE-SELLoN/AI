@@ -146,31 +146,39 @@ def render_divergence_gauge(
     sample_size: int | None = None,
     width: int = 430,
 ) -> str:
-    """채널 간 평판 격차 게이지 — 안전(0.0) ~ 위험(0.6+) 위에 현재 점수와 **기준선**을 찍는다.
+    """채널 간 평판 격차 게이지 — **절대 격차 축**(0.0~0.6+) 위에 점수와 **기준선**을 찍는다.
 
-    🔴 **`jsd_baseline` 을 같이 찍는 이유 — 안 찍으면 그림이 판정과 반대로 보인다.**
+    🔴 **이 그림은 판정을 말하지 않는다. 절대 척도에서의 위치만 말한다.**
        마커는 `jsd_score` **절대값** 위치인데, severity 판정은
        `excess = jsd_score - jsd_baseline` 기준이다(`metrics_calculator.decide_severity`,
        경계 `JSD_DELTA_MIN`=0.10 / 0.20). 두 기준이 달라 이런 쌍이 정상적으로 나온다:
 
-           jsd   baseline  excess  판정      기준선 없이 본 게이지
-           0.54  0.50      0.04    SAFE      붉은 구역(54%) — 위험해 보인다
-           0.25  0.02      0.23    CRISIS    녹색 구역(25%) — 안전해 보인다
+           jsd   baseline  excess  판정      절대 축에서 마커가 찍히는 곳
+           0.54  0.50      0.04    SAFE      막대 오른쪽(54%)
+           0.25  0.02      0.23    CRISIS    막대 왼쪽(25%)
 
-       두 번째가 더 나쁘다. 같은 페이지 상단 `cause_title` 에는 `_validate_stage_label`
-       이 "위험 단계"를 강제로 넣는데 그림은 SAFETY ZONE 을 가리켜, **문서 안에서 문장과
-       그림이 반대**가 된다. `jsd_baseline` 은 표본이 작을수록 커지므로 드문 경우가
-       아니다. (2026-08-13 서영님 시연 검토)
+       그래서 **구간 이름에 판정어를 쓰면 안 된다.** 예전엔 이 축을 "SAFETY ZONE /
+       DANGER ZONE(안전/위험)"으로 불렀는데, 그러면 CRISIS 인 두 번째 쌍의 마커가
+       "SAFETY ZONE" 안에 찍힌다. 같은 페이지 상단 `cause_title` 에는
+       `_validate_stage_label` 이 "위험 단계"를 강제로 넣으므로 **문서 안에서 문장과
+       그림이 정면으로 반대**가 된다.
 
-       기준선을 함께 찍으면 **두 마커 사이 간격이 곧 excess** 라 "얼마나 초과했는지"가
-       그림에 남는다. 절대 점수도 그대로 두는 이유는 `pair_analysis` 문장이 `jsd_score`
-       를 그대로 인용하기 때문이다 — excess 로 갈아끼우면 문장과 그림이 다시 갈린다.
+       ⚠️ **기준선을 추가해도 이 모순은 안 풀린다**(2026-08-13 서영님 2차 지적).
+          간격을 읽으면 *이유를* 추론할 수 있게 될 뿐, 마커가 "SAFETY" 라고 적힌
+          구역 안에 있다는 사실은 그대로다. 그래서 구간 이름을 절대 축의 말
+          ("절대 격차 낮음/높음")로 바꿨다 — 자세한 근거는 아래 라벨 생성부 주석.
 
-    ⚠️ **게이지가 아직 못 보여주는 축이 하나 남아 있다 — 유의성.** `decide_severity` 는
-       `bh_significant` 가 False 면 excess 가 아무리 커도 SAFE 로 본다("다중검정을
-       통과하지 못한 차이는 우연"). 그래서 간격이 넓은데 판정은 SAFE 인 쌍이 여전히
-       가능하다. 판정 자체를 게이지에 넘겨 마커 색으로 칠하는 안이 있었고, 배지 삭제
-       결정(아래)과의 관계 때문에 이번에는 **넣지 않았다.**
+       기준선을 함께 찍는 이유는 따로 있다. **두 마커 사이 간격이 곧 excess** 라
+       "얼마나 초과했는지"가 그림에 남는다. 절대 점수도 그대로 두는 이유는
+       `pair_analysis` 문장이 `jsd_score` 를 그대로 인용하기 때문이다 — excess 로
+       갈아끼우면 문장과 그림이 다시 갈린다.
+
+    ⚠️ **게이지는 유의성도 보여주지 않는다.** `decide_severity` 는 `bh_significant` 가
+       False 면 excess 가 아무리 커도 SAFE 로 본다("다중검정을 통과하지 못한 차이는
+       우연"). 그래서 간격이 넓은데 판정은 SAFE 인 쌍이 가능하다. 이것도 위와 같은
+       이유로 그림이 아니라 **문장이 책임진다** — 렌더러에 severity·bh 를 넘기면 배지
+       삭제 결정(아래)을 뒤집고, 판정 규칙이 `metrics_calculator` 와 여기 두 곳으로
+       갈린다.
 
     ⚠️ 게이지에는 severity 배지(CRISIS DETECTED 등)를 **달지 않는다**(2026-08-04 확정).
        여기서는 점수와 위치만 보여준다.
@@ -201,15 +209,33 @@ def render_divergence_gauge(
     ]
     parts.extend(_gradient_slices(pad, bar_w, bar_y, bar_h))
 
-    # 구간 라벨은 막대 안쪽에 흰 글씨로 (화면과 동일)
+    # 구간 라벨은 막대 안쪽에 흰 글씨로.
+    #
+    # 🔴 **판정어(안전/위험/SAFETY/DANGER)를 쓰지 않는다.** 이 축은 `jsd_score` **절대값**
+    #    이고 severity 판정은 `excess = jsd_score - jsd_baseline` 기준이라, 두 축이 서로
+    #    다른 것을 잰다. 예전 라벨은 절대 축에 판정어를 붙여서 CRISIS 인 쌍의 마커가
+    #    "SAFETY ZONE" 안에 찍혔다 — 기준선을 같이 그려도 **문구 자체가 판정처럼 읽히는
+    #    모순은 남는다**(2026-08-13 서영님 지적, 아래 반례로 재현됨).
+    #
+    #        jsd 0.25 / baseline 0.02 / bh_significant=True -> CRISIS
+    #        그런데 0.25 는 막대 왼쪽이라 "SAFETY ZONE" 안이다.
+    #
+    #    고를 수 있는 길은 둘이었다. (a) severity·bh 를 렌더러에 넘겨 판정을 직접 그리거나,
+    #    (b) 절대 축의 이름을 판정어가 아닌 말로 바꾸거나. **(b) 로 간다** — (a) 는 배지를
+    #    되살리는 셈이라 2026-08-04 결정(게이지에 배지를 달지 않는다)을 뒤집고, 렌더러가
+    #    판정 규칙을 알게 되어 `metrics_calculator` 와 경계가 두 곳으로 갈린다.
+    #    지금 라벨은 "이 값이 절대 척도에서 어디쯤인가"만 말한다. 판정은 문장이 한다.
+    #
+    # ⚠️ 화면(프론트)은 아직 SAFETY/DANGER 를 쓴다. 같은 모순이 거기에도 있으므로 공유가
+    #    필요하다. 지면을 화면에 맞추려고 되돌리지 말 것 — 틀린 쪽에 맞추는 것이다.
     parts.append(
         f'<text x="{pad + 8}" y="{bar_y + 11}" font-size="7" font-weight="bold" '
-        f'fill="#ffffff">SAFETY ZONE</text>'
-        f'<text x="{pad + 8}" y="{bar_y + 22}" font-size="8" fill="#ffffff">안전 (0.0)</text>'
+        f'fill="#ffffff">절대 격차 낮음</text>'
+        f'<text x="{pad + 8}" y="{bar_y + 22}" font-size="8" fill="#ffffff">0.0</text>'
         f'<text x="{width - pad - 8}" y="{bar_y + 11}" text-anchor="end" font-size="7" '
-        f'font-weight="bold" fill="#ffffff">DANGER ZONE</text>'
+        f'font-weight="bold" fill="#ffffff">절대 격차 높음</text>'
         f'<text x="{width - pad - 8}" y="{bar_y + 22}" text-anchor="end" font-size="8" '
-        f'fill="#ffffff">위험 (0.6+)</text>'
+        f'fill="#ffffff">0.6+</text>'
     )
 
     if jsd_score is not None:
