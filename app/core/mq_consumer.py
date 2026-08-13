@@ -3,7 +3,7 @@
 메인이 AI 로 되돌리는 건 **사용자 피드백 2종뿐**이다. "연산해달라"는 요청 이벤트는 없다.
 
     feedback.recommendation.reviewed  → 개선안 승인/반려 (지인) — 컬렉션2 축적
-    feedback.report.created           → 보고서 피드백 (용준) — 핸들러 미등록
+    feedback.report.created           → 보고서 피드백 (용준) — 기록만(저장 없음)
 
 **한 큐(`ai.inbound`)에 둘 다 들어온다.** 그래서 처리기가 없는 이벤트를 ACK 하면 그
 메시지는 조용히 사라진다 — 처리한 적 없는 걸 처리했다고 하는 것이므로, 모르는
@@ -101,7 +101,7 @@ core 가 컴포넌트(`app/recommendation/` 등)를 import 하면 의존 방향�
 (팀 규칙: 각 컴포넌트가 core 에서 가져다 쓴다). 그래서 core 는 "무엇을 처리할지"를
 모르고, 실행 진입점(`app/consumer.py`)이 시작할 때 등록해 준다.
 
-`feedback.report.created`(리포팅) 도 같은 방식으로 붙이면 된다. 등록되기 전까지 그
+`feedback.report.created`(리포팅) 도 같은 방식으로 꽂혀 있다(2026-08-13). 등록되지 않은
 이벤트는 DLX 로 간다 — 우리가 ACK 해버리면 담당자가 영영 못 받는다."""
 
 
