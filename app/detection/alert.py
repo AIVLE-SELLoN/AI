@@ -18,10 +18,11 @@
    "원인을 안 봤다"와 "봤는데 흩어졌다"는 다른 정보다.
 """
 
-from collections.abc import Iterator
 from datetime import date, datetime
 
+from app.core.ids import ALERT_ID_PREFIX
 from app.core.schemas import (
+    Aspect,
     Channel,
     DetectionAlert,
     Evidence,
@@ -39,9 +40,43 @@ UNSPECIFIED_CAUSE = "미특정"
 """[6] 을 수행했으나 원인이 흩어졌을 때의 root_cause.label. (§5.2)"""
 
 
-def make_alert_id(detected_at: datetime, seq: int) -> str:
-    """ALT-날짜-일련번호. (§3 alert_id)"""
-    return f"ALT-{detected_at:%Y%m%d}-{seq:04d}"
+def make_alert_id(
+    *, window_end: date, product_group_id: str, aspect: str, channel: Channel
+) -> str:
+    """알림의 논리 키를 그대로 옮긴 결정론적 ID. (§3 alert_id)
+
+    예: ALT-20260828-P001-COLOR-COUPANG · ALT-20260828-P001-DAMAGE-ALL(전역형)
+
+    🔴 **백엔드가 이 값을 멱등 키로 두고 upsert 한다** — 같은 입력이면 같은 ID 여야 한다.
+       예전 형식(`ALT-{실행일}-{4자리 일련번호}`)은 일련번호가 `sorted(후보집합)` 순서라
+       **후보가 하나만 달라져도 뒤쪽이 통째로 밀렸다**(A·B·C=0001·0002·0003 → B 가 빠지면
+       C 가 0002). 백엔드에선 C 가 새 행이 되고 옛 0003 이 고아로 남는다.
+
+    축이 네 개인 이유:
+      - `window_end`: 데이터 시각이라 **같은 구간을 다시 돌려도 같은 ID** 다. 실행 시각
+        (`detected_at`)이면 재실행마다 바뀐다. 억제(`suppression`)도 경과일을 window_end
+        로 세므로 시계가 일치한다.
+      - `aspect`: 알림의 논리 키가 원래 (상품, main_aspect, 채널)이고(`suppression._key`)
+        **aspect 가 달라지면 원인·근거·권장조치·개선안이 전부 달라진다.** 빼면 색상 알림이
+        사이즈 알림으로 덮여 이력이 사라진다 — PR #22 `guideline_id` 사고와 같은 모양이다.
+      - `channel`: 편중형은 발화 채널, 전역형은 `ALL`(`resolve_channel` 결과를 그대로 쓴다).
+
+    ⚠️ **회사 축은 넣지 않는다.** `product_group_id` 는 회사별 시퀀스라 A사·B사에 똑같이
+       `P001` 이 있지만, 백엔드가 `(companyId, alert_id)` 복합 유니크로 흡수한다(B안 확정).
+
+    ⚠️ **`Aspect(aspect).name` 이지 `aspect.name` 이 아니다.** 호출부가 넘기는 값은
+       평범한 `str`(`'색상'`)이다 — `Aspect` 로 바뀌는 건 `DetectionAlert` 생성 시
+       Pydantic 이 변환하는 시점이라 **여기는 그 이전**이고, `.name` 을 바로 쓰면
+       `AttributeError` 로 죽는다. 멤버명이 백엔드 대조표(§6)와 정확히 일치하므로
+       별도 매핑 테이블을 만들지 말 것.
+
+    길이 = `33 + len(product_group_id)` — 33 은 `ALT-`(4) + 날짜(8) + 구분자 3 +
+    최장 aspect `MISDELIVERY`(11) + 최장 channel `COUPANG`(7). 백엔드 컬럼은 `varchar(72)`.
+    """
+    return (
+        f"{ALERT_ID_PREFIX}{window_end:%Y%m%d}-{product_group_id}"
+        f"-{Aspect(aspect).name}-{Channel(channel).value}"
+    )
 
 
 def resolve_channel(verdict: str, channel: str) -> Channel:
@@ -79,7 +114,6 @@ def build_alert(
     detected_at: datetime,
     window_start: date,
     window_end: date,
-    seq: Iterator[int],
 ) -> DetectionAlert:
     """종합 판정 1건 → DetectionAlert 1건. (§3·§5)
 
@@ -102,18 +136,28 @@ def build_alert(
               "sub_aspects":    [SubAspectAction],
               "linked_change_id": str | None,
             }
-        seq: alert_id 일련번호 이터레이터 (윈도우 전체에서 공유).
     """
     verdict = judgement["verdict"]
     aspect = judgement["aspect"]
     root_cause = judgement["root_cause"]
+    product_group_id = judgement["product"]
+
+    # 🔴 **접힌 채널을 ID 와 필드가 같이 쓴다.** 전역형은 channel 이 ALL 로 접히는데
+    #    ID 를 judgement["channel"] 로 만들면 `...-COUPANG` 인데 필드는 ALL 인 알림이
+    #    나온다 — 상품당 1건이어야 할 전역형이 발화 채널마다 다른 ID 를 받는다.
+    channel = resolve_channel(verdict, judgement["channel"])
 
     return DetectionAlert(
-        alert_id=make_alert_id(detected_at, next(seq)),
+        alert_id=make_alert_id(
+            window_end=window_end,
+            product_group_id=product_group_id,
+            aspect=aspect,
+            channel=channel,
+        ),
         detected_at=detected_at,
         updates_alert_id=None,  # 갱신 여부는 suppression 이 나중에 채운다
-        product_group_id=judgement["product"],
-        channel=resolve_channel(verdict, judgement["channel"]),
+        product_group_id=product_group_id,
+        channel=channel,
         window_start=window_start,
         window_end=window_end,
         verdict=verdict,

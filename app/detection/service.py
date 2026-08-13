@@ -61,7 +61,6 @@ BH 배치 범위 — **두 소스를 한 family 로 묶는다** (로직 §[2-B] 
 from __future__ import annotations
 
 import asyncio
-import itertools
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -205,6 +204,31 @@ def normalize(items: list[ClassifiedItem]) -> list[dict]:
             }
         )
     return rows
+
+
+def _to_kst_aware(value: datetime) -> datetime:
+    """탐지 시각을 **KST aware** 로 못박는다. `daily._to_kst` 와 같은 규칙이다.
+
+    🔴 **백엔드가 `OffsetDateTime` 으로 수신한다** — 오프셋이 없으면 연동하는 순간
+       파싱이 전건 실패한다. 그래서 `+09:00` 을 붙여 내보낸다. **벽시계 값은 안 바뀐다**
+       (기본값은 이미 KST 로 고정돼 있었다 — PR #68). 달라지는 건 표기뿐이다.
+
+    🔴 **기본값만이 아니라 인자로 받은 값도 정규화한다.** 기본값만 KST 로 두면 호출부가
+       넘긴 값이 그대로 나가서 naive·aware 가 **한 배치 안에서 섞인다**(실제로 테스트가
+       양쪽을 다 넘긴다). 그러면 백엔드 파싱이 호출 경로에 따라 갈린다.
+
+    갈래 둘 — naive 는 **KST 로 간주**해 라벨을 붙이고(`replace`), aware 는 KST 로
+    **변환**한다(`astimezone`). naive 를 `.astimezone()` 으로 넘기면 파이썬이 그 값을
+    **실행 호스트의 로컬 시각**으로 읽어서, 같은 입력이 KST 노트북과 UTC 컨테이너에서
+    다른 순간이 된다 — 개발 머신이 KST 라 로컬 테스트로는 영원히 안 잡힌다.
+
+    ⚠️ 이 값의 날짜 부분은 이제 `alert_id` 에 안 들어간다(그쪽은 `window_end` 를 쓴다).
+       그래도 §3(KST 경계) 대상인 건 그대로다 — CS 가이드라인 기간(`%Y-%m`,
+       `reporting/cs_reply_service`)이 여기서 나온다.
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=KST)
+    return value.astimezone(KST)
 
 
 def _window_bounds(
@@ -554,19 +578,7 @@ async def detect_anomaly(
     if not rows:
         return [], []
 
-    # 🔴 **KST 벽시계로 정한다 — 호스트 시간대를 보지 않는다.** 이 값의 날짜 부분이
-    #    그대로 `alert_id`(`ALT-{detected_at:%Y%m%d}`, alert.make_alert_id)와 CS
-    #    가이드라인 기간(`%Y-%m`, reporting/cs_reply_service)이 되므로 §3(KST 경계)
-    #    대상이다. naive `datetime.now()` 는 로컬 시각이라 **UTC 컨테이너에서 KST
-    #    오전 9시 이전에 돌면 alert_id 가 하루 전 날짜**로 찍힌다 — 개발 머신이 KST 라
-    #    로컬 테스트로는 영원히 안 잡히는, `_to_kst` 가 막는 것과 같은 모양의 사고다.
-    #
-    # ⚠️ **tzinfo 를 떼서 naive 로 내보낸다 — 발행 계약을 안 바꾸려는 것이다.**
-    #    `detected_at` 은 `ai.anomaly.analyzed` payload 로 나가고 문서의 예시가
-    #    오프셋 없는 형태다(docs/mq_events.md §4.1 · docs/detection_schema.md).
-    #    aware 로 바꾸면 `"...+09:00"` 이 붙어 백엔드 파싱 계약이 조용히 달라지므로,
-    #    그건 별건으로 합의할 일이다. 값 자체는 위에서 KST 로 확정됐다.
-    detected_at = detected_at or datetime.now(KST).replace(tzinfo=None)
+    detected_at = _to_kst_aware(detected_at or datetime.now(KST))
     cur_start, cur_end, window_start_date, window_end_date = _window_bounds(
         rows, window_end
     )
@@ -615,7 +627,6 @@ async def detect_anomaly(
 
     # [8] 종합 → 알림 1건씩 발행
     alerts: list[DetectionAlert] = []
-    seq = itertools.count(1)
     cs_candidates, review_candidates = by_source[Source.CS], by_source[Source.REVIEW]
 
     for key in sorted(set(cs_candidates) | set(review_candidates)):
@@ -645,7 +656,6 @@ async def detect_anomaly(
                 detected_at=detected_at,
                 window_start=window_start_date,
                 window_end=window_end_date,
-                seq=seq,
             )
         )
 
