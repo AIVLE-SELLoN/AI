@@ -244,7 +244,7 @@ def pick_cache(items: list):
     """eval_cache 후보 중 **적용률이 가장 높은** 캐시를 고른다.
 
     Returns:
-        (경로, 캐시dict, 덮어쓴 items, 적용률) 또는 후보가 하나도 없으면 None.
+        (경로, 캐시dict, 덮어쓴 items, 덮어쓴 건수, 적용률) 또는 후보가 없으면 None.
 
     적용률이 0 인 캐시(옛 mock 으로 만들어져 item_id 가 하나도 안 겹치는 것)는 후보에서
     뺀다 — 골라봐야 real 이 통째로 oracle 이 된다.
@@ -258,10 +258,12 @@ def pick_cache(items: list):
             continue
         real_items, swapped = swap_real(items, cache)
         if swapped:
-            candidates.append((path, cache, real_items, swapped / len(items)))
+            candidates.append(
+                (path, cache, real_items, swapped, swapped / len(items))
+            )
     if not candidates:
         return None
-    return max(candidates, key=lambda c: c[3])
+    return max(candidates, key=lambda c: c[4])
 
 
 def require_full_real_cache(items: list):
@@ -272,7 +274,7 @@ def require_full_real_cache(items: list):
             f"쓸 수 있는 분류 캐시가 없습니다: {CACHE_DIR}/{CACHE_GLOB}"
         )
 
-    path, cache, real_items, coverage = best
+    path, cache, real_items, swapped, coverage = best
     if coverage < MIN_CACHE_COVERAGE:
         raise RuntimeError(
             f"실제분류 캐시 적용률이 {coverage:.1%}로 "
@@ -280,7 +282,6 @@ def require_full_real_cache(items: list):
             "나머지를 golden으로 대체한 real 수치는 산출하지 않습니다."
         )
 
-    swapped = sum(item.item_id in cache for item in items)
     return path, cache, real_items, swapped, coverage
 
 
@@ -303,10 +304,10 @@ async def main() -> None:
             "     덮어서 적용률이 10% 도 안 된다."
         )
     else:
-        path, cache, real_items, coverage = best
+        path, cache, real_items, swapped, coverage = best
         print(
             f"문서 {len(documents):,} / 캐시 {len(cache):,} ({path.name})"
-            f" / 적용률 {coverage:.1%}"
+            f" / 실제분류로 덮음 {swapped:,} / 적용률 {coverage:.1%}"
         )
         if coverage < MIN_CACHE_COVERAGE:
             print(

@@ -384,6 +384,8 @@ async def test_cs_mapping_failure_does_not_kill_the_batch(tmp_path, monkeypatch)
 
     mapping = [f for f in summary["failures"] if f["stage"] == "CS 원문 매핑"]
     assert mapping, "매핑 실패가 요약에 남아야 한다"
+    assert mapping[0]["target_key"].startswith("ALT-")
+    assert "alert_id" not in mapping[0], "failures 식별자 키는 target_key 하나다"
     assert "형식이 이상함" in mapping[0]["error"], "실제 사유가 남아야 한다"
     assert summary["delivered"] >= 1, "알림은 통계로 서므로 CS 원문과 무관하게 발행된다"
     assert summary["state_cached"] >= 1, "발행분이 캐시에 들어가야 한다 — 안 그러면 재과금"
