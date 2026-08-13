@@ -186,16 +186,27 @@ async def test_dispatches_to_registered_handler(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_unhandled_event_type_raises_instead_of_acking():
+async def test_unhandled_event_type_raises_instead_of_acking(monkeypatch):
     """⚠️ 핸들러 없는 이벤트를 ACK 하면 그 메시지는 사라진다.
 
-    `ai.inbound` 한 큐에 `feedback.#` 이 전부 들어오는데, 보고서 피드백(용준)은 아직
-    핸들러가 없다. 우리가 삼키면 용준 쪽에서 영영 못 받는다 — 던져서 DLX 로 보낸다.
+    `ai.inbound` 한 큐에 `feedback.#` 이 전부 들어온다. 바인딩이 와일드카드라 계약(§8)에
+    없는 이벤트도 이 큐로 올 수 있는데, 우리가 삼키면 담당자가 영영 못 받는다 —
+    던져서 DLX 로 보낸다.
+
+    ⚠️ 예시로 **실재하는 이벤트를 쓰지 않는다.** 원래 이 테스트는 아직 핸들러가 없던
+       `feedback.report.created` 를 예시로 삼았는데, 그게 등록되자(2026-08-13) 전제가
+       깨져 실패했다. 인바운드 2종은 이제 둘 다 꽂혀 있으므로 여기서 검증할 것은
+       "모르는 이벤트"이지 특정 이벤트가 아니다.
+
+    ⚠️ `HANDLERS` 를 비워 두고 시작한다. 전역이라 앞서 돈 테스트가 `wire_handlers()` 를
+       불렀으면 내용이 남아 있다 — 순서에 따라 결과가 갈리면 안 된다.
     """
-    body = b'{"eventType": "feedback.report.created", "payload": {}}'
+    monkeypatch.setattr(mq_consumer, "HANDLERS", {})
+    unknown = "feedback.something.unknown"
+    body = b'{"eventType": "feedback.something.unknown", "payload": {}}'
 
     with pytest.raises(KeyError):
-        await mq_consumer.dispatch(mq_consumer.REPORT_CREATED, body)
+        await mq_consumer.dispatch(unknown, body)
 
 
 def test_core_does_not_import_components():
@@ -550,7 +561,8 @@ async def test_successful_handling_acks(monkeypatch):
         (_GOOD_BODY, _raise(HitlContextUnavailableError("재료 부족"))),
         # 깨진 JSON — 핸들러에 닿지도 못한다(JSONDecodeError 는 ValueError).
         (b"{not json", lambda _payload: None),
-        # 핸들러 미등록(용준 feedback.report.created) — ACK 하면 그 메시지가 사라진다.
+        # 핸들러 미등록 — 계약 밖 이벤트가 와일드카드 바인딩으로 들어온 경우.
+        # ACK 하면 그 메시지가 사라진다.
         (_GOOD_BODY, None),
     ],
 )
