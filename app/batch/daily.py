@@ -936,7 +936,7 @@ async def run_batch(
     targets = alerts if max_alerts is None else alerts[:max_alerts]
     failures: list[dict] = [
         {
-            "alert_id": (
+            "target_key": (
                 f"{failure['product']}/{failure['aspect']}/"
                 f"{failure['channel']}/{failure['source']}"
             ),
@@ -1213,7 +1213,8 @@ def print_summary(summary: dict) -> None:
     if summary["failures"]:
         print(f"\n  ⚠️ 실패 {len(summary['failures'])}건 (배치는 계속 진행됨)")
         for f in summary["failures"][:10]:
-            print(f"     {f['alert_id']} [{f['stage']}] {f['error'][:80]}")
+            failure_key = f.get("alert_id") or f.get("target_key") or "식별자 없음"
+            print(f"     {failure_key} [{f['stage']}] {f['error'][:80]}")
     missing = [
         name
         for name, ok in [

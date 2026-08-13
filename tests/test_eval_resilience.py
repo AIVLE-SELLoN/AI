@@ -5,6 +5,8 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "eval"))
 
 import run_cause_eval as cause_eval
@@ -67,3 +69,16 @@ def test_cause_eval_isolates_failed_batch(monkeypatch):
     assert failures[0]["aspect"] == "소재"
     assert failures[0]["cs_ids"] == ["FAIL"]
     assert "일시적 API 오류" in failures[0]["error"]
+
+
+def test_cause_eval_main_exits_nonzero_when_a_batch_failed(monkeypatch):
+    async def fake_main_async(_args):
+        return 1
+
+    monkeypatch.setattr(cause_eval, "main_async", fake_main_async)
+    monkeypatch.setattr(cause_eval.sys, "argv", ["run_cause_eval.py"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        cause_eval.main()
+
+    assert exc_info.value.code == 1

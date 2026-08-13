@@ -644,7 +644,9 @@ async def test_mq_connection_is_closed_on_the_normal_path(tmp_path, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_cause_failure_is_reported_as_batch_failure(tmp_path, monkeypatch):
+async def test_cause_failure_is_reported_as_batch_failure(
+    tmp_path, monkeypatch, capsys
+):
     """Agent2 보강 실패를 알림 발행 성공과 별개로 실패 종료 근거에 남긴다."""
 
     async def fake_detect(_items, *, diagnostics, **_kwargs):
@@ -668,11 +670,14 @@ async def test_cause_failure_is_reported_as_batch_failure(tmp_path, monkeypatch)
     assert summary["cause_failures"] == 1
     assert summary["failures"] == [
         {
-            "alert_id": "P001/색상/COUPANG/cs",
+            "target_key": "P001/색상/COUPANG/cs",
             "stage": "원인분류",
             "error": "CauseValidationError: 응답 ID 누락",
         }
     ]
+
+    daily.print_summary(summary)
+    assert "P001/색상/COUPANG/cs [원인분류]" in capsys.readouterr().out
 
 
 def test_main_switches_encoding_before_printing(monkeypatch):
