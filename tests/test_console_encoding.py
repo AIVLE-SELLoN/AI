@@ -232,6 +232,13 @@ def _deployed_entrypoints() -> list[Path]:
        한 PR 에 몰면 리뷰가 불가능하다. 넓히려면 이 함수만 고치면 되고, 그때는
        파일 소유자별로 나눠 올릴 것.
 
+    ⚠️ **그래서 `eval/` 이 반만 정리된 상태다.** `run_pipeline_eval.py:69` ·
+       `run_reporting_eval.py:53` 에 손수 `sys.stdout.reconfigure()` 가 남아 있다
+       (`scripts/` 에도 여럿). 둘 다 compose 서비스가 아니라 여기 유도 대상이 아니고,
+       **범위 밖 파일을 임의로 두 개만 더 걷으면 "배포되는 것만" 이라는 기준이 흐려진다.**
+       위 28개 확대 때 같이 간다 — 그 사본들은 stderr 를 안 바꾸고 `errors="replace"` 도
+       `contextlib.suppress` 도 없어 그때 한꺼번에 걷는 편이 낫다. (용준님 PR #89 2회전 지적)
+
     ⚠️ `app/main.py` 는 대상이 아니다 — `__main__` 블록이 없고 Dockerfile 이
        `uvicorn app.main:app` 으로 띄운다. 스트림 소유자가 uvicorn 이라 우리가 끼어들
        자리가 아니다.
