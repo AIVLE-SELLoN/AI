@@ -93,8 +93,11 @@ async def _run() -> None:
 
 def main() -> None:
     # 출력이 나가기 전에. 사유는 app/core/console.py 참고.
-    # ⚠️ 여기서는 빠져도 크래시가 안 난다 — 출력이 거의 전부 `logger` 라 logging 이
-    #    인코딩 예외를 삼키고 그 줄만 조용히 사라진다(테스트 docstring 참고).
+    # ⚠️ 빠지면 조용히 사라지는 게 아니라 **시끄럽게 잃는다** — 진단 경고가 안 나가는
+    #    대신 `--- Logging error ---` 블록이 건당 10줄 쌓인다. 게다가 단일행 warning
+    #    (`_format_submitted_at`)은 **호출부로 탈출해 메시지까지 잃는다**:
+    #    `UnicodeEncodeError` 가 `ValueError` 하위라 `consume()` 이 계약 위반으로 보고
+    #    `nack(requeue=False)` → DLX. 조건·실측은 테스트 docstring 참고.
     force_utf8_output()
 
     settings = get_settings()

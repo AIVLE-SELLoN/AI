@@ -97,14 +97,31 @@ def test_unexpected_error_is_logged_as_one_record(monkeypatch, caplog):
 def test_main_switches_encoding_before_running(monkeypatch):
     """⚠️ `main()` 이 실제로 `force_utf8_output()` 을 부른다 — 배선까지 고정한다.
 
-    ⚠️ **다른 진입점과 실패 모양이 다르다.** 스크립트는 인코딩이 어긋나면 크래시로
-       드러나는데(`setup_local_mq` 가 큐를 다 만들고 종료 메시지에서 죽어 exit 1 이
-       났던 그것), 이 프로세스가 내는 출력은 거의 전부 `logger` 라 logging 이 예외를
-       삼킨다. 프로세스는 멀쩡히 돌고 **그 줄만 조용히 사라진다.**
+    🔴 **빠지면 조용히 사라지는 게 아니라 시끄럽게 잃는다.** cp949 콘솔에서 `—` 가 든
+       경고는 `emit` 이 실패해 **안 나가고**, 대신 `--- Logging error ---` 블록이
+       건당 10줄쯤 stderr 에 쌓인다(용준님 실측 613자/10줄). 진단 로그를 잃으면서
+       소음은 는다.
 
-       그래서 이 호출이 빠져도 종료코드도 테스트도 아무것도 안 변한다 — 이 테스트가
-       유일한 방어선이다. 사라지는 줄이 하필 계약 어긋남 경고들이라(`—` 를 쓴다),
-       백엔드와 처음 붙여보는 그 주에 정작 안 보인다.
+       🔴 그리고 **한 경로는 호출부로 탈출한다.** `handleError()` 가 traceback 을 같은
+       스트림에 쓰는데 거기 실린 소스 라인에 `—` 가 있으면 또 터지고, handleError 는
+       `OSError` 만 삼킨다. `UnicodeEncodeError` 는 `ValueError` 하위라 `consume()` 이
+       계약 위반으로 분류해 `nack(requeue=False)` → **DLX**. 메시지가 유실된다.
+
+       실측(2026-08-14, `handle_report_feedback` · cp949 · stderr = 핸들러 스트림):
+
+           naive submittedAt   (단일행 warning) → UnicodeEncodeError 탈출
+           계약 밖 feedbackType (다중행 warning) → 탈출 없음
+           범위 밖 rating       (다중행 warning) → 탈출 없음
+
+       **단일행만 탈출한다** — 여러 줄로 쪼갠 호출은 traceback 에 첫 줄(`logger.warning(`)
+       만 실려서 traceback 자체는 인코딩된다. 두 조건이 다 맞아야 한다:
+       ① 실패한 호출의 **소스 라인**에 `—` 리터럴이 있을 것
+       ② `sys.stderr` 가 그 실패하는 스트림일 것(`basicConfig` 가 그렇게 묶는다 —
+          `handlers[0].stream is sys.stderr` 확인함)
+       둘 중 하나만 바꿔도 재현이 안 된다.
+
+    ⚠️ 이 테스트가 유일한 방어선이다. 호출이 빠져도 **리눅스에서는 아무것도 안 변해서**
+       (운영이 리눅스라 프로덕션은 무사하다) 종료코드도 다른 테스트도 안 걸린다.
     """
     from app.core import mq_consumer
 
