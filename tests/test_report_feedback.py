@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -232,3 +233,88 @@ def test_coercible_or_unknown_fields_survive(field: str, value) -> None:
     백엔드가 계약에 필드를 추가해도(§11 은 옵셔널 추가만 허용) 이 핸들러는 안 죽는다.
     """
     handle_report_feedback({**PAYLOAD, field: value})
+
+
+# ── 로그 메시지가 cp949 콘솔에서 살아남는가 ──────────────────────
+
+def _cp949_unsafe(text: str) -> list[str]:
+    """cp949 로 인코딩 안 되는 문자만 골라낸다."""
+    bad = []
+    for ch in text:
+        try:
+            ch.encode("cp949")
+        except UnicodeEncodeError:
+            bad.append(ch)
+    return bad
+
+
+def test_log_messages_survive_a_cp949_console() -> None:
+    """🔴 로그 메시지에 cp949 밖 문자(`—`·`⚠️` 등)를 쓰지 않는다.
+
+    인코딩 편의 문제가 아니라 **메시지 유실** 문제다. 진입점이 `force_utf8_output()` 을
+    안 부른 상태에서 이 핸들러가 돌면:
+
+        emit() 인코딩 실패 -> 경고가 안 나감
+        handleError() 가 traceback 을 같은 스트림에 씀 -> 소스 라인에 그 문자가 있으면 또 터짐
+        handleError 는 OSError 만 삼킴 -> UnicodeEncodeError 가 호출부로 탈출
+        UnicodeEncodeError 는 ValueError 하위 -> consume() 이 계약 위반으로 분류
+        -> nack(requeue=False) -> DLX. **피드백이 유실된다.**
+
+    ⚠️ 소스를 읽어 **메시지 리터럴만** 본다. 주석·docstring 은 콘솔로 안 나가므로
+       대상이 아니다 — 거기까지 막으면 `—` 로 설명을 쓰지 못한다.
+
+    ⚠️ 여러 줄로 쪼갠 호출은 traceback 에 첫 줄만 실려 우연히 통과하는데, 그 차이에
+       기대지 않는다. 누가 한 줄로 합치면 되살아나고 합치는 건 정상적인 정리다.
+    """
+    import ast
+    from pathlib import Path
+
+    from app.reporting import feedback_service
+
+    source = Path(feedback_service.__file__).read_text(encoding="utf-8")
+    offenders: list[str] = []
+
+    for node in ast.walk(ast.parse(source)):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr not in {"debug", "info", "warning", "error", "exception", "critical"}:
+            continue
+        for arg in node.args:
+            for piece in ast.walk(arg):
+                if (
+                    isinstance(piece, ast.Constant)
+                    and isinstance(piece.value, str)
+                    and (bad := _cp949_unsafe(piece.value))
+                ):
+                    offenders.append(f"{node.lineno}행 {bad} : {piece.value[:40]}")
+
+    assert not offenders, "cp949 콘솔에서 유실될 로그 메시지가 있습니다:\n  " + "\n  ".join(
+        offenders
+    )
+
+
+def test_handler_survives_a_cp949_stderr_without_the_entry_point_helper() -> None:
+    """🔴 진입점이 `force_utf8_output()` 을 안 불러도 핸들러가 예외를 던지지 않는다.
+
+    이게 실제 증상이다 — 던지면 `consume()` 이 DLX 로 보낸다. 위 정적 검사와 짝이라,
+    검사를 지워도 이쪽이 잡는다.
+    """
+    import io
+    import logging as _logging
+
+    from app.reporting.feedback_service import handle_report_feedback as _handler
+
+    cp949_stream = io.TextIOWrapper(
+        io.BytesIO(), encoding="cp949", errors="strict", newline=""
+    )
+    handler = _logging.StreamHandler(cp949_stream)
+    target = _logging.getLogger("app.reporting.feedback_service")
+    original, target.handlers = list(target.handlers), [handler]
+    original_propagate, target.propagate = target.propagate, False
+    original_stderr, sys.stderr = sys.stderr, cp949_stream
+    try:
+        # naive submittedAt -> 단일행 warning 경로(탈출이 나던 그 자리)
+        _handler({**PAYLOAD, "submittedAt": "2026-08-13T08:30:00"})
+    finally:
+        sys.stderr = original_stderr
+        target.handlers, target.propagate = original, original_propagate
