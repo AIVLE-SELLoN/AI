@@ -279,7 +279,7 @@ def _log_detail_page_miss(alert: DetectionAlert, collection: Any, tenant: str) -
     | 사유 | 조치 | 수준 |
     |---|---|---|
     | 컬렉션이 통째로 비었다 | 시딩 실행 | WARNING |
-    | 이 회사(`company_id`) 문서가 0건이다 | **재시딩** | WARNING |
+    | 이 회사(`company_id`) 문서가 0건이다 | **시딩 실행** | WARNING |
     | 이 상품만 없다 | 상품 등록 | INFO |
 
     `.chroma/` 가 gitignore 라 각자 로컬은 시딩(`scripts/seed_vectordb.py`) 전까지
@@ -290,7 +290,22 @@ def _log_detail_page_miss(alert: DetectionAlert, collection: Any, tenant: str) -
        문서에 `company_id` metadata 가 없어서, 조회 필터가 **전건을 걸러낸다** —
        504건이 멀쩡히 들어 있는데 조회는 0건이다. 이때 `collection.count()` 는 504 라
        첫 줄에 안 걸리고, 옛 코드였다면 **"상세페이지 미등록"(INFO)** 으로 조용히
-       오진했다. 그러면 상품 등록 쪽을 파게 되는데 실제 조치는 재시딩이다.
+       오진했다. 그러면 상품 등록 쪽을 파게 되는데 실제 조치는 시딩이다.
+
+    🔴 **`--reset` 을 안내하지 말 것 (서영님 #84 리뷰).** 가운데 줄은 두 상태가 **같은
+       모양**이다 — ① 구형 문서만 있음 ② A사 문서는 정상이고 **새로 붙은 B사만** 아직
+       없음. 둘 다 `count() > 0` + 현재 회사 조회 0건이라 런타임에선 구분이 안 되는데,
+       `--reset` 은 `detail_pages` 와 **`rejection_reasons` 를 통째로** 지운다. ②에서
+       안내대로 실행하면 **다른 회사 문서와 HITL 반려 이력까지 날아간다.**
+       이번 변경은 임베딩 모델 변경이 아니라 **일반 시딩이면 복구된다** — 신규 scoped
+       문서가 추가되고 조회가 즉시 정상화되며, 구형 문서는 필터에 걸려 안 쓰인다
+       (실측 확인). 구형 정리는 **별도 migration** 이지 이 로그가 시킬 일이 아니다.
+
+    ⚠️ **①·②를 여기서 가르려 하지 말 것.** 한 번 시도했다가 되돌렸다 — 그건 알림별이
+       아니라 **컬렉션 전체의 성질**이라 미스마다 다시 계산하는 게 구조적으로 틀렸고,
+       핫 패스에서 전수를 못 보니 표본으로 어림잡게 된다(못 믿을 값). 정확한 판별은
+       **`scripts/seed_vectordb.py` 가 시딩 직후 전수로** 한다 — 한 번만 돌고, 무엇보다
+       사람이 그 콘솔 앞에 서 있는 시점이다. 이 로그는 "시딩하라" 까지만 말한다.
 
     로그만 남기고 예외는 안 던진다 — 근거 0건의 처리는 `run()` 이 이미 한다
     (개선안 미생성 + 경고). 여기서 막으면 그 경로가 두 벌이 된다.
@@ -307,8 +322,10 @@ def _log_detail_page_miss(alert: DetectionAlert, collection: Any, tenant: str) -
     if not get_documents(collection, where={TENANT_METADATA_KEY: tenant}, limit=1):
         logger.warning(
             "[상세페이지 회사 문서 0건] 컬렉션에 문서는 있는데 company_id=%s 것이 "
-            "하나도 없습니다 — 회사 축 도입 전에 시딩됐을 수 있습니다. "
-            "`python scripts/seed_vectordb.py --reset` 으로 재시딩하세요. alert=%s",
+            "하나도 없습니다 — 회사 축 없이 시딩됐거나 이 회사가 처음입니다. "
+            "둘 다 `python scripts/seed_vectordb.py` 로 해결됩니다. "
+            "⚠️ `--reset` 은 쓰지 마세요: 다른 회사 문서와 컬렉션2(반려 이력)까지 지웁니다. "
+            "alert=%s",
             tenant,
             alert.alert_id,
         )
