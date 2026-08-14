@@ -191,3 +191,44 @@ def test_offset_other_than_kst_is_converted_not_relabeled() -> None:
     aware = datetime(2026, 8, 13, 0, 0, tzinfo=timezone(timedelta(hours=-5)))
 
     assert _format_submitted_at(aware) == "2026-08-13T14:00:00+09:00"
+
+
+# ── 관대함의 경계 — 누락은 봐주고 타입은 안 봐준다 ──────────────
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("rating", 4.5),        # 정수가 아닌 수
+        ("rating", "good"),     # 숫자가 아닌 문자열
+        ("feedbackType", 3),    # 문자열이 아님
+        ("comment", 12345),     # 문자열이 아님
+        ("submittedAt", "어제"),  # 파싱 불가한 시각
+    ],
+)
+def test_wrong_type_still_raises(field: str, value) -> None:
+    """🔴 **관대함은 "필드 누락" 한정이다.** 타입이 틀리면 pydantic 이 먼저 죽인다.
+
+    docstring 의 "나머지를 필수로 올리면 전량 DLQ" 가 일반 보증처럼 읽히기 쉬운데,
+    실제로는 손수 만든 검사 둘(feedbackType 계약값·rating 범위)에서만 성립한다.
+    `rating` 은 **한 필드 안에서 갈린다** — 0/6/-1 은 경고만이고 4.5/"good" 은 DLQ 다.
+    지금은 백엔드가 타입 있는 Spring DTO 라 실제 위험이 낮다고 보고 그대로 둔다.
+    이 테스트는 그 경계가 어디인지를 **고정해 두는 것**이 목적이다. (2026-08-14 리뷰)
+    """
+    with pytest.raises(ValidationError):
+        handle_report_feedback({**PAYLOAD, field: value})
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("rating", "5"),                # 문자열이지만 정수로 강제 변환된다
+        ("submittedAt", 1755000000),    # epoch 초도 datetime 으로 읽힌다
+        ("unknownField", "x"),          # 모르는 필드는 무시된다(계약이 늘어도 안 죽는다)
+    ],
+)
+def test_coercible_or_unknown_fields_survive(field: str, value) -> None:
+    """반대편도 고정한다 — 강제 변환되는 값과 모르는 필드는 통과한다.
+
+    백엔드가 계약에 필드를 추가해도(§11 은 옵셔널 추가만 허용) 이 핸들러는 안 죽는다.
+    """
+    handle_report_feedback({**PAYLOAD, field: value})

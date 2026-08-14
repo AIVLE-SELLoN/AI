@@ -3,6 +3,7 @@
 브로커 없이 돈다 — 파싱·디스패치·재수화만 본다. 실제 수신은 `scripts/smoke_mq.py --feedback`.
 """
 
+import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -203,7 +204,10 @@ async def test_unhandled_event_type_raises_instead_of_acking(monkeypatch):
     """
     monkeypatch.setattr(mq_consumer, "HANDLERS", {})
     unknown = "feedback.something.unknown"
-    body = b'{"eventType": "feedback.something.unknown", "payload": {}}'
+    # 이벤트 이름을 **한 곳에서** 만든다. `dispatch()` 는 envelope 의 eventType 을 읽지
+    # 않고 인자만 쓰므로 body 쪽은 장식이지만, 둘을 따로 적으면 갈렸을 때 읽는 사람이
+    # 어느 쪽이 검사 대상인지 헷갈린다.
+    body = json.dumps({"eventType": unknown, "payload": {}}).encode("utf-8")
 
     with pytest.raises(KeyError):
         await mq_consumer.dispatch(unknown, body)

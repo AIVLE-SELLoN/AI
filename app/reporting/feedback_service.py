@@ -4,8 +4,9 @@
    핸들러가 있으면 "어딘가 쌓이고 있겠지"로 읽히기 쉬워서 여기 먼저 적는다. 지금은
    받았다는 사실만 기록한다. 그렇게 정한 이유가 셋이다(2026-08-13):
 
-   1. **쓸 수 있는 저장소가 없다.** CLAUDE.md 가 "FastAPI 는 운영 DB 에
-      INSERT/UPDATE/DELETE 하지 않는다"로 못박아 뒀다. 그리고 `feedbackId` 를 발급한
+   1. **쓸 수 있는 저장소가 없다.** 이 피드백이 들어갈 자리는 **서비스 DB** 이고,
+      서비스 DB 는 main server 경유다(원본 DB 는 AI 가 직접 읽고 쓰지만 이건 그쪽이
+      아니다 — 소유권은 `app/core/raw_schema.py` 상단 §1). `feedbackId` 를 발급한
       쪽이 백엔드라 **정본은 이미 백엔드에 있다** — AI 가 사본을 들 이유가 없다.
    2. **벡터DB 에 넣을 자리가 아니다.** 컬렉션은 둘뿐이고(`detail_pages` 상세페이지,
       `rejection_reasons` 개선안 HITL) 리포트 피드백은 어느 쪽도 아니다. 후자에 넣으면
@@ -61,6 +62,23 @@ class ReportFeedbackCreated(BaseModel):
        가르는 기준은 **그게 없으면 기록이 무의미해지는가**다. `feedbackId`·`reportId`
        가 없으면 어느 리포트의 무슨 피드백인지 알 수 없어 남길 이유가 없다 — 이건
        계약 위반이므로 DLX 로 보내 백엔드가 고쳐 재발행하게 한다.
+
+       🔴 **이 관대함은 "필드 누락" 한정이다. 타입이 틀리면 여전히 죽는다.**
+          아래 핸들러의 손수 만든 검사 둘(`feedbackType` 계약값·`rating` 범위)만
+          경고로 끝나고, 그 밖은 pydantic 타입 강제가 먼저 걸린다. 실측(2026-08-14):
+
+              rating 0 / 6 / -1        → 경고만 (의도대로)
+              rating 4.5 / "good"      → ValidationError → DLQ
+              feedbackType 3           → ValidationError → DLQ
+              comment 12345            → ValidationError → DLQ
+              submittedAt "어제"        → ValidationError → DLQ
+              rating "5" · submittedAt 1755000000 · 모르는 필드 → 통과(강제 변환·무시)
+
+          **`rating` 이 한 필드 안에서 갈린다** — 범위 밖이면 살고 타입이 틀리면 죽는다.
+          백엔드가 타입 있는 Spring DTO(`Integer`·enum·`OffsetDateTime`)로 직렬화하는
+          한 위 경우는 잘 안 나오므로 지금은 그대로 둔다. 여기를 정말 "어떤 값이 와도
+          안 죽는다"로 만들려면 전 필드를 `Any` 로 받아 핸들러에서 손수 검사해야 하고,
+          그러면 계약 문서화 효과를 잃는다. (2026-08-14 리뷰 확인)
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -68,6 +86,10 @@ class ReportFeedbackCreated(BaseModel):
     feedback_id: str = Field(alias="feedbackId")
     report_id: str = Field(alias="reportId")
 
+    # ⚠️ `userId` 는 **일부러 파싱만 하고 아무 데도 안 쓴다.** 계약(§8)에 있는 필드라
+    #    모델에 두어 문서 역할을 하게 한다. 로그에는 넣지 않는다 — `comment` 를 안 찍는
+    #    것과 같은 판단으로, 누가 썼는지는 정본을 가진 백엔드가 알면 된다.
+    #    "안 쓰는데?" 하고 지우면 계약과 코드가 갈린다.
     user_id: str | None = Field(default=None, alias="userId")
     feedback_type: str | None = Field(default=None, alias="feedbackType")
     rating: int | None = None
