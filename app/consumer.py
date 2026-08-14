@@ -34,10 +34,10 @@ import signal
 import sys
 
 from app.config import get_settings
+from app.core import mq_consumer
 from app.core.console import force_utf8_output
 from app.core.exceptions import AiServiceError
 from app.core.mq_consumer import (
-    HANDLERS,
     RECOMMENDATION_REVIEWED,
     REPORT_CREATED,
     consume,
@@ -68,7 +68,11 @@ def wire_handlers() -> None:
 
     register_handler(RECOMMENDATION_REVIEWED, handle_recommendation_reviewed)
     register_handler(REPORT_CREATED, handle_report_feedback)
-    logger.info("등록된 처리 함수: %s", ", ".join(sorted(HANDLERS)))
+    # ⚠️ `mq_consumer.HANDLERS` 를 **모듈 경유로** 읽는다. `from … import HANDLERS` 로
+    #    가져오면 import 시점의 객체가 이 네임스페이스에 값으로 묶여, 테스트가
+    #    `monkeypatch.setattr(mq_consumer, "HANDLERS", {})` 로 갈아끼웠을 때
+    #    등록은 새 dict 에 되고 이 로그는 옛 dict 를 읽어 "비었다"고 말한다.
+    logger.info("등록된 처리 함수: %s", ", ".join(sorted(mq_consumer.HANDLERS)))
 
 
 async def _run() -> None:
