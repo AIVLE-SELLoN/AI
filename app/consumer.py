@@ -34,6 +34,7 @@ import signal
 import sys
 
 from app.config import get_settings
+from app.core.console import force_utf8_output
 from app.core.exceptions import AiServiceError
 from app.core.mq_consumer import (
     HANDLERS,
@@ -82,6 +83,11 @@ async def _run() -> None:
 
 
 def main() -> None:
+    # 출력이 나가기 전에. 사유는 app/core/console.py 참고.
+    # ⚠️ 여기서는 빠져도 크래시가 안 난다 — 출력이 거의 전부 `logger` 라 logging 이
+    #    인코딩 예외를 삼키고 그 줄만 조용히 사라진다(테스트 docstring 참고).
+    force_utf8_output()
+
     settings = get_settings()
     logging.basicConfig(
         level=settings.log_level,

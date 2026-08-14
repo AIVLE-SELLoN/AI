@@ -94,6 +94,38 @@ def test_unexpected_error_is_logged_as_one_record(monkeypatch, caplog):
     assert any("예기치 않게" in r.getMessage() for r in caplog.records)
 
 
+def test_main_switches_encoding_before_running(monkeypatch):
+    """⚠️ `main()` 이 실제로 `force_utf8_output()` 을 부른다 — 배선까지 고정한다.
+
+    ⚠️ **다른 진입점과 실패 모양이 다르다.** 스크립트는 인코딩이 어긋나면 크래시로
+       드러나는데(`setup_local_mq` 가 큐를 다 만들고 종료 메시지에서 죽어 exit 1 이
+       났던 그것), 이 프로세스가 내는 출력은 거의 전부 `logger` 라 logging 이 예외를
+       삼킨다. 프로세스는 멀쩡히 돌고 **그 줄만 조용히 사라진다.**
+
+       그래서 이 호출이 빠져도 종료코드도 테스트도 아무것도 안 변한다 — 이 테스트가
+       유일한 방어선이다. 사라지는 줄이 하필 계약 어긋남 경고들이라(`—` 를 쓴다),
+       백엔드와 처음 붙여보는 그 주에 정작 안 보인다.
+    """
+    from app.core import mq_consumer
+
+    calls: list[str] = []
+
+    async def interrupted():
+        calls.append("consume")
+        raise KeyboardInterrupt
+
+    # 이 테스트가 전역 HANDLERS 를 더럽히지 않게 — main() 이 wire_handlers() 를 탄다.
+    monkeypatch.setattr(mq_consumer, "HANDLERS", {})
+    monkeypatch.setattr(consumer, "force_utf8_output", lambda: calls.append("utf8"))
+    monkeypatch.setattr(consumer, "consume", interrupted)
+
+    consumer.main()
+
+    assert "utf8" in calls, "main() 이 force_utf8_output() 을 부르지 않았습니다"
+    # 출력이 나가기 전에 불려야 한다.
+    assert calls.index("utf8") < calls.index("consume")
+
+
 def test_wiring_registers_the_hitl_handler(monkeypatch):
     """⚠️ 배선이 실제로 HITL 핸들러를 꽂는지 확인한다.
 
