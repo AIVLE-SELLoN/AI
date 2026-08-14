@@ -38,6 +38,7 @@ from app.core.exceptions import AiServiceError
 from app.core.mq_consumer import (
     HANDLERS,
     RECOMMENDATION_REVIEWED,
+    REPORT_CREATED,
     consume,
     register_handler,
 )
@@ -55,13 +56,17 @@ def wire_handlers() -> None:
     직접 띄우지 않고 `dispatch()` 만 쓰는 도구(스모크 스크립트 등)도 이 함수를 먼저
     불러야 한다 — 공개 함수인 이유가 그것이다.
 
-    리포팅(`feedback.report.created`)도 담당자가 함수를 만들면 여기 한 줄로 붙는다.
     등록 안 된 이벤트는 ACK 하지 않고 DLX 로 보낸다 — 처리한 적 없는 걸 처리했다고
-    하면 그 메시지가 사라진다.
+    하면 그 메시지가 사라진다. 인바운드 2종(§8)이 여기 다 꽂혀 있어야 한다.
+
+    ⚠️ import 를 **함수 안에서** 한다. 모듈 최상단으로 올리면 컨슈머를 띄우지 않는
+       테스트·도구까지 recommendation·reporting 을 끌고 들어온다.
     """
     from app.recommendation.service import handle_recommendation_reviewed
+    from app.reporting.feedback_service import handle_report_feedback
 
     register_handler(RECOMMENDATION_REVIEWED, handle_recommendation_reviewed)
+    register_handler(REPORT_CREATED, handle_report_feedback)
     logger.info("등록된 처리 함수: %s", ", ".join(sorted(HANDLERS)))
 
 
