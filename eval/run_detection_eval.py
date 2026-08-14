@@ -59,6 +59,7 @@ from validate_anomaly import (
     round_counts,
 )
 
+from app.core.console import force_utf8_output
 from app.core.constants import CONSISTENT_COUNT, CONSISTENT_RATIO
 from app.core.schemas import Verdict
 from app.detection.confidence import decide_confidence
@@ -434,6 +435,10 @@ def report(m: dict, pred: dict, golden: list[dict], verbose: bool) -> None:
 
 
 def main() -> None:
+    # 출력이 나가기 전에. 사유는 app/core/console.py 참고 —
+    # 결과 표에 `—`·`✅` 를 쓰는데 cp949 콘솔에서 그 줄이 터진다.
+    force_utf8_output()
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--verbose", action="store_true", help="케이스별 상세 출력")
     args = ap.parse_args()
