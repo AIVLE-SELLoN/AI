@@ -1,11 +1,39 @@
 # SELLoN Mock Producer 파이프라인
 #
-# 인프라 팀 협의 (2026-08-02):
+# 인프라 팀 협의 (2026-08-02, **2026-08-14 개정**):
 #   - 분산 코디네이터: KRaft (Zookeeper 제거)
-#   - 브로커 : 파티션 : 컨슈머 = 3 : 3 : 1  (추후 변경 가능)
+#   - 브로커 : 파티션 : 컨슈머 = **1 : 1 : 1**
 #   - 브로커는 EC2 에 올리고, EC2 는 Elastic IP 사용
 #     → EXTERNAL 리스너의 advertised host 를 Elastic IP 로 광고해야
 #       외부(로컬 PC, Spring Boot)에서 붙을 수 있다.
+#
+# 🔴 **3:3:1 → 1:1:1 (2026-08-14).** 인프라 세팅은 끝났으나 서버가 열리지 않아 단일
+#    브로커로 확정했다. **복제 수를 함께 내려야 한다** — 브로커만 1대로 줄이면 토픽
+#    생성이 실패한다:
+#      · `--replication-factor 3` → 브로커가 3대 미만이면 create 가 거부된다
+#      · `min.insync.replicas=2`  → 통과해도 발행이 NOT_ENOUGH_REPLICAS 로 막힌다
+#    그래서 아래 여섯 값이 **한 세트다**: NUM_PARTITIONS · DEFAULT_REPLICATION_FACTOR ·
+#    MIN_INSYNC_REPLICAS · OFFSETS_TOPIC_REPLICATION_FACTOR ·
+#    TRANSACTION_STATE_LOG_{REPLICATION_FACTOR,MIN_ISR} + kafka-init 의 인자.
+#    (브로커 수에 실제로 걸리는 건 **복제 다섯**이다. NUM_PARTITIONS 는 파티션 > 브로커도
+#     합법이라 실패하지 않고, 1:1:1 협의 비율에 맞춰 같이 내린 값이다.)
+#
+#    ⚠️ **단일 브로커는 내구성이 없다.** 그 노드가 죽으면 미소비 메시지가 사라진다.
+#       목 파이프라인은 CSV 대본을 다시 재생하면 되므로 감수한다. 브로커를 늘릴 때는
+#       위 값들을 **같이** 올려야 한다(하나만 올리면 조용히 복제가 안 된다).
+#
+# 🔴 **3-브로커 시절 볼륨이 남아 있으면 kafka-1 이 아예 기동하지 못한다** — 기존 compose 를
+#    한 번이라도 up 한 사람은 반드시 읽을 것. kafka-1-data 의 KRaft 상태 파일에 voter
+#    [1, 2, 3] 이 박혀 있어 지금 설정(voter [1])과 충돌한다:
+#      IllegalStateException: Configured voter set: [1] is different from the voter set
+#      read from the state file: [1, 2, 3]. ... wipe out the local state file if necessary
+#    KRaft static quorum 의 동작이라 compose 설정으로는 못 막는다. 게다가
+#    `restart: unless-stopped` 라 화면에는 에러 없이 Waiting/starting 만 반복해서
+#    `docker compose logs kafka-1` 을 열기 전엔 원인이 안 보인다. 조치는 볼륨 삭제:
+#      docker compose down -v
+#      docker volume rm ai_kafka-2-data ai_kafka-3-data
+#    ⚠️ 아래 volumes: 에 kafka-2/3 정의가 없어 **`down -v` 로는 그 둘이 안 지워진다.**
+#       그래서 두 번째 줄이 따로 필요하다(프로젝트명 ai = 이 디렉터리 이름).
 #
 # 워크플로우 회의 (2026-08-02):
 #   - 분류 워커는 Kafka 를 구독하지 않고 raw DB(mock_producer 가 적재)를 참조하도록 바뀌어
@@ -13,7 +41,7 @@
 #       python scripts/classification_worker.py --limit 50     # 시험 실행(과금 상한)
 #       python scripts/classification_worker.py --follow       # 상시 추종 — 전량 과금 주의
 #     ⚠️ data/ 에 원문이 12.8만 건 있다. --limit 없이 --follow 로 돌리면 전량이 LLM 으로 간다.
-#   - 따라서 여기 남는 건 브로커 3대 + 토픽 초기화 + mock producer 뿐이다.
+#   - 따라서 여기 남는 건 브로커 1대 + 토픽 초기화 + mock producer 뿐이다.
 #     협의상 "컨슈머 1"은 raw.* 토픽을 구독하는 쪽(인프라/Spring Boot)이 맡는다.
 #
 # 실행 전 .env 에 아래 값을 채울 것:
@@ -25,8 +53,6 @@ networks:
 
 volumes:
   kafka-1-data:
-  kafka-2-data:
-  kafka-3-data:
   rabbitmq-data:
 
 x-kafka-common: &kafka-common
@@ -35,16 +61,16 @@ x-kafka-common: &kafka-common
     - app-network
   restart: unless-stopped
 
-# 3개 브로커가 공유하는 KRaft 설정.
-# 브로커별로 다른 값(NODE_ID / LISTENERS / ADVERTISED_LISTENERS / 포트)은
-# 각 서비스에서 따로 지정한다.
+# KRaft 설정. 지금은 브로커가 1대지만 anchor 를 유지한다 — 늘릴 때 브로커별로 다른
+# 값(NODE_ID / LISTENERS / ADVERTISED_LISTENERS / 포트)만 각 서비스에서 덮으면 된다.
 x-kafka-env: &kafka-env
   # --- KRaft ---
-  # 3노드 모두 broker + controller 겸용(combined mode). 쿼럼 과반 = 2.
+  # 단일 노드가 broker + controller 겸용(combined mode). 쿼럼도 자기 자신 하나뿐이다.
+  # 브로커를 늘리면 **전 노드의 voters 목록이 같아야** 한다(하나만 고치면 기동 실패).
   KAFKA_PROCESS_ROLES: broker,controller
-  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:29093,2@kafka-2:29093,3@kafka-3:29093
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:29093
   KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-  # 클러스터 최초 포맷 시 사용되는 ID. 3노드가 같은 값이어야 한 클러스터로 묶인다.
+  # 클러스터 최초 포맷 시 사용되는 ID. 노드를 늘리면 같은 값이어야 한 클러스터로 묶인다.
   # 바꾸면 기존 볼륨과 불일치로 기동 실패 → 바꿀 거면 볼륨도 같이 지울 것.
   CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
 
@@ -55,15 +81,19 @@ x-kafka-env: &kafka-env
   KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
   KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
 
-  # --- 복제/파티션 기본값 (브로커 3) ---
-  KAFKA_NUM_PARTITIONS: 3
-  KAFKA_DEFAULT_REPLICATION_FACTOR: 3
-  KAFKA_MIN_INSYNC_REPLICAS: 2
-  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
-  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
-  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+  # --- 복제/파티션 기본값 (브로커 1) ---
+  # NUM_PARTITIONS 는 브로커 수 제약이 아니다 — 파티션 > 브로커도 합법이라 그대로 둬도
+  # 실패하지 않는다. 협의된 1:1:1 비율을 따라 같이 내린 값이라 늘릴 때도 같이 올린다.
+  KAFKA_NUM_PARTITIONS: 1
+  # 🔴 아래 **복제 다섯 값**은 브로커 수와 한 세트다. 브로커만 바꾸고 여기를 두면
+  #    토픽 생성(RF > 브로커 수)이나 발행(min ISR 미달)이 실패한다.
+  KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+  KAFKA_MIN_INSYNC_REPLICAS: 1
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
   KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-  # 토픽은 kafka-init 에서 파티션 3 / RF 3 으로 명시 생성한다.
+  # 토픽은 kafka-init 에서 파티션 1 / RF 1 로 명시 생성한다.
   # 오타 토픽이 자동 생성돼 조용히 유실되는 걸 막기 위해 자동 생성은 끈다.
   KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
 
@@ -87,45 +117,7 @@ services:
       retries: 15
       start_period: 30s
 
-  kafka-2:
-    <<: *kafka-common
-    container_name: ai-kafka-2
-    ports:
-      - "9093:9093"
-    environment:
-      <<: *kafka-env
-      KAFKA_NODE_ID: 2
-      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9093,CONTROLLER://0.0.0.0:29093
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-2:29092,EXTERNAL://${KAFKA_EXTERNAL_HOST:-localhost}:9093
-    volumes:
-      - kafka-2-data:/var/lib/kafka/data
-    healthcheck:
-      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:29092"]
-      interval: 10s
-      timeout: 10s
-      retries: 15
-      start_period: 30s
-
-  kafka-3:
-    <<: *kafka-common
-    container_name: ai-kafka-3
-    ports:
-      - "9094:9094"
-    environment:
-      <<: *kafka-env
-      KAFKA_NODE_ID: 3
-      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9094,CONTROLLER://0.0.0.0:29093
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-3:29092,EXTERNAL://${KAFKA_EXTERNAL_HOST:-localhost}:9094
-    volumes:
-      - kafka-3-data:/var/lib/kafka/data
-    healthcheck:
-      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:29092"]
-      interval: 10s
-      timeout: 10s
-      retries: 15
-      start_period: 30s
-
-  # 토픽을 파티션 3 / RF 3 으로 미리 만들고 끝나는 1회성 서비스.
+  # 토픽을 파티션 1 / RF 1 로 미리 만들고 끝나는 1회성 서비스.
   # (자동 생성을 껐으므로 이 단계가 없으면 producer 가 UNKNOWN_TOPIC 으로 실패한다.)
   kafka-init:
     image: confluentinc/cp-kafka:7.5.0
@@ -133,26 +125,29 @@ services:
     depends_on:
       kafka-1:
         condition: service_healthy
-      kafka-2:
-        condition: service_healthy
-      kafka-3:
-        condition: service_healthy
     networks:
       - app-network
     entrypoint: ["/bin/bash", "-c"]
-    command: |
-      "
-      set -e
-      BS=kafka-1:29092,kafka-2:29092,kafka-3:29092
-      for t in raw.orders raw.inquiries raw.reviews raw.detail_changes; do
-        kafka-topics --bootstrap-server $$BS \
-          --create --if-not-exists \
-          --topic $$t --partitions 3 --replication-factor 3 \
-          --config min.insync.replicas=2
-      done
-      echo '--- topics ---'
-      kafka-topics --bootstrap-server $$BS --list
-      "
+    # 🔴 command 는 **리스트 + 블록 스칼라**여야 한다(문자열로 되돌리지 말 것).
+    #    문자열로 주면 compose 가 shell-lex 로 쪼개면서 **줄 끝 `\`(라인 연속)만 지우고
+    #    개행은 남긴다** → 첫 줄이 그대로 완결 명령이 되어
+    #      Command must include exactly one action: --list, --describe, --create ...
+    #    로 죽는다(`docker inspect ai-kafka-init` 의 Cmd 로 확인 가능). set -e 라 곧바로
+    #    exit 1 → mock-producer 는 service_completed_successfully 를 영원히 기다린다.
+    #    리스트로 주면 lex 를 안 거쳐 `\` 가 bash 까지 그대로 간다.
+    #    (`$$` 는 리스트에서도 필요하다 — 변수 보간은 문자열/리스트 구분 없이 적용된다.)
+    command:
+      - |
+        set -e
+        BS=kafka-1:29092
+        for t in raw.orders raw.inquiries raw.reviews raw.detail_changes; do
+          kafka-topics --bootstrap-server $$BS \
+            --create --if-not-exists \
+            --topic $$t --partitions 1 --replication-factor 1 \
+            --config min.insync.replicas=1
+        done
+        echo '--- topics ---'
+        kafka-topics --bootstrap-server $$BS --list
 
   mock-producer:
     build:
@@ -162,7 +157,7 @@ services:
     # --speed 100 : 대본 CSV 를 100배속으로 재생
     command: >
       python -u scripts/mock_producer.py
-      --bootstrap-servers kafka-1:29092,kafka-2:29092,kafka-3:29092
+      --bootstrap-servers kafka-1:29092
       --speed 100
       --raw-db /app/data/raw.db
     environment:
