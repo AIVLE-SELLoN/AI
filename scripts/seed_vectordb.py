@@ -37,13 +37,26 @@ from app.core.constants import (
     EMBEDDING_MODEL,
 )
 from app.core.exceptions import VectorDbError
-from app.core.vectordb import get_client, get_detail_pages, upsert_documents
+from app.core.vectordb import (
+    TENANT_METADATA_KEY,
+    current_tenant,
+    get_client,
+    get_detail_pages,
+    get_documents,
+    scoped_document_id,
+    upsert_documents,
+)
 
 CSV_PATH = Path(__file__).resolve().parent.parent / "data" / "input" / "input_detail_fields.csv"
 
 
 def _make_id(entry: dict[str, Any]) -> str:
-    """product_group_id+channel+aspect로 결정적 id 생성 — 재실행해도 중복 안 쌓인다."""
+    """product_group_id+channel+aspect로 결정적 id 생성 — 재실행해도 중복 안 쌓인다.
+
+    ⚠️ **회사 축은 여기 없다** — 호출부가 `scoped_document_id(tenant, ...)` 로 감싼다.
+    `product_group_id` 는 회사별 시퀀스라 이 값만으로는 회사 간에 유일하지 않다
+    (`vectordb.current_tenant` docstring).
+    """
     return f"{entry['product_group_id']}:{entry['channel']}:{entry['aspect']}"
 
 
@@ -67,6 +80,55 @@ def reset_collections() -> None:
         print(f"  - {name}: {count}건 삭제")
 
 
+def report_legacy_documents(collection: Any, tenant: str) -> int:
+    """회사 축이 **없는** 구형 문서가 몇 건 남았는지 시딩 직후 알려준다.
+
+    🔴 **판별을 여기서 하는 이유 (서영님 #84 리뷰 후속).** "이 컬렉션이 구형인가" 는
+       알림별이 아니라 **컬렉션 전체의 성질**이다. 런타임(`_log_detail_page_miss`)에서
+       미스마다 다시 계산하면 ① 같은 답을 수십 번 구하고 ② 핫 패스라 전수를 못 봐
+       표본으로 어림잡게 된다. 여기는 **한 번만 돌고 전수를 보며**, 무엇보다 **사람이
+       이 콘솔 앞에 서 있는 시점**이다.
+
+    ⚠️ **Chroma 1.5.9 엔 `$exists` 가 없다** — `where` 연산자 목록에서 거부한다
+       (`ValueError: Expected where operator to be one of $gt … $not_contains`).
+       대신 **`$nin` 이 키가 아예 없는 문서도 매칭**하므로(실측) 그걸로 후보를 뽑고,
+       metadata 에 키가 실제로 있는지는 파이썬에서 본다.
+
+    ⚠️ `include=["metadatas"]` 로 **본문 전송을 없앤다** — 상세페이지가 건당 700자대라
+       빼지 않으면 수십 건만 훑어도 수만 자가 오간다.
+
+    Returns:
+        구형 문서 수(정리 여부 판단용). 조회 실패 시 -1.
+    """
+    try:
+        rows = get_documents(
+            collection,
+            where={TENANT_METADATA_KEY: {"$nin": [tenant]}},
+            include=["metadatas"],
+        )
+    except VectorDbError as exc:
+        print(f"  ⚠️ 구형 문서 확인 실패(적재 자체는 성공): {exc}")
+        return -1
+
+    legacy = sum(1 for row in rows if TENANT_METADATA_KEY not in row["metadata"])
+    others = len(rows) - legacy
+
+    if others:
+        print(f"  - 다른 회사 문서 {others}건이 같은 컬렉션에 있습니다(정상, 조회에서 격리됨).")
+    if not legacy:
+        return 0
+
+    print(
+        f"  ⚠️ 회사 축이 없는 구형 문서 {legacy}건이 남아 있습니다.\n"
+        "     조회 필터에 안 걸리므로 **그대로 둬도 동작에는 문제가 없습니다**"
+        "(저장 공간만 차지합니다).\n"
+        "     확인: python scripts/inspect_detail_pages.py --all-companies\n"
+        "     🔴 정리하려고 `--reset` 을 쓰지 마세요 — 컬렉션2(HITL 반려 이력)와"
+        " 다른 회사 문서까지 지웁니다."
+    )
+    return legacy
+
+
 def main(reset: bool = False) -> None:
     with CSV_PATH.open(encoding="utf-8-sig", newline="") as f:
         entries = list(csv.DictReader(f))
@@ -78,16 +140,26 @@ def main(reset: bool = False) -> None:
         print(f"임베딩 모델 = {EMBEDDING_MODEL} / 컬렉션 초기화")
         reset_collections()
 
+    # 🔴 **한 번만 읽어 ID·metadata 에 같이 쓴다** — 두 번 읽으면 어긋날 수 있고,
+    #    조회 필터(`pipeline._get_detail_page_text`)까지 셋이 같은 값이어야 격리가
+    #    성립한다(컬렉션2 `record_hitl_outcome` 과 같은 형태).
+    tenant = current_tenant()
+
     # 적재는 문서를 임베딩하므로 네트워크와 유효한 키가 필요하다. 실패는
     # `upsert_documents` 가 VectorDbError 로 감싸 사유를 알아볼 수 있게 준다.
     collection = get_detail_pages()
     try:
         upsert_documents(
             collection,
-            ids=[_make_id(entry) for entry in entries],
+            # 🔴 회사 축을 붙인다. `product_group_id` 가 회사별 시퀀스라 A사 P001 과
+            #    B사 P001 이 **같은 ID** 를 받아 나중 시딩이 앞엣것을 덮는다.
+            ids=[scoped_document_id(tenant, _make_id(entry)) for entry in entries],
             documents=[entry["detail_text"] for entry in entries],
             metadatas=[
                 {
+                    # 조회 필터가 이 키로 회사를 좁힌다. 쓰기와 읽기가 짝이므로
+                    # 한쪽만 지우면 조용히 다른 회사 상세페이지를 근거로 쓴다.
+                    TENANT_METADATA_KEY: tenant,
                     "product_group_id": entry["product_group_id"],
                     "channel": entry["channel"],
                     "aspect": entry["aspect"],
@@ -100,7 +172,8 @@ def main(reset: bool = False) -> None:
         print("  .env 의 LLM_API_KEY 와 네트워크 연결을 확인하세요.")
         raise SystemExit(1) from exc
 
-    print(f"{len(entries)}건 적재 완료 → collection={collection.name}")
+    print(f"{len(entries)}건 적재 완료 → collection={collection.name} / company_id={tenant}")
+    report_legacy_documents(collection, tenant)
 
 
 if __name__ == "__main__":
