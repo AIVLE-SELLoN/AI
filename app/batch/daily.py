@@ -101,6 +101,36 @@ STATE_RETENTION_DAYS = CURRENT_WINDOW_DAYS + PAST_WINDOW_DAYS
 풀리고 기준선이 오염된다.
 """
 
+PENDING_GUIDELINE_PATH = ROOT / "data" / "batch_state" / "pending_guidelines.json"
+"""가이드라인 전달 대기열 — **백엔드가 아무것도 못 들은 건**만 담는다 (§4, 2026-08-14).
+
+`published_alerts.json`(억제 캐시)과 파일을 일부러 나눈다:
+  - 억제 캐시는 §2 조회 API(`GET /internal/alerts/active`)가 붙으면 통째로 걷어낼
+    파일이지만, "가이드라인을 받았는지"는 그 응답에 없다(백엔드에 요청하지 않기로
+    확정). 한 파일에 섞으면 §2 때 지워도 되는 키와 안 되는 키가 섞인다.
+  - 새 파일은 배포 첫 실행에 비어 있다 — 기존 캐시 35일치가 재시도 대상으로 둔갑해
+    LLM 비용이 한 번에 나가는 사고가 구조적으로 없다.
+
+항목: {"alert": DetectionAlert.model_dump(), "attempts": int}
+  attempts = 소진한 **재시도** 횟수. 본배치 실패로 처음 들어올 때 0.
+  알림 전문을 담는 이유: `build_guideline_input` 이 알림에서 18개 필드를 읽는데
+  §2 응답은 5개뿐이라 alert_id 만으로는 재생성이 불가능하다.
+
+재시도는 **재생성**이다(payload 재발행 아님) — Pre-signed URL·S3 객체 수명(7일)
+시계가 생성 시점에 시작되므로, 콜백을 캐시했다 재발행하면 보장 기간이 깎인 채로
+(배치 장기 중단 뒤엔 만료된 링크가) SUCCESS 로 나간다. `GenerationCallback` 을
+저장하면 리포팅 계약에 결합되는 문제도 있다.
+
+볼륨 요구는 STATE_PATH 와 같다(같은 디렉토리) — 추가 마운트 없음.
+"""
+
+GUIDELINE_RETRY_MAX_ATTEMPTS = 3
+"""알림 1건당 가이드라인 재시도 상한. 소진하면 경고를 남기고 포기한다.
+
+상한이 없으면 영구 실패(S3 미구성 등)가 같은 건을 매일 재시도한다 — 재시도 1회가
+곧 LLM·S3 재지불이다. 배치 상태 정책이라 core/constants.py 가 아니라 여기 둔다.
+"""
+
 
 # ── 담당자 미완성 함수 — import 폴백 ────────────────────────────
 # 시그니처는 지인님 결선 정리(2026-08-05)의 예시 코드를 그대로 따른다.
@@ -818,6 +848,76 @@ def save_published(
     return len(kept)
 
 
+def load_pending_guidelines(
+    window_end: date, path: Path = PENDING_GUIDELINE_PATH
+) -> list[dict]:
+    """대기열을 읽는다. 항목: {"alert": DetectionAlert, "attempts": int}.
+
+    깨진 항목은 버리고 경고만 남긴다(`load_prior_alerts` 와 같은 규율).
+    `window_end` 가 STATE_RETENTION_DAYS 보다 오래된 항목도 버린다 — 그 구간의
+    CS 원문이 오늘 documents(35일 창) 밖이라 재생성이 성공할 수 없다.
+    """
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning(
+            "가이드라인 대기열이 손상됐습니다 — 빈 대기열로 진행합니다 (%s)", exc
+        )
+        return []
+    if not isinstance(raw, list):
+        logger.warning("가이드라인 대기열 형식이 예상과 다릅니다 — 빈 대기열로 진행합니다")
+        return []
+
+    cutoff = date.fromordinal(window_end.toordinal() - STATE_RETENTION_DAYS)
+    entries: list[dict] = []
+    dropped = expired = 0
+    for item in raw:
+        if not isinstance(item, dict):
+            dropped += 1
+            continue
+        try:
+            alert = DetectionAlert.model_validate(item.get("alert"))
+        except ValidationError:
+            dropped += 1
+            continue
+        if alert.window_end < cutoff:
+            expired += 1
+            continue
+        attempts = item.get("attempts")
+        entries.append(
+            {
+                "alert": alert,
+                "attempts": attempts if isinstance(attempts, int) and attempts >= 0 else 0,
+            }
+        )
+    if dropped:
+        logger.warning("가이드라인 대기 %d건이 현재 스키마와 안 맞아 버립니다", dropped)
+    if expired:
+        logger.warning(
+            "가이드라인 대기 %d건이 보관 기간(%d일)을 넘겨 포기합니다",
+            expired,
+            STATE_RETENTION_DAYS,
+        )
+    return entries
+
+
+def save_pending_guidelines(entries: list[dict], path: Path) -> None:
+    """대기열을 통째로 다시 쓴다. 빈 리스트면 빈 파일 — '대기 없음'도 상태다."""
+    _atomic_write(
+        path,
+        json.dumps(
+            [
+                {"alert": e["alert"].model_dump(mode="json"), "attempts": e["attempts"]}
+                for e in entries
+            ],
+            ensure_ascii=False,
+            indent=2,
+        ),
+    )
+
+
 # ── 배치 본체 ───────────────────────────────────────────────────
 
 
@@ -827,6 +927,7 @@ async def run_batch(
     max_alerts: int | None = None,
     dry_run: bool = False,
     state_path: Path = STATE_PATH,
+    pending_path: Path | None = None,
     load_inputs: Callable[..., tuple[list[ClassifiedItem], list[dict]]] | None = None,
 ) -> dict:
     """탐지 → 개선안 → 가이드라인 → 발행. 배치 1회.
@@ -836,6 +937,9 @@ async def run_batch(
         max_alerts: Agent3·가이드라인에 태울 alert 수 상한 (비용 통제).
         dry_run: LLM 을 한 번도 부르지 않고 **몇 번 부를지만 실측**한다.
         state_path: 발행 기록 캐시 경로 (테스트 주입용).
+        pending_path: 가이드라인 대기열 경로. 기본은 state_path 를 따라간다 —
+            운영 기본이면 PENDING_GUIDELINE_PATH, 커스텀이면 그 옆 파생 이름.
+            디버그 실행(--state-path)이 운영 대기열을 소비·저장하지 않게 하기 위해서다.
         load_inputs: 입력원. 기본은 원본 DB(`load_inputs_from_db`).
             평가·재현은 `scripts.golden_inputs.load_golden_inputs` 를 주입한다.
             **골든을 주입하면 분류 오차가 0 이라 결과가 탐지 성능이 아니다** —
@@ -846,6 +950,14 @@ async def run_batch(
     """
     loader = load_inputs or load_inputs_from_db
     classifier_versions = _classifier_versions_for(loader)
+    if pending_path is None:
+        # 커스텀 state_path 는 **파일명에서** 파생한다 — 디렉토리 기준이면 "파일명만 바꿔
+        # 운영 디렉토리를 준" 디버그 실행이 운영 대기열을 그대로 소비·저장한다.
+        pending_path = (
+            PENDING_GUIDELINE_PATH
+            if state_path == STATE_PATH
+            else state_path.with_name(state_path.stem + ".pending_guidelines.json")
+        )
     trace_id = new_trace_id()
     # 경과시간 전용이라 시간대는 UTC 로 고정한다 — 벽시계 값이 아니라 **차이만** 쓴다.
     # naive `datetime.now()` 는 로컬 시각이라 배치가 도는 중 DST·시간대 변경이 걸리면
@@ -919,6 +1031,13 @@ async def run_batch(
         window_end,
     )
 
+    # §4 가이드라인 재시도 대기열 — "알림은 나갔는데 가이드라인만 못 나간" 건들.
+    # window_end 가 없으면(문서 0건) 로드하지 않는다 — 보관 컷오프를 잴 기준이 없고
+    # documents 가 비어 재시도가 성공할 수도 없다. 파일은 그대로 남는다.
+    pending = load_pending_guidelines(window_end, pending_path) if window_end else []
+    if pending:
+        logger.info("가이드라인 재시도 대기 %d건", len(pending))
+
     # ⚠️ dry-run 이어도 [6] 원인분류는 detect_anomaly 안에서 돈다. 스텁을 안 주면
     #    "LLM 0회"라고 해놓고 실제로 과금된다.
     stub = CountingClient() if dry_run else None
@@ -953,6 +1072,15 @@ async def run_batch(
     # 이유는 종료코드에 안 실리게 하기 위해서다(루프 안 주석 참고).
     evidence_gaps = 0
     routing_misses = 0
+    # §4 — 이 배치에서 "가이드라인만 못 나간" 알림. 끝에 대기열로 들어간다.
+    new_pending: list[DetectionAlert] = []
+    # 재시도 패스가 안 돌면(dry-run·documents 0건) 대기열은 그대로 다음 배치로 넘어간다.
+    still_pending: list[dict] = list(pending)
+    retried_ok = 0
+    retry_exhausted = 0
+    if dry_run and pending:
+        # 재시도도 다음 실제 실행이 지불할 비용이다 — 안 세면 추정이 아래로 어긋난다.
+        counts["가이드라인"] += len(pending)
     # ⚠️ **발행에 성공한 것만** 캐시에 넣는다. save_published docstring 참고.
     delivered: list[DetectionAlert] = []
 
@@ -1077,6 +1205,11 @@ async def run_batch(
                 if guideline is not None:
                     counts["가이드라인"] += 1
             except Exception as exc:  # noqa: BLE001
+                # §4 — 생성 예외 = 대상 알림인데 백엔드가 아무것도 못 들었다 → 대기열.
+                #    FAILED_* 는 예외가 아니라 반환값이라 여기 안 온다. 그 콜백은 아래
+                #    발행이 성공하는 순간 백엔드가 종결 상태를 들은 것이므로 재시도하지
+                #    않는다(재시도하면 FAILED 행을 SUCCESS 로 덮는 계약 변경이 된다).
+                new_pending.append(alert)
                 failures.append(
                     {
                         "alert_id": alert.alert_id,
@@ -1103,6 +1236,10 @@ async def run_batch(
                     await publish_guideline_generated(guideline, trace_id)
                     counts["발행:가이드"] += 1
                 except Exception as exc:  # noqa: BLE001
+                    # §4 본체 — 만들어 놓고 백엔드가 못 들었다. 알림은 위에서 delivered
+                    #    에 들어갔으므로(억제 유지 = 알림·개선안 재생성 비용 없음)
+                    #    가이드라인만 대기열로 간다.
+                    new_pending.append(alert)
                     failures.append(
                         {
                             "alert_id": alert.alert_id,
@@ -1110,6 +1247,58 @@ async def run_batch(
                             "error": repr(exc),
                         }
                     )
+
+        # ── §4 가이드라인 재시도 패스 ────────────────────────────
+        # 메인 루프 **뒤**다 — 대기 건의 알림은 억제돼 있어 targets 에 없으므로 두
+        # 경로가 같은 알림을 겹쳐 처리하지 않는다. 같은 try 안이라 finally 가 MQ 를
+        # 닫아준다. 재시도 = **재생성**이다(PENDING_GUIDELINE_PATH docstring).
+        if pending and not dry_run:
+            if not documents:
+                # 원문이 없으면 generate_guideline 이 ValueError 로 죽어 attempts 만
+                # 태운다. 대기열을 그대로 두고 다음 배치로 넘긴다.
+                logger.info("documents 0건 — 가이드라인 재시도 %d건 보류", len(pending))
+            else:
+                remaining: list[dict] = []
+                for entry in pending:
+                    p_alert: DetectionAlert = entry["alert"]
+                    try:
+                        retry_inquiries = build_linked_inquiries(p_alert, documents)
+                        retry_guideline = await generate_guideline(
+                            p_alert, retry_inquiries
+                        )
+                        if retry_guideline is None:
+                            # 대상 아닌 알림은 애초에 대기열에 안 들어온다. 그래도
+                            # 조용히 눌러앉지 않게 종결로 뺀다 — 게이트 정책이 바뀌거나
+                            # 가이드라인 미연결 환경으로 파일이 넘어와도 안전하다.
+                            logger.info(
+                                "가이드라인 재시도 대상 아님 — 종결 alert=%s",
+                                p_alert.alert_id,
+                            )
+                            continue
+                        counts["가이드라인"] += 1
+                        await publish_guideline_generated(retry_guideline, trace_id)
+                        counts["발행:가이드"] += 1
+                        retried_ok += 1
+                    except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
+                        entry["attempts"] += 1
+                        failures.append(
+                            {
+                                "alert_id": p_alert.alert_id,
+                                "stage": "가이드라인 재시도",
+                                "error": repr(exc),
+                            }
+                        )
+                        if entry["attempts"] >= GUIDELINE_RETRY_MAX_ATTEMPTS:
+                            retry_exhausted += 1
+                            logger.warning(
+                                "가이드라인 재시도 %d회 소진 — 포기 alert=%s (%r)",
+                                GUIDELINE_RETRY_MAX_ATTEMPTS,
+                                p_alert.alert_id,
+                                exc,
+                            )
+                        else:
+                            remaining.append(entry)
+                still_pending = remaining
 
     finally:
         await close_mq()
@@ -1120,6 +1309,15 @@ async def run_batch(
         if (not dry_run and delivered and window_end)
         else 0
     )
+
+    # §4 대기열 저장. 같은 alert_id 중복은 구조적으로 없다 — 대기 건의 알림은 억제돼
+    # targets 에 안 오므로 new_pending 과 still_pending 이 겹치지 않는다.
+    # dry-run 은 읽기만 하고, window_end 가 없으면 로드도 안 했으므로 파일을 안 건드린다.
+    pending_after = still_pending + [
+        {"alert": a, "attempts": 0} for a in new_pending
+    ]
+    if not dry_run and window_end:
+        save_pending_guidelines(pending_after, pending_path)
 
     return {
         "trace_id": trace_id,
@@ -1152,6 +1350,11 @@ async def run_batch(
         # `routing_miss` 가 계속 크면 라우팅 프롬프트를 볼 것.
         "no_evidence": evidence_gaps,
         "routing_miss": routing_misses,
+        # §4 가이드라인 재시도. retried = 이번 실행이 재발행에 성공한 건수 /
+        # pending = 다음 배치가 다시 시도할 건수 / exhausted = 상한 소진으로 포기.
+        "guideline_retried": retried_ok,
+        "guideline_pending": len(pending_after),
+        "guideline_retry_exhausted": retry_exhausted,
         "failures": failures,
         "state_cached": cached,
     }
@@ -1203,6 +1406,16 @@ def print_summary(summary: dict) -> None:
         print(
             f"  원인분류 실패 {summary['cause_failures']}건  ← 탐지는 계속했지만 "
             "배치는 실패 상태로 종료"
+        )
+    if (
+        summary.get("guideline_retried")
+        or summary.get("guideline_pending")
+        or summary.get("guideline_retry_exhausted")
+    ):
+        print(
+            f"  가이드라인 재시도  성공 {summary.get('guideline_retried', 0)}건 / "
+            f"대기 {summary.get('guideline_pending', 0)}건 / "
+            f"포기 {summary.get('guideline_retry_exhausted', 0)}건"
         )
     if summary["dry_run"]:
         print("\n  [dry-run] LLM 호출 0회. 실제로 돌리면:")
@@ -1257,7 +1470,8 @@ def main() -> None:
         default=None,
         help=f"발행 기록 캐시 경로 (기본 {STATE_PATH}). 디버그 실행이 운영 캐시를"
         " 오염시키지 않게 따로 지정할 것 — 캐시가 오염되면 그 알림이 억제 기간 내내"
-        " 셀러에게 안 간다.",
+        " 셀러에게 안 간다. 가이드라인 대기열(pending_guidelines)도 이 경로에서"
+        " 파생돼 같이 옮겨간다.",
     )
     args = ap.parse_args()
 
