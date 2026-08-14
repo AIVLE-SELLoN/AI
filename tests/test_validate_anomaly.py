@@ -1,5 +1,7 @@
 """config_anomaly 검산기가 운영 통계 로직과 같은 BH family를 쓰는지 고정한다."""
 
+import pytest
+
 from scripts import validate_anomaly
 
 
@@ -80,3 +82,40 @@ def test_robustness_check_recalculates_only_the_changed_product_family(monkeypat
     result = validate_anomaly.robustness_check(batch)
 
     assert result["흔들린_케이스"] == []
+
+
+def test_robustness_check_reports_a_real_one_count_flip():
+    """실제 Fisher 경계 사례가 -1건에서 뒤집히면 취약 케이스로 보고한다.
+
+    현재 3/100 대 과거 0/400은 p=0.00781, delta=3%p라 단일검정 family에서
+    발화한다. 현재 부정을 2건으로 낮추면 p=0.03968이지만 delta=2%p라 관문③에서
+    미발화로 뒤집힌다. 빈 결과만 확인하면 함수가 항상 []를 반환해도 통과하므로,
+    검출 능력 자체를 이 양성 사례로 고정한다.
+    """
+    batch = [
+        {
+            "case_id": "SC-ROBUSTNESS-POSITIVE",
+            "product": "A",
+            "channel": "COUPANG",
+            "aspect": "색상",
+            "source": "cs",
+            "cur_neg": 3,
+            "cur_total": 100,
+            "past_neg": 0,
+            "past_total": 400,
+            "p_value": 0.007808387860057466,
+            "intended_answer": "TRUE",
+        }
+    ]
+
+    result = validate_anomaly.robustness_check(batch)
+
+    assert len(result["흔들린_케이스"]) == 1
+    unstable = result["흔들린_케이스"][0]
+    assert unstable["case_id"] == "SC-ROBUSTNESS-POSITIVE"
+    assert len(unstable["flips"]) == 1
+    flip = unstable["flips"][0]
+    assert flip["변화"] == "-1건"
+    assert flip["p"] == pytest.approx(0.0396793587)
+    assert flip["delta"] == pytest.approx(0.02)
+    assert flip["새_fired"] is False
