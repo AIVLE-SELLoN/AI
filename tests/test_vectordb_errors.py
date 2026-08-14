@@ -16,7 +16,7 @@ from chromadb.errors import ChromaError
 from openai import APIConnectionError, AuthenticationError, RateLimitError
 
 from app.core.exceptions import VectorDbError
-from app.core.vectordb import query_documents, upsert_documents
+from app.core.vectordb import get_documents, query_documents, upsert_documents
 
 _REQUEST = httpx.Request("POST", "https://api.openai.com/v1/embeddings")
 
@@ -87,3 +87,47 @@ def test_unrelated_errors_are_not_swallowed():
     진짜 원인이 가려진다. 감싸는 대상은 공급자 예외뿐이다."""
     with pytest.raises(AttributeError):
         query_documents(RaisingCollection(AttributeError("오타")), query_text="색상")
+
+
+# ── get_documents 의 include 지원 (서영님 #84 리뷰 후속) ────────────
+class _RecordingCollection:
+    """`get()` 인자를 기록하고, Chroma 처럼 **빠진 필드를 빈 리스트로** 돌려준다."""
+
+    def __init__(self):
+        self.kwargs: dict = {}
+
+    def get(self, **kwargs):
+        self.kwargs = kwargs
+        include = kwargs.get("include")
+        return {
+            "ids": ["a", "b"],
+            "documents": [] if include == ["metadatas"] else ["본문A", "본문B"],
+            "metadatas": [{"company_id": "SLN-aaa"}, {}],
+        }
+
+
+def test_include_metadatas_only_still_returns_every_row():
+    """🔴 `include` 로 본문을 빼도 **행이 사라지면 안 된다.**
+
+    Chroma 는 빠진 필드를 **빈 리스트**로 준다. 예전 구현은 세 리스트를 `zip` 으로 묶어서,
+    `documents` 가 비면 **전체가 0건으로 잘렸다** — 조회는 성공했는데 결과만 조용히
+    사라지는 모양이라 호출부에서 "구형 문서 0건" 으로 오독된다.
+    """
+    collection = _RecordingCollection()
+
+    rows = get_documents(collection, where={"company_id": "x"}, include=["metadatas"])
+
+    assert len(rows) == 2, "include 로 본문을 빼면 zip 이 전체를 잘라내던 자리입니다"
+    assert [r["metadata"] for r in rows] == [{"company_id": "SLN-aaa"}, {}]
+    assert [r["document"] for r in rows] == [None, None]
+    assert collection.kwargs["include"] == ["metadatas"]
+
+
+def test_include_is_omitted_when_not_requested():
+    """`include` 를 안 주면 Chroma 기본값(본문 포함)을 그대로 쓴다 — 인자를 넣지 않는다."""
+    collection = _RecordingCollection()
+
+    rows = get_documents(collection, where={"company_id": "x"})
+
+    assert "include" not in collection.kwargs
+    assert [r["document"] for r in rows] == ["본문A", "본문B"]

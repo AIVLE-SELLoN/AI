@@ -229,24 +229,40 @@ def get_documents(
     *,
     where: dict[str, Any],
     limit: int | None = None,
+    include: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """메타데이터 완전일치 조회. 키를 알 때 사용 (임베딩 안 거침).
 
+    Args:
+        include: Chroma 가 실어 보낼 필드. 기본(None)은 문서 본문 + metadata 둘 다다.
+            **metadata 만 필요하면 `["metadatas"]` 를 줘서 본문 전송을 없앨 것** —
+            상세페이지 본문이 건당 700자대라 수십 건만 훑어도 수만 자가 오간다.
+
     Returns:
-        `{"id", "document", "metadata"}` 리스트.
+        `{"id", "document", "metadata"}` 리스트. `include` 로 뺀 필드는 `document=None`
+        · `metadata={}` 로 채워진다(키 자체는 항상 있다).
     """
     try:
-        result = collection.get(where=where, limit=limit)
+        result = (
+            collection.get(where=where, limit=limit)
+            if include is None
+            else collection.get(where=where, limit=limit, include=include)
+        )
     except ChromaError as exc:
         raise VectorDbError(f"get 실패: {exc}") from exc
 
+    # ⚠️ `zip` 으로 묶지 말 것 — `include` 로 뺀 필드는 **빈 리스트**로 와서 zip 이
+    #    전체를 0건으로 잘라낸다(조회는 성공했는데 결과가 사라진다).
+    ids = result.get("ids") or []
+    documents = result.get("documents") or []
+    metadatas = result.get("metadatas") or []
     return [
-        {"id": doc_id, "document": document, "metadata": metadata or {}}
-        for doc_id, document, metadata in zip(
-            result.get("ids") or [],
-            result.get("documents") or [],
-            result.get("metadatas") or [],
-        )
+        {
+            "id": doc_id,
+            "document": documents[i] if i < len(documents) else None,
+            "metadata": (metadatas[i] if i < len(metadatas) else None) or {},
+        }
+        for i, doc_id in enumerate(ids)
     ]
 
 

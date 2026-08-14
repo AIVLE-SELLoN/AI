@@ -42,6 +42,7 @@ from app.core.vectordb import (
     current_tenant,
     get_client,
     get_detail_pages,
+    get_documents,
     scoped_document_id,
     upsert_documents,
 )
@@ -77,6 +78,55 @@ def reset_collections() -> None:
             continue
         client.delete_collection(name=name)
         print(f"  - {name}: {count}건 삭제")
+
+
+def report_legacy_documents(collection: Any, tenant: str) -> int:
+    """회사 축이 **없는** 구형 문서가 몇 건 남았는지 시딩 직후 알려준다.
+
+    🔴 **판별을 여기서 하는 이유 (서영님 #84 리뷰 후속).** "이 컬렉션이 구형인가" 는
+       알림별이 아니라 **컬렉션 전체의 성질**이다. 런타임(`_log_detail_page_miss`)에서
+       미스마다 다시 계산하면 ① 같은 답을 수십 번 구하고 ② 핫 패스라 전수를 못 봐
+       표본으로 어림잡게 된다. 여기는 **한 번만 돌고 전수를 보며**, 무엇보다 **사람이
+       이 콘솔 앞에 서 있는 시점**이다.
+
+    ⚠️ **Chroma 1.5.9 엔 `$exists` 가 없다** — `where` 연산자 목록에서 거부한다
+       (`ValueError: Expected where operator to be one of $gt … $not_contains`).
+       대신 **`$nin` 이 키가 아예 없는 문서도 매칭**하므로(실측) 그걸로 후보를 뽑고,
+       metadata 에 키가 실제로 있는지는 파이썬에서 본다.
+
+    ⚠️ `include=["metadatas"]` 로 **본문 전송을 없앤다** — 상세페이지가 건당 700자대라
+       빼지 않으면 수십 건만 훑어도 수만 자가 오간다.
+
+    Returns:
+        구형 문서 수(정리 여부 판단용). 조회 실패 시 -1.
+    """
+    try:
+        rows = get_documents(
+            collection,
+            where={TENANT_METADATA_KEY: {"$nin": [tenant]}},
+            include=["metadatas"],
+        )
+    except VectorDbError as exc:
+        print(f"  ⚠️ 구형 문서 확인 실패(적재 자체는 성공): {exc}")
+        return -1
+
+    legacy = sum(1 for row in rows if TENANT_METADATA_KEY not in row["metadata"])
+    others = len(rows) - legacy
+
+    if others:
+        print(f"  - 다른 회사 문서 {others}건이 같은 컬렉션에 있습니다(정상, 조회에서 격리됨).")
+    if not legacy:
+        return 0
+
+    print(
+        f"  ⚠️ 회사 축이 없는 구형 문서 {legacy}건이 남아 있습니다.\n"
+        "     조회 필터에 안 걸리므로 **그대로 둬도 동작에는 문제가 없습니다**"
+        "(저장 공간만 차지합니다).\n"
+        "     확인: python scripts/inspect_detail_pages.py --all-companies\n"
+        "     🔴 정리하려고 `--reset` 을 쓰지 마세요 — 컬렉션2(HITL 반려 이력)와"
+        " 다른 회사 문서까지 지웁니다."
+    )
+    return legacy
 
 
 def main(reset: bool = False) -> None:
@@ -123,6 +173,7 @@ def main(reset: bool = False) -> None:
         raise SystemExit(1) from exc
 
     print(f"{len(entries)}건 적재 완료 → collection={collection.name} / company_id={tenant}")
+    report_legacy_documents(collection, tenant)
 
 
 if __name__ == "__main__":
