@@ -204,14 +204,26 @@ _MONTHLY_SECTION_HTML = """
     <div class="summary-line">{{ report.channel_divergence_cause.cause_title }} —
         {{ report.channel_divergence_cause.cause_description }}</div>
 
+    {#- ⚠️ **라벨은 계산식을 그대로 말한다** (2026-08-13 시연 검토).
+        예전 라벨 두 개가 값을 잘못 읽게 만들었다:
+          · `TOTAL VOC INSIGHT` — "INSIGHT" 가 아무 뜻이 없고(그냥 건수),
+            **전 상품 합계로 오해**되기 쉬웠다. 실제로는 이 상품 1건의 해당 월 수치다
+            (`reporting_schema.md` §7-1 의 목업 125,000건이 그 오해의 산물이다).
+          · `BRAND SENTIMENT` — 감성 점수로 읽히는데 실제 값은 **긍정+중립**,
+            즉 "부정이 아닌 비율"이다. 66.7% 를 보면 긍정이 3분의 2로 이해하지만
+            같은 데이터의 실제 긍정은 38.9% 로 거의 두 배 차이였다.
+            "브랜드" 도 틀렸다 — 상품 단위 지표다.
+        둘째 줄에 근거를 적는 이유: 카드에 숫자만 있으면 정의를 물을 곳이 없다. -#}
     <div class="kpi-row section">
         <div class="kpi">
-            <div class="label">TOTAL VOC INSIGHT</div>
+            <div class="label">이번 달 수집 VOC</div>
             <div class="value">{{ '{:,}'.format(input.total_voc_count) }}건</div>
+            <div class="sub">문의·리뷰 합계</div>
         </div>
         <div class="kpi accent">
-            <div class="label">BRAND SENTIMENT</div>
+            <div class="label">비부정 의견 비율</div>
             <div class="value">{{ '%.1f'|format(brand_sentiment) }}%</div>
+            <div class="sub">긍정+중립 · 건수 가중</div>
         </div>
     </div>
 
@@ -338,10 +350,20 @@ def _build_monthly_chart_context(context: dict[str, Any]) -> dict[str, Any]:
         )
         for d in distributions
     }
+    # ⚠️ `jsd_baseline` 을 **반드시 같이 넘긴다.** 마커는 `jsd_score` 절대 위치인데
+    #    severity 판정은 `excess = jsd_score - jsd_baseline` 기준이라, 기준선이 없으면
+    #    두 마커 사이 간격(= excess)이 사라져 판정 이유가 그림에서 없어진다.
+    #
+    #    ⚠️ 게이지는 **판정을 말하지 않는다.** 절대 축이라 CRISIS 인 쌍의 마커가 막대
+    #       왼쪽에 찍힐 수 있어서, 구간 이름에서 판정어를 걷어냈다(2026-08-13).
+    #       판정은 상단 `cause_title` 문장이 한다 — `_validate_stage_label` 이 "위험
+    #       단계" 같은 라벨을 강제하는 그 자리다. 근거는
+    #       `charts.render_divergence_gauge` docstring.
     gauge_by_pair = {
         p["comparison_pair"]: render_divergence_gauge(
             jsd_score=p.get("jsd_score"),
             comparison_pair=p["comparison_pair"],
+            jsd_baseline=p.get("jsd_baseline"),
             sample_size=p.get("sample_size"),
             width=GAUGE_WIDTH_PX,
         )
@@ -349,8 +371,12 @@ def _build_monthly_chart_context(context: dict[str, Any]) -> dict[str, Any]:
     }
 
     total_count = sum(d.get("total_count", 0) for d in distributions) or 1
-    # 브랜드 감성 = 전 속성 (긍정+중립) 가중평균. 건수로 가중해야 표본이 큰 속성이
+    # 비부정 의견 비율 = 전 속성 (긍정+중립) 가중평균. 건수로 가중해야 표본이 큰 속성이
     # 제대로 반영된다(단순 평균은 피드백 10건짜리 속성이 200건짜리와 같은 무게가 된다).
+    # ⚠️ 변수명은 `brand_sentiment` 로 남겨 둔다 — 템플릿·테스트가 이 키를 쓰고, 대시보드
+    #    카드②(`DashboardMonthlySummary.brand_sentiment_ratio`)와 이름을 맞춰 둔 것이다.
+    #    **지면 라벨만** "비부정 의견 비율"로 고쳤다(2026-08-13). 이름이 값을 설명하지
+    #    못하는 상태라, 이 계산식을 인용할 때는 반드시 (긍정+중립)임을 같이 적을 것.
     brand_sentiment = (
         sum(
             (d.get("positive_ratio", 0.0) + d.get("neutral_ratio", 0.0)) * d.get("total_count", 0)
