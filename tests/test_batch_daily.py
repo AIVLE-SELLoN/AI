@@ -1128,3 +1128,175 @@ async def test_pending_path_derives_from_custom_state_path(tmp_path, monkeypatch
     derived = tmp_path / "debug.pending_guidelines.json"
     assert derived.exists(), "대기열이 state_path 옆 파생 이름으로 생겨야 한다"
     assert len(json.loads(derived.read_text(encoding="utf-8"))) == 1
+
+
+# ── PR #90 리뷰 반영 (서영, 2026-08-14) ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pending_save_failure_does_not_suppress_the_alert(tmp_path, monkeypatch):
+    """🔴 P1 — 대기열 저장이 실패하면 그 알림을 억제 캐시에도 넣지 않는다.
+
+    억제 캐시를 먼저 저장하면 두 쓰기 사이에서 실패했을 때 알림은 억제되는데 대기
+    항목이 없어 가이드라인이 영구 유실된다 — 이 PR 이 막으려는 구멍 그대로다.
+    영구 유실 대신 다음 배치의 통째 재처리(중복 비용)를 택한다.
+    """
+
+    async def fake_guideline(alert, inquiries, *, product_name=None):
+        return _FakeCallback(alert.alert_id)
+
+    async def sent(alert, rec, trace_id, versions=None):
+        return None
+
+    async def guideline_publish_fails(guideline, trace_id):
+        raise RuntimeError("MQ down")
+
+    def pending_save_fails(entries, path):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(daily, "generate_guideline", fake_guideline)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+    monkeypatch.setattr(daily, "publish_guideline_generated", guideline_publish_fails)
+    monkeypatch.setattr(daily, "save_pending_guidelines", pending_save_fails)
+
+    state_path = tmp_path / "state.json"
+    summary = await daily.run_batch(
+        state_path=state_path,
+        pending_path=_pending_path(tmp_path),
+        load_inputs=_stub_inputs,
+    )
+
+    assert any(f["stage"] == "대기열 저장" for f in summary["failures"])
+    assert summary["state_cached"] == 0, "대기 기록이 없는 알림은 억제되면 안 된다"
+    assert not state_path.exists(), "억제 캐시에 들어가면 가이드라인이 영구 유실된다"
+
+
+@pytest.mark.asyncio
+async def test_alert_publish_failure_is_not_enqueued_for_retry(tmp_path, monkeypatch):
+    """🔴 P2 — 알림 발행까지 실패한 건은 대기열에 안 넣는다.
+
+    그 알림은 억제 캐시에 없어 다음 배치가 신규 target 으로 통째로 재처리한다
+    (가이드라인도 그 경로에서 다시 만들어진다). 대기열에도 넣으면 같은
+    guideline_id 가 두 경로에서 두 번 생성·발행된다 — 서영님 실측 그대로.
+    """
+
+    async def fake_guideline(alert, inquiries, *, product_name=None):
+        return _FakeCallback(alert.alert_id)
+
+    async def anomaly_publish_fails(alert, rec, trace_id, versions=None):
+        raise RuntimeError("MQ down")
+
+    async def guideline_publish_fails(guideline, trace_id):
+        raise RuntimeError("MQ down")
+
+    monkeypatch.setattr(daily, "generate_guideline", fake_guideline)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", anomaly_publish_fails)
+    monkeypatch.setattr(daily, "publish_guideline_generated", guideline_publish_fails)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json",
+        pending_path=_pending_path(tmp_path),
+        load_inputs=_stub_inputs,
+    )
+
+    assert summary["delivered"] == 0
+    assert summary["guideline_pending"] == 0, "알림째 재처리될 건이 대기열에 있으면 이중 생성"
+    assert json.loads(_pending_path(tmp_path).read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.asyncio
+async def test_max_alerts_zero_holds_pending_retries(tmp_path, monkeypatch):
+    """🔴 P2 — 재시도가 --max-alerts 예산을 우회하면 안 된다.
+
+    max_alerts=0 은 "이 실행에서 LLM·S3 비용 0" 이라는 뜻이다. 대기열이 그걸
+    우회하면 장애 복구 직후 대기열 규모만큼 비용이 한 번에 나간다. 예산 밖 대기
+    건은 attempts 를 쓰지 않고 그대로 다음 배치로 넘어간다.
+    """
+    pending_path = _pending_path(tmp_path)
+    daily.save_pending_guidelines(
+        [
+            {"alert": _alert("ALT-P1", date(2026, 8, 27)), "attempts": 0},
+            {"alert": _alert("ALT-P2", date(2026, 8, 26)), "attempts": 1},
+        ],
+        pending_path,
+    )
+    before = pending_path.read_text(encoding="utf-8")
+
+    generated: list[str] = []
+
+    async def record_generate(alert, inquiries, *, product_name=None):
+        generated.append(alert.alert_id)
+        return _FakeCallback(alert.alert_id)
+
+    async def sent(alert, rec, trace_id, versions=None):
+        return None
+
+    async def publish_ok(guideline, trace_id):
+        return None
+
+    monkeypatch.setattr(daily, "generate_guideline", record_generate)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+    monkeypatch.setattr(daily, "publish_guideline_generated", publish_ok)
+
+    summary = await daily.run_batch(
+        max_alerts=0,
+        state_path=tmp_path / "state.json",
+        pending_path=pending_path,
+        load_inputs=_stub_inputs,
+    )
+
+    assert generated == [], "예산 0 인데 재생성이 돌면 상한이 무의미하다"
+    assert summary["guideline_retried"] == 0
+    assert summary["guideline_pending"] == 2
+    assert pending_path.read_text(encoding="utf-8") == before, "attempts 도 안 쓴다"
+
+    # dry-run 비용 추정도 같은 예산을 적용한다 — 실측(위)과 어긋나면 추정을 못 믿는다.
+    dry = await daily.run_batch(
+        max_alerts=0,
+        dry_run=True,
+        state_path=tmp_path / "state.json",
+        pending_path=pending_path,
+        load_inputs=_stub_inputs,
+    )
+    assert dry["llm_calls"].get("가이드라인", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_retry_budget_is_what_max_alerts_leaves_over(tmp_path, monkeypatch):
+    """P2 — 예산은 신규 target 이 먼저 쓰고, 남는 만큼만 재시도한다."""
+    pending_path = _pending_path(tmp_path)
+    daily.save_pending_guidelines(
+        [
+            {"alert": _alert("ALT-P1", date(2026, 8, 27)), "attempts": 0},
+            {"alert": _alert("ALT-P2", date(2026, 8, 26)), "attempts": 1},
+        ],
+        pending_path,
+    )
+
+    async def fake_guideline(alert, inquiries, *, product_name=None):
+        return _FakeCallback(alert.alert_id)
+
+    async def sent(alert, rec, trace_id, versions=None):
+        return None
+
+    async def publish_ok(guideline, trace_id):
+        return None
+
+    monkeypatch.setattr(daily, "generate_guideline", fake_guideline)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+    monkeypatch.setattr(daily, "publish_guideline_generated", publish_ok)
+
+    # 스텁 입력은 alert 1건을 낸다 → max_alerts=2 면 재시도 몫은 1.
+    summary = await daily.run_batch(
+        max_alerts=2,
+        state_path=tmp_path / "state.json",
+        pending_path=pending_path,
+        load_inputs=_stub_inputs,
+    )
+
+    assert summary["processed"] == 1
+    assert summary["guideline_retried"] == 1, "남은 예산 1 만큼만 재시도"
+    saved = json.loads(pending_path.read_text(encoding="utf-8"))
+    assert [(e["alert"]["alert_id"], e["attempts"]) for e in saved] == [("ALT-P2", 1)], (
+        "예산 밖 건은 attempts 그대로 대기열에 남는다"
+    )

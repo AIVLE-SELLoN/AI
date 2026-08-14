@@ -102,7 +102,10 @@ STATE_RETENTION_DAYS = CURRENT_WINDOW_DAYS + PAST_WINDOW_DAYS
 """
 
 PENDING_GUIDELINE_PATH = ROOT / "data" / "batch_state" / "pending_guidelines.json"
-"""가이드라인 전달 대기열 — **백엔드가 아무것도 못 들은 건**만 담는다 (§4, 2026-08-14).
+"""가이드라인 전달 대기열 — **알림 발행은 성공했는데 가이드라인만 백엔드가 못 들은
+건**을 담는다 (§4, 2026-08-14). 알림 발행까지 실패한 건은 여기 안 온다 — 억제 캐시에
+없어 다음 배치가 알림을 통째로 재처리하고, 대기열에도 있으면 가이드라인이 두 경로에서
+두 번 만들어진다 (PR #90 리뷰 P2).
 
 `published_alerts.json`(억제 캐시)과 파일을 일부러 나눈다:
   - 억제 캐시는 §2 조회 API(`GET /internal/alerts/active`)가 붙으면 통째로 걷어낼
@@ -935,6 +938,8 @@ async def run_batch(
     Args:
         window_end: 현재 윈도우 마지막 날. 없으면 입력의 최신 날짜.
         max_alerts: Agent3·가이드라인에 태울 alert 수 상한 (비용 통제).
+            **가이드라인 재시도(§4)도 이 예산을 나눠 쓴다** — 신규 target 이 먼저
+            쓰고 남는 만큼만 재시도한다. 밖에 두면 상한이 재시도로 우회된다.
         dry_run: LLM 을 한 번도 부르지 않고 **몇 번 부를지만 실측**한다.
         state_path: 발행 기록 캐시 경로 (테스트 주입용).
         pending_path: 가이드라인 대기열 경로. 기본은 state_path 를 따라간다 —
@@ -1078,9 +1083,16 @@ async def run_batch(
     still_pending: list[dict] = list(pending)
     retried_ok = 0
     retry_exhausted = 0
+    # §4 — 재시도도 --max-alerts 예산 안에서 돈다: 신규 target 이 먼저 쓰고 남는 만큼만.
+    # 상한을 우회하면 장애 복구 직후 대기열 규모만큼 LLM·S3 비용이 한 번에 나간다
+    # (PR #90 리뷰 P2). 예산 밖 대기 건은 attempts 를 안 쓰고 다음 배치로 넘어간다.
+    retry_budget = (
+        len(pending) if max_alerts is None else max(0, max_alerts - len(targets))
+    )
     if dry_run and pending:
         # 재시도도 다음 실제 실행이 지불할 비용이다 — 안 세면 추정이 아래로 어긋난다.
-        counts["가이드라인"] += len(pending)
+        # 실제 실행과 같은 예산을 적용해야 추정이 실측과 일치한다.
+        counts["가이드라인"] += min(len(pending), retry_budget)
     # ⚠️ **발행에 성공한 것만** 캐시에 넣는다. save_published docstring 참고.
     delivered: list[DetectionAlert] = []
 
@@ -1149,6 +1161,10 @@ async def run_batch(
             # ⚠️ alert 1건이 터져도 배치는 계속한다. 여기서 던지면 **이미 LLM 비용을 쓴
             #    앞쪽 알림들까지 발행되지 않고 날아간다.** 실패는 모아서 끝에 요약한다.
             rec = guideline = None
+            # §4 — 대기열 적재 판정용. 아래 두 예외 지점이 후보만 표시하고, 실제 적재는
+            # 알림 발행 성공 여부까지 보고 이 반복의 끝에서 한다 (PR #90 리뷰 P2).
+            anomaly_delivered = False
+            guideline_undelivered = False
             if wants_recommendation:
                 try:
                     outcome = await generate_outcome_for_alert(alert, inquiries)
@@ -1205,11 +1221,11 @@ async def run_batch(
                 if guideline is not None:
                     counts["가이드라인"] += 1
             except Exception as exc:  # noqa: BLE001
-                # §4 — 생성 예외 = 대상 알림인데 백엔드가 아무것도 못 들었다 → 대기열.
+                # §4 — 생성 예외 = 대상 알림인데 백엔드가 아무것도 못 들었다 → 대기 후보.
                 #    FAILED_* 는 예외가 아니라 반환값이라 여기 안 온다. 그 콜백은 아래
                 #    발행이 성공하는 순간 백엔드가 종결 상태를 들은 것이므로 재시도하지
                 #    않는다(재시도하면 FAILED 행을 SUCCESS 로 덮는 계약 변경이 된다).
-                new_pending.append(alert)
+                guideline_undelivered = True
                 failures.append(
                     {
                         "target_key": alert.alert_id,
@@ -1222,6 +1238,7 @@ async def run_batch(
                 await publish_anomaly_analyzed(alert, rec, trace_id, classifier_versions)
                 counts["발행:이상"] += 1
                 delivered.append(alert)
+                anomaly_delivered = True
             except Exception as exc:  # noqa: BLE001
                 failures.append(
                     {
@@ -1236,10 +1253,8 @@ async def run_batch(
                     await publish_guideline_generated(guideline, trace_id)
                     counts["발행:가이드"] += 1
                 except Exception as exc:  # noqa: BLE001
-                    # §4 본체 — 만들어 놓고 백엔드가 못 들었다. 알림은 위에서 delivered
-                    #    에 들어갔으므로(억제 유지 = 알림·개선안 재생성 비용 없음)
-                    #    가이드라인만 대기열로 간다.
-                    new_pending.append(alert)
+                    # §4 본체 — 만들어 놓고 백엔드가 못 들었다 → 대기 후보.
+                    guideline_undelivered = True
                     failures.append(
                         {
                             "target_key": alert.alert_id,
@@ -1247,6 +1262,14 @@ async def run_batch(
                             "error": repr(exc),
                         }
                     )
+
+            # §4 — 대기열은 "알림은 **나갔는데** 가이드라인만 못 나간" 건만 받는다.
+            # 알림 발행까지 실패한 건은 캐시에 안 들어가 다음 배치가 그 알림을 통째로
+            # 재처리한다(가이드라인도 그 경로에서 다시 만들어진다) — 대기열에도 넣으면
+            # 같은 가이드라인이 두 경로에서 두 번 생성·발행된다 (PR #90 리뷰 P2 실측:
+            # 같은 guideline_id 가 2회 발행 + LLM·S3 이중 지불).
+            if guideline_undelivered and anomaly_delivered:
+                new_pending.append(alert)
 
         # ── §4 가이드라인 재시도 패스 ────────────────────────────
         # 메인 루프 **뒤**다 — 대기 건의 알림은 억제돼 있어 targets 에 없으므로 두
@@ -1258,8 +1281,15 @@ async def run_batch(
                 # 태운다. 대기열을 그대로 두고 다음 배치로 넘긴다.
                 logger.info("documents 0건 — 가이드라인 재시도 %d건 보류", len(pending))
             else:
+                retry_now = pending[:retry_budget]
+                held = pending[retry_budget:]
+                if held:
+                    logger.info(
+                        "가이드라인 재시도 %d건은 --max-alerts 예산 밖 — 다음 배치로 보류",
+                        len(held),
+                    )
                 remaining: list[dict] = []
-                for entry in pending:
+                for entry in retry_now:
                     p_alert: DetectionAlert = entry["alert"]
                     try:
                         retry_inquiries = build_linked_inquiries(p_alert, documents)
@@ -1300,10 +1330,38 @@ async def run_batch(
                             )
                         else:
                             remaining.append(entry)
-                still_pending = remaining
+                still_pending = remaining + held
 
     finally:
         await close_mq()
+
+    # §4 대기열을 억제 캐시보다 **먼저** 저장한다(write-ahead) — 순서가 반대면 두 쓰기
+    # 사이에서 죽었을 때 알림은 억제되는데 대기 항목이 없어, 이 PR 이 막으려는 구멍
+    # (가이드라인 영구 유실)이 그대로 재현된다 (PR #90 리뷰 P1). 저장이 실패하면 해당
+    # 알림을 delivered 에서 빼서 다음 배치가 통째로 재처리하게 한다 — 영구 유실보다
+    # 중복 비용(재발행·재생성)을 택한다.
+    #
+    # 같은 alert_id 가 대기열과 신규 target 에 동시에 있을 수는 없다 — 대기열은 알림
+    # 발행에 **성공한** 건만 받으므로(위 anomaly_delivered 게이트) 그 알림은 자기
+    # window 동안 억제되고, 억제 만료·갱신으로 다시 뜨는 알림은 window_end 가 달라
+    # alert_id 도 다르다(그건 별개 알림이라 각자 가이드라인을 받는 것이 맞다).
+    # dry-run 은 읽기만 하고, window_end 가 없으면 로드도 안 했으므로 파일을 안 건드린다.
+    pending_after = still_pending + [
+        {"alert": a, "attempts": 0} for a in new_pending
+    ]
+    if not dry_run and window_end:
+        try:
+            save_pending_guidelines(pending_after, pending_path)
+        except Exception as exc:  # noqa: BLE001 - 저장 실패가 배치를 못 세우게
+            failures.append(
+                {
+                    "target_key": "(가이드라인 대기열)",
+                    "stage": "대기열 저장",
+                    "error": repr(exc),
+                }
+            )
+            undeliverable = {a.alert_id for a in new_pending}
+            delivered = [a for a in delivered if a.alert_id not in undeliverable]
 
     # 캐시는 dry-run 에서 건드리지 않는다 — 안 보낸 걸 보냈다고 기록하지 않는다.
     cached = (
@@ -1311,15 +1369,6 @@ async def run_batch(
         if (not dry_run and delivered and window_end)
         else 0
     )
-
-    # §4 대기열 저장. 같은 alert_id 중복은 구조적으로 없다 — 대기 건의 알림은 억제돼
-    # targets 에 안 오므로 new_pending 과 still_pending 이 겹치지 않는다.
-    # dry-run 은 읽기만 하고, window_end 가 없으면 로드도 안 했으므로 파일을 안 건드린다.
-    pending_after = still_pending + [
-        {"alert": a, "attempts": 0} for a in new_pending
-    ]
-    if not dry_run and window_end:
-        save_pending_guidelines(pending_after, pending_path)
 
     return {
         "trace_id": trace_id,
@@ -1455,7 +1504,7 @@ def main() -> None:
         "--max-alerts",
         type=int,
         default=None,
-        help="후속 처리할 alert 수 상한 (비용 통제)",
+        help="후속 처리할 alert 수 상한 (비용 통제). 가이드라인 재시도도 이 예산을 나눠 쓴다",
     )
     ap.add_argument(
         "--dry-run", action="store_true", help="LLM 0회 — 몇 번 부를지만 실측한다"
