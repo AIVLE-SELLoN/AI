@@ -94,6 +94,78 @@ def test_unexpected_error_is_logged_as_one_record(monkeypatch, caplog):
     assert any("예기치 않게" in r.getMessage() for r in caplog.records)
 
 
+def test_main_switches_encoding_before_running(monkeypatch):
+    """⚠️ `main()` 이 실제로 `force_utf8_output()` 을 부른다 — 배선까지 고정한다.
+
+    🔴 **빠지면 조용히 사라지는 게 아니라 시끄럽게 잃는다.** cp949 콘솔에서 `—` 가 든
+       경고는 `emit` 이 실패해 **안 나가고**, 대신 `--- Logging error ---` 블록이
+       건당 10줄쯤 stderr 에 쌓인다(용준님 실측 613자/10줄). 진단 로그를 잃으면서
+       소음은 는다.
+
+       🔴 그리고 **한 경로는 호출부로 탈출한다.** `handleError()` 가 traceback 을 같은
+       스트림에 쓰는데 거기 실린 소스 라인에 `—` 가 있으면 또 터지고, handleError 는
+       `OSError` 만 삼킨다. `UnicodeEncodeError` 는 `ValueError` 하위라 `consume()` 이
+       계약 위반으로 분류해 `nack(requeue=False)` → **DLX**. 메시지가 유실된다.
+
+       실측(2026-08-14, `handle_report_feedback` · cp949 · stderr = 핸들러 스트림):
+
+           naive submittedAt   (단일행 warning) → UnicodeEncodeError 탈출
+           계약 밖 feedbackType (다중행 warning) → 탈출 없음
+           범위 밖 rating       (다중행 warning) → 탈출 없음
+
+       **단일행만 탈출한다** — 여러 줄로 쪼갠 호출은 traceback 에 첫 줄(`logger.warning(`)
+       만 실려서 traceback 자체는 인코딩된다. 두 조건이 다 맞아야 한다:
+       ① 실패한 호출의 **소스 라인**에 `—` 리터럴이 있을 것
+       ② `sys.stderr` 가 그 실패하는 스트림일 것(`basicConfig` 가 그렇게 묶는다 —
+          `handlers[0].stream is sys.stderr` 확인함)
+       둘 중 하나만 바꿔도 재현이 안 된다.
+
+    ⚠️ 이 테스트가 유일한 방어선이다. 호출이 빠져도 **리눅스에서는 아무것도 안 변해서**
+       (운영이 리눅스라 프로덕션은 무사하다) 종료코드도 다른 테스트도 안 걸린다.
+    """
+    from app.core import mq_consumer
+
+    calls: list[str] = []
+
+    async def interrupted():
+        calls.append("consume")
+        raise KeyboardInterrupt
+
+    # 이 테스트가 전역 HANDLERS 를 더럽히지 않게 — main() 이 wire_handlers() 를 탄다.
+    monkeypatch.setattr(mq_consumer, "HANDLERS", {})
+    monkeypatch.setattr(consumer, "force_utf8_output", lambda: calls.append("utf8"))
+    monkeypatch.setattr(consumer, "consume", interrupted)
+
+    consumer.main()
+
+    assert "utf8" in calls, "main() 이 force_utf8_output() 을 부르지 않았습니다"
+    # 출력이 나가기 전에 불려야 한다.
+    assert calls.index("utf8") < calls.index("consume")
+
+
+def test_wiring_log_reports_what_was_actually_registered(monkeypatch, caplog):
+    """⚠️ 배선 로그가 **실제로 등록된 곳**을 읽는지 — 사본을 읽으면 거짓말을 한다.
+
+    `from app.core.mq_consumer import HANDLERS` 로 가져오면 import 시점의 dict 객체가
+    `app.consumer` 네임스페이스에 값으로 묶인다. 운영에서는 같은 객체라 안 드러나지만
+    (`consumer.HANDLERS is mq_consumer.HANDLERS`), 테스트가 `HANDLERS` 를 갈아끼우면
+    **등록은 새 dict 에 되고 로그는 옛 dict 를 읽어 "비었다"고 말한다.**
+
+    이 로그가 배선을 눈으로 확인하는 유일한 수단이라, 거짓이면 운영에서 "핸들러가 안
+    꽂혔나" 를 엉뚱한 데서 찾게 된다. (용준님 PR #86 리뷰, 2026-08-14)
+    """
+    from app.core import mq_consumer
+
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(mq_consumer, "HANDLERS", {})
+
+    consumer.wire_handlers()
+
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert mq_consumer.REPORT_CREATED in logged
+    assert mq_consumer.RECOMMENDATION_REVIEWED in logged
+
+
 def test_wiring_registers_the_hitl_handler(monkeypatch):
     """⚠️ 배선이 실제로 HITL 핸들러를 꽂는지 확인한다.
 
