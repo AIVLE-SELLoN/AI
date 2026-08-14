@@ -5,14 +5,17 @@
 
 발화 판정은 3관문 AND:
     ① 표본 가드   (상품,채널) 총문의 >= MIN_SAMPLE_SIZE           ← 아니면 보류
-    ② BH-FDR      윈도우 전체 p값에 BH 보정 후 유의               ← run_batch
+    ② BH-FDR      상품별 family 안의 p값에 BH 보정 후 유의         ← run_batch
     ③ min_delta   상승폭 >= MIN_DELTA                             ← run_one_test
 
-주의 — 적용 순서: BH(②)를 전체 검정에 먼저 적용한 뒤 min_delta(③)를 AND 로 겹친다.
-min_delta 로 먼저 거르면 '관측된 delta 데이터로 검정 집합을 고르는 것'이 되어 FDR
-보장이 깨지고 컷오프가 흔들린다. 그래서 run_one_test 는 delta 정보만 담고 발화는
-안 정하며, 발화 확정은 run_batch 가 배치 전체를 보고 한다.
+주의 — 적용 순서: 보류를 제외한 상품별 **판정 가능 검정 전체**에 BH(②)를 먼저 적용한 뒤
+min_delta(③)를 AND 로 겹친다. min_delta 로 먼저 거르면 '관측된 delta 데이터로 검정
+집합을 고르는 것'이 되어 FDR 제어 전제가 깨지고 컷오프가 흔들린다. 그래서
+run_one_test 는 delta 정보만 담고 발화는 안 정하며, 발화 확정은 run_batch 가 각 상품의
+판정 가능 family를 보고 한다. 보류 채널이 있으면 family 크기는 최대 36보다 작아진다.
 """
+
+from collections import defaultdict
 
 from scipy.stats import fisher_exact
 from statsmodels.stats.multitest import multipletests
@@ -26,7 +29,8 @@ def run_one_test(cur_neg: int, cur_total: int, past_neg: int, past_total: int) -
     '현재 윈도우 vs 자기 과거 윈도우'를 Fisher 단측 검정한다. 채널간 비교가 아니라
     각 채널이 자기 평소와만 싸우므로 채널간 baseline 차이가 판정에 안 끼어든다.
 
-    반환값에 '발화 여부'는 없다. 발화는 배치 전체를 봐야 정해지므로 run_batch 에서.
+    반환값에 '발화 여부'는 없다. 발화는 같은 상품 family 전체를 봐야 정해지므로
+    run_batch 에서 확정한다.
 
     Returns:
         {"p_value", "delta", "meaningful"}
@@ -83,12 +87,19 @@ def build_batch(
          CS 가 빠졌다고 리뷰 분모까지 틀린 건 아니다.
 
     ③을 **검정 전에** 빼는 이유: 분모가 깎인 슬롯은 부정률이 부풀려져 p값이 실제보다
-    작게 나온다. BH 는 step-up 이라 가짜로 작은 p값 하나가 기각 개수(k)를 늘려
-    **나머지 검정의 임계까지 완화**시킨다 — 한 상품의 데이터 결함이 다른 상품을
-    오탐시킨다. 반대로 빼는 쪽은 m 이 조금 줄 뿐이라 영향이 작다(실측: 1슬롯 제외 시
-    m 1,464→1,428, 다른 상품 발화 변화 없음).
+    작게 나온다. BH 는 step-up 이라 가짜로 작은 p값 하나가 그 상품 family의 기각
+    개수(k)를 늘려 **같은 상품의 다른 검정 임계까지 완화**시킨다. 상품별 family이므로
+    다른 상품의 컷오프에는 전파되지 않는다.
 
-    ①을 source 별로 좁히면 family 크기(m)가 달라져 BH 컷오프가 어긋난다.
+    ⚠️ 보류는 자기 상품 family 크기(m)를 줄여 남은 검정의 BH 임계를 완화한다. 정본에서
+    m=36인 상품의 순위 1 임계는 q/36인데, 1채널 보류 상품(m=24)은 1.5배, 2채널 보류
+    상품(m=12)은 3배가 된다. 현재 config의 판정은 고정 m=36 반사실과 같지만 상품 간
+    임계가 달라지는 운영 특성이므로 평가기의 family 크기 출력으로 감시한다. **현재 방식도
+    각 상품의 실제 검정 family에 BH를 적용하므로 통계적으로 유효하다.** 보류를 p=1로
+    패딩하는 것은 결함 수정이 아니라 상품 간 임계를 균일하게 만드는 제품 선택이며,
+    보류 상품의 검정력을 낮추는 대가가 있다. 별도 사전 합의와 재평가 없이 적용하지 않는다.
+
+    ①을 source 별로 좁히면 그 상품 family 크기(m)가 달라져 BH 컷오프가 어긋난다.
     반대로 ②를 채널 단위로 넓히면 aspect 격리(로직 §150)가 깨진다. 범위를 섞지 말 것.
     """
     unreliable = unreliable_denominators or set()
@@ -143,30 +154,59 @@ def build_batch(
 
 
 def decide_fires(batch: list, q: float = BH_FDR_Q) -> list:
-    """윈도우 전체 검정에 BH-FDR(관문②)을 적용하고 min_delta(관문③)와 AND → 발화 확정.
+    """**상품별로** BH-FDR(관문②)을 적용하고 min_delta(관문③)와 AND → 발화 확정.
 
-    왜 배치로 하나:
+    왜 보정이 필요한가:
         검정을 조합마다 매일 돌리면 하루 약 1,464건. 보정 없이 각각 α=0.05 로 보면
-        정상 상품 하나도 하루 54.8% 확률로 오탐한다(부록 A). BH 는 step-up 이라
-        발견이 많으면 기준이 완화돼 참양성은 살리고 가짜만 죽인다.
+        정상 상품 하나도 하루 54.8% 확률로 오탐한다(부록 A).
 
-    각 test dict 에 "fired"(bool) 를 넣어 반환한다.
+    🔴 **왜 배치 전체가 아니라 상품별인가** (2026-08-13 변경):
+        BH 는 step-up 이라 **임계가 그 family 안의 발견 수에 비례해 올라간다.** 배치
+        전체를 한 family 로 두면, 평가 배치(전 케이스가 한 배치에 모여 참양성 41개)와
+        일별 운영 배치(하루 이상 1~3개)의 실효 임계가 **36배** 벌어진다:
+
+            평가 배치   m=1,464  기각 41  실효 컷오프 0.00122
+            일별 배치   m=1,476  기각  1  실효 컷오프 3.39e-05 (= q/m)
+
+        그래서 **채점은 통과인데 운영·데모에선 안 뜨는** 상태가 된다. 실측(oracle,
+        케이스별 자기 윈도우 끝날 기준)으로 일별 배치 탐지가 3/25 였고, 살아남은 3건은
+        전부 파손·오배송이었다 — 평소 부정률이 1~2%라 p 가 가장 작기 때문이다. 즉
+        **개선안 스코프(색상·사이즈·소재)는 0/13 으로 Agent3 가 한 번도 못 돈다.**
+
+        상품은 **검정 결과를 보기 전에 정해지는 분할 단위**다(관측된 delta 로 family를
+        고르지 않는다). 따라서 BH 가정 아래에서 상품별 기각 집합의 기대 FDR을 q로
+        제어한다. 전체 상품을 합친 최종 발행 알림의 실현 헛알림률 5%를 보장하는 것은
+        아니며, 그 값은 데모 시뮬레이션에서 별도로 잰다.
+
+    ⚠️ **`(상품, source)` 로 더 쪼개지 말 것.** 32일 데모 시뮬(oracle) 실측에서 양쪽
+       축이 다 나쁘다 — 헛알림률 35.0% / 케이스 도달 25·26 (상품별은 15.6% / 26·26).
+       근거: `eval/results/detection_review_followup_20260813.md` §3.1
+
+    각 test dict 에 "fired"(bool) 를 넣어 반환한다. `t["key"]` 는 `build_batch` 가 붙이는
+    `(product, aspect, channel, source)` 이고, **여기서는 `key[0]`(상품)만 쓴다.**
     """
     if not batch:
         return batch
 
-    p_values = [t["p_value"] for t in batch]
-    # rejected[i] = i번째 검정이 BH 기준으로 유의한가
-    rejected, _, _, _ = multipletests(p_values, alpha=q, method="fdr_bh")
+    # 상품별 family. key 가 없으면 KeyError 로 세운다 — 조용히 전체 family 로 폴백하면
+    # "key 를 안 넘기면 옛 동작"이라는 함정이 생기고, 그건 미탐이라 조용하다.
+    groups: dict[str, list] = defaultdict(list)
+    for test in batch:
+        groups[test["key"][0]].append(test)
 
-    for test, is_significant in zip(batch, rejected):
-        # bh_significant 는 BH 보정 결과 **그 자체**로 남긴다 — 스키마 §3 이 이 필드를
-        # "BH-FDR 보정 후에도 유의했는지"로 정의하고 대시보드 '유의 ✓' 배지의 근거로
-        # 쓰기 때문이다. min_delta 를 섞으면 통계적 유의성과 실무적 크기가 한 칸에
-        # 뭉개진다. 발화(fired)는 그 둘의 AND.
-        test["bh_significant"] = bool(is_significant)
-        # 이중 잠금: ② BH 보정 후 유의 AND ③ 상승폭이 실질적
-        test["fired"] = test["bh_significant"] and test["meaningful"]
+    for group in groups.values():
+        # rejected[i] = 그 family 안에서 i번째 검정이 BH 기준으로 유의한가
+        rejected, _, _, _ = multipletests(
+            [t["p_value"] for t in group], alpha=q, method="fdr_bh"
+        )
+        for test, is_significant in zip(group, rejected):
+            # bh_significant 는 BH 보정 결과 **그 자체**로 남긴다 — 스키마 §3 이 이 필드를
+            # "BH-FDR 보정 후에도 유의했는지"로 정의하고 대시보드 '유의 ✓' 배지의 근거로
+            # 쓰기 때문이다. min_delta 를 섞으면 통계적 유의성과 실무적 크기가 한 칸에
+            # 뭉개진다. 발화(fired)는 그 둘의 AND.
+            test["bh_significant"] = bool(is_significant)
+            # 이중 잠금: ② BH 보정 후 유의 AND ③ 상승폭이 실질적
+            test["fired"] = test["bh_significant"] and test["meaningful"]
 
     return batch
 

@@ -384,6 +384,8 @@ async def test_cs_mapping_failure_does_not_kill_the_batch(tmp_path, monkeypatch)
 
     mapping = [f for f in summary["failures"] if f["stage"] == "CS 원문 매핑"]
     assert mapping, "매핑 실패가 요약에 남아야 한다"
+    assert mapping[0]["target_key"].startswith("ALT-")
+    assert "alert_id" not in mapping[0], "failures 식별자 키는 target_key 하나다"
     assert "형식이 이상함" in mapping[0]["error"], "실제 사유가 남아야 한다"
     assert summary["delivered"] >= 1, "알림은 통계로 서므로 CS 원문과 무관하게 발행된다"
     assert summary["state_cached"] >= 1, "발행분이 캐시에 들어가야 한다 — 안 그러면 재과금"
@@ -984,7 +986,10 @@ async def test_retry_failure_increments_attempts_and_keeps_entry(tmp_path, monke
     }
     assert saved["ALT-PENDING"]["attempts"] == 1, "재시도 1회 소진이 기록돼야 한다"
     assert summary["guideline_retried"] == 0
-    assert any(f["stage"] == "가이드라인 재시도" for f in summary["failures"])
+    retry_failures = [f for f in summary["failures"] if f["stage"] == "가이드라인 재시도"]
+    # 식별자 키는 target_key 하나다(#80 후속) — alert_id 로 넣으면 print_summary 가
+    # "식별자 없음" 으로 찍는다.
+    assert retry_failures and retry_failures[0]["target_key"] == "ALT-PENDING"
     # 이 배치 자신의 신규 실패도 attempts=0 으로 같이 들어간다 — 서로 안 겹친다.
     assert all(
         item["attempts"] == 0 for aid, item in saved.items() if aid != "ALT-PENDING"

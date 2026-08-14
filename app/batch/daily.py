@@ -1140,7 +1140,7 @@ async def run_batch(
                 inquiries = []
                 failures.append(
                     {
-                        "alert_id": alert.alert_id,
+                        "target_key": alert.alert_id,
                         "stage": "CS 원문 매핑",
                         "error": repr(exc),
                     }
@@ -1157,7 +1157,7 @@ async def run_batch(
                     counts["개선안"] += 1
                     failures.append(
                         {
-                            "alert_id": alert.alert_id,
+                            "target_key": alert.alert_id,
                             "stage": "개선안",
                             "error": repr(exc),
                         }
@@ -1189,7 +1189,7 @@ async def run_batch(
                         elif outcome.counts_as_failure:
                             failures.append(
                                 {
-                                    "alert_id": alert.alert_id,
+                                    "target_key": alert.alert_id,
                                     "stage": "개선안",
                                     "error": outcome.detail
                                     or "생성 실패 — 사유는 app.recommendation.pipeline 로그 참고",
@@ -1212,7 +1212,7 @@ async def run_batch(
                 new_pending.append(alert)
                 failures.append(
                     {
-                        "alert_id": alert.alert_id,
+                        "target_key": alert.alert_id,
                         "stage": "가이드라인",
                         "error": repr(exc),
                     }
@@ -1225,7 +1225,7 @@ async def run_batch(
             except Exception as exc:  # noqa: BLE001
                 failures.append(
                     {
-                        "alert_id": alert.alert_id,
+                        "target_key": alert.alert_id,
                         "stage": "발행:이상",
                         "error": repr(exc),
                     }
@@ -1242,7 +1242,7 @@ async def run_batch(
                     new_pending.append(alert)
                     failures.append(
                         {
-                            "alert_id": alert.alert_id,
+                            "target_key": alert.alert_id,
                             "stage": "발행:가이드",
                             "error": repr(exc),
                         }
@@ -1283,7 +1283,9 @@ async def run_batch(
                         entry["attempts"] += 1
                         failures.append(
                             {
-                                "alert_id": p_alert.alert_id,
+                                # failures 식별자 키는 target_key 하나다 (#80 후속,
+                                # `5adc025`). print_summary 가 이 키만 읽는다.
+                                "target_key": p_alert.alert_id,
                                 "stage": "가이드라인 재시도",
                                 "error": repr(exc),
                             }
@@ -1429,7 +1431,7 @@ def print_summary(summary: dict) -> None:
     if summary["failures"]:
         print(f"\n  ⚠️ 실패 {len(summary['failures'])}건 (배치는 계속 진행됨)")
         for f in summary["failures"][:10]:
-            failure_key = f.get("alert_id") or f.get("target_key") or "식별자 없음"
+            failure_key = f.get("target_key", "식별자 없음")
             print(f"     {failure_key} [{f['stage']}] {f['error'][:80]}")
     missing = [
         name

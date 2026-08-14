@@ -8,7 +8,7 @@ config_anomaly.csv에 심은 수치가, 실제 이상탐지 로직(Fisher 단측
 --------------------------------------------------
 ① 풀 배치 구성(케이스 123행 + 배경 검정 전부, 총 1,464개)
 ② Fisher 단측 검정 → p값만 산출(발화 여부는 아직 결정 안 함)
-③ BH-FDR(q=0.05)을 "전체 배치"에 적용 → 통계적 유의 확정
+③ BH-FDR(q=0.05)을 **상품별 family**에 적용 → 통계적 유의 확정
 ④ min_delta(3%p) AND로 겹침 → 최종 발화(fired) 확정
 ⑤ intended_answer와 대조. 단, 공백인 16행(G 9 + SC-036 보류 1 + SC-037/038 6)은
    assert 스킵 — 정답이 없는 관찰용 케이스이므로 "발화 경로만" 확인하고 정오 비교는 안 함
@@ -177,14 +177,20 @@ def apply_pipeline(batch: list[dict], alpha: float = 0.05, min_delta: float = 0.
         item["delta"] = delta
         item["meaningful"] = delta >= min_delta
 
-    # ③ BH-FDR — 반드시 "전체 배치"에 한 번에 적용 (min_delta로 먼저 거르면 안 됨)
-    p_values = [item["p_value"] for item in batch]
-    rejected, corrected_p, _, _ = multipletests(p_values, alpha=alpha, method="fdr_bh")
-    for item, is_sig, cp in zip(batch, rejected, corrected_p):
-        item["bh_significant"] = bool(is_sig)
-        item["bh_corrected_p"] = cp
-        # ④ min_delta AND — 이중 잠금
-        item["fired"] = bool(is_sig) and item["meaningful"]
+    # ③ BH-FDR — 상품별 family의 모든 검정에 적용 (min_delta 선필터 금지)
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for item in batch:
+        groups[item["product"]].append(item)
+
+    for group in groups.values():
+        rejected, corrected_p, _, _ = multipletests(
+            [item["p_value"] for item in group], alpha=alpha, method="fdr_bh"
+        )
+        for item, is_sig, cp in zip(group, rejected, corrected_p):
+            item["bh_significant"] = bool(is_sig)
+            item["bh_corrected_p"] = cp
+            # ④ min_delta AND — 이중 잠금
+            item["fired"] = bool(is_sig) and item["meaningful"]
 
     return batch
 
@@ -225,12 +231,10 @@ ROBUSTNESS_EXEMPT = {"SC-019", "SC-020", "SC-021", "SC-026", "SC-027", "SC-028"}
 
 
 def robustness_check(batch: list[dict], alpha: float = 0.05, min_delta: float = 0.03) -> dict:
-    """배치 전체에서 cutoff(문서 관행: 이미 발화한 것들 중 최대 raw p)를 구한 뒤,
-    대상 케이스 각각에 대해 cur_neg를 +1/-1 했을 때도 fired 여부(=intended_answer)가
-    유지되는지 확인한다. m 대비 1건 변화는 BH 컷오프에 사실상 영향이 없다는 걸
-    앞서(m=1488→1464 실험) 확인했으므로, 컷오프는 원본 배치 값을 그대로 재사용한다."""
-    fired_p = [i["p_value"] for i in batch if i["fired"]]
-    cutoff = max(fired_p) if fired_p else 0.0
+    """cur_neg를 ±1한 뒤 해당 상품 family의 BH를 다시 계산해 판정 강건성을 본다."""
+    families: dict[str, list[dict]] = defaultdict(list)
+    for item in batch:
+        families[item["product"]].append(item)
 
     results = []
     for item in batch:
@@ -246,14 +250,22 @@ def robustness_check(batch: list[dict], alpha: float = 0.05, min_delta: float = 
             if new_neg < 0 or new_neg > item["cur_total"]:
                 continue
             p, d = run_fisher(new_neg, item["cur_total"], item["past_neg"], item["past_total"])
-            fired = (p <= cutoff) and (d >= min_delta)
+            family = families[item["product"]]
+            item_index = next(i for i, sibling in enumerate(family) if sibling is item)
+            p_values = [p if sibling is item else sibling["p_value"] for sibling in family]
+            rejected, _, _, _ = multipletests(p_values, alpha=alpha, method="fdr_bh")
+            fired = bool(rejected[item_index]) and (d >= min_delta)
             if fired != row_result["intended"]:
                 row_result["flips"].append({"변화": label, "p": p, "delta": d, "새_fired": fired})
 
         if row_result["flips"]:
             results.append(row_result)
 
-    return {"cutoff_사용값": cutoff, "검사_대상_제외": sorted(ROBUSTNESS_EXEMPT), "흔들린_케이스": results}
+    return {
+        "방법": "각 ±1 변경마다 해당 상품 family의 BH 재계산",
+        "검사_대상_제외": sorted(ROBUSTNESS_EXEMPT),
+        "흔들린_케이스": results,
+    }
 
 
 # ────────────────────────────────────────────────────────────────
@@ -273,7 +285,7 @@ def main():
     all_products = load_products(args.products_config)
 
     batch, held_channels = build_full_batch(anomaly_rows, all_products)
-    print(f"전체 배치 크기(m): {len(batch)}  (보류 채널 {len(held_channels)}개 제외됨)")
+    print(f"전체 검정 수: {len(batch)}  (보류 채널 {len(held_channels)}개 제외됨)")
     if held_channels:
         print("  보류된 (상품,채널,source):", held_channels)
 
@@ -283,7 +295,7 @@ def main():
     cutoff = max(fired_p) if fired_p else None
     print(f"BH 기각(유의) 건수: {sum(i['bh_significant'] for i in batch)}")
     print(f"최종 발화(fired) 건수: {sum(i['fired'] for i in batch)}")
-    print(f"실효 컷오프(발화 중 최대 raw p): {cutoff}")
+    print(f"발화 raw p 최대값(상품별 family 전체): {cutoff}")
 
     result = score(batch)
     print()
@@ -301,12 +313,12 @@ def main():
                   f"(p={m['p_value']:.6f}, bh_p={m['bh_corrected_p']:.6f}, delta={m['delta']:.4f})")
         print("\n검산 실패 — 불일치 존재")
     else:
-        print("\n검산 통과 — 전체 일치")
+        print("\n검산 통과 - 전체 일치")
 
     if args.robustness:
         print("\n=== ±1건 강건성 검사 ===")
         rc = robustness_check(batch, alpha=args.alpha, min_delta=args.min_delta)
-        print(f"사용 컷오프: {rc['cutoff_사용값']:.6f}")
+        print(f"방법: {rc['방법']}")
         print(f"검사 제외(G·D, {len(rc['검사_대상_제외'])}개): {rc['검사_대상_제외']}")
         if rc["흔들린_케이스"]:
             print(f"\n⚠️ ±1건에 판정이 흔들리는 케이스 {len(rc['흔들린_케이스'])}건:")

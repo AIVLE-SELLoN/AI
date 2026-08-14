@@ -11,8 +11,9 @@
 --------------------------------------------------------
 ① 42상품 × 6aspect × 3채널 × 2source = 1,512슬롯을 한 배치로 구성.
    케이스 슬롯은 config_anomaly 값, 나머지는 baseline 으로 채운다.
-② BH-FDR 은 **배치 전체**에 적용한다. 케이스별로 쪼개 돌리면 family 가 달라져
-   컷오프가 바뀐다 — 골든이 한 배치 기준으로 만들어졌으므로 반드시 맞춰야 한다.
+② BH-FDR 은 **상품별 family**에 적용한다. 먼저 상품별 36슬롯 그리드를 구성하고,
+   최소표본·과거표본·분류 커버리지 보류를 제외한 12~36개 판정 가능 검정을 함께 보정한다.
+   임의로 일부 슬롯만 쪼개 실행하면 family가 달라져 컷오프가 바뀌므로 금지한다.
    (윈도우가 25개로 흩어져 있으나 Fisher 는 4개 숫자만 쓰므로 날짜는 무관 —
     validate_anomaly.py 헤더 "window 선택은 통계 결과에 전혀 영향을 주지 않는다")
 
@@ -69,12 +70,12 @@ CONFIG_ANOMALY = ROOT / "data" / "config" / "config_anomaly.csv"
 CONFIG_PRODUCTS = ROOT / "data" / "config" / "config_products.csv"
 GOLDEN_ANOMALY = ROOT / "data" / "golden" / "golden_anomaly.csv"
 
-DOC_FAMILY_SIZE = 1464
-"""로직 §[2-B] family 표의 검정 수 (42상품 × 36검정 1,512 − 보류 48).
+DOC_TOTAL_TESTS = 1464
+DOC_MAX_FAMILY_SIZE = 36
+"""정본 데이터의 전체 검정 수와 상품 하나의 최대 family 크기.
 
-부록 A 의 컷오프 캘리브레이션이 이 m 기준이라, 여기서 벗어나면 컷오프도 함께
-움직인다. **판정 임계가 아니라 대조용 기준값**이므로 어겨도 실패시키지 않는다
-(상품이 늘면 정상적으로 커진다) — _report_family 가 한 줄 알리기만 한다.
+둘 다 판정 임계가 아니라 실행 구성을 감시하는 대조값이다. 보류 채널이 있는 상품은
+family가 36보다 작을 수 있고, 상품 수가 바뀌면 전체 검정 수도 달라진다.
 """
 
 # ⚠️ str(Verdict.NORMAL) 은 "Verdict.NORMAL" 을 낸다(3.11+ StrEnum 아님). 반드시 .value.
@@ -220,21 +221,29 @@ def predict(config_rows: list[dict], products: list[str]) -> dict:
 
 
 def _report_family(pred: dict) -> None:
-    """BH family 크기가 그리드에서 유도한 값과 맞는지 대조한다. (로직 §[2-B] family 표)
+    """전체 검정 수와 상품별 BH family 크기 분포를 함께 출력한다.
 
-    왜 감시하나: BH 는 m 으로 컷오프를 정하는 상대평가라, family 가 조용히 달라지면
-    **모든 판정이 함께 움직인다.** 코드는 그대로인데 성적만 바뀌어서 원인을 찾기 어렵다.
-    실제로 겪은 두 경로 — ① 보류 범위를 (상품,채널)에서 (상품,채널,source)로 잘못
-    좁히면 m 이 늘고, ② 커버리지 미달 슬롯 제외가 켜지면 m 이 준다.
+    BH는 family 크기와 발견 순위로 컷오프를 정하므로 구성이 조용히 달라지면 모든
+    판정이 함께 움직인다. 실제 변동 경로는 ① 최소표본 보류 범위 오축소와 ② 분류
+    커버리지 미달 슬롯 제외다.
 
-    **고정값을 박지 않는다.** 상품이 늘면 m 이 커지는 게 정상이라 상수로 두면 오경보가
-    된다. 대신 그리드(상품×aspect×채널×source)에서 유도한 기대치와 대조하고, 문서
-    캘리브레이션(m=1,464)과 다를 때만 한 줄 알린다 — 실패가 아니라 재확인 신호다.
+    상품별 전환 후에는 보류가 자기 상품의 m을 직접 줄인다. 정본에서 정상 상품은
+    m=36이지만 P036/P042는 m=24, P041은 m=12라 순위 1 임계가 각각 1.5배, 3배
+    완화된다. 현재 정본 판정은 고정 m=36 반사실과 같지만, 데이터가 부족한 상품의
+    임계가 느슨해지는 방향이므로 분포를 계속 출력해 감시한다.
     """
     excluded = pred["n_grid"] - pred["n_batch"]
-    line = f"  family {pred['n_batch']} = 그리드 {pred['n_grid']} − 미검정 {excluded}"
-    if pred["n_batch"] != DOC_FAMILY_SIZE:
-        line += f"  ⚠️ 문서 캘리브레이션 {DOC_FAMILY_SIZE} 과 다름 — BH 컷오프 재확인"
+    family_sizes: dict[str, int] = {}
+    for product, _aspect, _channel, _source in pred["tests"]:
+        family_sizes[product] = family_sizes.get(product, 0) + 1
+    sizes = list(family_sizes.values())
+    span = f"{min(sizes)}~{max(sizes)}" if sizes else "0"
+    line = (
+        f"  전체 검정 {pred['n_batch']} = 그리드 {pred['n_grid']} − 미검정 {excluded}"
+        f" / 상품별 family {len(sizes)}개 (크기 {span}, 최대 {DOC_MAX_FAMILY_SIZE})"
+    )
+    if pred["n_batch"] != DOC_TOTAL_TESTS:
+        line += f"  ⚠️ 정본 전체 검정 {DOC_TOTAL_TESTS} 과 다름 — 입력 구성 재확인"
     print(line)
 
 

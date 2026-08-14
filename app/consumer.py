@@ -34,9 +34,10 @@ import signal
 import sys
 
 from app.config import get_settings
+from app.core import mq_consumer
+from app.core.console import force_utf8_output
 from app.core.exceptions import AiServiceError
 from app.core.mq_consumer import (
-    HANDLERS,
     RECOMMENDATION_REVIEWED,
     REPORT_CREATED,
     consume,
@@ -67,7 +68,11 @@ def wire_handlers() -> None:
 
     register_handler(RECOMMENDATION_REVIEWED, handle_recommendation_reviewed)
     register_handler(REPORT_CREATED, handle_report_feedback)
-    logger.info("등록된 처리 함수: %s", ", ".join(sorted(HANDLERS)))
+    # ⚠️ `mq_consumer.HANDLERS` 를 **모듈 경유로** 읽는다. `from … import HANDLERS` 로
+    #    가져오면 import 시점의 객체가 이 네임스페이스에 값으로 묶여, 테스트가
+    #    `monkeypatch.setattr(mq_consumer, "HANDLERS", {})` 로 갈아끼웠을 때
+    #    등록은 새 dict 에 되고 이 로그는 옛 dict 를 읽어 "비었다"고 말한다.
+    logger.info("등록된 처리 함수: %s", ", ".join(sorted(mq_consumer.HANDLERS)))
 
 
 async def _run() -> None:
@@ -87,6 +92,14 @@ async def _run() -> None:
 
 
 def main() -> None:
+    # 출력이 나가기 전에. 사유는 app/core/console.py 참고.
+    # ⚠️ 빠지면 조용히 사라지는 게 아니라 **시끄럽게 잃는다** — 진단 경고가 안 나가는
+    #    대신 `--- Logging error ---` 블록이 건당 10줄 쌓인다. 게다가 단일행 warning
+    #    (`_format_submitted_at`)은 **호출부로 탈출해 메시지까지 잃는다**:
+    #    `UnicodeEncodeError` 가 `ValueError` 하위라 `consume()` 이 계약 위반으로 보고
+    #    `nack(requeue=False)` → DLX. 조건·실측은 테스트 docstring 참고.
+    force_utf8_output()
+
     settings = get_settings()
     logging.basicConfig(
         level=settings.log_level,

@@ -65,8 +65,12 @@ swap_real 은 캐시에 없는 item_id 를 조용히 golden 으로 되돌린다.
 """
 
 FAMILIES = {
-    "현재(전체)": None,
-    "상품별": lambda k: k[0],
+    # 🔴 **전 팔을 명시 keyfn 으로 둔다 — `None`(=운영 기본값) 을 쓰지 않는다.**
+    #    2026-08-13 에 운영 기본값이 전체 → 상품별로 바뀌었다. 그때 `None` 로 두면
+    #    "전체" 라고 이름 붙은 팔이 조용히 상품별이 되어 **비교표가 거짓말을 한다.**
+    #    라벨과 실제 보정 단위가 어긋나는 것이 이 스크립트에서 제일 위험하다.
+    "전체(구정책)": lambda k: None,  # 전 검정이 한 그룹 = 2026-08-13 이전 동작
+    "상품별": lambda k: k[0],  # ← 현재 운영 정책
     "상품x source": lambda k: (k[0], k[3]),
 }
 
@@ -74,7 +78,11 @@ _ORIGINAL_DECIDE = stats_mod.decide_fires
 
 
 def make_decide(keyfn):
-    """decide_fires 를 family 별 BH 로 교체. keyfn=None 이면 원본 그대로."""
+    """decide_fires 를 family 별 BH 로 교체. keyfn=None 이면 **운영 기본값 그대로**.
+
+    ⚠️ `keyfn=None` 은 "전체 family" 가 아니라 "현재 운영 코드가 뭘 쓰든 그것" 이다.
+       전체 family 를 원하면 `lambda k: None` 을 넘길 것(위 FAMILIES 참고).
+    """
     if keyfn is None:
         return _ORIGINAL_DECIDE
 
@@ -236,7 +244,7 @@ def pick_cache(items: list):
     """eval_cache 후보 중 **적용률이 가장 높은** 캐시를 고른다.
 
     Returns:
-        (경로, 캐시dict, 덮어쓴 items, 적용률) 또는 후보가 하나도 없으면 None.
+        (경로, 캐시dict, 덮어쓴 items, 덮어쓴 건수, 적용률) 또는 후보가 없으면 None.
 
     적용률이 0 인 캐시(옛 mock 으로 만들어져 item_id 가 하나도 안 겹치는 것)는 후보에서
     뺀다 — 골라봐야 real 이 통째로 oracle 이 된다.
@@ -250,10 +258,12 @@ def pick_cache(items: list):
             continue
         real_items, swapped = swap_real(items, cache)
         if swapped:
-            candidates.append((path, cache, real_items, swapped / len(items)))
+            candidates.append(
+                (path, cache, real_items, swapped, swapped / len(items))
+            )
     if not candidates:
         return None
-    return max(candidates, key=lambda c: c[3])
+    return max(candidates, key=lambda c: c[4])
 
 
 def require_full_real_cache(items: list):
@@ -264,7 +274,7 @@ def require_full_real_cache(items: list):
             f"쓸 수 있는 분류 캐시가 없습니다: {CACHE_DIR}/{CACHE_GLOB}"
         )
 
-    path, cache, real_items, coverage = best
+    path, cache, real_items, swapped, coverage = best
     if coverage < MIN_CACHE_COVERAGE:
         raise RuntimeError(
             f"실제분류 캐시 적용률이 {coverage:.1%}로 "
@@ -272,7 +282,6 @@ def require_full_real_cache(items: list):
             "나머지를 golden으로 대체한 real 수치는 산출하지 않습니다."
         )
 
-    swapped = sum(item.item_id in cache for item in items)
     return path, cache, real_items, swapped, coverage
 
 
@@ -295,10 +304,10 @@ async def main() -> None:
             "     덮어서 적용률이 10% 도 안 된다."
         )
     else:
-        path, cache, real_items, coverage = best
+        path, cache, real_items, swapped, coverage = best
         print(
             f"문서 {len(documents):,} / 캐시 {len(cache):,} ({path.name})"
-            f" / 적용률 {coverage:.1%}"
+            f" / 실제분류로 덮음 {swapped:,} / 적용률 {coverage:.1%}"
         )
         if coverage < MIN_CACHE_COVERAGE:
             print(

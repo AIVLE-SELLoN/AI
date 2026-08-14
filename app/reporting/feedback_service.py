@@ -40,6 +40,26 @@ from app.core.constants import KST
 
 logger = logging.getLogger(__name__)
 
+# 🔴 **아래 `logger.*` 메시지에는 cp949 로 인코딩 안 되는 문자를 쓰지 않는다**(`—`·`⚠️` 등).
+#    주석·docstring 은 상관없다 — 콘솔로 나가지 않는다. 메시지만 해당된다.
+#
+#    이유가 인코딩 편의가 아니라 **메시지 유실**이다. 윈도우 기본 콘솔(cp949)에서 이
+#    핸들러가 도는데 진입점이 `force_utf8_output()` 을 안 불렀으면:
+#      1. `emit()` 이 인코딩에 실패해 **그 경고가 안 나간다**
+#      2. `handleError()` 가 traceback 을 같은 스트림에 쓰는데, 거기 실린 **소스 라인**에
+#         그 문자가 있으면 또 터진다. handleError 는 `OSError` 만 삼키므로
+#         `UnicodeEncodeError` 가 호출부로 **탈출한다**
+#      3. `UnicodeEncodeError` 는 `ValueError` 하위 → `mq_consumer.consume()` 이 계약
+#         위반으로 분류 → `nack(requeue=False)` → **DLX. 피드백 메시지가 유실된다**
+#
+#    ⚠️ 2번은 실패한 호출이 **한 줄**일 때만 난다(여러 줄로 쪼개면 traceback 에
+#       `logger.warning(` 첫 줄만 실려 인코딩된다). 그 차이에 기대지 않는다 — 누가
+#       한 줄로 합치면 되살아나고, 합치는 건 정상적인 정리 작업이다.
+#
+#    `app/consumer.py` 가 `force_utf8_output()` 을 부르므로(PR #86) 실제 경로는 이미
+#    막혀 있다. 여기서 또 막는 건 **모듈이 진입점의 기억력에 기대지 않게** 하려는 것이다.
+#    (2026-08-14, PR #86 리뷰에서 서영님이 탈출 조건을 특정)
+
 # 계약(§8)이 정한 값. 벗어나도 **죽이지 않고 경고만** 한다 — 아래 핸들러 주석 참고.
 FEEDBACK_TYPES = frozenset({"POSITIVE", "NEGATIVE", "NEUTRAL"})
 RATING_MIN, RATING_MAX = 1, 5
@@ -111,7 +131,7 @@ def _format_submitted_at(value: datetime | None) -> str | None:
     if value is None:
         return None
     if value.tzinfo is None:
-        logger.warning("submittedAt 에 타임존이 없습니다 — 원문 그대로 기록합니다: %s", value)
+        logger.warning("submittedAt 에 타임존이 없습니다. 원문 그대로 기록합니다: %s", value)
         return value.isoformat()
     return value.astimezone(KST).isoformat()
 
@@ -137,7 +157,7 @@ def handle_report_feedback(payload: dict) -> None:
 
     if event.feedback_type is not None and event.feedback_type not in FEEDBACK_TYPES:
         logger.warning(
-            "reportId=%s: 계약에 없는 feedbackType 입니다(%s) — 그대로 기록합니다. "
+            "reportId=%s: 계약에 없는 feedbackType 입니다(%s). 그대로 기록합니다. "
             "계약값: %s",
             event.report_id,
             event.feedback_type,
@@ -146,7 +166,7 @@ def handle_report_feedback(payload: dict) -> None:
 
     if event.rating is not None and not RATING_MIN <= event.rating <= RATING_MAX:
         logger.warning(
-            "reportId=%s: rating 이 %d~%d 를 벗어났습니다(%s) — 그대로 기록합니다.",
+            "reportId=%s: rating 이 %d~%d 를 벗어났습니다(%s). 그대로 기록합니다.",
             event.report_id,
             RATING_MIN,
             RATING_MAX,

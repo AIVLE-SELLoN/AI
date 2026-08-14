@@ -63,14 +63,24 @@ def current_tenant() -> str:
        0건인 지금이 비용 0이고, HITL 이 돌기 시작하면 기존 문서 이관 작업이 되기**
        때문이다.
 
-    ⚠️ **분리 기제는 아직 고르지 않았다.** 지금은 metadata + 문서 ID 접두어(데이터 레벨)
-       뿐이고, 컬렉션 분리·Chroma `tenant`/`database` 인자는 후속에서 정한다
-       (`get_client()` 가 그 인자를 안 쓰고 기본값으로 연다). **어느 기제를 고르든 이
-       축이 데이터에 있어야 하므로** 축을 먼저 넣고 기제를 뒤로 미룬 것이다.
+    ✅ **두 컬렉션 다 이 축을 쓴다.** 컬렉션2는 PR #77, 컬렉션1(`detail_pages`)은 그
+       후속에서 붙였다(시딩 ID·metadata·조회 필터 셋 다). 컬렉션1을 나눠서 한 이유는
+       504건 **재시딩이 걸려 팀 전원이 다시 시딩**해야 했기 때문이지 설계가 달라서가
+       아니다.
 
-    ⚠️ **컬렉션1(`detail_pages`)은 아직 이 축이 없다** — 시딩 ID 가
-       `{product_group_id}:{channel}:{aspect}` 라 같은 충돌 모양이고, PR #77 이 만든 게
-       아니라 그 전부터 main 에 있다. 504건 재시딩이 걸려 별도 후속으로 분리했다.
+    ✅ **분리 기제 = metadata + 문서 ID 접두어(데이터 레벨)로 확정.** 근거·실측·다른
+       두 기제를 반려한 사유·다시 볼 조건은 `docs/vectordb_tenancy.md` 에 있다.
+       요약하면 Chroma `tenant`/`database` 는 **AdminClient 를 통한 사전 생성이 필요**해서
+       (없는 값으로 열면 `NotFoundError`) **우리 파드가 뜨기 전에 남의 인프라 매니페스트에
+       프로비저닝 단계가 들어가야** 한다 — 배포 순서 의존성이라 지금 고를 수 없다.
+       `get_client()` 가 그 인자를 안 쓰고 기본값으로 여는 건 그래서다 — 미구현이 아니라
+       선택이다.
+       ⚠️ **"권한이 없어서" 가 아니다** — 확정된 운영 Chroma 는 인증이 없다
+       (NetworkPolicy 로만 제어, 2026-08-14).
+
+    🔴 **셋은 짝이다 — 쓰기 ID · 쓰기 metadata · 조회 `where`.** 하나만 지워도 격리가
+       깨지는데 **모양이 다르다**: ID 축을 지우면 다른 회사 문서를 *덮고*, 조회 필터를
+       지우면 덮지 않은 채 *새어 나온다*. 그래서 뮤테이션도 따로 잡아야 한다.
     """
     return get_settings().mq_company_id or LOCAL_TENANT
 
@@ -222,24 +232,40 @@ def get_documents(
     *,
     where: dict[str, Any],
     limit: int | None = None,
+    include: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """메타데이터 완전일치 조회. 키를 알 때 사용 (임베딩 안 거침).
 
+    Args:
+        include: Chroma 가 실어 보낼 필드. 기본(None)은 문서 본문 + metadata 둘 다다.
+            **metadata 만 필요하면 `["metadatas"]` 를 줘서 본문 전송을 없앨 것** —
+            상세페이지 본문이 건당 700자대라 수십 건만 훑어도 수만 자가 오간다.
+
     Returns:
-        `{"id", "document", "metadata"}` 리스트.
+        `{"id", "document", "metadata"}` 리스트. `include` 로 뺀 필드는 `document=None`
+        · `metadata={}` 로 채워진다(키 자체는 항상 있다).
     """
     try:
-        result = collection.get(where=where, limit=limit)
+        result = (
+            collection.get(where=where, limit=limit)
+            if include is None
+            else collection.get(where=where, limit=limit, include=include)
+        )
     except ChromaError as exc:
         raise VectorDbError(f"get 실패: {exc}") from exc
 
+    # ⚠️ `zip` 으로 묶지 말 것 — `include` 로 뺀 필드는 **빈 리스트**로 와서 zip 이
+    #    전체를 0건으로 잘라낸다(조회는 성공했는데 결과가 사라진다).
+    ids = result.get("ids") or []
+    documents = result.get("documents") or []
+    metadatas = result.get("metadatas") or []
     return [
-        {"id": doc_id, "document": document, "metadata": metadata or {}}
-        for doc_id, document, metadata in zip(
-            result.get("ids") or [],
-            result.get("documents") or [],
-            result.get("metadatas") or [],
-        )
+        {
+            "id": doc_id,
+            "document": documents[i] if i < len(documents) else None,
+            "metadata": (metadatas[i] if i < len(metadatas) else None) or {},
+        }
+        for i, doc_id in enumerate(ids)
     ]
 
 

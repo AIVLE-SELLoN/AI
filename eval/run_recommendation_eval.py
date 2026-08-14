@@ -54,7 +54,13 @@ from app.core.schemas import (
     SourceSignals,
     Verdict,
 )
-from app.core.vectordb import get_detail_pages, get_documents, get_rejection_reasons
+from app.core.vectordb import (
+    TENANT_METADATA_KEY,
+    current_tenant,
+    get_detail_pages,
+    get_documents,
+    get_rejection_reasons,
+)
 from app.recommendation import pipeline
 from scripts.generate_detail_fields import FIFTEEN_COMBOS
 
@@ -127,6 +133,9 @@ def check_collection1_hit_rate() -> None:
 
     expected = load_expected_texts()
     detail_pages = get_detail_pages()
+    # 운영(`pipeline._get_detail_page_text`)과 **같은 조건**으로 조회한다 — 회사 축을
+    # 빼면 이 실험만 필터가 느슨해져 운영보다 잘 맞는 수치가 나온다.
+    tenant = current_tenant()
 
     hits = 0
     misses = []
@@ -139,6 +148,7 @@ def check_collection1_hit_rate() -> None:
             detail_pages,
             where={
                 "$and": [
+                    {TENANT_METADATA_KEY: tenant},
                     {"product_group_id": key[0]},
                     {"channel": key[1]},
                     {"aspect": key[2]},

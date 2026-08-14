@@ -139,12 +139,54 @@ def test_bh_step_up_toy():
     p = [0.001, 0.008, 0.030, 0.045, 0.060]
     k=3(0.030) 이 (3/5)*0.05=0.030 에 딱 맞아 통과 → 1,2,3 발화 / 4,5 탈락.
     (전부 delta 충분하다고 두고 BH 만 본다.)
+
+    ⚠️ 5개를 **같은 상품**에 둔다 — family 가 상품별이라 그래야 한 family 안의
+       step-up 을 보는 원래 의도가 유지된다.
     """
     ps = [0.001, 0.008, 0.030, 0.045, 0.060]
-    batch = [{"p_value": p, "meaningful": True} for p in ps]
+    batch = [
+        {"p_value": p, "meaningful": True, "key": ("P001", a, "COUPANG", "cs")}
+        for p, a in zip(ps, ["색상", "사이즈", "소재", "파손", "오배송"])
+    ]
     decide_fires(batch, q=0.05)
     fired = [t["fired"] for t in batch]
     assert fired == [True, True, True, False, False]
+
+
+def test_bh_family_is_per_product():
+    """family 가 **상품별**이라는 것 자체를 고정한다.
+
+    상품 A 는 검정 1개(p=0.02), 상품 B 는 귀무 검정 9개(p=0.9).
+
+        배치 전체 family : m=10 → 순위1 임계 0.05/10 = 0.005 → A 탈락
+        상품별 family    : A 의 m=1 → 임계 0.05/1 = 0.05    → A 발화
+
+    즉 **상품별 그룹핑을 빼면 이 테스트는 실패한다.** 그게 이 테스트의 목적이다.
+    """
+    batch = [{"p_value": 0.02, "meaningful": True, "key": ("A", "색상", "COUPANG", "cs")}]
+    batch += [
+        {"p_value": 0.9, "meaningful": True, "key": ("B", a, "NAVER", "cs")}
+        for a in ["색상", "사이즈", "소재", "파손", "오배송", "기타"]
+    ]
+    batch += [
+        {"p_value": 0.9, "meaningful": True, "key": ("B", a, "ZIGZAG", "cs")}
+        for a in ["색상", "사이즈", "소재"]
+    ]
+    decide_fires(batch, q=0.05)
+
+    fired = {t["key"]: t["fired"] for t in batch}
+    assert fired[("A", "색상", "COUPANG", "cs")] is True
+    assert not any(f for k, f in fired.items() if k[0] == "B")
+
+
+def test_bh_missing_key_raises():
+    """key 가 없으면 조용히 옛 동작(전체 family)으로 폴백하지 않고 세운다.
+
+    폴백을 두면 "key 를 안 넘긴 호출부만 옛 보정"이 되는데, 그건 알림이 덜 나가는
+    방향이라 **미탐이고 조용하다.**
+    """
+    with pytest.raises(KeyError):
+        decide_fires([{"p_value": 0.01, "meaningful": True}], q=0.05)
 
 
 def test_bh_empty_batch():
