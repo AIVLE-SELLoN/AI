@@ -70,10 +70,13 @@ def current_tenant() -> str:
 
     ✅ **분리 기제 = metadata + 문서 ID 접두어(데이터 레벨)로 확정.** 근거·실측·다른
        두 기제를 반려한 사유·다시 볼 조건은 `docs/vectordb_tenancy.md` 에 있다.
-       요약하면 Chroma `tenant`/`database` 는 **사전 생성이 필요**하고(없는 값으로 열면
-       `NotFoundError`) HTTP 모드에선 우리가 소유하지 않은 서버의 admin 권한을 요구해
-       지금 고를 수 없다. `get_client()` 가 그 인자를 안 쓰고 기본값으로 여는 건
-       그래서다 — 미구현이 아니라 선택이다.
+       요약하면 Chroma `tenant`/`database` 는 **AdminClient 를 통한 사전 생성이 필요**해서
+       (없는 값으로 열면 `NotFoundError`) **우리 파드가 뜨기 전에 남의 인프라 매니페스트에
+       프로비저닝 단계가 들어가야** 한다 — 배포 순서 의존성이라 지금 고를 수 없다.
+       `get_client()` 가 그 인자를 안 쓰고 기본값으로 여는 건 그래서다 — 미구현이 아니라
+       선택이다.
+       ⚠️ **"권한이 없어서" 가 아니다** — 확정된 운영 Chroma 는 인증이 없다
+       (NetworkPolicy 로만 제어, 2026-08-14).
 
     🔴 **셋은 짝이다 — 쓰기 ID · 쓰기 metadata · 조회 `where`.** 하나만 지워도 격리가
        깨지는데 **모양이 다르다**: ID 축을 지우면 다른 회사 문서를 *덮고*, 조회 필터를
