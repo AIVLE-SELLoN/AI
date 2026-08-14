@@ -1077,6 +1077,22 @@ async def run_batch(
     # 이유는 종료코드에 안 실리게 하기 위해서다(루프 안 주석 참고).
     evidence_gaps = 0
     routing_misses = 0
+    # §4 — 두 상태 파일(대기열·억제 캐시)은 원자적으로 같이 못 쓴다. 직전 실행이
+    # 대기열 저장(선행)과 억제 캐시 저장(후행) **사이**에서 죽으면 "대기열엔 있는데
+    # 억제는 안 된" 알림이 남고, 그 알림은 이번 실행에 신규 target 으로 다시 뜬다 —
+    # 메인 루프가 가이드라인까지 다시 만드므로 겹치는 대기 항목을 여기서 걷어내
+    # **한 경로만** 태운다 (PR #90 리뷰 2회전 P1 실측: 같은 guideline_id 2회 발행).
+    # 걷힌 건의 attempts 는 버려진다 — 메인 루프가 실패하면 attempts=0 으로 다시
+    # 들어오는데, 크래시 창 한정이라 재시도가 늘어나는 방향의 오차만 있다.
+    target_ids = {a.alert_id for a in targets}
+    superseded = sum(1 for e in pending if e["alert"].alert_id in target_ids)
+    if superseded:
+        logger.info(
+            "가이드라인 대기 %d건이 이번 실행의 신규 target 과 겹쳐 대기열에서 뺍니다"
+            " (메인 루프가 처리)",
+            superseded,
+        )
+        pending = [e for e in pending if e["alert"].alert_id not in target_ids]
     # §4 — 이 배치에서 "가이드라인만 못 나간" 알림. 끝에 대기열로 들어간다.
     new_pending: list[DetectionAlert] = []
     # 재시도 패스가 안 돌면(dry-run·documents 0건) 대기열은 그대로 다음 배치로 넘어간다.
@@ -1341,10 +1357,11 @@ async def run_batch(
     # 알림을 delivered 에서 빼서 다음 배치가 통째로 재처리하게 한다 — 영구 유실보다
     # 중복 비용(재발행·재생성)을 택한다.
     #
-    # 같은 alert_id 가 대기열과 신규 target 에 동시에 있을 수는 없다 — 대기열은 알림
-    # 발행에 **성공한** 건만 받으므로(위 anomaly_delivered 게이트) 그 알림은 자기
-    # window 동안 억제되고, 억제 만료·갱신으로 다시 뜨는 알림은 window_end 가 달라
-    # alert_id 도 다르다(그건 별개 알림이라 각자 가이드라인을 받는 것이 맞다).
+    # 같은 alert_id 가 대기열과 신규 target 에 **정상 경로에서는** 겹치지 않지만(대기열은
+    # 알림 발행 성공 건만 받아 자기 window 동안 억제된다), 두 파일을 원자적으로 같이 쓸
+    # 수 없어 "대기열 저장 성공 + 억제 캐시 저장 실패" 크래시 창에서는 겹친다 — 그건
+    # 실행 초입의 대기열-target 조정이 걷어낸다(리뷰 2회전 P1). 억제 만료·갱신으로 다시
+    # 뜨는 알림은 window_end 가 달라 alert_id 도 다르다(별개 알림 = 각자 가이드라인).
     # dry-run 은 읽기만 하고, window_end 가 없으면 로드도 안 했으므로 파일을 안 건드린다.
     pending_after = still_pending + [
         {"alert": a, "attempts": 0} for a in new_pending

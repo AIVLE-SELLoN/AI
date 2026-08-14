@@ -1300,3 +1300,69 @@ async def test_retry_budget_is_what_max_alerts_leaves_over(tmp_path, monkeypatch
     assert [(e["alert"]["alert_id"], e["attempts"]) for e in saved] == [("ALT-P2", 1)], (
         "예산 밖 건은 attempts 그대로 대기열에 남는다"
     )
+
+
+@pytest.mark.asyncio
+async def test_crash_between_pending_and_suppression_saves_single_path(
+    tmp_path, monkeypatch
+):
+    """🔴 2회전 P1 — "대기열 저장 성공 + 억제 캐시 저장 실패" 크래시 창의 재실행.
+
+    두 상태 파일은 원자적으로 같이 못 쓴다. 그 사이에서 죽으면 다음 실행에 같은
+    알림이 신규 target(억제 안 됨)과 대기열 **양쪽**에 있다 — 조정 없이는 같은
+    guideline_id 가 2회 생성·발행된다(서영님 실측). 실행 초입에 겹치는 대기 항목을
+    걷어내 메인 루프 한 경로만 태운다.
+    """
+    pending_path = _pending_path(tmp_path)
+    state_path = tmp_path / "state.json"
+    published: list[str] = []
+
+    async def fake_guideline(alert, inquiries, *, product_name=None):
+        return _FakeCallback(alert.alert_id)
+
+    async def sent(alert, rec, trace_id, versions=None):
+        return None
+
+    async def guideline_publish_fails(guideline, trace_id):
+        raise RuntimeError("MQ down")
+
+    async def record_publish(guideline, trace_id):
+        published.append(guideline.guideline_id)
+
+    monkeypatch.setattr(daily, "generate_guideline", fake_guideline)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+
+    # 1차 실행: 가이드라인 발행 실패(→ 대기열 write-ahead 저장 성공) 직후
+    # 억제 캐시 저장이 죽는다 — 서영님 재현 그대로.
+    real_save_published = daily.save_published
+
+    def save_published_crashes(published_alerts, window_end, path):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(daily, "publish_guideline_generated", guideline_publish_fails)
+    monkeypatch.setattr(daily, "save_published", save_published_crashes)
+    with pytest.raises(OSError):
+        await daily.run_batch(
+            state_path=state_path,
+            pending_path=pending_path,
+            load_inputs=_stub_inputs,
+        )
+
+    assert json.loads(pending_path.read_text(encoding="utf-8")), (
+        "write-ahead 라 대기열은 남는다"
+    )
+    assert not state_path.exists(), "억제 캐시는 안 써졌다 — 불일치 상태 재현"
+
+    # 2차 실행: 전부 정상. 같은 alert_id 가 target 과 대기열 양쪽에 있는 상태다.
+    monkeypatch.setattr(daily, "save_published", real_save_published)
+    monkeypatch.setattr(daily, "publish_guideline_generated", record_publish)
+    summary = await daily.run_batch(
+        state_path=state_path,
+        pending_path=pending_path,
+        load_inputs=_stub_inputs,
+    )
+
+    assert len(published) == 1, f"한 경로만 발행해야 한다 — 실제 {published}"
+    assert summary["guideline_retried"] == 0, "대기 항목은 신규 target 에 밀려 걷힌다"
+    assert json.loads(pending_path.read_text(encoding="utf-8")) == []
+    assert state_path.exists(), "이번엔 억제 캐시까지 써져 불일치가 해소된다"
