@@ -100,11 +100,26 @@ def main() -> None:
     #    `nack(requeue=False)` → DLX. 조건·실측은 테스트 docstring 참고.
     force_utf8_output()
 
-    settings = get_settings()
-    logging.basicConfig(
-        level=settings.log_level,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    )
+    # ⚠️ **설정 로딩·로깅 설정도 try 안이다.** 밖에 두면 `LOG_LEVEL` 오타 하나가
+    #    미포착 예외로 나가 exit **1**(일시적 오류)이 된다 — 재시작해도 같은 값을 읽으니
+    #    k8s 는 영원히 재시작만 하고 아무도 못 알아챈다. 이 파일 맨 위가 정의한
+    #    "2 = 설정 문제" 와 어긋나는 자리다.
+    #
+    #    `ValueError` 만 잡는 이유: `logging.basicConfig(level=...)` 의 잘못된 레벨과
+    #    `get_settings()` 의 pydantic `ValidationError` 가 **둘 다 ValueError 하위**라
+    #    이걸로 덮인다. 더 넓히면 진짜 예상 밖 오류까지 "설정 문제" 로 보고하게 된다.
+    try:
+        settings = get_settings()
+        logging.basicConfig(
+            level=settings.log_level,
+            format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        )
+    except ValueError as exc:
+        # ⚠️ 여기서는 `logger` 를 쓰지 않는다 — 실패한 것이 로깅 설정 자체라 핸들러가
+        #    붙었는지 보장되지 않는다. `force_utf8_output()` 은 이미 돌았으므로
+        #    한글 메시지는 안전하다.
+        print(f"설정을 읽지 못해 컨슈머를 띄우지 못했습니다: {exc!r}", file=sys.stderr)
+        sys.exit(EXIT_CONFIG_ERROR)
 
     try:
         asyncio.run(_run())

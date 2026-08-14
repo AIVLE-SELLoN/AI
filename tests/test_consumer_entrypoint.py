@@ -1,10 +1,12 @@
 """담당: 지인 — 컨슈머 실행 진입점(`app/consumer.py`).
 
 브로커 없이 돈다 — `consume()` 을 몽키패치해서 종료 경로와 종료 코드만 본다.
+예외로 `test_real_bad_log_level_exits_two` 만 실제 프로세스를 띄운다(사유는 그 docstring).
 """
 
 import asyncio
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -29,6 +31,67 @@ def test_config_error_exits_nonzero(monkeypatch, caplog):
 
     assert exc.value.code == consumer.EXIT_CONFIG_ERROR
     assert any("띄우지 못했습니다" in r.getMessage() for r in caplog.records)
+
+
+def test_bad_log_level_exits_as_a_config_error(monkeypatch, capsys):
+    """🔴 설정 오타는 exit 2(설정 문제)여야 한다 — exit 1(일시적 오류)이면 안 된다.
+
+    `LOG_LEVEL` 에 소문자를 적으면 `logging.basicConfig()` 가 `ValueError` 를 던진다.
+    예전엔 이 두 줄이 `try` **밖**이라 미포착 예외로 나가 종료코드가 **1** 이 됐다.
+    1 은 이 파일 맨 위에서 *"재시작하면 나을 수 있다"* 로 정의한 값이라, k8s 가
+    CrashLoopBackOff 로 알리지 않고 **영원히 재시작만 한다** — 같은 `.env` 를 다시 읽으니
+    영원히 실패한다. (용준님 PR #86 리뷰 지적, 2026-08-14 재현)
+    """
+
+    def boom(*_args, **_kwargs):
+        raise ValueError("Unknown level: 'info'")
+
+    monkeypatch.setattr(consumer.logging, "basicConfig", boom)
+
+    with pytest.raises(SystemExit) as exc:
+        consumer.main()
+
+    assert exc.value.code == consumer.EXIT_CONFIG_ERROR
+    # 로깅 설정이 실패했으므로 logger 가 아니라 stderr 로 나가야 한다.
+    assert "설정을 읽지 못해" in capsys.readouterr().err
+
+
+def test_real_bad_log_level_exits_two(tmp_path):
+    """🔴 실제 프로세스로 확인한다 — 몽키패치가 아니라 진짜 `basicConfig` 가 던지는 경로.
+
+    위 테스트는 `basicConfig` 를 갈아끼우므로 "우리 처리"만 잰다. 소문자 레벨이 **정말**
+    `ValueError` 를 내는지는 실행해 봐야 안다(파이썬 버전이 바뀌면 달라질 수 있다).
+
+    ⚠️ `encoding="utf-8"` 을 명시한다 — 자식은 한글 메시지를 내는데 부모가 cp949 로
+       디코드하면 `stderr` 가 `None` 이 된다(`test_generate_determinism` 이 같은 함정을
+       밟았다, 2026-08-11).
+    """
+    import os
+    import subprocess
+    import sys as _sys
+
+    proc = subprocess.run(
+        [_sys.executable, "-m", "app.consumer"],
+        cwd=Path(__file__).resolve().parents[1],
+        env={
+            **os.environ,
+            "MQ_ENABLED": "false",
+            "LOG_LEVEL": "info",  # 소문자 — logging 이 거부한다
+            "PYTHONIOENCODING": "utf-8",
+        },
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+        check=False,  # 0 이 아닌 종료코드가 **기대값**이다 — check=True 면 안 된다
+    )
+
+    assert proc.returncode == consumer.EXIT_CONFIG_ERROR, (
+        f"설정 오타인데 exit {proc.returncode} 입니다 "
+        f"(stderr 마지막 줄: {proc.stderr.strip().splitlines()[-1:]})"
+    )
+    # raw traceback 이 아니라 한 줄 메시지로 나가야 한다.
+    assert "Traceback" not in proc.stderr
 
 
 def test_interrupt_is_a_clean_shutdown(monkeypatch, caplog):
