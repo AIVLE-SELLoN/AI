@@ -24,13 +24,29 @@
 
 스크립트에서는 탈출이 크래시로 보이는데, **할 일을 다 끝낸 뒤 마지막 print 에서** 나서
 종료코드가 "성공"과 "아무것도 못 함"을 구분하지 못하게 만든다(`app/core/console.py`).
+
+🔴 왜 정규식·tokenize 가 아니라 `ast` 인가
+------------------------------------------
+초안은 소스를 문자열로 훑었는데 **네 방향으로 뚫렸다**(2026-08-14, 용준님이 전부 재현):
+
+  - f-string 안의 언급을 호출로 셌다 — 파이썬 **3.12 부터 f-string 본문이
+    `FSTRING_MIDDLE`** 이라 `tokenize.STRING` 으로 안 지워진다. 이 저장소는 3.12 고정이라
+    **항상** 해당됐다. `--help` 문구에 이름만 적어도 통과한다
+  - `def force_utf8_output():` 정의를 호출로 셌다 — **사설 복사본으로 되돌아가는 것**이
+    이 가드가 제일 잡아야 할 회귀인데(`app/core/console.py` 가 "떠나온 안티패턴" 이라고
+    적어 둔 그것) 그걸 못 잡았다
+  - `if __name__ == '__main__':`(홑따옴표)를 놓치고, docstring 안 언급을 진입점으로 셌다
+  - 폼피드(`\f`)가 있으면 `splitlines()` 와 `tokenize` 의 행 번호가 어긋나 주석이 살아남았다
+
+전부 "소스를 텍스트로 보면 생기는" 구멍이라 정규식을 덧대는 대신 **파서에게 맡긴다.**
+덤으로 `test_timestamp_timezone._offending_lines` 와 겹치던 13줄도 사라졌다 — 두 곳에서
+같은 버그를 고칠 일이 없다.
 """
 
 from __future__ import annotations
 
-import io
+import ast
 import re
-import tokenize
 from pathlib import Path
 
 import pytest
@@ -39,17 +55,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 COMPOSE = ROOT / "docker-compose.yml"
 
-MAIN_BLOCK = re.compile(r'__name__\s*==\s*"__main__"')
-CALL = re.compile(r"\bforce_utf8_output\s*\(")
-
-# docker-compose 의 `command:` 에 적힌 파이썬 대상. `python -u scripts/x.py` ·
-# `python eval/y.py` 를 잡는다.
-#
-# ⚠️ **`yaml` 로 파싱하지 않는다.** PyYAML 이 `requirements.txt` 에 없다(전이 의존으로
-#    깔려 있을 뿐이라 남의 환경에서는 없을 수 있다). 테스트가 선언되지 않은 의존성에
-#    기대면 "내 로컬에서만 통과"가 된다 — boto3 가 없어 리포팅 테스트 9건이 실패했던
-#    것과 같은 계열이다(2026-08-07).
-COMPOSE_TARGET = re.compile(r"(?:^|\s)((?:app|scripts|eval)/[\w/]+\.py)")
+HELPER = "force_utf8_output"
 
 YAML_COMMENT = re.compile(r"(?:^|\s)#.*$")
 """compose 의 주석 — **전체줄과 인라인을 모두** 지운다.
@@ -61,8 +67,157 @@ YAML_COMMENT = re.compile(r"(?:^|\s)#.*$")
 
 ⚠️ 처음엔 `^\\s*#` 로 **전체줄만** 지웠는데 `app/core/mq.py` 하나가 계속 남았다 —
    포트 매핑 뒤 **인라인** 주석(`- "5672:5672"  # AMQP … app/core/mq.py …`)이었다.
-   두 형태를 다 지워야 한다.
 """
+
+COMMAND_KEY = re.compile(r"^(\s*)-?\s*(?:command|entrypoint)\s*:\s*(.*)$")
+"""`command:` · `entrypoint:` 키. **이 블록 안에서만** 대상을 찾는다.
+
+🔴 초안은 `findall` 을 **파일 전체**에 돌려서, docstring 이 *"`command:` 가 가리키는"*
+   이라고 적어 둔 계약과 구현이 갈려 있었다. 볼륨 마운트에 `.py` 가 하나 생기면
+   진입점도 아닌 파일이 요구 대상이 된다.
+"""
+
+SCRIPT_TARGET = re.compile(r"(?:^|[\s\"',\[])\.?/?((?:app|scripts|eval)/[\w./-]+\.py)")
+"""`command:` 값 안의 파이썬 파일.
+
+⚠️ **exec-form(`["python", "-u", "scripts/x.py"]`)도 잡아야 한다** — 이 compose 가 이미
+   그 관용구를 쓰고 있다(`entrypoint: ["/bin/bash", "-c"]` · healthcheck `test:`).
+   그래서 앞에 따옴표·대괄호·쉼표가 와도 매칭한다.
+⚠️ `[\\w/]` 만 쓰면 `scripts/my-tool/run.py` 같은 하이픈·점 경로를 놓친다.
+⚠️ `./scripts/foo.py` 의 `./` 는 선택적으로 흡수한다.
+"""
+
+MODULE_TARGET = re.compile(r"-m\s+([\w.]+)")
+"""`python -m app.consumer` 형태. 모듈 경로를 파일 경로로 바꿔서 본다."""
+
+
+def _parse(path: Path) -> ast.Module | None:
+    try:
+        return ast.parse(path.read_text(encoding="utf-8"))
+    except (SyntaxError, ValueError):  # pragma: no cover - 파싱 불가 파일은 건너뛴다
+        return None
+
+
+def _is_main_guard(node: ast.stmt) -> bool:
+    """그 문장이 `if __name__ == "__main__":` 인지.
+
+    ⚠️ 문자열 매칭이 아니라 **AST** 다 — 홑따옴표도 잡고, docstring·주석 안의 언급은
+       애초에 노드가 아니라 안 잡힌다(초안이 두 방향으로 다 틀렸던 자리).
+    """
+    if not isinstance(node, ast.If):
+        return False
+    test = node.test
+    if not isinstance(test, ast.Compare) or len(test.comparators) != 1:
+        return False
+    left, right = test.left, test.comparators[0]
+    return (
+        isinstance(left, ast.Name)
+        and left.id == "__name__"
+        and isinstance(right, ast.Constant)
+        and right.value == "__main__"
+    )
+
+
+def _has_main_block(tree: ast.Module) -> bool:
+    """모듈 최상단에 `__main__` 가드가 있는지."""
+    return any(_is_main_guard(node) for node in tree.body)
+
+
+def _entry_body(tree: ast.Module) -> list[ast.stmt] | None:
+    """진입 지점의 문장 목록. `main()` 이 있으면 그쪽, 없으면 `__main__` 블록.
+
+    ⚠️ `main()` 을 먼저 보는 이유: 대부분의 진입점은 `__main__` 블록이
+       `main()` 한 줄이라, 블록을 보면 "첫 문장이 `main()` 이다" 가 되어 검사가 무의미해진다.
+    """
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "main":
+            return node.body
+    for node in tree.body:
+        if _is_main_guard(node):
+            return node.body
+    return None
+
+
+def _call_name(node: ast.expr) -> str | None:
+    if not isinstance(node, ast.Call):
+        return None
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def _calls_helper_first(tree: ast.Module) -> bool:
+    """`force_utf8_output()` 이 진입 지점의 **첫 문장**인지(docstring 제외).
+
+    🔴 **왜 "어딘가에 있으면" 이 아니라 "첫 문장" 인가 — 실버그로 확인됐다.**
+       초안은 "진입 지점의 직속 문장이면 통과" 였는데, 그 규칙 아래서
+       `app/batch/daily.py` 가 **통과하면서 실제로는 죽었다**:
+
+           $ PYTHONIOENCODING=cp949 python -m app.batch.daily --help
+           UnicodeEncodeError: 'cp949' codec can't encode character '\\u2014'
+
+       `--state-path` 도움말에 `—` 가 있는데 **argparse 가 그걸 찍는 시점이
+       `force_utf8_output()` 보다 앞**이었다. 우리 코드가 첫 줄을 찍기 한참 전이다.
+       지켜야 할 것은 "진입 지점에서 실행된다" 가 아니라 **"무엇도 출력되기 전에
+       실행된다"** 이고, 그걸 기계적으로 보장하는 유일한 형태가 첫 문장이다.
+
+    🔴 이 규칙은 세 가지를 한 번에 막는다.
+       - **정의를 호출로 세지 않는다** — `def force_utf8_output(): pass` 만 있는 사설
+         복사본(`app/core/console.py` 가 "떠나온 안티패턴" 이라 적어 둔 그것)
+       - **분기 안으로 숨기지 못한다** — `if False:` 안에 넣어도 첫 문장이 아니다
+       - **다른 출력 뒤로 밀지 못한다** — 위 daily.py 사고
+
+    ⚠️ 앞에 무언가를 꼭 둬야 하는 진입점이 나오면 그때 완화하되 **왜 완화하는지 근거를
+       남길 것.** 인코딩 전환은 의존성이 없는 환경 설정이라 앞에 둘 것이 실제로 없다.
+    """
+    body = _entry_body(tree)
+    if not body:
+        return False
+
+    stmts = list(body)
+    first = stmts[0]
+    if (
+        isinstance(first, ast.Expr)
+        and isinstance(first.value, ast.Constant)
+        and isinstance(first.value.value, str)
+    ):
+        stmts = stmts[1:]  # docstring 은 건너뛴다
+
+    if not stmts:
+        return False
+    head = stmts[0]
+    return isinstance(head, ast.Expr) and _call_name(head.value) == HELPER
+
+
+def _compose_command_blocks(text: str) -> list[str]:
+    """`command:` · `entrypoint:` 값 블록만 뽑는다(주석 제거 후).
+
+    값이 같은 줄에 있을 수도(`command: python x.py`), 블록 스칼라·리스트로 다음 줄에
+    이어질 수도 있다(`command: >` · `command:` + 들여쓴 리스트). 키보다 **더 들여쓴**
+    줄을 값의 연속으로 본다.
+    """
+    lines = [YAML_COMMENT.sub("", line) for line in text.splitlines()]
+    blocks: list[str] = []
+    i = 0
+    while i < len(lines):
+        match = COMMAND_KEY.match(lines[i])
+        if not match:
+            i += 1
+            continue
+        indent = len(match.group(1))
+        collected = [match.group(2)]
+        i += 1
+        while i < len(lines):
+            nxt = lines[i]
+            if nxt.strip() and len(nxt) - len(nxt.lstrip()) <= indent:
+                break
+            collected.append(nxt)
+            i += 1
+        blocks.append("\n".join(collected))
+    return blocks
 
 
 def _deployed_entrypoints() -> list[Path]:
@@ -70,7 +225,7 @@ def _deployed_entrypoints() -> list[Path]:
 
     두 곳에서 온다:
       - `app/**` 의 `__main__` 블록 — 우리가 배포하는 패키지 코드
-      - `docker-compose.yml` 의 `command:` 가 가리키는 파이썬 파일 — 컨테이너로 뜬다
+      - `docker-compose.yml` 의 `command:`/`entrypoint:` 가 가리키는 파이썬 파일
 
     ⚠️ **범위를 왜 여기서 끊었나.** `scripts/`·`eval/` 전체로 넓히면 대상이 **28개**가
        된다(2026-08-14 실측). 전부 두 줄짜리 기계적 변경이지만 대부분 남의 파일이라
@@ -84,56 +239,27 @@ def _deployed_entrypoints() -> list[Path]:
     found: set[Path] = set()
 
     for path in (ROOT / "app").rglob("*.py"):
-        if MAIN_BLOCK.search(path.read_text(encoding="utf-8")):
+        tree = _parse(path)
+        if tree is not None and _has_main_block(tree):
             found.add(path)
 
-    compose = "\n".join(
-        YAML_COMMENT.sub("", line)
-        for line in COMPOSE.read_text(encoding="utf-8").splitlines()
-    )
-    for rel in COMPOSE_TARGET.findall(compose):
-        target = ROOT / rel
-        if target.exists():
-            found.add(target)
+    for block in _compose_command_blocks(COMPOSE.read_text(encoding="utf-8")):
+        for rel in SCRIPT_TARGET.findall(block):
+            target = ROOT / rel
+            if target.exists():
+                found.add(target)
+        for dotted in MODULE_TARGET.findall(block):
+            target = ROOT / (dotted.replace(".", "/") + ".py")
+            if target.exists():
+                found.add(target)
 
     return sorted(found)
-
-
-def _calls_in_code(path: Path) -> bool:
-    """그 파일이 **코드로** `force_utf8_output()` 을 부르는지. 주석·문자열은 뺀다.
-
-    ⚠️ 주석을 빼는 이유는 `test_timestamp_timezone._offending_lines` 와 같다 —
-       이 함수를 **설명하는** 주석이 여러 파일에 있어서, 그것까지 세면 설명만 적어 두고
-       실제로는 안 부르는 파일이 통과한다.
-    """
-    source = path.read_text(encoding="utf-8")
-    lines = source.splitlines()
-    blanked = list(lines)
-
-    try:
-        tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
-    except (tokenize.TokenError, SyntaxError):  # pragma: no cover - 파싱 불가 파일
-        return False
-
-    for tok in tokens:
-        if tok.type not in (tokenize.COMMENT, tokenize.STRING):
-            continue
-        (r1, c1), (r2, c2) = tok.start, tok.end
-        for row in range(r1, r2 + 1):
-            i = row - 1
-            if i >= len(blanked):
-                continue
-            start = c1 if row == r1 else 0
-            end = c2 if row == r2 else len(blanked[i])
-            blanked[i] = blanked[i][:start] + " " * (end - start) + blanked[i][end:]
-
-    return any(CALL.search(code) for code in blanked)
 
 
 def test_deployed_entrypoints_switch_console_encoding() -> None:
     """🔴 배포되는 진입점은 전부 `force_utf8_output()` 을 불러야 한다.
 
-    걸렸다면 `main()` 첫 줄에 넣을 것:
+    걸렸다면 `main()` 안에 **직속 문장으로** 넣을 것:
 
         from app.core.console import force_utf8_output
         ...
@@ -145,11 +271,11 @@ def test_deployed_entrypoints_switch_console_encoding() -> None:
     missing = [
         p.relative_to(ROOT).as_posix()
         for p in _deployed_entrypoints()
-        if not _calls_in_code(p)
+        if (tree := _parse(p)) is None or not _calls_helper_first(tree)
     ]
 
     assert not missing, (
-        "배포되는 진입점인데 force_utf8_output() 을 안 부릅니다:\n  "
+        "배포되는 진입점인데 진입 지점에서 force_utf8_output() 을 안 부릅니다:\n  "
         + "\n  ".join(missing)
     )
 
@@ -158,23 +284,19 @@ def test_the_derivation_actually_finds_the_known_entrypoints() -> None:
     """가드가 **무엇을 보고 있는지** 고정한다.
 
     이게 없으면 정규식이 조용히 아무것도 안 잡게 바뀌어도 위 테스트가 통과한다 —
-    "테스트가 있는데 안 잡는" 상태가 제일 나쁘다. `test_timestamp_timezone` 의
-    `test_the_guard_actually_matches_the_forbidden_forms` 와 같은 역할이다.
+    "테스트가 있는데 안 잡는" 상태가 제일 나쁘다.
     """
     found = {p.relative_to(ROOT).as_posix() for p in _deployed_entrypoints()}
 
-    # app/ 의 __main__ 진입점
     assert "app/batch/daily.py" in found
     assert "app/consumer.py" in found
-    # docker-compose 가 컨테이너로 띄우는 것
     assert "scripts/mock_producer.py" in found, "compose command 파싱이 죽었습니다"
     assert "eval/run_detection_eval.py" in found, "compose command 파싱이 죽었습니다"
 
     # uvicorn 이 스트림을 소유하므로 대상이 아니다(위 docstring 참고).
     assert "app/main.py" not in found
 
-    # 🔴 compose **주석**에만 있는 것은 서비스가 아니다. 이 셋은 사용법 안내로 적혀
-    #    있을 뿐이라, 여기 들어오면 가드가 안내 문구를 요구사항으로 착각한 것이다.
+    # 🔴 compose **주석**에만 있는 것은 서비스가 아니다.
     for mentioned_only_in_comments in (
         "scripts/classification_worker.py",
         "scripts/setup_local_mq.py",
@@ -186,25 +308,130 @@ def test_the_derivation_actually_finds_the_known_entrypoints() -> None:
         )
 
 
-def test_the_call_detector_ignores_comments_and_strings(tmp_path: Path) -> None:
-    """탐지기가 **코드**만 센다 — 주석·문자열에 이름만 적힌 파일은 통과하면 안 된다."""
-    only_mentions = tmp_path / "mentions.py"
-    only_mentions.write_text(
-        '"""force_utf8_output() 을 부르는 게 좋다."""\n'
-        "# force_utf8_output() 을 여기서 부른다\n"
-        'HELP = "force_utf8_output()"\n',
-        encoding="utf-8",
-    )
-    assert not _calls_in_code(only_mentions)
+# ── 검출기 자체를 고정한다 (전부 초안이 실제로 틀렸던 입력) ──────────────
 
-    real = tmp_path / "real.py"
-    real.write_text(
-        "from app.core.console import force_utf8_output\n"
-        "def main():\n"
-        "    force_utf8_output()\n",
-        encoding="utf-8",
+
+def _tmp_module(tmp_path: Path, body: str) -> ast.Module:
+    path = tmp_path / "sample.py"
+    path.write_text(body, encoding="utf-8")
+    tree = _parse(path)
+    assert tree is not None
+    return tree
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        'if __name__ == "__main__":\n    main()\n',
+        "if __name__ == '__main__':\n    main()\n",  # 🔴 홑따옴표 — 초안이 놓쳤다
+    ],
+)
+def test_main_block_is_detected_regardless_of_quote_style(
+    tmp_path: Path, body: str
+) -> None:
+    assert _has_main_block(_tmp_module(tmp_path, body))
+
+
+def test_main_block_ignores_mentions_in_docstrings_and_comments(tmp_path: Path) -> None:
+    """🔴 설명이 진입점을 만들면 안 된다 — 초안은 docstring 언급을 셌다."""
+    body = (
+        '"""아래에 if __name__ == "__main__": 를 둔다."""\n'
+        '# if __name__ == "__main__":\n'
+        'HELP = "if __name__ == \\"__main__\\":"\n'
     )
-    assert _calls_in_code(real)
+    assert not _has_main_block(_tmp_module(tmp_path, body))
+
+
+@pytest.mark.parametrize(
+    "body, expected, why",
+    [
+        (
+            "def main():\n    force_utf8_output()\n",
+            True,
+            "직속 호출",
+        ),
+        (
+            'name = "x"\ndef main():\n    print(f"hint: force_utf8_output() {name}")\n',
+            False,
+            "🔴 f-string 안 언급 — 3.12 는 FSTRING_MIDDLE 이라 tokenize 로 안 지워졌다",
+        ),
+        (
+            "def force_utf8_output():\n    pass\ndef main():\n    pass\n",
+            False,
+            "🔴 정의를 호출로 세면 사설 복사본 회귀를 못 잡는다",
+        ),
+        (
+            "def main():\n    if False:\n        force_utf8_output()\n",
+            False,
+            "🔴 안 닿는 분기로 숨기면 안 된다",
+        ),
+        (
+            "def main():\n    ap = build_parser()\n    force_utf8_output()\n",
+            False,
+            "🔴 다른 문장 뒤로 밀면 안 된다 — daily.py 가 이 모양으로 `--help` 에서 죽었다",
+        ),
+        (
+            "X = 1\n\x0c\ndef main():\n    # force_utf8_output() 주석뿐\n    pass\n",
+            False,
+            "🔴 폼피드가 있으면 splitlines/tokenize 행이 어긋나 주석이 살아남았다",
+        ),
+        (
+            'def main():\n    """force_utf8_output() 을 부른다."""\n    pass\n',
+            False,
+            "docstring 언급",
+        ),
+        (
+            'if __name__ == "__main__":\n    force_utf8_output()\n    run()\n',
+            True,
+            "main() 없이 __main__ 블록에서 직접 부르는 형태",
+        ),
+    ],
+)
+def test_call_detector_counts_only_real_calls_at_entry(
+    tmp_path: Path, body: str, expected: bool, why: str
+) -> None:
+    assert _calls_helper_first(_tmp_module(tmp_path, body)) is expected, why
+
+
+@pytest.mark.parametrize(
+    "line, expected",
+    [
+        ("command: python -u scripts/mock_producer.py", "scripts/mock_producer.py"),
+        # 🔴 exec-form — 이 compose 가 이미 쓰는 관용구인데 초안이 통째로 놓쳤다
+        ('command: ["python", "-u", "scripts/mock_producer.py"]', "scripts/mock_producer.py"),
+        ("command: python ./scripts/mock_producer.py", "scripts/mock_producer.py"),
+        ('entrypoint: ["python", "eval/run_detection_eval.py"]', "eval/run_detection_eval.py"),
+        # `python -m app.consumer` 는 모듈 표기라 파일로 환원해야 한다
+        ("command: python -m app.consumer", "app/consumer.py"),
+    ],
+)
+def test_compose_command_forms_are_all_understood(line: str, expected: str) -> None:
+    blocks = _compose_command_blocks(f"services:\n  x:\n    {line}\n")
+    hits = {
+        rel for b in blocks for rel in SCRIPT_TARGET.findall(b)
+    } | {
+        dotted.replace(".", "/") + ".py" for b in blocks for dotted in MODULE_TARGET.findall(b)
+    }
+    assert expected in hits, f"{line!r} 에서 {expected} 를 못 찾았습니다"
+
+
+def test_targets_outside_command_blocks_are_ignored() -> None:
+    """🔴 `command:` 밖의 `.py` 는 진입점이 아니다 — 볼륨 마운트 등.
+
+    초안은 `findall` 을 파일 전체에 돌려서, docstring 이 적어 둔 계약
+    (*"`command:` 가 가리키는"*)과 구현이 갈려 있었다.
+    """
+    compose = (
+        "services:\n"
+        "  x:\n"
+        "    command: python scripts/mock_producer.py\n"
+        "    volumes:\n"
+        "      - ./scripts/seed_vectordb.py:/app/seed.py:ro\n"
+    )
+    hits = {rel for b in _compose_command_blocks(compose) for rel in SCRIPT_TARGET.findall(b)}
+
+    assert "scripts/mock_producer.py" in hits
+    assert "scripts/seed_vectordb.py" not in hits
 
 
 @pytest.mark.parametrize("char", ["—", "⚠", "ℹ", "❌"])
@@ -215,11 +442,20 @@ def test_the_characters_this_guard_exists_for_are_really_absent_from_cp949(
 
     전제가 조용히 바뀌면(예: 누가 `—` 를 ASCII `-` 로 일괄 치환) 가드는 남아 있는데
     막는 대상이 없어진다. 그 경우 이 테스트가 먼저 실패해서 알려준다.
-
-    ⚠️ `←`(U+2190) 는 **cp949 에 있다** — 그래서 같은 줄에서 한 문자만 골라 터지는
-       것처럼 보인다(`app/core/console.py`).
     """
     with pytest.raises(UnicodeEncodeError):
         char.encode("cp949")
 
-    "←".encode("cp949")  # 대조군: 이건 통과한다
+
+def test_the_arrow_is_encodable_so_only_one_char_per_line_blows_up() -> None:
+    """대조군 — `←`(U+2190)는 **cp949 에 있다.**
+
+    그래서 같은 줄에서 한 문자만 골라 터지는 것처럼 보인다(`app/core/console.py`).
+    ⚠️ 초안은 이 단언을 위 파라미터라이즈 테스트 끝에 **assert 없는 맨 표현식**으로
+       뒀는데, 그러면 지워져도 아무것도 안 깨진다(용준님 잔가지 지적).
+
+    ⚠️ 바이트값을 박지 않는다 — 처음에 손으로 적었다가 틀렸다(`\\xa1\\xe7` 인데
+       `\\xa1\\xf9` 로 썼다). 여기서 고정할 것은 **인코딩이 되느냐**이지 특정 바이트가
+       아니다.
+    """
+    assert "←".encode("cp949")  # 예외가 나면 이 줄에서 실패한다
