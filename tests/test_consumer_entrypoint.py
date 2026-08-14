@@ -6,12 +6,33 @@
 
 import asyncio
 import logging
+import os
+import subprocess
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from pydantic import BaseModel
 
 from app import consumer
 from app.core.exceptions import MqDisabledError
+
+
+class _PortOnly(BaseModel):
+    """`MQ_PORT=abc` 를 흉내내기 위한 최소 모델 — 진짜 `ValidationError` 를 얻는다."""
+
+    port: int
+
+
+def _bad_log_level():
+    """설정은 읽히는데 레벨 값이 틀린 경우 — 진짜 `basicConfig` 가 던진다."""
+    return SimpleNamespace(log_level="info")
+
+
+def _unloadable_settings():
+    """설정 로딩 자체가 실패하는 경우. `ValidationError` 는 `ValueError` 하위다."""
+    return _PortOnly(port="abc")
 
 
 def test_config_error_exits_nonzero(monkeypatch, caplog):
@@ -33,45 +54,69 @@ def test_config_error_exits_nonzero(monkeypatch, caplog):
     assert any("띄우지 못했습니다" in r.getMessage() for r in caplog.records)
 
 
-def test_bad_log_level_exits_as_a_config_error(monkeypatch, capsys):
-    """🔴 설정 오타는 exit 2(설정 문제)여야 한다 — exit 1(일시적 오류)이면 안 된다.
+@pytest.mark.parametrize(
+    "fake_get_settings, why",
+    [
+        (_bad_log_level, "logging 이 거부하는 레벨 — 진짜 basicConfig 가 던진다"),
+        (_unloadable_settings, "설정 로딩 자체가 실패 — get_settings() 가 던진다"),
+    ],
+)
+def test_config_failures_exit_as_config_error(monkeypatch, capsys, fake_get_settings, why):
+    """🔴 설정 오류는 exit 2(설정 문제)여야 한다 — exit 1(일시적 오류)이면 안 된다.
 
-    `LOG_LEVEL` 에 소문자를 적으면 `logging.basicConfig()` 가 `ValueError` 를 던진다.
-    예전엔 이 두 줄이 `try` **밖**이라 미포착 예외로 나가 종료코드가 **1** 이 됐다.
-    1 은 이 파일 맨 위에서 *"재시작하면 나을 수 있다"* 로 정의한 값이라, k8s 가
-    CrashLoopBackOff 로 알리지 않고 **영원히 재시작만 한다** — 같은 `.env` 를 다시 읽으니
-    영원히 실패한다. (용준님 PR #86 리뷰 지적, 2026-08-14 재현)
+    예전엔 `get_settings()`·`basicConfig()` 가 `try` **밖**이라 미포착 예외로 나가
+    종료코드가 **1** 이 됐다. 1 은 이 파일 맨 위에서 *"재시작하면 나을 수 있다"* 로
+    정의한 값이라, 같은 `.env` 를 다시 읽어 영원히 실패하는데도 계속 재시작만 한다.
+    (용준님 PR #86 리뷰 지적, 2026-08-14 재현)
+
+    ⚠️ **`get_settings` 를 갈아끼운다 — `basicConfig` 가 아니다.** 초안은 `basicConfig` 를
+       가짜로 바꿔서 **우리 처리만** 쟀는데, 그러면 *"소문자 레벨이 정말 `ValueError` 를
+       내는가"* 라는 전제는 아무도 안 잰다. 이렇게 두면 **진짜 `logging.basicConfig` 가
+       진짜 예외를 던지는 경로**를 인프로세스에서 탄다(용준님 잔가지 지적).
+
+    ⚠️ **두 갈래를 다 돈다.** 분기가 덮는 실패는 둘인데(로깅 설정 / 설정 로딩) 초안은
+       로깅 쪽만 쟀다. 그러면 누가 `settings = get_settings()` 를 `try` 위로 올리는
+       "정리" 를 해도 스위트가 초록이고, `MQ_PORT` 오타가 다시 exit 1 이 된다.
     """
-
-    def boom(*_args, **_kwargs):
-        raise ValueError("Unknown level: 'info'")
-
-    monkeypatch.setattr(consumer.logging, "basicConfig", boom)
+    # 🔴 root 핸들러를 비우고 시작한다. `logging.basicConfig()` 는 **핸들러가 이미 있으면
+    #    아무것도 안 하고 반환**하는데, pytest 의 logging 플러그인이 붙여 둔 것이 있어서
+    #    비우지 않으면 예외가 아예 안 난다. 그러면 흐름이 그대로 흘러가
+    #    `MqDisabledError` → 같은 exit 2 가 나와 **검증 대상을 안 타고도 초록**이 된다.
+    #    (2026-08-14 실측 — 아래 `설정을 읽지 못해` 단언이 실제로 이걸 잡아냈다.)
+    monkeypatch.setattr(logging.root, "handlers", [])
+    monkeypatch.setattr(consumer, "get_settings", fake_get_settings)
 
     with pytest.raises(SystemExit) as exc:
         consumer.main()
 
-    assert exc.value.code == consumer.EXIT_CONFIG_ERROR
-    # 로깅 설정이 실패했으므로 logger 가 아니라 stderr 로 나가야 한다.
-    assert "설정을 읽지 못해" in capsys.readouterr().err
+    assert exc.value.code == consumer.EXIT_CONFIG_ERROR, why
+    assert "설정을 읽지 못해" in capsys.readouterr().err, why
 
 
-def test_real_bad_log_level_exits_two(tmp_path):
-    """🔴 실제 프로세스로 확인한다 — 몽키패치가 아니라 진짜 `basicConfig` 가 던지는 경로.
+def test_real_bad_log_level_exits_two():
+    """🔴 실제 프로세스로 확인한다 — 종료코드가 **OS 까지** 2로 나가는지.
 
-    위 테스트는 `basicConfig` 를 갈아끼우므로 "우리 처리"만 잰다. 소문자 레벨이 **정말**
-    `ValueError` 를 내는지는 실행해 봐야 안다(파이썬 버전이 바뀌면 달라질 수 있다).
+    위 테스트는 `SystemExit` 까지만 본다. 실제로 그 값이 프로세스 종료코드가 되는지는
+    띄워 봐야 안다.
 
-    ⚠️ `encoding="utf-8"` 을 명시한다 — 자식은 한글 메시지를 내는데 부모가 cp949 로
-       디코드하면 `stderr` 가 `None` 이 된다(`test_generate_determinism` 이 같은 함정을
-       밟았다, 2026-08-11).
+    🔴 **`설정을 읽지 못해` 를 반드시 본다.** 종료코드만 보면 이 테스트는 **다른 이유로도
+       초록**이 된다 — `MQ_ENABLED=false` 만으로 `MqDisabledError` → 같은 exit 2 가
+       나오기 때문이다(2026-08-14 실측):
+
+           LOG_LEVEL=info (오타)  exit=2  Traceback=0  '설정을 읽지 못해' 있음  ← 이 분기
+           LOG_LEVEL=INFO (정상)  exit=2  Traceback=0  '설정을 읽지 못해' 없음  ← 딴 분기
+
+       즉 파이썬이 소문자 레벨을 받아들이게 바뀌거나 누가 `log_level` 정규화를 넣으면
+       **테스트는 초록인 채 검증 대상이 사라진다.** 이 한 줄이 그걸 가른다.
+       (용준님 지적. ⚠️ 근거로 드신 *"수정 전 코드에서도 통과한다"* 는 재현되지 않았다 —
+       수정 전에서는 두 단언이 다 실패한다. 다만 **지적 자체는 맞다.**)
+
+    ⚠️ `encoding="utf-8"` 을 명시한다 — 자식이 한글을 내는데 부모가 cp949 로 디코드하면
+       mojibake 나 `UnicodeDecodeError` 가 난다. 2026-08-11 에는 부모가 UTF-8 모드일 때
+       디코드 스레드가 죽어 `proc.stderr` 가 **`None`** 이 되는 형태로 나타났다.
     """
-    import os
-    import subprocess
-    import sys as _sys
-
     proc = subprocess.run(
-        [_sys.executable, "-m", "app.consumer"],
+        [sys.executable, "-m", "app.consumer"],
         cwd=Path(__file__).resolve().parents[1],
         env={
             **os.environ,
@@ -90,6 +135,8 @@ def test_real_bad_log_level_exits_two(tmp_path):
         f"설정 오타인데 exit {proc.returncode} 입니다 "
         f"(stderr 마지막 줄: {proc.stderr.strip().splitlines()[-1:]})"
     )
+    # 🔴 어느 분기가 처리했는지까지 고정한다(위 docstring 참고).
+    assert "설정을 읽지 못해" in proc.stderr
     # raw traceback 이 아니라 한 줄 메시지로 나가야 한다.
     assert "Traceback" not in proc.stderr
 
