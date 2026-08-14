@@ -115,10 +115,21 @@ def main() -> None:
             format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
         )
     except ValueError as exc:
-        # ⚠️ 여기서는 `logger` 를 쓰지 않는다 — 실패한 것이 로깅 설정 자체라 핸들러가
-        #    붙었는지 보장되지 않는다. `force_utf8_output()` 은 이미 돌았으므로
-        #    한글 메시지는 안전하다.
-        print(f"설정을 읽지 못해 컨슈머를 띄우지 못했습니다: {exc!r}", file=sys.stderr)
+        # ⚠️ 여기서는 `logger` 를 쓰지 않는다. 이 분기가 덮는 실패가 **둘**인데
+        #    (`get_settings()` / `basicConfig()`) **앞쪽에서 터지면 로깅이 아직 아무것도
+        #    설정되지 않았다** — 핸들러도 포매터도 없다. 두 갈래가 같은 모양으로 나가게
+        #    하려고 `print` 로 통일한다. `force_utf8_output()` 은 이미 돌았으므로 한글은
+        #    안전하다.
+        #
+        #    ⚠️ *"basicConfig 가 실패하면 핸들러가 안 붙는다"* 는 **사실이 아니다**(2026-08-14
+        #    실측: 핸들러를 먼저 붙이고 `setLevel` 을 마지막에 부르므로 붙어 있다). 그
+        #    경우 root 레벨은 `WARNING` 이라 `logger.error` 도 보이긴 한다 — 즉 이 선택의
+        #    근거는 "안 보인다" 가 아니라 위의 **두 갈래 일관성**이다.
+        #
+        #    `{exc}` 를 쓴다(`{exc!r}` 아님) — pydantic `ValidationError` 의 repr 은
+        #    **4줄**이라 아래 `except Exception` 이 막으려는 "여러 줄로 흩어짐" 을 되살린다.
+        first_line = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+        print(f"설정을 읽지 못해 컨슈머를 띄우지 못했습니다: {first_line}", file=sys.stderr)
         sys.exit(EXIT_CONFIG_ERROR)
 
     try:
