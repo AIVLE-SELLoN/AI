@@ -217,18 +217,22 @@ def test_main_switches_encoding_before_running(monkeypatch):
        `OSError` 만 삼킨다. `UnicodeEncodeError` 는 `ValueError` 하위라 `consume()` 이
        계약 위반으로 분류해 `nack(requeue=False)` → **DLX**. 메시지가 유실된다.
 
-       실측(2026-08-14, `handle_report_feedback` · cp949 · stderr = 핸들러 스트림):
+       탈출에는 **두 조건이 다 맞아야** 한다. 하나만 바꿔도 재현이 안 된다:
+       ① 실패한 호출의 **소스 라인**에 `—` 리터럴이 있을 것 — 여러 줄로 쪼갠 호출은
+          traceback 에 첫 줄(`logger.warning(`)만 실려서 traceback 자체는 인코딩된다
+       ② `sys.stderr` 가 그 실패하는 스트림일 것 — `basicConfig` 가 그렇게 묶는다
+          (`handlers[0].stream is sys.stderr` 확인함)
 
-           naive submittedAt   (단일행 warning) → UnicodeEncodeError 탈출
-           계약 밖 feedbackType (다중행 warning) → 탈출 없음
-           범위 밖 rating       (다중행 warning) → 탈출 없음
+       ⚠️ **당시 근거로 든 `handle_report_feedback` 예시는 이제 재현되지 않는다.**
+          2026-08-14 측정 시점에는 naive `submittedAt` 경로(단일행 warning)가 실제로
+          탈출했는데, **PR #88 이 그 모듈의 로그 메시지에서 `—` 를 걷어내** 조건 ①이
+          사라졌다(세 경로 모두 탈출 없음·메시지 정상 기록으로 재확인).
 
-       **단일행만 탈출한다** — 여러 줄로 쪼갠 호출은 traceback 에 첫 줄(`logger.warning(`)
-       만 실려서 traceback 자체는 인코딩된다. 두 조건이 다 맞아야 한다:
-       ① 실패한 호출의 **소스 라인**에 `—` 리터럴이 있을 것
-       ② `sys.stderr` 가 그 실패하는 스트림일 것(`basicConfig` 가 그렇게 묶는다 —
-          `handlers[0].stream is sys.stderr` 확인함)
-       둘 중 하나만 바꿔도 재현이 안 된다.
+          🔴 **그렇다고 이 호출이 필요 없어진 게 아니다.** #88 은 그 파일 하나를 고친
+          것이고 조건 ①은 **누가 로그 문구에 `—`·`⚠️` 를 하나 넣는 순간 되돌아온다.**
+          메시지 위생은 파일마다 사람이 지켜야 하지만 진입점 전환은 한 줄로 전부를
+          덮는다 — 그래서 두 겹으로 둔다(`tests/test_console_encoding.py` 가 진입점
+          쪽을 기계적으로 강제한다).
 
     ⚠️ 이 테스트가 유일한 방어선이다. 호출이 빠져도 **리눅스에서는 아무것도 안 변해서**
        (운영이 리눅스라 프로덕션은 무사하다) 종료코드도 다른 테스트도 안 걸린다.
