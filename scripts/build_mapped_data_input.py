@@ -77,14 +77,18 @@ _BUNDLE_HINT = (
 )
 
 
-def _require_columns(fieldnames: list[str] | None, src: Path) -> None:
+def _require_columns(fieldnames: list[str] | None, src: Path, required: tuple[str, ...]) -> None:
     """필수 헤더 확인. 없으면 어떤 컬럼이 필요한지 말하고 죽는다.
 
-    헤더가 통째로 다르면 아래 루프가 전 행을 "빈 값"으로 보고 첫 행에서 죽는데, 그러면
-    "1행이 비었다"는 엉뚱한 사유가 나온다. 원인은 컬럼명이므로 여기서 먼저 잡는다.
+    헤더가 통째로 다르면 읽는 쪽이 전 행을 "빈 값"으로 보게 되는데, 그때 나오는 사유가
+    원인과 다르다. golden 쪽은 "1행이 비었다"로, catalog 쪽은 "매핑에만 있는 variant"로
+    엉뚱한 곳을 지목한다. 원인은 컬럼명이므로 **읽기 전에** 잡는다.
+
+    ⚠️ **두 파일이 같이 쓴다.** golden 은 두 컬럼, catalog 는 `variant_row_id` 하나만
+       필요해서 `required` 를 받는다.
     """
     present = set(fieldnames or ())
-    missing = [c for c in (SRC_VARIANT, SRC_GROUP) if c not in present]
+    missing = [c for c in required if c not in present]
     if missing:
         raise SystemExit(
             f"{src}: 필수 컬럼이 없습니다 — {', '.join(missing)}. "
@@ -115,7 +119,7 @@ def build_rows(src: Path) -> list[dict[str, str]]:
 
     with src.open(encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
-        _require_columns(reader.fieldnames, src)
+        _require_columns(reader.fieldnames, src, (SRC_VARIANT, SRC_GROUP))
 
         for row in reader:
             line = reader.line_num  # 헤더가 1행이라 데이터는 2행부터
@@ -164,22 +168,31 @@ def check_against_catalog(rows: list[dict[str, str]], catalog: Path) -> None:
     돌면서 조인하므로 남는 매핑 행은 읽히지 않아 폴백을 만들지 않는다. 다만 두 파일이
     어긋났다는 신호이므로 조용히 넘기지는 않는다.
 
-    catalog 파일이 없으면 건너뛴다 — `data/**` 가 gitignore 라 없는 게 정상인 환경이
+    catalog 파일이 **없으면** 건너뛴다 — `data/**` 가 gitignore 라 없는 게 정상인 환경이
     있고, 대조는 이 변환기의 본업이 아니다.
 
+    🔴 **다만 "없음"과 "헤더가 틀림"은 다르게 다룬다.** 파일이 있는데 `variant_row_id`
+       컬럼이 없으면 전 행이 빈 값으로 읽혀 `catalog_variants` 가 공집합이 되고, 그러면
+       대조가 통과해 버린다(2026-08-14 서영님 지적, 재현됨: 종료코드 0 · 출력 파일까지
+       기록). 게다가 그때 나가는 경고가 "매핑에만 있는 variant"라 **원인과 반대쪽을
+       지목한다** — 문제는 매핑이 아니라 catalog 헤더다.
+
+       같은 파일을 producer 가 읽으면 `build_channel_product_map` 의 조인이 통째로
+       비어 채널 비교가 사라진다. 이 변환기가 막으려는 바로 그 실패라, 건너뛰지 않고
+       중단한다.
+
     Raises:
-        SystemExit: products 에 있는 variant 가 매핑에서 빠짐.
+        SystemExit: catalog 헤더에 `variant_row_id` 가 없음 · products 에 있는 variant 가
+            매핑에서 빠짐.
     """
     if not catalog.exists():
         print(f"  [건너뜀] products 대본이 없어 variant 집합을 대조하지 않았습니다: {catalog}")
         return
 
     with catalog.open(encoding="utf-8-sig", newline="") as f:
-        catalog_variants = {
-            v
-            for row in csv.DictReader(f)
-            if (v := (row.get("variant_row_id") or "").strip())
-        }
+        reader = csv.DictReader(f)
+        _require_columns(reader.fieldnames, catalog, (SRC_VARIANT,))
+        catalog_variants = {v for row in reader if (v := (row.get(SRC_VARIANT) or "").strip())}
 
     mapped = {r["variant_row_id"] for r in rows}
     missing = sorted(catalog_variants - mapped)

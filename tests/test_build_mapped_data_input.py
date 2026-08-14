@@ -176,6 +176,45 @@ def test_exact_match_is_reported(tmp_path: Path, capsys) -> None:
     assert "일치 확인" in capsys.readouterr().out
 
 
+def test_catalog_with_wrong_header_fails(tmp_path: Path) -> None:
+    """🔴 파일이 **있는데 헤더가 틀린** 경우는 건너뛰지 않고 죽는다.
+
+    `variant_row_id` 컬럼이 없으면 전 행이 빈 값으로 읽혀 `catalog_variants` 가 공집합이
+    되고, 그러면 대조가 조용히 통과한다(2026-08-14 지적 — 재현하면 종료코드 0 에
+    출력 파일까지 기록됐다). 게다가 그때 나가는 경고가 "매핑에만 있는 variant"라
+    **원인과 반대쪽을 지목한다** — 문제는 매핑이 아니라 catalog 헤더다.
+
+    같은 파일을 producer 가 읽으면 `build_channel_product_map` 의 조인이 통째로 비어
+    채널 비교가 사라진다. 이 변환기가 막으려는 바로 그 실패다.
+    """
+    rows = builder.build_rows(_golden(tmp_path, "V1,P1\nV2,P1\n"))
+    bad = _write(
+        tmp_path / "input_channel_products.csv", "wrong_header,channel\nV2,COUPANG\n"
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        builder.check_against_catalog(rows, bad)
+
+    message = str(exc.value)
+    assert "필수 컬럼" in message
+    assert "variant_row_id" in message
+    assert "wrong_header" in message  # 실제로 들어온 헤더를 같이 보여준다
+
+
+def test_catalog_header_check_runs_before_the_set_comparison(tmp_path: Path, capsys) -> None:
+    """헤더 검사가 **집합 대조보다 먼저** 돈다 — 순서가 뒤집히면 경고가 원인을 가린다.
+
+    "매핑에만 있는 variant" 경고가 먼저 나가면 읽는 사람이 매핑을 고치러 간다.
+    """
+    rows = builder.build_rows(_golden(tmp_path, "V1,P1\n"))
+    bad = _write(tmp_path / "input_channel_products.csv", "wrong_header\nV1\n")
+
+    with pytest.raises(SystemExit):
+        builder.check_against_catalog(rows, bad)
+
+    assert "경고" not in capsys.readouterr().out
+
+
 def test_absent_catalog_is_skipped_not_fatal(tmp_path: Path, capsys) -> None:
     """`data/**` 가 gitignore 라 products 가 없는 환경이 정상으로 있다."""
     rows = builder.build_rows(_golden(tmp_path, "V1,P1\n"))
