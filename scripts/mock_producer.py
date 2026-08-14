@@ -41,6 +41,7 @@ import pandas as pd
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from app.core import raw_schema
+from app.core.console import force_utf8_output
 from app.core.constants import KST
 from app.core.schemas import Channel
 
@@ -774,6 +775,10 @@ def print_summary(
 
 
 def main() -> None:
+    # 출력이 나가기 전에. 사유는 app/core/console.py 참고 —
+    # 이 스크립트는 요약에 `⚠️`·`—` 를 쓰는데 cp949 콘솔에서 그 줄이 터진다.
+    force_utf8_output()
+
     args = parse_arguments()
     data_dir = validate_data_directory(args.data_dir)
 

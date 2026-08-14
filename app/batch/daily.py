@@ -1232,6 +1232,12 @@ def print_summary(summary: dict) -> None:
 
 
 def main() -> None:
+    # 🔴 **argparse 를 만들기 전에 부른다.** 예전엔 `parse_args()` 뒤에 있었는데,
+    #    아래 `--state-path` 도움말에 `—` 가 들어 있어 **`--help` 나 잘못된 인자만으로
+    #    cp949 콘솔에서 죽었다**(2026-08-14 재현: exit 1, UnicodeEncodeError).
+    #    argparse 는 우리 코드가 첫 줄을 찍기 한참 전에 자기 출력을 내보낸다.
+    force_utf8_output()
+
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument(
         "--window-end", default=None, help="현재 윈도우 마지막 날 (YYYY-MM-DD)"
@@ -1260,9 +1266,6 @@ def main() -> None:
         " 셀러에게 안 간다.",
     )
     args = ap.parse_args()
-
-    # 출력이 나가기 전에. 사유는 app/core/console.py 참고.
-    force_utf8_output()
 
     loader = None
     if args.input_source == "golden":

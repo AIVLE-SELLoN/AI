@@ -41,11 +41,6 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-# 리포트에 한글·'—'·'←' 가 들어간다. Windows 콘솔 기본이 cp949 라 재설정하지 않으면
-# 채점을 다 끝낸 **마지막 출력 단계에서** UnicodeEncodeError 로 죽는다 (지인님
-# run_recommendation_eval.py 와 같은 처리).
-sys.stdout.reconfigure(encoding="utf-8")
-
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -59,6 +54,7 @@ from validate_anomaly import (
     round_counts,
 )
 
+from app.core.console import force_utf8_output
 from app.core.constants import CONSISTENT_COUNT, CONSISTENT_RATIO
 from app.core.schemas import Verdict
 from app.detection.confidence import decide_confidence
@@ -434,6 +430,14 @@ def report(m: dict, pred: dict, golden: list[dict], verbose: bool) -> None:
 
 
 def main() -> None:
+    # 출력이 나가기 전에. 사유는 app/core/console.py 참고 —
+    # 결과 표에 `—`·`✅` 를 쓰는데 cp949 콘솔에서 그 줄이 터진다.
+    #
+    # ⚠️ 예전엔 모듈 최상단에서 `sys.stdout.reconfigure()` 를 직접 불렀는데 걷어냈다.
+    #    헬퍼가 없애려던 중복이고, 그 사본은 **stderr 를 안 바꾸고** `errors="replace"`
+    #    도 없으며 `contextlib.suppress` 가 없어 **import 시점에 터질 수 있었다**.
+    force_utf8_output()
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--verbose", action="store_true", help="케이스별 상세 출력")
     args = ap.parse_args()
