@@ -30,6 +30,7 @@ from pathlib import Path as _Path
 
 sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 
+from app.core.console import force_utf8_output
 from app.core.llm_client import get_llm_client
 from app.core.exceptions import LlmCallError, LlmParseError
 
@@ -182,6 +183,10 @@ def write_csv(rows: list[dict], path: Path):
 
 
 def main():
+    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    #    (`description=__doc__` · `--golden-outdir`)에 `—` 가 있다. `app/core/console.py`.
+    force_utf8_output()
+
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--products-config", default="config_products.csv")
     ap.add_argument("--detail-prompt", default="prompts/generate_detail_field_text_v1.md")

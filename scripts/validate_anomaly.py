@@ -30,10 +30,18 @@ past_neg/past_total)만 쓰고 날짜는 입력값에 없으므로, window 선�
 
 import argparse
 import csv
+import sys
 from collections import defaultdict
+from pathlib import Path
 
 from scipy.stats import fisher_exact
 from statsmodels.stats.multitest import multipletests
+
+# scripts/ 는 저장소 루트의 형제 폴더 — app 패키지를 절대경로로 import하려면
+# 저장소 루트를 sys.path에 넣어야 함(실행 방식에 따라 자동으로 안 잡힐 수 있어서 명시)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.core.console import force_utf8_output
 
 ASPECTS = ["색상", "사이즈", "소재", "파손", "오배송", "기타"]
 CHANNELS = ["COUPANG", "NAVER", "ZIGZAG"]
@@ -273,6 +281,10 @@ def robustness_check(batch: list[dict], alpha: float = 0.05, min_delta: float = 
 # ────────────────────────────────────────────────────────────────
 
 def main():
+    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    #    (`description=__doc__`)에 `—` 가 있다. `app/core/console.py`.
+    force_utf8_output()
+
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--anomaly-config", default="config_anomaly.csv")
     ap.add_argument("--products-config", default="config_products.csv")

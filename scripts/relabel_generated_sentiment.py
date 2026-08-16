@@ -62,11 +62,10 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-sys.stdout.reconfigure(encoding="utf-8")
-
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from app.core.console import force_utf8_output
 from app.core.llm_client import get_llm_client
 from scripts.generate_hybrid_700 import SENTIMENT_DEFINITIONS
 
@@ -641,6 +640,12 @@ def apply_manual(infile: Path, review_file: Path) -> None:
 
 
 def main() -> None:
+    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    #    (`description=__doc__` · `--only-aspects` · `--dry-run`)에 `—`·`🔴` 가 있다.
+    #    예전 모듈 최상단 `sys.stdout.reconfigure()` 는 stderr 를 안 바꿔 로깅·traceback 이
+    #    그대로 깨졌다. `app/core/console.py`.
+    force_utf8_output()
+
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

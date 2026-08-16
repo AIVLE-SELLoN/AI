@@ -25,8 +25,15 @@ from __future__ import annotations
 import argparse
 import csv
 import random
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# scripts/ 는 저장소 루트의 형제 폴더 — app 패키지를 절대경로로 import하려면
+# 저장소 루트를 sys.path에 넣어야 함(실행 방식에 따라 자동으로 안 잡힐 수 있어서 명시)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.core.console import force_utf8_output
 
 CHANNELS = ["COUPANG", "NAVER", "ZIGZAG"]
 DAYS = 60
@@ -112,6 +119,10 @@ def write_csv(rows: list[dict], path: Path):
 
 
 def main():
+    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    #    (`description=__doc__`)에 `—`·`⚠️` 가 있다. `app/core/console.py`.
+    force_utf8_output()
+
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--products-config", default="config_products.csv")
     ap.add_argument("--mapping-dir", required=True, help="input_channel_products.csv 위치")

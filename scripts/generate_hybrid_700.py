@@ -58,6 +58,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from app.core.console import force_utf8_output
 from app.core.llm_client import get_llm_client
 
 PROMPT_PATH = ROOT / "app" / "classification" / "prompts" / "classify_aspect_v5.md"
@@ -413,6 +414,10 @@ async def run_generation(outfile: Path, seed: int, verify: bool = True) -> None:
 
 
 def main() -> None:
+    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    #    (`description=__doc__` · `--no-verify`)에 `—`·`⚠️` 가 있다. `app/core/console.py`.
+    force_utf8_output()
+
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--outfile", default="eval/eval_sets/llm_generated_700.csv")
     ap.add_argument("--seed", type=int, default=11)
