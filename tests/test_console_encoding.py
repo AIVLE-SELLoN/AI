@@ -46,7 +46,11 @@
 from __future__ import annotations
 
 import ast
+import importlib
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -227,17 +231,21 @@ def _deployed_entrypoints() -> list[Path]:
       - `app/**` 의 `__main__` 블록 — 우리가 배포하는 패키지 코드
       - `docker-compose.yml` 의 `command:`/`entrypoint:` 가 가리키는 파이썬 파일
 
-    ⚠️ **범위를 왜 여기서 끊었나.** `scripts/`·`eval/` 전체로 넓히면 대상이 **28개**가
-       된다(2026-08-14 실측). 전부 두 줄짜리 기계적 변경이지만 대부분 남의 파일이라
-       한 PR 에 몰면 리뷰가 불가능하다. 넓히려면 이 함수만 고치면 되고, 그때는
-       파일 소유자별로 나눠 올릴 것.
+    ⚠️ **범위를 왜 여기서 끊었나.** `scripts/`·`eval/` 전체로 넓히면 대상이 수십 개다.
+       전부 두 줄짜리 기계적 변경이지만 대부분 남의 파일이라 한 PR 에 몰면 리뷰가
+       불가능하다. 넓히려면 이 함수만 고치면 되고, 그때는 파일 소유자별로 나눠 올릴 것
+       (그렇게 진행 중이다 — PR #92·#93·#94).
 
-    ⚠️ **그래서 `eval/` 이 반만 정리된 상태다.** `run_pipeline_eval.py:69` ·
-       `run_reporting_eval.py:53` 에 손수 `sys.stdout.reconfigure()` 가 남아 있다
-       (`scripts/` 에도 여럿). 둘 다 compose 서비스가 아니라 여기 유도 대상이 아니고,
-       **범위 밖 파일을 임의로 두 개만 더 걷으면 "배포되는 것만" 이라는 기준이 흐려진다.**
-       위 28개 확대 때 같이 간다 — 그 사본들은 stderr 를 안 바꾸고 `errors="replace"` 도
-       `contextlib.suppress` 도 없어 그때 한꺼번에 걷는 편이 낫다. (용준님 PR #89 2회전 지적)
+    🔴 **여기에 개수를 적지 말 것.** 예전 docstring 이 *"28개"* 와
+       *"`run_reporting_eval.py:53` 에 손수 `sys.stdout.reconfigure()` 가 남아 있다"* 를
+       박아뒀는데, **그 파일을 고치는 PR 이 같은 문장을 거짓으로 만들었다**(용준님 PR #92
+       리뷰 A-2). 스윕이 진행되는 동안 이 숫자는 PR 마다 바뀐다 — 세고 싶으면
+       `MANUALLY_CONVERTED` 아래 주석의 명령으로 그때그때 유도할 것.
+
+    ⚠️ 남은 사설 사본들은 stderr 를 안 바꾸고 `contextlib.suppress` 도 없어, 범위 확대
+       때 한꺼번에 걷는 편이 낫다. **범위 밖 파일을 임의로 몇 개만 더 걷으면 "배포되는
+       것만" 이라는 기준이 흐려진다** — 그래서 손으로 전환한 것은 `MANUALLY_CONVERTED`
+       에 모아 두고 별도 테스트로 잠근다. (용준님 PR #89 2회전 · #92 리뷰 지적)
 
     ⚠️ `app/main.py` 는 대상이 아니다 — `__main__` 블록이 없고 Dockerfile 이
        `uvicorn app.main:app` 으로 띄운다. 스트림 소유자가 uvicorn 이라 우리가 끼어들
@@ -313,6 +321,133 @@ def test_the_derivation_actually_finds_the_known_entrypoints() -> None:
             f"{mentioned_only_in_comments} 은 compose 주석에만 있습니다 — "
             "주석 제외가 깨졌습니다"
         )
+
+
+# ── 범위 밖인데 손으로 전환한 진입점 ────────────────────────────────────
+
+MANUALLY_CONVERTED = [
+    "eval/run_reporting_eval.py",
+    "scripts/build_mapped_data_input.py",
+    "scripts/classification_worker.py",
+]
+"""**이 PR(#92)에서** 손으로 전환한 진입점 — `_deployed_entrypoints()` 유도 대상 밖이다.
+
+⚠️ **저장소 전체의 "전환된 진입점" 대장이 아니다.** 유도 대상에도 이 목록에도 없이
+   `force_utf8_output()` 을 부르는 파일이 따로 있고(대부분 PR #93·#94 전환분), 그것들은
+   **어떤 테스트도 안 잡는다.** 그 구멍은 이 목록을 늘려서가 아니라
+   **`_deployed_entrypoints()` 범위를 `scripts/`·`eval/` 로 넓혀서** 닫는다 — 그때 이 목록은
+   통째로 지운다. (용준님 PR #92 리뷰 A-1·2회전)
+
+   세려면(숫자를 박지 말고 그때그때 유도할 것)::
+
+       import sys; sys.path.insert(0, "tests")
+       import test_console_encoding as g
+       derived = {p.relative_to(g.ROOT).as_posix() for p in g._deployed_entrypoints()}
+       conv = {f.relative_to(g.ROOT).as_posix()
+               for f in [*g.ROOT.glob("scripts/**/*.py"), *g.ROOT.glob("eval/*.py")]
+               if "force_utf8_output()" in f.read_text(encoding="utf-8")}
+       print(sorted(conv - derived - set(g.MANUALLY_CONVERTED)))
+
+🔴 **여기 넣으려면 그 파일 `main()` 이 argv 를 파싱해야 한다.** 아래 배선 테스트가
+   `module.main()` 을 **실제로 호출**하기 때문이다 — `--help` 로 `SystemExit` 이 나야
+   거기서 멈춘다. 파싱하지 않는 `main()` 을 넣으면 **진짜 작업이 돌아간다.**
+   예: `scripts/seed_vectordb.py` 는 `main(reset=False)` 가 argparse 를 안 거치고 바로
+   시딩해서(argparse 는 `__main__` 블록에 있다) 넣는 순간 임베딩 504건이 과금된다.
+   `scripts/setup_local_mq.py`(모듈 레벨 `main()` 없음) ·
+   `scripts/smoke_mq.py`(helper import 가 함수 안이라 monkeypatch 불가)도 그대로는 못 넣는다.
+"""
+
+
+@pytest.mark.parametrize("rel", MANUALLY_CONVERTED)
+def test_manually_converted_entrypoints_survive_cp949_help(rel: str) -> None:
+    """cp949 콘솔에서 `--help` 만 요청해도 죽지 않아야 한다.
+
+    argparse 는 우리 코드가 첫 줄을 찍기 전에 자기 출력을 내보내므로, 전환이
+    `parse_args()` 뒤로 밀리거나 통째로 빠지면 여기서 exit 1 로 잡힌다. 이 세 파일은
+    유도 집합 밖이라 **이 테스트가 없으면 고친 줄을 지워도 스위트가 초록이다**
+    (용준님 PR #92 리뷰 A-1).
+
+    🔴 **`text=True` 를 쓰지 말 것 — bytes 로 받는다.** 자식은 `force_utf8_output()`
+       때문에 UTF-8 로 쓰는데 부모는 `PYTHONIOENCODING` 이 아니라 **자기 locale** 로
+       디코드한다. 한국어 윈도우에서 그 둘이 어긋나 reader thread 가
+       `UnicodeDecodeError` 로 죽고 **`stdout` 이 조용히 `None` 이 된다**(실측). 종료코드는
+       0 그대로라 단언은 통과하면서 출력만 사라진다 — PR #66 이 `test_generate_determinism`
+       에서 고친 바로 그 버그다.
+    ⚠️ `env` 를 통째로 교체하지 않고 `os.environ` 을 물려준다. 교체하면 자식이 `PATH` 를
+       잃는다(같은 PR #66 건).
+    """
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / rel), "--help"],
+        capture_output=True,
+        env={**os.environ, "PYTHONIOENCODING": "cp949"},
+        cwd=ROOT,
+        check=False,
+    )
+
+    assert proc.returncode == 0, (
+        f"{rel} 이 cp949 콘솔에서 --help 만으로 죽습니다:\n"
+        + proc.stderr.decode("utf-8", "replace")[-2000:]
+    )
+    # 종료코드만 보면 "아무것도 안 찍고 0" 도 통과한다 — 도움말이 실제로 나왔는지까지 본다.
+    assert proc.stdout, f"{rel} 이 --help 에 아무것도 출력하지 않았습니다"
+
+
+def _main_parses_argv(path: Path) -> bool:
+    """모듈 레벨 `main()` 이 `parse_args()` 를 **실제로 호출**하는지.
+
+    🔴 **문자열 매칭이 아니라 AST 다.** 처음엔 `"parse_args" in inspect.getsource(main)`
+       으로 썼는데, 그러면 **docstring·주석에 그 단어만 있어도 통과**한다. 파싱을 안 하는
+       `main()` 이 가드를 지나 **실제로 실행되는** 방향의 오검출이라 제일 나쁘다 —
+       `_calls_helper_first` 가 정규식·tokenize 를 버린 것과 같은 사유(이 파일 머리말).
+    """
+    tree = _parse(path)
+    if tree is None:
+        return False
+    fn = next(
+        (n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main"),
+        None,
+    )
+    if fn is None:
+        return False
+    return any(_call_name(n) == "parse_args" for n in ast.walk(fn) if isinstance(n, ast.Call))
+
+
+@pytest.mark.parametrize("rel", MANUALLY_CONVERTED)
+def test_manually_converted_entrypoints_call_the_helper_before_parsing(
+    rel: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`main()` 이 `parse_args()` **전에** `force_utf8_output()` 을 부르는지.
+
+    🔴 **위 서브프로세스 테스트만으로는 부족하다 — 3개 중 1개를 못 잡는다.**
+       `eval/run_reporting_eval.py` 는 `description` 이 리터럴(`"실험⑦ …"`)이고
+       `⑦`(U+2465)은 **cp949 에 있어서** `--help` 가 애초에 안 죽는다. 호출을 통째로
+       지워도 서브프로세스 테스트는 초록이다(실측). 그 파일의 위험은 `--help` 가 아니라
+       **채점 결과 출력**에 있는데 그건 LLM 비용이 들어 테스트에서 돌릴 수 없다.
+
+    `--help` 는 `SystemExit(0)` 을 던지므로, 호출이 `parse_args()` 뒤로 밀리면
+    여기 도달하기 전에 빠져나가 `calls` 가 비고 실패한다 — 순서까지 같이 잠근다.
+    """
+    module = importlib.import_module(rel.removesuffix(".py").replace("/", "."))
+
+    # ⚠️ **호출 전에** 막는다. 아래는 `main()` 을 실제로 실행하므로, 조건이 안 맞는 파일이
+    #    목록에 들어오면 `AttributeError`·`DID NOT RAISE` 로 죽기 **전에 진짜 작업이 돈다**
+    #    (`seed_vectordb.py` 면 임베딩 과금). 조건은 위 `MANUALLY_CONVERTED` docstring 참고.
+    assert hasattr(module, "main"), (
+        f"{rel} 에 모듈 레벨 main() 이 없습니다 — `__main__` 블록에서 추출할 것"
+    )
+    assert _main_parses_argv(ROOT / rel), (
+        f"{rel} 의 main() 이 argv 를 파싱하지 않습니다. 이 테스트는 main() 을 실제로 부르므로 "
+        "파싱이 없으면 --help 에서 안 멈추고 본 작업이 돌아갑니다"
+    )
+
+    calls: list[str] = []
+    monkeypatch.setattr(module, "force_utf8_output", lambda: calls.append("utf8"))
+    monkeypatch.setattr(module.sys, "argv", [rel, "--help"])
+
+    with pytest.raises(SystemExit):
+        module.main()
+
+    assert calls, f"{rel} 의 main() 이 force_utf8_output() 을 (먼저) 부르지 않았습니다"
 
 
 # ── 검출기 자체를 고정한다 (전부 초안이 실제로 틀렸던 입력) ──────────────

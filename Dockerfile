@@ -33,9 +33,16 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# app/ 만 넣는다. data/(~30MB) · eval/(수동 실행) · tests/ 는 운영 이미지에 불필요.
+# app/ 와 scripts/ 를 넣는다. data/(~30MB) · eval/(수동 실행) · tests/ 는 운영 이미지에 불필요.
 # 특히 data/golden/ 은 채점 정답지라 컨테이너에 들어가면 안 된다.
+#
+# scripts/ 가 필요한 이유: 분류 워커(`python scripts/classification_worker.py`)가
+# k8s CronJob 으로 돌게 되어, compose 의 ./scripts 마운트가 없는 클러스터에서는
+# 이미지 안에 실물이 있어야 한다. 프롬프트는 app/**/prompts/ 라 COPY app/ 에 이미
+# 포함된다. scripts/ 에 들어가는 건 코드와 scripts/prompts/ 의 스크립트 전용 프롬프트
+# 뿐이다 — 입력 CSV·raw.db 는 여전히 볼륨으로 공급한다.
 COPY app/ ./app/
+COPY scripts/ ./scripts/
 
 EXPOSE 8080
 
