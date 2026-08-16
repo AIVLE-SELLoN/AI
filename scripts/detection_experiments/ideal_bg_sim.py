@@ -24,7 +24,6 @@ from datetime import date, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -36,6 +35,7 @@ from demo_sim import (
     run_family,
 )
 
+from app.core.console import force_utf8_output
 from app.core.schemas import AspectSentiment
 from scripts.golden_inputs import load_golden_inputs as load_inputs
 
@@ -173,4 +173,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    # 🔴 첫 문장이어야 한다. ⚠️ `async def main()` 이라 `main()` 안이 아니라 **여기**다 —
+    #    가드가 `AsyncFunctionDef` 를 못 찾아 `__main__` 블록을 진입 지점으로 삼는다.
+    force_utf8_output()
+
     asyncio.run(main())

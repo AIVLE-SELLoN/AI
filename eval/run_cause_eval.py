@@ -45,6 +45,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app.config import get_settings
+from app.core.console import force_utf8_output
 from app.core.constants import CONSISTENT_COUNT, CONSISTENT_RATIO, KST
 from app.detection.cause import classify_cause, judge_cause
 from app.detection.scope import SCOPE_ASPECTS
@@ -361,6 +362,11 @@ async def main_async(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
+    # 🔴 첫 문장이어야 한다. ⚠️ 이 파일은 `--help` 가 원래 통과한다 — `description` 이
+    #    리터럴이라 docstring 의 `—`·`⚠️` 가 도움말에 안 실린다(`⑥` 은 cp949 에 있다).
+    #    대신 아래 채점 결과 출력이 그 문자를 써서 결과가 통째로 사라진다.
+    force_utf8_output()
+
     parser = argparse.ArgumentParser(description="실험⑥ 프롬프트3 원인분류 정확도")
     parser.add_argument("--golden", default=str(GOLDEN_LABELS), help="골든 라벨 CSV 경로")
     parser.add_argument("--limit", type=int, default=200, help="표본 수 (0=전량)")

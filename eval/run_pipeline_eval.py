@@ -64,10 +64,6 @@ from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-# ⚠️ 이게 없으면 Windows(cp949) 에서 **LLM 을 다 태운 뒤 리포트 출력에서** 죽는다.
-#    분류 캐시는 청크마다 저장되니 돈이 날아가진 않지만, 숫자를 못 본다.
-sys.stdout.reconfigure(encoding="utf-8")
-
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
@@ -92,6 +88,7 @@ from app.classification.service import (
     classify_aspect,
     load_llm_prompt,
 )
+from app.core.console import force_utf8_output
 from app.core.constants import CURRENT_WINDOW_DAYS
 from app.core.schemas import AspectSentiment, ClassifiedItem
 from app.detection.aggregate import count_window
@@ -1209,6 +1206,13 @@ async def main_async(args) -> None:
 
 
 def main() -> None:
+    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    #    (`description=__doc__` · `--limit` · `--sources` · `--mode`)에 `—`·`−`·`≈` 가 있다.
+    #    ⚠️ 예전 모듈 최상단 `sys.stdout.reconfigure()` 가 경고하던 것 — *"이게 없으면
+    #    LLM 을 다 태운 뒤 리포트 출력에서 죽는다"* — 은 그대로 유효하다. 다만 그 사본은
+    #    stderr 를 안 바꿔 로깅·traceback 이 계속 깨졌다. `app/core/console.py`.
+    force_utf8_output()
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--runs", type=int, default=3, help="LLM 실행 횟수 (평균용)")
     ap.add_argument(

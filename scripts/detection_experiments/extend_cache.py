@@ -12,7 +12,6 @@ from datetime import timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
 
@@ -26,6 +25,7 @@ from run_pipeline_eval import (
     read,
 )
 
+from app.core.console import force_utf8_output
 from app.core.constants import CURRENT_WINDOW_DAYS
 
 EXTRA_DAYS = 2  # 연속 3일까지 보려면 2일 앞까지
@@ -76,4 +76,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    # 🔴 첫 문장이어야 한다. ⚠️ `async def main()` 이라 `main()` 안이 아니라 **여기**다 —
+    #    가드가 `AsyncFunctionDef` 를 못 찾아 `__main__` 블록을 진입 지점으로 삼는다.
+    force_utf8_output()
+
     asyncio.run(main())

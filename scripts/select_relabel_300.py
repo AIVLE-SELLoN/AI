@@ -29,7 +29,15 @@ import csv
 import glob
 import json
 import random
+import sys
 from collections import defaultdict
+from pathlib import Path
+
+# scripts/ 는 저장소 루트의 형제 폴더 — app 패키지를 절대경로로 import하려면
+# 저장소 루트를 sys.path에 넣어야 함(실행 방식에 따라 자동으로 안 잡힐 수 있어서 명시)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.core.console import force_utf8_output
 
 ASPECT_QUOTA = {"색상": 100, "사이즈": 100, "소재": 100}
 
@@ -157,6 +165,10 @@ def write_csv(selected: list[dict], outfile: str):
 
 
 def main():
+    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    #    (`description=__doc__`)에 `—` 가 있다. `app/core/console.py`.
+    force_utf8_output()
+
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data-dir", required=True, help="71630 압축 풀어놓은 폴더")
     ap.add_argument("--seed", type=int, default=11)
