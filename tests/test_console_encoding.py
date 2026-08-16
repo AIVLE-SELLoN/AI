@@ -60,11 +60,16 @@ COMPOSE = ROOT / "docker-compose.yml"
 
 DOCKERFILE = ROOT / "Dockerfile"
 
-DOCKER_COPY_DIR = re.compile(r"^COPY\s+(?:--\S+\s+)*([\w.-]+)/\s", re.MULTILINE)
+DOCKER_COPY_DIR = re.compile(r"^COPY\s+(?:--\S+\s+)*([\w-]+)/?(?=\s)", re.MULTILINE)
 """`COPY app/ ./app/` 형태에서 **소스 디렉터리**만 뽑는다.
 
-⚠️ `COPY requirements.txt .` 처럼 파일 하나를 옮기는 줄은 안 잡는다(끝에 `/` 가 없다).
-⚠️ `--from=builder` 같은 플래그가 붙어도 잡는다.
+⚠️ **끝 `/` 는 선택이다** — `COPY app ./app` 도 도커에선 같은 뜻인데, 처음에 `/` 를 필수로
+   뒀더니 그 형태를 통째로 놓쳤다(자체 검수에서 발견). 유도 집합이 **조용히 좁아지는**
+   방향이라, 이 파일이 "Dockerfile 이 바뀌면 가드가 따라온다" 고 주장하는 근거가 깨진다.
+⚠️ 파일 이름은 안 잡는다 — `[\\w-]+` 가 점을 못 먹어 `COPY requirements.txt .` 는 매칭에
+   실패한다(`requirements` 뒤에 `/` 도 공백도 아닌 `.` 이 온다).
+⚠️ `--from=builder` · `--chown=u:g` 같은 플래그가 붙어도 잡는다.
+⚠️ 중첩 경로(`COPY data/config/ ...`)는 안 잡지만, 비교 대상이 최상위 폴더명뿐이라 무해하다.
 """
 
 HELPER = "force_utf8_output"
@@ -211,38 +216,78 @@ def _call_name(node: ast.expr) -> str | None:
     return None
 
 
-def _imports_canonical_helper(tree: ast.Module) -> bool:
-    """`app.core.console` 의 helper 를 **모듈 최상단에서, `__main__` 가드보다 먼저** import 하는지.
+def _helper_binding(node: ast.stmt) -> bool | None:
+    """이 최상위 문장이 `force_utf8_output` **이름을 바인딩**하는지.
 
-    🔴 **호출만 검사하면 이 회귀를 통째로 놓친다**(서영님 PR #97 리뷰, 재현함). import 한 줄만
-       지우고 호출을 남기면 `_calls_helper_first` 는 **통과**하는데 CLI 는 첫 문장에서
-       `NameError` 로 죽는다. 이름이 같은 무엇이든 첫 문장이면 되는 게 아니라, **그 이름이
-       공용 helper 여야** 한다.
+    `None` = 안 건드림 · `True` = 별칭 없는 정본 import · `False` = 그 밖의 바인딩.
 
-    세 가지를 한 번에 막는다.
-      - **import 없음** — 위 회귀
-      - **가드 뒤 import** — 모듈은 위에서 아래로 실행되므로 `__main__` 블록이 먼저 돌아
-        역시 `NameError` 다. 그래서 줄 번호를 비교한다
-      - **사설 동명 함수** — `def force_utf8_output(): ...` 로 되돌아가는 것
-        (`app/core/console.py` 가 "떠나온 안티패턴" 이라 적어 둔 그것). `ImportFrom` 이
-        아니므로 안 잡힌다
-
-    ⚠️ `import app.core.console` **후 `app.core.console.force_utf8_output()`** 형태는 일부러
-       통과시키지 않는다 — 저장소에 0건이고, 관용구를 하나로 두는 편이 낫다. 그 형태를 쓰려면
-       이 함수를 넓히고 실패 메시지도 같이 고칠 것.
+    ⚠️ **바인딩이지 "언급" 이 아니다.** `from ... import X as Y` 는 `Y` 를 바인딩하고 `X` 는
+       바인딩하지 않는다 — 이름만 맞춰 보면 정확히 이 경우를 놓친다.
     """
-    guard_line = next(
-        (node.lineno for node in tree.body if _is_main_guard(node)), None
-    )
+    if isinstance(node, ast.ImportFrom):
+        for alias in node.names:
+            if (alias.asname or alias.name) != HELPER:
+                continue
+            return (
+                node.module == HELPER_MODULE
+                and alias.name == HELPER
+                and alias.asname is None
+            )
+        return None
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            if (alias.asname or alias.name.split(".")[0]) == HELPER:
+                return False
+        return None
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+        return False if node.name == HELPER else None
+    if isinstance(node, ast.Assign):
+        targets = [t for t in node.targets if isinstance(t, ast.Name)]
+        return False if any(t.id == HELPER for t in targets) else None
+    if isinstance(node, ast.AnnAssign):
+        target = node.target
+        return False if isinstance(target, ast.Name) and target.id == HELPER else None
+    return None
+
+
+def _imports_canonical_helper(tree: ast.Module) -> bool:
+    """`__main__` 가드 시점에 `force_utf8_output` 이 **정본 helper 로 바인딩돼 있는지.**
+
+    가드보다 앞선 최상위 문장을 **실행 순서대로** 훑어 그 이름을 바인딩하는 것을 모으고,
+    **마지막 유효 바인딩**이 별칭 없는 `from app.core.console import force_utf8_output`
+    인지 본다.
+
+    🔴 **"정본 import 가 어딘가 있으면 통과" 로는 부족하다 — 두 방향으로 뚫린다**
+       (서영님 PR #97 리뷰 2회전, 둘 다 재현함. 각각 37 passed 였다):
+
+         from app.core.console import force_utf8_output as utf8_output   # 이름을 안 바인딩
+         force_utf8_output()                                             # → NameError
+
+         from app.core.console import force_utf8_output                  # 정본 import 있음
+         def force_utf8_output(): pass                                   # 그런데 덮어씀
+         force_utf8_output()                                             # → 사설 no-op 이 돈다
+
+       그래서 **존재가 아니라 마지막 바인딩**을 본다. 이러면 `import 없음` · `가드 뒤 import` ·
+       `별칭` · `정본 뒤 재정의·재할당` 이 한 규칙으로 막힌다 —
+       `_calls_helper_first` 가 "어딘가 호출" 대신 "첫 문장" 을 보는 것과 같은 꼴이다.
+
+    ⚠️ **최상위 직속 문장만 본다.** `try:`/`if:` 안에 감춘 재정의는 안 잡는다. 저장소에 0건이고,
+       실행 경로가 갈리는 바인딩은 정적으로 판정할 수 없다 — 그런 게 생기면 그때 넓힐 것.
+    ⚠️ `import app.core.console` 후 `app.core.console.force_utf8_output()` 형태도 일부러
+       통과시키지 않는다(저장소 0건, 관용구를 하나로). 넓히려면 실패 메시지도 같이 고칠 것.
+    """
+    guard_line = next((n.lineno for n in tree.body if _is_main_guard(n)), None)
     if guard_line is None:
         return False
-    return any(
-        isinstance(node, ast.ImportFrom)
-        and node.module == HELPER_MODULE
-        and any(alias.name == HELPER for alias in node.names)
-        and node.lineno < guard_line
-        for node in tree.body
-    )
+
+    last: bool | None = None
+    for node in tree.body:
+        if node.lineno >= guard_line:
+            break
+        binding = _helper_binding(node)
+        if binding is not None:
+            last = binding
+    return last is True
 
 
 def _calls_helper_first(tree: ast.Module) -> bool:
@@ -606,6 +651,30 @@ IMPORT_FROM_OTHER_MODULE = (
 )
 """엉뚱한 모듈에서 온 import — 이름만 맞다고 통과하면 안 된다."""
 
+# 🔴 아래 넷은 "정본 import 가 어딘가 있으면 통과" 를 뚫는다 (서영님 #97 2회전, 재현됨).
+ALIASED_IMPORT = (
+    f"from {HELPER_MODULE} import {HELPER} as utf8_output\n"
+    f"def main():\n    {HELPER}()\n{MAIN_GUARD}"
+)
+"""`as` 별칭 — 정본에서 왔지만 **그 이름을 바인딩하지 않는다.** 실제로는 `NameError`."""
+
+REDEFINED_AFTER_IMPORT = (
+    f"{CANONICAL_IMPORT}def {HELPER}():\n    pass\ndef main():\n    {HELPER}()\n{MAIN_GUARD}"
+)
+"""정본 import 뒤 **사설 재정의** — 호출은 no-op 으로 간다."""
+
+REASSIGNED_AFTER_IMPORT = (
+    f"{CANONICAL_IMPORT}{HELPER} = lambda: None\n"
+    f"def main():\n    {HELPER}()\n{MAIN_GUARD}"
+)
+"""정본 import 뒤 **재할당** — 위와 같은 사고, 문법만 다르다."""
+
+REDEFINED_THEN_REIMPORTED = (
+    f"def {HELPER}():\n    pass\n{CANONICAL_IMPORT}"
+    f"def main():\n    {HELPER}()\n{MAIN_GUARD}"
+)
+"""사설 정의가 **먼저**고 정본 import 가 나중 — 마지막 바인딩이 정본이라 통과해야 한다."""
+
 
 @pytest.mark.parametrize(
     "body, expected, why",
@@ -640,12 +709,36 @@ IMPORT_FROM_OTHER_MODULE = (
             False,
             "🔴 다른 모듈에서 온 import 는 근거가 안 된다",
         ),
+        (
+            ALIASED_IMPORT,
+            False,
+            "🔴 `as` 별칭은 그 이름을 안 바인딩한다 — 실제로는 NameError (서영님 #97 2회전)",
+        ),
+        (
+            REDEFINED_AFTER_IMPORT,
+            False,
+            "🔴 정본 import 뒤 사설 재정의 — 호출이 no-op 으로 간다 (같은 리뷰)",
+        ),
+        (
+            REASSIGNED_AFTER_IMPORT,
+            False,
+            "🔴 정본 import 뒤 재할당 — 위와 같은 사고, 문법만 다르다",
+        ),
+        (
+            REDEFINED_THEN_REIMPORTED,
+            True,
+            "사설 정의가 먼저고 정본 import 가 나중 — **마지막** 바인딩이 정본이라 통과",
+        ),
     ],
 )
 def test_import_detector_requires_the_canonical_helper_import(
     tmp_path: Path, body: str, expected: bool, why: str
 ) -> None:
-    """🔴 호출 검사와 **짝**이다. 하나만 있으면 반대쪽 회귀를 통째로 놓친다."""
+    """🔴 호출 검사와 **짝**이다. 하나만 있으면 반대쪽 회귀를 통째로 놓친다.
+
+    ⚠️ 마지막 두 케이스가 *"존재하면 통과"* 와 *"마지막 바인딩이 정본"* 을 가른다 —
+       둘 다 정본 import 를 **갖고 있는데** 기대값이 반대다.
+    """
     assert _imports_canonical_helper(_tmp_module(tmp_path, body)) is expected, why
 
 
@@ -714,6 +807,45 @@ def test_call_detector_counts_only_real_calls_at_entry(
     tmp_path: Path, body: str, expected: bool, why: str
 ) -> None:
     assert _calls_helper_first(_tmp_module(tmp_path, body)) is expected, why
+
+
+@pytest.mark.parametrize(
+    "line, expected",
+    [
+        ("COPY app/ ./app/", ["app"]),
+        # 🔴 끝 `/` 없는 형태 — 도커에선 같은 뜻인데 처음 정규식이 통째로 놓쳤다.
+        #    유도 집합이 **조용히 좁아지는** 방향이라 자체 검수에서 잡았다.
+        ("COPY app ./app", ["app"]),
+        ("COPY --from=builder app/ ./app/", ["app"]),
+        ("COPY --chown=u:g scripts/ ./scripts/", ["scripts"]),
+        # 파일 하나를 옮기는 줄은 디렉터리가 아니다.
+        ("COPY requirements.txt .", []),
+        ("COPY .dockerignore .", []),
+    ],
+)
+def test_dockerfile_copy_forms_are_understood(line: str, expected: list[str]) -> None:
+    """`COPY` 파싱을 **직접** 고정한다.
+
+    ⚠️ 이게 없으면 파싱이 조용히 좁아져도 `_guarded_entrypoints()` 가 그냥 작아질 뿐이라
+       테스트는 통과한다 — "가드가 있는데 안 잡는" 상태다.
+    """
+    assert DOCKER_COPY_DIR.findall(line) == expected
+
+
+def test_the_real_dockerfile_still_parses() -> None:
+    """실제 `Dockerfile` 이 파싱되는지 — 형태가 바뀌면 여기가 먼저 터진다.
+
+    🔴 개수를 박지 않고 **아는 두 디렉터리만** 단언한다. `COPY` 가 하나 늘면 유도 대상도
+       늘어야 맞으므로 실패시킬 이유가 없지만, 파싱이 죽어 **빈 목록**이 되면 사유 1
+       (배포되는 것)이 통째로 사라지는데 그건 조용하다.
+    """
+    dirs = _image_source_dirs()
+
+    assert "app" in dirs, f"Dockerfile COPY 파싱이 죽었습니다: {dirs}"
+    assert "scripts" in dirs, (
+        "PR #95 로 `COPY scripts/` 가 들어왔는데 안 잡힙니다 — "
+        f"COPY 형태가 바뀌었으면 DOCKER_COPY_DIR 를 고칠 것: {dirs}"
+    )
 
 
 @pytest.mark.parametrize(
