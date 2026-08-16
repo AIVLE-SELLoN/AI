@@ -62,6 +62,7 @@ sys.path.insert(0, str(ROOT))
 
 import app.classification.service as classification_service
 from app.classification.service import ClassifyRequestItem
+from app.core.console import force_utf8_output
 from app.core.exceptions import AiServiceError
 from app.core.llm_client import get_llm_client
 from app.core.schemas import Channel, Source
@@ -724,6 +725,10 @@ async def main_async(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    #    (`description=__doc__`)에 `—`·`⚠️`·`🔴`·`✅` 가 있다. `app/core/console.py`.
+    force_utf8_output()
+
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data-dir", required=True, help="71630 zip을 풀어놓은 폴더")
     parser.add_argument("--limit", type=int, default=300, help="표본 수 (0=전량)")
