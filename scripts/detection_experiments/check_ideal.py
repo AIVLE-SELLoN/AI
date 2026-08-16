@@ -5,12 +5,19 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+# ⚠️ 무거운 import 는 아래 `main()` 안에 그대로 둔다("실행할 때만" 이 이 파일 설계다).
+#    여기로 올린 것은 경로 설정과 `app.core.console` 뿐인데, 그 모듈은 `contextlib`·`sys`
+#    만 쓰고 부수효과가 없다. 가드가 몽키패치를 걸려면 import 가 모듈 최상단이어야 한다.
+sys.path.insert(0, str(ROOT))
+
+from app.core.console import force_utf8_output
 
 
 def main() -> None:
     """실행할 때만 캐시를 읽고 이상화 데이터를 만든다."""
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.path.insert(0, str(ROOT))
+    # 🔴 첫 문장이어야 한다 — 아래 출력이 `—` 를 쓰는데 cp949 에 없다.
+    force_utf8_output()
+
     sys.path.insert(0, str(Path(__file__).parent))
 
     from demo_sim import ANCHOR, require_full_real_cache

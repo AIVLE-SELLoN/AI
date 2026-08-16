@@ -33,6 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app.classification.service import ClassifyRequestItem, classify_aspect
+from app.core.console import force_utf8_output
 from app.core.schemas import AspectSentiment, ClassifiedItem
 from app.detection.service import detect_anomaly
 
@@ -202,6 +203,11 @@ async def main(args):
 
 
 if __name__ == "__main__":
+    # 🔴 첫 문장이어야 한다. ⚠️ 이 파일은 `--help` 가 원래 통과한다 —
+    #    `ArgumentParser()` 에 `description=` 이 없어 docstring 의 `—`·`⚠️` 가 도움말에
+    #    안 실린다. 대신 아래 대조 결과 출력이 그 문자를 써서 **결과가 통째로 사라진다.**
+    force_utf8_output()
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--case", default="SC-001", help="config_anomaly 의 case_id")
     ap.add_argument(

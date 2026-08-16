@@ -47,6 +47,7 @@ from check_agent1_to_agent2 import DAY1, read
 # dry-run 스텁은 배치(app/batch/daily.py)와 **같은 것을 쓴다.** 복제하면 한쪽만
 # 고쳤을 때 두 도구의 실측 호출 수가 갈린다 (지인님 PR 리뷰, 2026-08-06).
 from app.batch.daily import STUB_CAUSE, CountingClient
+from app.core.console import force_utf8_output
 from app.core.inquiries import build_linked_inquiries
 from app.core.schemas import (
     AspectSentiment,
@@ -421,6 +422,11 @@ async def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
+    # 🔴 첫 문장이어야 한다. ⚠️ 이 파일은 `--help` 가 원래 통과한다 — `description` 이
+    #    리터럴이라 docstring 의 `—`·`⚠️` 가 도움말에 안 실리고, `→`(U+2192)는 cp949 에
+    #    **있다**. 대신 아래 대조 결과 출력이 그 문자를 써서 결과가 통째로 사라진다.
+    force_utf8_output()
+
     ap = argparse.ArgumentParser(description="Agent2 → Agent3 실연동 확인")
     ap.add_argument("--case", default="SC-001", help="config_anomaly 의 case_id (기대 케이스)")
     ap.add_argument(
