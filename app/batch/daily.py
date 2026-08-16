@@ -59,7 +59,9 @@ from app.config import get_settings
 from app.core import raw_schema
 from app.core.console import force_utf8_output
 from app.core.constants import CURRENT_WINDOW_DAYS, KST, PAST_WINDOW_DAYS
+from app.core.exit_codes import EXIT_RUNTIME_ERROR
 from app.core.inquiries import build_linked_inquiries
+from app.core.logging_setup import configure_logging_or_exit
 from app.core.raw_db import connect_readonly
 from app.core.schemas import Channel, ClassifiedItem, DetectionAlert, Source
 from app.core.versions import CLASSIFIER_PIPELINE_VERSION
@@ -1557,9 +1559,19 @@ def main() -> None:
 
         loader = load_golden_inputs
 
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s"
-    )
+    # ⚠️ **`parse_args()` 뒤에 둔다.** 앞으로 옮기면 설정 오타 하나로 `--help` 조차 못 본다.
+    #    ⚠️ 반대로 `force_utf8_output()` 보다 앞으로는 못 간다 — 그건 첫 문장이어야 한다
+    #       (`tests/test_console_encoding.py` 가 강제).
+    #
+    # 🔴 **여기서 설정을 한 번 읽는 것이 아래 깊은 호출부까지 덮는다.** `get_settings()` 가
+    #    `@lru_cache` 라, 이 시점에 성공하면 `_llm_calls_estimate`·`_require_classified_tables`
+    #    가 나중에 부를 때 같은 인스턴스를 받는다. 실패하면 `run_batch` 에 들어가기 전에
+    #    exit 2 로 끝난다 — 예전엔 그 깊은 호출부에서 미포착 `ValidationError` 가 터져
+    #    **exit 1 + raw traceback** 이었고, 그건 아래 "실패가 있음"(=1)과 구분이 안 됐다.
+    #
+    # ⚠️ 로깅 레벨이 `logging.INFO` 고정에서 **`LOG_LEVEL` 을 따르는 것으로 바뀐다.**
+    #    기본값이 `INFO` 라 평소 동작은 그대로고, 다른 두 진입점과 같아진다.
+    configure_logging_or_exit("배치")
     summary = asyncio.run(
         run_batch(
             window_end=date.fromisoformat(args.window_end) if args.window_end else None,
@@ -1574,8 +1586,12 @@ def main() -> None:
     # ⚠️ 계속 도는 것과 성공으로 보고하는 것은 다르다. 실패가 있으면 비-0 으로 끝내야
     #    cron·k8s Job 이 알아챈다 — 안 그러면 모든 알림이 발행 실패해도 성공한 배치다.
     #    (지인님 PR 리뷰 §4, 2026-08-06)
+    #
+    # ⚠️ **값(1)은 그대로다 — 출처만 상수로 바꿨다.** 여기는 "배치가 돌긴 했는데 일부가
+    #    실패" 라 `EXIT_RUNTIME_ERROR` 의 정의(*"재시작하면 나을 수 있다"*)에 정확히 맞는다.
+    #    설정 오류(재시작해도 같음)는 위 `configure_logging_or_exit()` 이 2 로 가른다.
     if summary["failures"]:
-        sys.exit(1)
+        sys.exit(EXIT_RUNTIME_ERROR)
 
 
 if __name__ == "__main__":

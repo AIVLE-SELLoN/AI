@@ -5,11 +5,14 @@ LLM 은 부르지 않는다 — 발행·개선안·가이드라인을 전부 주
 """
 
 import json
+import logging
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
 from app.batch import daily
+from app.core import exit_codes, logging_setup
 from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
 from app.core.schemas import (
     Aspect,
@@ -734,6 +737,94 @@ def test_main_switches_encoding_before_printing(monkeypatch):
     assert "utf8" in calls, "main() 이 force_utf8_output() 을 부르지 않았습니다"
     # 출력·로깅보다 먼저 불려야 한다.
     assert calls.index("utf8") < calls.index("run_batch")
+
+
+def test_config_error_exits_two_before_running_the_batch(monkeypatch, capsys):
+    """🔴 설정 오류는 exit **2** 이고, `run_batch` 에 **들어가지도 않는다.**
+
+    예전엔 `get_settings()` 가 `run_batch` **안쪽**에서만 불려서(`_llm_calls_estimate` ·
+    `_require_classified_tables`) `MQ_PORT=abc` 같은 값 오류가 미포착 `ValidationError` 로
+    나갔다 — **exit 1 + raw traceback**. 그런데 1 은 이 파일이 *"배치는 돌았는데 일부가
+    실패"* 로 쓰는 값이라(`sys.exit(EXIT_RUNTIME_ERROR)`), **"아예 못 떴다" 와 "돌다가
+    일부 실패" 가 종료코드로 구분이 안 됐다.**
+
+    ⚠️ `run_batch` 를 **안 탄다는 것까지** 본다. 종료코드만 보면, 배치를 끝까지 돌고 나서
+       실패로 끝나도 통과한다 — LLM 을 태운 뒤 죽는 것과 아예 안 시작하는 것은 다르다.
+    """
+    monkeypatch.setattr(logging.root, "handlers", [])
+    monkeypatch.setattr(
+        logging_setup, "get_settings", lambda: SimpleNamespace(log_level="info")
+    )
+
+    ran = []
+    monkeypatch.setattr(daily, "run_batch", lambda **kw: ran.append(1))
+    monkeypatch.setattr(daily.sys, "argv", ["daily", "--dry-run"])
+
+    with pytest.raises(SystemExit) as exc:
+        daily.main()
+
+    assert exc.value.code == exit_codes.EXIT_CONFIG_ERROR
+    assert "설정을 읽지 못해" in capsys.readouterr().err
+    assert not ran, "설정이 틀렸는데 배치가 돌았습니다"
+
+
+def test_help_works_even_when_the_config_is_broken(monkeypatch):
+    """`--help` 는 설정이 깨져 있어도 나와야 한다 — 그래서 설정 로딩이 `parse_args()` **뒤**다.
+
+    ⚠️ 순서를 앞으로 옮기면 **설정 오타 하나로 사용법조차 못 본다.** 하필 그때가 사용법이
+       제일 필요한 순간이다(어떤 플래그로 고쳐 돌릴지 봐야 한다).
+    ⚠️ 반대 방향 제약도 있다 — `force_utf8_output()` 보다 뒤여야 한다(그건 첫 문장이어야
+       하고 `tests/test_console_encoding.py` 가 강제한다). 두 제약 사이의 자리다.
+    """
+    monkeypatch.setattr(logging.root, "handlers", [])
+    monkeypatch.setattr(
+        logging_setup, "get_settings", lambda: SimpleNamespace(log_level="info")
+    )
+    monkeypatch.setattr(daily.sys, "argv", ["daily", "--help"])
+
+    with pytest.raises(SystemExit) as exc:
+        daily.main()
+
+    # argparse 의 정상 종료(0)여야 한다 — 설정 오류(2)로 먼저 죽으면 안 된다.
+    assert exc.value.code == 0, "설정 로딩이 parse_args() 보다 앞으로 옮겨졌습니다"
+
+
+def test_batch_failures_still_exit_one(monkeypatch):
+    """반대편 — "돌았는데 일부 실패" 는 여전히 **1** 이다.
+
+    ⚠️ 위 테스트만 있으면 누가 `sys.exit(EXIT_CONFIG_ERROR)` 로 통일해도 안 걸린다.
+       그러면 cron·k8s 가 **재시도해도 소용없는 실패**로 오해한다 — 이쪽은 다음 실행에
+       나을 수 있는 실패다.
+    """
+
+    async def fake_run_batch(**kwargs):
+        return {
+            "trace_id": "trace-1",
+            "window_end": date(2026, 8, 3),
+            "dry_run": True,
+            "input_source": "load_golden_inputs",
+            "elapsed_sec": 1.0,
+            "items": 0,
+            "documents": 0,
+            "prior_alerts": 0,
+            "published": 0,
+            "suppressed": 0,
+            "processed": 0,
+            "delivered": 0,
+            "llm_calls": {},
+            "cause_calls": 0,
+            "failures": [{"stage": "발행", "target_key": "P001", "error": "boom"}],
+            "state_cached": 0,
+        }
+
+    monkeypatch.setattr(daily, "run_batch", fake_run_batch)
+    monkeypatch.setattr(daily.sys, "argv", ["daily", "--dry-run"])
+
+    with pytest.raises(SystemExit) as exc:
+        daily.main()
+
+    assert exc.value.code == exit_codes.EXIT_RUNTIME_ERROR
+    assert exit_codes.EXIT_RUNTIME_ERROR != exit_codes.EXIT_CONFIG_ERROR
 
 
 @pytest.mark.asyncio

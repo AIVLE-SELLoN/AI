@@ -226,17 +226,20 @@ CMD_MODULE = re.compile(r"uvicorn[\"',\s]+([\w.]+):")
 """Dockerfile `CMD` 가 uvicorn 으로 띄우는 모듈 — `app/main.py` 는 `__main__` 블록이
 없어서 이것 말고는 진입점으로 잡을 방법이 없다."""
 
-ENTRYPOINTS_STILL_ON_THEIR_OWN = {"app/batch/daily.py"}
-"""🔴 **아직 `exit_codes.py` 계약을 안 쓰는 배포 진입점.** 여기 있다는 건 *"설정 오류가
-exit 1 + raw traceback 으로 나간다"* 는 뜻이다 — `exit_codes.py` 가 없애려던 그 상태다.
+ENTRYPOINTS_STILL_ON_THEIR_OWN: set[str] = set()
+"""🔴 **아직 `exit_codes.py` 계약을 안 쓰는 배포 진입점. 지금은 비어 있다.**
 
-`app/batch/daily.py` 는 로깅 레벨을 `logging.INFO` 로 하드코딩해서 `LOG_LEVEL` 오타에는
-안 걸리지만, `get_settings()` 가 `run_batch` **안쪽**에서 불려서 `MQ_PORT=abc` 같은 값
-오류는 그대로 샌다(실측). 실패 지점이 부팅이 아니라 실행 중이라
-`configure_logging_or_exit()` 모양으로는 안 덮이고, 별건이 필요하다.
+여기 이름이 있다는 건 *"설정 오류가 exit 1 + raw traceback 으로 나간다"* 는 뜻이다 —
+`exit_codes.py` 가 없애려던 그 상태다.
 
-⚠️ **고쳤으면 이 집합에서 지울 것** — 남겨두면 이 테스트가 실패해서 알려준다(부분집합이
-   아니라 **정확히 일치**를 본다). 목록이 조용히 자라지 않게 하려는 것이다.
+`app/batch/daily.py` 가 마지막 항목이었고 **닫혔다**(2026-08-16). `get_settings()` 가
+`run_batch` 안쪽에서 불려서 값 오류가 새던 것을, `main()` 이 `parse_args()` 직후
+`configure_logging_or_exit()` 로 **한 번 읽어** 덮는다(`@lru_cache` 라 깊은 호출부가 같은
+인스턴스를 받는다).
+
+⚠️ **비었다고 이 상수를 지우지 말 것.** 새 진입점이 자기 숫자를 쓰기 시작하면 여기 걸리는데,
+   그때 *"원래 이런 게 있었나"* 를 다시 판단하지 않게 하려는 것이다. 예외를 추가할 일이
+   생기면 **왜 예외인지 사유를 같이 적을 것.**
 """
 
 
@@ -245,6 +248,12 @@ def _deployed_app_entrypoints() -> set[str]:
 
     `__main__` 블록이 있는 모듈 + Dockerfile `CMD` 가 uvicorn 으로 띄우는 모듈.
     (`tests/test_console_encoding.py` 가 인코딩에 대해 하는 것과 같은 방식이다.)
+
+    🔴 **`test_console_encoding._deployed_entrypoints()` 와 합치지 말 것 — 범위가 일부러
+       다르다.** 저쪽은 `scripts/`·`eval/` 까지 훑는다(그 스크립트들도 사람이 콘솔에서 돌려서
+       인코딩이 문제가 된다). 여기는 **`app/` 배포물만** 본다 — 종료코드 계약은 k8s 가
+       재시작 여부를 판단하는 값이라, 사람이 손으로 돌리는 일회성 스크립트에는 해당이 없다.
+       합치면 이 가드가 `scripts/` 수십 개로 번지면서 **의미 없는 예외 목록**을 만든다.
     """
     found = set()
     for path in (ROOT / "app").rglob("*.py"):
