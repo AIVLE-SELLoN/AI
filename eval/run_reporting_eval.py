@@ -50,11 +50,11 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
-sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import get_settings
 from app.core import constants
+from app.core.console import force_utf8_output
 from app.core.constants import KST
 from app.core.llm_client import get_llm_client
 from app.core.schemas import (
@@ -645,6 +645,12 @@ async def main_async(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    # 🔴 **첫 문장이어야 한다.** 예전엔 모듈 최상단에서 `sys.stdout` 만 `reconfigure` 했다.
+    #    ① stderr 를 안 바꿔서 로깅·traceback 은 그대로 깨졌고 ② `errors="replace"` 도
+    #    `contextlib.suppress` 도 없어 `reconfigure` 가 없는 스트림에서는 **import 만 해도**
+    #    터졌다. 사유 전문은 `app/core/console.py`.
+    force_utf8_output()
+
     parser = argparse.ArgumentParser(description="실험⑦ 리포팅 정량 실험")
     parser.add_argument(
         "--live", action="store_true", help="실제 LLM 생성으로 1차 통과율 측정 (과금)"

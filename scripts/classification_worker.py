@@ -75,6 +75,7 @@ from app.classification.service import (
 )
 from app.config import get_settings
 from app.core import constants, raw_schema
+from app.core.console import force_utf8_output
 from app.core.constants import KST
 from app.core.exceptions import LlmParseError
 from app.core.schemas import Aspect, AspectSentiment, ClassifiedItem, Sentiment, Source
@@ -1145,6 +1146,11 @@ class ClassificationWorker:
 
 
 if __name__ == "__main__":
+    # 🔴 **첫 문장이어야 한다.** `--reclassify-stale` 도움말에 `—`(U+2014) 가 있어서,
+    #    아래 `parse_args()` 가 그걸 먼저 찍으면 cp949 콘솔에서는 도움말만 요청해도
+    #    `UnicodeEncodeError` 로 죽는다(2026-08-14 실측). 사유 전문은 `app/core/console.py`.
+    force_utf8_output()
+
     parser = argparse.ArgumentParser(description="Classification Worker (raw DB → classified_item)")
     parser.add_argument("--db", default=DEFAULT_DB_PATH, help="raw DB 경로(sqlite)")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="한 번에 분류할 원문 건수")
