@@ -15,10 +15,8 @@ uvicorn worker 를 2개 이상 띄우면 **컨슈머도 2개가 되어 같은 �
 Ctrl+C(SIGINT) 또는 SIGTERM(k8s) 으로 멈춘다. **처리 중이던 메시지는 유실되지 않는다** —
 Manual ACK 라 확인하지 않은 메시지는 연결이 끊기는 순간 브로커가 큐로 되돌린다.
 
-종료 코드 (정본은 `app/core/exit_codes.py` — 웹 진입점과 같은 계약을 쓴다)
-    0  정상 종료(종료 신호를 받음)
-    1  실행 중 오류 — 브로커 접속 실패 등. 재시작하면 나을 수 있다
-    2  설정 문제로 뜨지 못함 — 재시작해도 같으므로 k8s 가 CrashLoopBackOff 로 알린다
+종료 코드는 `app/core/exit_codes.py` 가 정본이다(웹 진입점과 같은 계약을 쓴다).
+여기서 0 은 "종료 신호를 받아 정상 종료" 를 뜻한다.
 
 ⚠️ **Git Bash 에서 `MQ_VHOST=/` 를 인라인으로 주면 안 된다.** MSYS 경로 변환이 `/` 를
    `C:/Program Files/Git/` 로 바꿔서 엉뚱한 vhost 로 접속한다. `.env` 에 적거나
@@ -33,11 +31,11 @@ import logging
 import signal
 import sys
 
-from app.config import get_settings
 from app.core import mq_consumer
 from app.core.console import force_utf8_output
 from app.core.exceptions import AiServiceError
 from app.core.exit_codes import EXIT_CONFIG_ERROR, EXIT_RUNTIME_ERROR
+from app.core.logging_setup import configure_logging_or_exit
 from app.core.mq_consumer import (
     RECOMMENDATION_REVIEWED,
     REPORT_CREATED,
@@ -98,37 +96,12 @@ def main() -> None:
     #    `nack(requeue=False)` → DLX. 조건·실측은 테스트 docstring 참고.
     force_utf8_output()
 
-    # ⚠️ **설정 로딩·로깅 설정도 try 안이다.** 밖에 두면 `LOG_LEVEL` 오타 하나가
-    #    미포착 예외로 나가 exit **1**(일시적 오류)이 된다 — 재시작해도 같은 값을 읽으니
-    #    k8s 는 영원히 재시작만 하고 아무도 못 알아챈다. 이 파일 맨 위가 정의한
-    #    "2 = 설정 문제" 와 어긋나는 자리다.
-    #
-    #    `ValueError` 만 잡는 이유: `logging.basicConfig(level=...)` 의 잘못된 레벨과
-    #    `get_settings()` 의 pydantic `ValidationError` 가 **둘 다 ValueError 하위**라
-    #    이걸로 덮인다. 더 넓히면 진짜 예상 밖 오류까지 "설정 문제" 로 보고하게 된다.
-    try:
-        settings = get_settings()
-        logging.basicConfig(
-            level=settings.log_level,
-            format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-        )
-    except ValueError as exc:
-        # ⚠️ 여기서는 `logger` 를 쓰지 않는다. 이 분기가 덮는 실패가 **둘**인데
-        #    (`get_settings()` / `basicConfig()`) **앞쪽에서 터지면 로깅이 아직 아무것도
-        #    설정되지 않았다** — 핸들러도 포매터도 없다. 두 갈래가 같은 모양으로 나가게
-        #    하려고 `print` 로 통일한다. `force_utf8_output()` 은 이미 돌았으므로 한글은
-        #    안전하다.
-        #
-        #    ⚠️ *"basicConfig 가 실패하면 핸들러가 안 붙는다"* 는 **사실이 아니다**(2026-08-14
-        #    실측: 핸들러를 먼저 붙이고 `setLevel` 을 마지막에 부르므로 붙어 있다). 그
-        #    경우 root 레벨은 `WARNING` 이라 `logger.error` 도 보이긴 한다 — 즉 이 선택의
-        #    근거는 "안 보인다" 가 아니라 위의 **두 갈래 일관성**이다.
-        #
-        #    `{exc}` 를 쓴다(`{exc!r}` 아님) — pydantic `ValidationError` 의 repr 은
-        #    **4줄**이라 아래 `except Exception` 이 막으려는 "여러 줄로 흩어짐" 을 되살린다.
-        first_line = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
-        print(f"설정을 읽지 못해 컨슈머를 띄우지 못했습니다: {first_line}", file=sys.stderr)
-        sys.exit(EXIT_CONFIG_ERROR)
+    # ⚠️ **설정 로딩·로깅 설정이 여기(try 안)에 있어야 한다.** 밖에 두면 `LOG_LEVEL`
+    #    오타 하나가 미포착 예외로 나가 exit **1**(일시적 오류)이 된다 — 재시작해도 같은
+    #    값을 읽으니 k8s 는 영원히 재시작만 하고 아무도 못 알아챈다.
+    #    처리 본체와 사유는 `app/core/logging_setup.py` 에 있다 — 웹 진입점과 **같은
+    #    블록을 복사**하고 있었고, 그래서 진단 문구 결함을 두 번 고쳐야 했다(PR #96 리뷰 ④).
+    configure_logging_or_exit("컨슈머")
 
     try:
         asyncio.run(_run())

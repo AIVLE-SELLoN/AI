@@ -16,6 +16,7 @@ import pytest
 from pydantic import BaseModel
 
 from app import consumer
+from app.core import logging_setup
 from app.core.exceptions import MqDisabledError
 
 
@@ -74,6 +75,10 @@ def test_config_failures_exit_as_config_error(monkeypatch, capsys, fake_get_sett
        내는가"* 라는 전제는 아무도 안 잰다. 이렇게 두면 **진짜 `logging.basicConfig` 가
        진짜 예외를 던지는 경로**를 인프로세스에서 탄다(용준님 잔가지 지적).
 
+    ⚠️ **몽키패치 대상이 `consumer` 가 아니라 `logging_setup` 이다**(PR #96). 처리 본체가
+       `app/core/logging_setup.py` 로 옮겨가서, 웹 진입점과 **한 블록을 공유**한다.
+       `consumer` 에 걸면 조용히 아무 효과가 없다 — 여기서 이름을 되돌리지 말 것.
+
     ⚠️ **두 갈래를 다 돈다.** 분기가 덮는 실패는 둘인데(로깅 설정 / 설정 로딩) 초안은
        로깅 쪽만 쟀다. 그러면 누가 `settings = get_settings()` 를 `try` 위로 올리는
        "정리" 를 해도 스위트가 초록이고, `MQ_PORT` 오타가 다시 exit 1 이 된다.
@@ -84,7 +89,7 @@ def test_config_failures_exit_as_config_error(monkeypatch, capsys, fake_get_sett
     #    `MqDisabledError` → 같은 exit 2 가 나와 **검증 대상을 안 타고도 초록**이 된다.
     #    (2026-08-14 실측 — 아래 `설정을 읽지 못해` 단언이 실제로 이걸 잡아냈다.)
     monkeypatch.setattr(logging.root, "handlers", [])
-    monkeypatch.setattr(consumer, "get_settings", fake_get_settings)
+    monkeypatch.setattr(logging_setup, "get_settings", fake_get_settings)
 
     with pytest.raises(SystemExit) as exc:
         consumer.main()
