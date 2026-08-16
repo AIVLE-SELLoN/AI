@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import inspect
 import os
 import re
 import subprocess
@@ -330,17 +331,31 @@ MANUALLY_CONVERTED = [
     "scripts/build_mapped_data_input.py",
     "scripts/classification_worker.py",
 ]
-"""`_deployed_entrypoints()` 밖이지만 **손으로 전환한** 진입점.
+"""**이 PR(#92)에서** 손으로 전환한 진입점 — `_deployed_entrypoints()` 유도 대상 밖이다.
 
-🔴 여기 적는 것 = *"범위 밖인데 예외로 걷었다"* 는 선언이다. 늘릴 때는 PR 에 사유를
-   남길 것 — 목록이 조용히 자라면 `_deployed_entrypoints()` 의 기준이 흐려진다.
-   범위가 확대되면 이 목록은 지우고 유도 대상에 흡수시킨다. (용준님 PR #92 리뷰 A-1)
+⚠️ **저장소 전체의 "전환된 진입점" 대장이 아니다.** 유도 대상에도 이 목록에도 없이
+   `force_utf8_output()` 을 부르는 파일이 따로 있고(대부분 PR #93·#94 전환분), 그것들은
+   **어떤 테스트도 안 잡는다.** 그 구멍은 이 목록을 늘려서가 아니라
+   **`_deployed_entrypoints()` 범위를 `scripts/`·`eval/` 로 넓혀서** 닫는다 — 그때 이 목록은
+   통째로 지운다. (용준님 PR #92 리뷰 A-1·2회전)
 
-남은 사설 `sys.stdout.reconfigure()` 사본을 세려면(숫자를 박지 말고 그때그때 유도할 것)::
+   세려면(숫자를 박지 말고 그때그때 유도할 것)::
 
-    git ls-tree -r --name-only HEAD | grep '\\.py$' | while read f; do
-      grep -q 'sys\\.stdout\\.reconfigure(' "$f" && ! grep -q force_utf8_output "$f" && echo "$f"
-    done | wc -l
+       import sys; sys.path.insert(0, "tests")
+       import test_console_encoding as g
+       derived = {p.relative_to(g.ROOT).as_posix() for p in g._deployed_entrypoints()}
+       conv = {f.relative_to(g.ROOT).as_posix()
+               for f in [*g.ROOT.glob("scripts/**/*.py"), *g.ROOT.glob("eval/*.py")]
+               if "force_utf8_output()" in f.read_text(encoding="utf-8")}
+       print(sorted(conv - derived - set(g.MANUALLY_CONVERTED)))
+
+🔴 **여기 넣으려면 그 파일 `main()` 이 argv 를 파싱해야 한다.** 아래 배선 테스트가
+   `module.main()` 을 **실제로 호출**하기 때문이다 — `--help` 로 `SystemExit` 이 나야
+   거기서 멈춘다. 파싱하지 않는 `main()` 을 넣으면 **진짜 작업이 돌아간다.**
+   예: `scripts/seed_vectordb.py` 는 `main(reset=False)` 가 argparse 를 안 거치고 바로
+   시딩해서(argparse 는 `__main__` 블록에 있다) 넣는 순간 임베딩 504건이 과금된다.
+   `scripts/setup_local_mq.py`(모듈 레벨 `main()` 없음) ·
+   `scripts/smoke_mq.py`(helper import 가 함수 안이라 monkeypatch 불가)도 그대로는 못 넣는다.
 """
 
 
@@ -394,6 +409,17 @@ def test_manually_converted_entrypoints_call_the_helper_before_parsing(
     여기 도달하기 전에 빠져나가 `calls` 가 비고 실패한다 — 순서까지 같이 잠근다.
     """
     module = importlib.import_module(rel.removesuffix(".py").replace("/", "."))
+
+    # ⚠️ **호출 전에** 막는다. 아래는 `main()` 을 실제로 실행하므로, 조건이 안 맞는 파일이
+    #    목록에 들어오면 `AttributeError`·`DID NOT RAISE` 로 죽기 **전에 진짜 작업이 돈다**
+    #    (`seed_vectordb.py` 면 임베딩 과금). 조건은 위 `MANUALLY_CONVERTED` docstring 참고.
+    assert hasattr(module, "main"), (
+        f"{rel} 에 모듈 레벨 main() 이 없습니다 — `__main__` 블록에서 추출할 것"
+    )
+    assert "parse_args" in inspect.getsource(module.main), (
+        f"{rel} 의 main() 이 argv 를 파싱하지 않습니다. 이 테스트는 main() 을 실제로 부르므로 "
+        "파싱이 없으면 --help 에서 안 멈추고 본 작업이 돌아갑니다"
+    )
 
     calls: list[str] = []
     monkeypatch.setattr(module, "force_utf8_output", lambda: calls.append("utf8"))
