@@ -1,5 +1,6 @@
 """공용 pytest 픽스처. pytest가 자동 수집하므로 각 tests/test_*.py에서 import 불필요."""
 
+import logging
 import os
 
 # pipeline.py의 @traceable은 LLM이 mock이어도 트레이스를 실제로 전송한다 — 테스트가
@@ -23,6 +24,30 @@ from app.core.schemas import (
     SourceSignals,
     Verdict,
 )
+
+
+@pytest.fixture(autouse=True)
+def restore_root_logger():
+    """root 로거 상태(레벨·핸들러)를 테스트마다 되돌린다.
+
+    🔴 **왜 필요한가 — 실제로 다른 파일 테스트 2개를 깨뜨렸다**(2026-08-16 실측).
+       진입점의 `configure_logging_or_exit()`(`app/core/logging_setup.py`)이 `LOG_LEVEL`
+       을 **항상** 적용하도록 바뀌면서, 그걸 태우는 테스트가 root 레벨을 바꾼 채 끝나면
+       **뒤에 도는 테스트의 `caplog` 가 조용히 달라진다.** 레벨이 올라간 상태면 기대하던
+       INFO/WARNING 레코드가 아예 안 잡힌다.
+
+    ⚠️ `monkeypatch` 로는 못 막는다 — `handlers` 리스트는 되돌려주지만 **`level` 은
+       되돌리지 않는다.** 그래서 별도 픽스처가 필요하다.
+
+    ⚠️ 실패가 **테스트 단독 실행에서는 재현되지 않는다**(그때는 앞에서 레벨을 바꾼 게
+       없다). 순서에 따라 갈리는 형태라 눈에 잘 안 띈다 — 그래서 전역으로 잠근다.
+    """
+    root = logging.getLogger()
+    level = root.level
+    handlers = root.handlers[:]
+    yield
+    root.setLevel(level)
+    root.handlers[:] = handlers
 
 
 @pytest.fixture(autouse=True)

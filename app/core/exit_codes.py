@@ -7,6 +7,14 @@
 로컬에서 종료 코드를 보는 사람은 없다 (`raw_db.py`·`ids.py`·`KST` 가 core 로 온 것과
 같은 사유).
 
+왜 `constants.py` 가 아니라 별도 파일인가
+------------------------------------------
+`constants.py` 는 자기 docstring 에서 스스로를 *"정량 실험 때 바꿔가며 돌려야 하는 값들"*
+로 규정하고 **"변경 전 팀 합의 필수"** 를 걸어 둔다. 종료 코드는 실험 노브가 아니라 배포
+계약이라 그 문구가 그대로 거짓이 된다. 반대로 `KST` 처럼 *"쓰는 쪽이 갈려 있다"* 는
+사유만 보면 거기 둬도 되긴 한다 — **어느 쪽이든 성립해서 근거를 남긴다**(용준님 PR #96
+리뷰 잔가지). 옮기고 싶어지면 `constants.py` 머리말을 같이 고칠 것.
+
 의미
 ----
     0  정상 종료
@@ -17,9 +25,10 @@
    영원히 재시작만 한다(CrashLoopBackOff). 재시작 로그만 쌓이고 **원인 한 줄이 아무 데도
    안 남아서** 아무도 못 알아챈다. 실제로 `app/main.py` 가 그 상태였다 — `LOG_LEVEL=info`
    (소문자) 하나로 주 배포물이 exit 1 로 못 떴다(2026-08-16, PR #91 후속).
-"""
 
-from __future__ import annotations
+⚠️ **이 계약을 쓰는 진입점은 아직 둘이다.** `app/batch/daily.py` 는 `sys.exit(1)` 리터럴을
+   쓰고 설정 오류도 exit 1 + raw traceback 으로 나간다(사유는 `logging_setup.py` docstring).
+"""
 
 EXIT_CONFIG_ERROR = 2
 """설정 문제로 뜨지 못했다. 재시작해도 같으므로 k8s 가 CrashLoopBackOff 로 알린다."""
