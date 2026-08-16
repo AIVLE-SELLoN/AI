@@ -23,14 +23,21 @@
    (`cs.inquired_at` / `reviews.created_at`) 리뷰에만 `rating` 이 있는 등 컬럼이 갈려서,
    한 테이블에 몰면 NULL 허용이 늘어 제약으로 잡을 수 있는 것이 없어진다.
 
-⚠️ sqlite 방언을 피해 표준 SQL 범위로 유지한다. 운영 Postgres 로 옮길 때 타입 표기만
-   바꾸면(TEXT→VARCHAR(n), TEXT 시각→TIMESTAMPTZ, INTEGER PK→BIGSERIAL) 제약·인덱스·뷰는
-   그대로 쓴다. 시각은 전부 **오프셋이 붙은 ISO 문자열**로 넣는다 — §3 이 날짜 경계를
-   Asia/Seoul 로 못박았는데, 오프셋 없이 넣으면 TIMESTAMPTZ 로 옮길 때 어느 지역 시각인지
-   알 수 없어 하루가 밀린다.
+🔴 **아래 DDL 은 운영에서 안 쓰인다 — 로컬·목 파이프라인 전용이다(2026-08-16 확정).**
+   운영 raw DB(Postgres `rawdb`)의 스키마는 **인프라가 노션 「RAW DB 스키마」(DDL 전문)로
+   세운다.** 우리 코드는 그 스키마를 전제로 조회·삽입만 한다. 그래서 이 파일을 고쳐도
+   운영에는 아무 일도 일어나지 않는다 — 반대로, 운영에 제약이 필요하면 코드가 아니라
+   **문서와 인프라에 요청**해야 한다(§2-6 의 `UNIQUE (item_id, aspect)` 가 그 경우다).
+   로컬 Postgres 스키마는 `docker/postgres/init/01_schema.sql` 이 세운다.
+
+⚠️ sqlite 방언을 피해 표준 SQL 범위로 유지한다. 시각은 전부 **오프셋이 붙은 ISO 문자열**로
+   넣는다 — §3 이 날짜 경계를 Asia/Seoul 로 못박았는데, 오프셋 없이 넣으면 TIMESTAMPTZ 인
+   운영 컬럼으로 옮길 때 어느 지역 시각인지 알 수 없어 하루가 밀린다.
 """
 
 from __future__ import annotations
+
+from app.core import raw_db
 
 # ── main server 소유 (§2-1 · §2-4 · §2-5 · §2-9) ─────────────────────────────
 #
@@ -207,15 +214,25 @@ def active_version_predicate(alias: str = "ci") -> str:
     ⚠️ **`source` 마다 프롬프트가 다르다**(CS=프롬프트1 / 리뷰=프롬프트2). 값 하나로 거를 수
        없어 CASE 로 가른다.
 
-    ⚠️ **`=` 가 아니라 `IS` 다 — sqlite 의 null-safe 비교.** `=` 를 쓰면 버전을 안 남기던
-       시절에 적재된 `NULL` 행이 **어느 쪽으로도 안 걸려** 조용히 빠진다. 가장 오래된,
-       그래서 가장 확실히 옛것인 행들이 하필 안 잡히는 형태다. `IS` 는 NULL 을 포함해 항상
+    ⚠️ **`=` 가 아니라 null-safe 비교다.** `=` 를 쓰면 버전을 안 남기던 시절에 적재된
+       `NULL` 행이 **어느 쪽으로도 안 걸려** 조용히 빠진다. 가장 오래된, 그래서 가장
+       확실히 옛것인 행들이 하필 안 잡히는 형태다. null-safe 는 NULL 을 포함해 항상
        0/1 을 돌려주므로 `NOT (...)` 로 뒤집어도 정확하다(워커의 stale 조회가 그렇게 쓴다).
+
+    🔴 **철자가 `IS` 가 아니라 `IS NOT DISTINCT FROM` 인 이유 — 두 방언의 교집합이다.**
+       sqlite 는 `IS` 를 null-safe 비교로 쓰지만 **Postgres 는 안 그렇다**(거기서 `IS` 는
+       `IS NULL`·`IS TRUE` 계열 전용이라 `x IS ?` 는 구문 오류다). 반대로 sqlite 도 3.39+
+       부터 `IS NOT DISTINCT FROM` 을 `IS` 의 별칭으로 받는다(호스트 3.49 · 런타임 이미지
+       3.46 실측). 그래서 이 철자 하나로 양쪽이 같은 뜻이 되고, **방언 분기도 파라미터
+       개수 변화도 없다** — `version_params()` 의 순서 계약이 그대로 유지된다.
+       `(a = b OR (a IS NULL AND b IS NULL))` 로 풀어쓰는 방식은 `?` 가 두 배로 늘어
+       그 계약을 깨므로 쓰지 않는다.
     """
     return (
-        f"{alias}.prompt_version IS (CASE {alias}.source WHEN 'cs' THEN ? ELSE ? END)"
-        f" AND {alias}.model_version IS ?"
-        f" AND {alias}.pipeline_version IS ?"
+        f"{alias}.prompt_version IS NOT DISTINCT FROM"
+        f" (CASE {alias}.source WHEN 'cs' THEN ? ELSE ? END)"
+        f" AND {alias}.model_version IS NOT DISTINCT FROM ?"
+        f" AND {alias}.pipeline_version IS NOT DISTINCT FROM ?"
     )
 
 
@@ -418,12 +435,17 @@ LEGACY_MARKERS: dict[str, str] = {
 def find_legacy_tables(conn) -> list[str]:
     """확정 스키마 이전 구조로 남아 있는 AI 소유 테이블 이름. 없으면 빈 리스트.
 
-    없는 테이블은 대상이 아니다 — `PRAGMA table_info` 가 빈 결과를 주고, 그건 새로
-    만들면 되는 정상 상태다. "있는데 컬럼이 옛것"인 경우만 골라낸다.
+    없는 테이블은 대상이 아니다 — 컬럼 조회가 빈 결과를 주고, 그건 새로 만들면 되는
+    정상 상태다. "있는데 컬럼이 옛것"인 경우만 골라낸다.
+
+    ⚠️ 컬럼 조회를 `raw_db.table_columns()` 에 맡긴다 — sqlite 는 `PRAGMA table_info`,
+       Postgres 는 `information_schema.columns` 로 방언이 완전히 갈리는 자리다. 여기서
+       `PRAGMA` 를 직접 쓰면 **Postgres 에서 이 가드 자신이 구문 오류로 죽는다**(스키마가
+       멀쩡한지 보려던 코드가 먼저 터지는 모양이라 원인이 메시지에 안 드러난다).
     """
     stale = []
     for table, marker in LEGACY_MARKERS.items():
-        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        columns = raw_db.table_columns(conn, table)
         if columns and marker not in columns:
             stale.append(table)
     return stale

@@ -32,7 +32,12 @@ def _enum_value(value):
 
 def build_oracle_connection(db_path: Path) -> tuple[sqlite3.Connection, int, int]:
     """읽기 전용 원본을 메모리에 복사하고 골든 매핑·분류 결과를 주입한다."""
-    source = connect_readonly(str(db_path))
+    # ⚠️ **`dsn=""` 로 sqlite 를 명시한다.** 이 러너는 목 `raw.db` 를 메모리로 복사해
+    #    (`Connection.backup()`) 골든 라벨을 주입하는 sqlite 전용 절차다. 명시하지 않으면
+    #    `.env` 에 `RAW_DB_DSN` 이 남아 있는 환경에서 Postgres 연결이 돌아와
+    #    `AttributeError: 'PostgresConnection' object has no attribute 'backup'` 로 죽는데,
+    #    원인이 "왜 여기서 backup 이 없지" 로 보여서 안 드러난다.
+    source = connect_readonly(str(db_path), dsn="")
     conn = sqlite3.connect(":memory:")
     try:
         source.backup(conn)
