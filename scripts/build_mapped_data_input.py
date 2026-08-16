@@ -57,6 +57,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from app.core.console import force_utf8_output
 
 DEFAULT_SRC = ROOT / "data" / "golden" / "golden_mapping.csv"
 DEFAULT_DST = ROOT / "data" / "input" / "input_mapped_data.csv"
@@ -216,6 +219,14 @@ def check_against_catalog(rows: list[dict[str, str]], catalog: Path) -> None:
 
 
 def main() -> None:
+    # 🔴 **첫 문장이어야 한다.** 예전엔 `parse_args()` 뒤에서 stdout·stderr 를
+    #    직접 `reconfigure` 했는데, 그러면 `--help` 가 그 전에 찍힌다 — 이 스크립트의
+    #    `description` 첫 줄에 `—`(U+2014) 가 있어서 cp949 콘솔에서는 도움말만 요청해도
+    #    `UnicodeEncodeError` 로 죽었다(2026-08-14 실측). 사유 전문은 `app/core/console.py`.
+    # ⚠️ stdout 만이 아니라 **stderr 도** 바꿔야 한다 — 이 스크립트의 실패는 전부
+    #    `SystemExit` 이고, 어느 행이 왜 틀렸는지가 그 메시지에 실린다(`_BUNDLE_HINT` 포함).
+    force_utf8_output()
+
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--src", default=str(DEFAULT_SRC), help=f"기본 {DEFAULT_SRC}")
     ap.add_argument("--out", default=str(DEFAULT_DST), help=f"기본 {DEFAULT_DST}")
@@ -224,12 +235,6 @@ def main() -> None:
     )
     ap.add_argument("--dry-run", action="store_true", help="파일을 쓰지 않고 요약만")
     args = ap.parse_args()
-
-    # ⚠️ **stderr 도 같이 맞춘다.** 이 스크립트의 실패는 전부 `SystemExit` 이고 그 메시지는
-    #    stderr 로 나가는데, 윈도우 콘솔 기본 코드페이지에서는 한글이 깨진다. 어느 행이
-    #    왜 틀렸는지 알려주려고 넣은 문장이 정작 안 읽히면 아무 의미가 없다.
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.stderr.reconfigure(encoding="utf-8")
 
     src, dst = Path(args.src), Path(args.out)
     if not src.exists():
