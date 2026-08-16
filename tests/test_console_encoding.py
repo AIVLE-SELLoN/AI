@@ -69,6 +69,9 @@ DOCKER_COPY_DIR = re.compile(r"^COPY\s+(?:--\S+\s+)*([\w.-]+)/\s", re.MULTILINE)
 
 HELPER = "force_utf8_output"
 
+HELPER_MODULE = "app.core.console"
+"""helper 의 정본 위치. 진입점은 **여기서** import 해야 한다(사설 복사본 금지)."""
+
 YAML_COMMENT = re.compile(r"(?:^|\s)#.*$")
 """compose 의 주석 — **전체줄과 인라인을 모두** 지운다.
 
@@ -206,6 +209,40 @@ def _call_name(node: ast.expr) -> str | None:
     if isinstance(func, ast.Attribute):
         return func.attr
     return None
+
+
+def _imports_canonical_helper(tree: ast.Module) -> bool:
+    """`app.core.console` 의 helper 를 **모듈 최상단에서, `__main__` 가드보다 먼저** import 하는지.
+
+    🔴 **호출만 검사하면 이 회귀를 통째로 놓친다**(서영님 PR #97 리뷰, 재현함). import 한 줄만
+       지우고 호출을 남기면 `_calls_helper_first` 는 **통과**하는데 CLI 는 첫 문장에서
+       `NameError` 로 죽는다. 이름이 같은 무엇이든 첫 문장이면 되는 게 아니라, **그 이름이
+       공용 helper 여야** 한다.
+
+    세 가지를 한 번에 막는다.
+      - **import 없음** — 위 회귀
+      - **가드 뒤 import** — 모듈은 위에서 아래로 실행되므로 `__main__` 블록이 먼저 돌아
+        역시 `NameError` 다. 그래서 줄 번호를 비교한다
+      - **사설 동명 함수** — `def force_utf8_output(): ...` 로 되돌아가는 것
+        (`app/core/console.py` 가 "떠나온 안티패턴" 이라 적어 둔 그것). `ImportFrom` 이
+        아니므로 안 잡힌다
+
+    ⚠️ `import app.core.console` **후 `app.core.console.force_utf8_output()`** 형태는 일부러
+       통과시키지 않는다 — 저장소에 0건이고, 관용구를 하나로 두는 편이 낫다. 그 형태를 쓰려면
+       이 함수를 넓히고 실패 메시지도 같이 고칠 것.
+    """
+    guard_line = next(
+        (node.lineno for node in tree.body if _is_main_guard(node)), None
+    )
+    if guard_line is None:
+        return False
+    return any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == HELPER_MODULE
+        and any(alias.name == HELPER for alias in node.names)
+        and node.lineno < guard_line
+        for node in tree.body
+    )
 
 
 def _calls_helper_first(tree: ast.Module) -> bool:
@@ -365,18 +402,33 @@ def test_guarded_entrypoints_switch_console_encoding() -> None:
     어디가 "진입 지점" 인지는 `_entry_body()` 가 정한다 — `__main__` 블록이 기준이고,
     그 블록이 `main()` 위임 한 줄뿐일 때만 그 함수 안이다.
 
-    ⚠️ **import 를 모듈 최상단에 둘 것.** 함수 안에서 import 하면 배선 테스트가
-       몽키패치를 못 걸어 호출 여부를 고정할 수 없다.
-    """
-    missing = [
-        p.relative_to(ROOT).as_posix()
-        for p in _guarded_entrypoints()
-        if (tree := _parse(p)) is None or not _calls_helper_first(tree)
-    ]
+    🔴 **호출과 import 를 둘 다 본다.** 호출만 보면 `import` 한 줄만 지운 회귀를 놓친다 —
+       가드는 통과하는데 CLI 는 첫 문장에서 `NameError` 로 죽는다(서영님 PR #97 리뷰에서
+       실측). 사유는 `_imports_canonical_helper`.
 
-    assert not missing, (
+    ⚠️ **import 는 모듈 최상단, `__main__` 가드보다 앞.** 함수 안에 두면 실행은 되더라도
+       배선을 테스트로 고정할 수 없고, 가드보다 뒤에 두면 그대로 `NameError` 다.
+    """
+    no_call: list[str] = []
+    no_import: list[str] = []
+    for path in _guarded_entrypoints():
+        rel = path.relative_to(ROOT).as_posix()
+        tree = _parse(path)
+        if tree is None or not _calls_helper_first(tree):
+            no_call.append(rel)
+        # ⚠️ 두 목록을 **따로** 모은다. 합쳐 보고하면 어느 쪽이 빠졌는지 몰라 고치는 사람이
+        #    호출을 또 넣거나 import 를 또 넣는다.
+        if tree is not None and not _imports_canonical_helper(tree):
+            no_import.append(rel)
+
+    assert not no_call, (
         "진입 지점의 첫 문장에서 force_utf8_output() 을 안 부릅니다:\n  "
-        + "\n  ".join(missing)
+        + "\n  ".join(no_call)
+    )
+    assert not no_import, (
+        f"모듈 최상단(=`__main__` 가드보다 앞)에서 `from {HELPER_MODULE} import {HELPER}` 를 "
+        "하지 않습니다 — 호출만 있으면 CLI 가 NameError 로 죽습니다:\n  "
+        + "\n  ".join(no_import)
     )
 
 
@@ -529,6 +581,72 @@ def test_main_block_ignores_mentions_in_docstrings_and_comments(tmp_path: Path) 
         'HELP = "if __name__ == \\"__main__\\":"\n'
     )
     assert not _has_main_block(_tmp_module(tmp_path, body))
+
+
+CANONICAL_IMPORT = f"from {HELPER_MODULE} import {HELPER}\n"
+
+CALL_WITHOUT_IMPORT = f"def main():\n    {HELPER}()\n{MAIN_GUARD}"
+"""🔴 서영님 PR #97 리뷰에서 실측된 회귀 — 호출만 남기고 import 를 지운 모양."""
+
+IMPORT_AFTER_GUARD = f"def main():\n    {HELPER}()\n{MAIN_GUARD}{CANONICAL_IMPORT}"
+"""import 가 `__main__` 가드보다 뒤 — 실행 순서상 그대로 `NameError`."""
+
+PRIVATE_HELPER_DEF = (
+    f"def {HELPER}():\n    pass\ndef main():\n    {HELPER}()\n{MAIN_GUARD}"
+)
+"""사설 동명 함수 — `app/core/console.py` 가 "떠나온 안티패턴" 이라 적어 둔 그것."""
+
+IMPORT_INSIDE_FUNCTION = (
+    f"def main():\n    from {HELPER_MODULE} import {HELPER}\n    {HELPER}()\n{MAIN_GUARD}"
+)
+"""함수 안 import — 실행은 되지만 배선을 테스트로 고정할 수 없다."""
+
+IMPORT_FROM_OTHER_MODULE = (
+    f"from app.core.constants import KST\ndef main():\n    {HELPER}()\n{MAIN_GUARD}"
+)
+"""엉뚱한 모듈에서 온 import — 이름만 맞다고 통과하면 안 된다."""
+
+
+@pytest.mark.parametrize(
+    "body, expected, why",
+    [
+        (
+            f"{CANONICAL_IMPORT}def main():\n    force_utf8_output()\n{MAIN_GUARD}",
+            True,
+            "모듈 최상단 import + 가드보다 앞",
+        ),
+        (
+            CALL_WITHOUT_IMPORT,
+            False,
+            "🔴 import 없이 호출만 — 가드는 통과하는데 CLI 는 NameError (서영님 #97 실측)",
+        ),
+        (
+            IMPORT_AFTER_GUARD,
+            False,
+            "🔴 import 가 __main__ 가드보다 **뒤** — 모듈은 위에서 아래로 도니 역시 NameError",
+        ),
+        (
+            PRIVATE_HELPER_DEF,
+            False,
+            "🔴 사설 동명 함수 — 공용 helper 로부터의 import 가 아니다",
+        ),
+        (
+            IMPORT_INSIDE_FUNCTION,
+            False,
+            "🔴 함수 안 import — 모듈 최상단이 아니라 배선을 고정할 수 없다",
+        ),
+        (
+            IMPORT_FROM_OTHER_MODULE,
+            False,
+            "🔴 다른 모듈에서 온 import 는 근거가 안 된다",
+        ),
+    ],
+)
+def test_import_detector_requires_the_canonical_helper_import(
+    tmp_path: Path, body: str, expected: bool, why: str
+) -> None:
+    """🔴 호출 검사와 **짝**이다. 하나만 있으면 반대쪽 회귀를 통째로 놓친다."""
+    assert _imports_canonical_helper(_tmp_module(tmp_path, body)) is expected, why
 
 
 @pytest.mark.parametrize(
