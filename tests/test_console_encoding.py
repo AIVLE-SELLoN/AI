@@ -47,7 +47,6 @@ from __future__ import annotations
 
 import ast
 import importlib
-import inspect
 import os
 import re
 import subprocess
@@ -393,6 +392,26 @@ def test_manually_converted_entrypoints_survive_cp949_help(rel: str) -> None:
     assert proc.stdout, f"{rel} 이 --help 에 아무것도 출력하지 않았습니다"
 
 
+def _main_parses_argv(path: Path) -> bool:
+    """모듈 레벨 `main()` 이 `parse_args()` 를 **실제로 호출**하는지.
+
+    🔴 **문자열 매칭이 아니라 AST 다.** 처음엔 `"parse_args" in inspect.getsource(main)`
+       으로 썼는데, 그러면 **docstring·주석에 그 단어만 있어도 통과**한다. 파싱을 안 하는
+       `main()` 이 가드를 지나 **실제로 실행되는** 방향의 오검출이라 제일 나쁘다 —
+       `_calls_helper_first` 가 정규식·tokenize 를 버린 것과 같은 사유(이 파일 머리말).
+    """
+    tree = _parse(path)
+    if tree is None:
+        return False
+    fn = next(
+        (n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main"),
+        None,
+    )
+    if fn is None:
+        return False
+    return any(_call_name(n) == "parse_args" for n in ast.walk(fn) if isinstance(n, ast.Call))
+
+
 @pytest.mark.parametrize("rel", MANUALLY_CONVERTED)
 def test_manually_converted_entrypoints_call_the_helper_before_parsing(
     rel: str, monkeypatch: pytest.MonkeyPatch
@@ -416,7 +435,7 @@ def test_manually_converted_entrypoints_call_the_helper_before_parsing(
     assert hasattr(module, "main"), (
         f"{rel} 에 모듈 레벨 main() 이 없습니다 — `__main__` 블록에서 추출할 것"
     )
-    assert "parse_args" in inspect.getsource(module.main), (
+    assert _main_parses_argv(ROOT / rel), (
         f"{rel} 의 main() 이 argv 를 파싱하지 않습니다. 이 테스트는 main() 을 실제로 부르므로 "
         "파싱이 없으면 --help 에서 안 멈추고 본 작업이 돌아갑니다"
     )
