@@ -54,6 +54,7 @@ networks:
 volumes:
   kafka-1-data:
   rabbitmq-data:
+  rawdb-data:
 
 x-kafka-common: &kafka-common
   image: confluentinc/cp-kafka:7.5.0
@@ -247,4 +248,52 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    restart: unless-stopped
+
+  # raw DB (Postgres) — 운영 이식 검증용. **데모는 여전히 sqlite 다.**
+  #
+  # ⚠️ **이건 로컬 검증용이다. 운영 rawdb 는 인프라가 띄우고 스키마도 인프라가 세운다**
+  #    (2026-08-16 확정). 여기 있는 것과 운영이 어긋나면 **노션 「RAW DB 스키마」가 맞고
+  #    이 서비스가 틀린 것**이다. RabbitMQ 를 우리가 띄워 발행을 검증한 것과 같은 방식.
+  #
+  # 🔴 **띄운다고 데모가 이쪽을 보지는 않는다.** 백엔드를 가르는 것은 `.env` 의
+  #    `RAW_DB_DSN` 하나이고, 비어 있으면(기본값) 코드가 sqlite `RAW_DB_PATH` 로 간다.
+  #    즉 이 서비스를 올려도 `RAW_DB_DSN` 을 안 채우면 아무것도 안 바뀐다 — 의도다.
+  #
+  #   docker compose up -d rawdb
+  #   .env 에  RAW_DB_DSN=postgresql://sellon:sellon@localhost:5433/rawdb
+  #   ⚠️ 검증이 끝나면 그 줄을 지울 것 — 남겨두면 sqlite 데모가 빈 Postgres 를 본다.
+  #
+  # ⚠️ **호스트 포트가 5433 이다**(백엔드 관례). 5432 는 로컬에 이미 Postgres 를 깔아둔
+  #    사람과 충돌한다. 컨테이너 안은 표준 5432 라 컨테이너끼리는 `rawdb:5432` 로 붙는다.
+  #
+  # ⚠️ init 스크립트는 **볼륨이 비어 있을 때 한 번만** 실행된다. SQL 을 고친 뒤 다시
+  #    적용하려면 `docker compose down -v rawdb` 로 볼륨을 지우고 다시 올려야 한다
+  #    (고쳤는데 반영이 안 되는 것처럼 보이는 자리다).
+  #
+  # ⚠️ **운영 Postgres 메이저 버전은 아직 확인 안 됐다**(인프라 회신 대기). 16 은 우리
+  #    쪽 가정이고, 우리가 쓰는 문법(TIMESTAMPTZ · GENERATED AS IDENTITY ·
+  #    IS NOT DISTINCT FROM · information_schema)은 12+ 면 전부 같다.
+  rawdb:
+    image: postgres:16-alpine
+    container_name: sellon-rawdb
+    networks:
+      - app-network
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: rawdb
+      POSTGRES_USER: ${RAW_DB_USER:-sellon}
+      POSTGRES_PASSWORD: ${RAW_DB_PASSWORD:-sellon}
+    volumes:
+      - rawdb-data:/var/lib/postgresql/data
+      # 노션 DDL 전문(01) + 정본에 없는 우리 요구사항(02). 파일이 나뉜 이유는
+      # 02 머리말 참고 — 그 파일이 곧 인프라 요청 목록이다.
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${RAW_DB_USER:-sellon} -d rawdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
