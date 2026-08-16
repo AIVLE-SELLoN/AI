@@ -15,7 +15,7 @@ uvicorn worker 를 2개 이상 띄우면 **컨슈머도 2개가 되어 같은 �
 Ctrl+C(SIGINT) 또는 SIGTERM(k8s) 으로 멈춘다. **처리 중이던 메시지는 유실되지 않는다** —
 Manual ACK 라 확인하지 않은 메시지는 연결이 끊기는 순간 브로커가 큐로 되돌린다.
 
-종료 코드
+종료 코드 (정본은 `app/core/exit_codes.py` — 웹 진입점과 같은 계약을 쓴다)
     0  정상 종료(종료 신호를 받음)
     1  실행 중 오류 — 브로커 접속 실패 등. 재시작하면 나을 수 있다
     2  설정 문제로 뜨지 못함 — 재시작해도 같으므로 k8s 가 CrashLoopBackOff 로 알린다
@@ -37,6 +37,7 @@ from app.config import get_settings
 from app.core import mq_consumer
 from app.core.console import force_utf8_output
 from app.core.exceptions import AiServiceError
+from app.core.exit_codes import EXIT_CONFIG_ERROR, EXIT_RUNTIME_ERROR
 from app.core.mq_consumer import (
     RECOMMENDATION_REVIEWED,
     REPORT_CREATED,
@@ -45,9 +46,6 @@ from app.core.mq_consumer import (
 )
 
 logger = logging.getLogger(__name__)
-
-EXIT_CONFIG_ERROR = 2
-EXIT_RUNTIME_ERROR = 1
 
 
 def wire_handlers() -> None:
