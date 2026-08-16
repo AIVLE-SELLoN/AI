@@ -39,7 +39,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # scripts/ 가 필요한 이유: 분류 워커(`python scripts/classification_worker.py`)가
 # k8s CronJob 으로 돌게 되어, compose 의 ./scripts 마운트가 없는 클러스터에서는
 # 이미지 안에 실물이 있어야 한다. 프롬프트는 app/**/prompts/ 라 COPY app/ 에 이미
-# 포함되고, scripts/ 는 코드 파일뿐이다 — 입력 CSV·raw.db 는 여전히 볼륨으로 공급한다.
+# 포함된다. scripts/ 에 들어가는 건 코드와 scripts/prompts/ 의 스크립트 전용 프롬프트
+# 뿐이다 — 입력 CSV·raw.db 는 여전히 볼륨으로 공급한다.
 COPY app/ ./app/
 COPY scripts/ ./scripts/
 
