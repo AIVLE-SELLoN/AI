@@ -223,6 +223,8 @@ def main() -> None:
     #    직접 `reconfigure` 했는데, 그러면 `--help` 가 그 전에 찍힌다 — 이 스크립트의
     #    `description` 첫 줄에 `—`(U+2014) 가 있어서 cp949 콘솔에서는 도움말만 요청해도
     #    `UnicodeEncodeError` 로 죽었다(2026-08-14 실측). 사유 전문은 `app/core/console.py`.
+    # ⚠️ stdout 만이 아니라 **stderr 도** 바꿔야 한다 — 이 스크립트의 실패는 전부
+    #    `SystemExit` 이고, 어느 행이 왜 틀렸는지가 그 메시지에 실린다(`_BUNDLE_HINT` 포함).
     force_utf8_output()
 
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])

@@ -1145,9 +1145,15 @@ class ClassificationWorker:
         self.is_running = False
 
 
-if __name__ == "__main__":
-    # 🔴 **첫 문장이어야 한다.** `--limit` 도움말(1167행)에 `—`(U+2014) 가 있어서,
-    #    아래 `parse_args()` 가 그걸 먼저 찍으면 cp949 콘솔에서는 도움말만 요청해도
+def main() -> None:
+    """CLI 진입점.
+
+    ⚠️ **`if __name__` 블록에 인라인으로 두지 말 것.** 그러면 pytest 가 그 블록을
+       실행하지 않아 `force_utf8_output()` 배선을 테스트로 잠글 수 없다 —
+       나머지 진입점과 형태도 갈린다(용준님 PR #92 리뷰 B-1).
+    """
+    # 🔴 **첫 문장이어야 한다.** `--limit` 도움말에 `—`(U+2014) 가 있어서, 아래
+    #    `parse_args()` 가 그걸 먼저 찍으면 cp949 콘솔에서는 도움말만 요청해도
     #    `UnicodeEncodeError` 로 죽는다(2026-08-14 실측). 사유 전문은 `app/core/console.py`.
     force_utf8_output()
 
@@ -1199,3 +1205,7 @@ if __name__ == "__main__":
         reclassify_stale=args.reclassify_stale,
     )
     worker.start()
+
+
+if __name__ == "__main__":
+    main()

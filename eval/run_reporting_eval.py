@@ -646,9 +646,9 @@ async def main_async(args: argparse.Namespace) -> None:
 
 def main() -> None:
     # 🔴 **첫 문장이어야 한다.** 예전엔 모듈 최상단에서 `sys.stdout` 만 `reconfigure` 했다.
-    #    ① stderr 를 안 바꿔서 로깅·traceback 은 그대로 깨졌고 ② `errors="replace"` 도
-    #    `contextlib.suppress` 도 없어 `reconfigure` 가 없는 스트림에서는 **import 만 해도**
-    #    터졌다. 사유 전문은 `app/core/console.py`.
+    #    ① stderr 를 안 바꿔서 로깅·traceback 은 그대로 깨졌고 ② `contextlib.suppress` 가
+    #    없어 `.reconfigure` 가 아예 없는 스트림(pytest 캡처 등)에서는 `AttributeError` 로
+    #    **import 만 해도** 터졌다. 사유 전문은 `app/core/console.py`.
     force_utf8_output()
 
     parser = argparse.ArgumentParser(description="실험⑦ 리포팅 정량 실험")
