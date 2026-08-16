@@ -776,3 +776,593 @@ async def test_window_end_fallback_uses_kst_today(tmp_path, monkeypatch):
     )
 
     assert seen == [date(2026, 3, 5)], "UTC 호스트에서 오늘 날짜가 하루 밀렸습니다"
+
+
+# ── §4 가이드라인 재시도 대기열 (2026-08-14) ─────────────────────
+#
+# "알림 발행은 성공했는데 가이드라인만 실패" 하면 알림이 억제 캐시에 들어가
+# 그 건의 가이드라인이 영영 재시도되지 않던 구멍을 막는다. 대기열은
+# published_alerts.json 이 아니라 **별도 파일**이다 — §2 조회 API 가 붙으면
+# 억제 캐시는 통째로 걷어내는데 "가이드라인을 받았는지"는 그 응답에 없어서다.
+
+
+def _pending_path(tmp_path):
+    return tmp_path / "pending.json"
+
+
+class _FakeCallback:
+    """generate_guideline 반환값 흉내. 배치는 내용을 안 보고 None 여부만 본다."""
+
+    def __init__(self, alert_id):
+        self.guideline_id = f"GD-{alert_id}"
+
+
+@pytest.mark.asyncio
+async def test_guideline_publish_failure_goes_to_pending_queue(tmp_path, monkeypatch):
+    """🔴 §4 본체 — 발행 실패분이 대기열에 남고, 알림 자체는 억제 캐시에 들어간다.
+
+    알림까지 캐시에서 빼면 다음 배치가 알림·개선안을 통째로 재생성한다(LLM 재지불).
+    가이드라인만 대기열로 가는 것이 '상태 두 단계로 쪼개기'의 핵심이다.
+    """
+
+    async def fake_guideline(alert, inquiries, *, product_name=None):
+        return _FakeCallback(alert.alert_id)
+
+    async def sent(alert, rec, trace_id, versions=None):
+        return None
+
+    async def guideline_publish_fails(guideline, trace_id):
+        raise RuntimeError("MQ down")
+
+    monkeypatch.setattr(daily, "generate_guideline", fake_guideline)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+    monkeypatch.setattr(daily, "publish_guideline_generated", guideline_publish_fails)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json",
+        pending_path=_pending_path(tmp_path),
+        load_inputs=_stub_inputs,
+    )
+
+    saved = json.loads(_pending_path(tmp_path).read_text(encoding="utf-8"))
+    assert len(saved) == 1, "발행 실패분이 대기열에 있어야 한다"
+    assert saved[0]["attempts"] == 0, "본배치 실패는 재시도를 아직 안 쓴 상태다"
+    assert summary["guideline_pending"] == 1
+    assert summary["delivered"] >= 1, (
+        "알림은 발행·캐시돼야 한다 — 억제가 유지돼야 재과금이 없다"
+    )
+    assert any(f["stage"] == "발행:가이드" for f in summary["failures"])
+
+
+@pytest.mark.asyncio
+async def test_guideline_generation_exception_goes_to_pending_queue(
+    tmp_path, monkeypatch
+):
+    """생성 예외도 대기열 대상이다 — 백엔드가 아무것도 못 들은 건 같아서다."""
+
+    async def guideline_gen_fails(alert, inquiries, *, product_name=None):
+        raise ValueError("대상 알림인데 원문 조회가 전부 실패")
+
+    async def sent(alert, rec, trace_id, versions=None):
+        return None
+
+    monkeypatch.setattr(daily, "generate_guideline", guideline_gen_fails)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json",
+        pending_path=_pending_path(tmp_path),
+        load_inputs=_stub_inputs,
+    )
+
+    saved = json.loads(_pending_path(tmp_path).read_text(encoding="utf-8"))
+    assert len(saved) == 1
+    assert summary["guideline_pending"] == 1
+    assert any(f["stage"] == "가이드라인" for f in summary["failures"])
+
+
+@pytest.mark.asyncio
+async def test_not_a_target_is_not_enqueued(tmp_path, monkeypatch):
+    """None(대상 아님)은 대기열에 안 들어간다 — 스코프 밖 알림이 영구 적재되면 안 된다."""
+
+    async def not_a_target(alert, inquiries, *, product_name=None):
+        return None
+
+    async def sent(alert, rec, trace_id, versions=None):
+        return None
+
+    monkeypatch.setattr(daily, "generate_guideline", not_a_target)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json",
+        pending_path=_pending_path(tmp_path),
+        load_inputs=_stub_inputs,
+    )
+
+    assert summary["guideline_pending"] == 0
+    assert json.loads(_pending_path(tmp_path).read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.asyncio
+async def test_failed_callback_that_published_is_not_enqueued(tmp_path, monkeypatch):
+    """FAILED_* 콜백이 정상 발행됐으면 재시도하지 않는다 — 종결 상태다.
+
+    generate_guideline docstring 이 FAILED_* 를 백엔드가 "생성 중" 에서 벗어나는
+    종결 상태로 규정한다. 재시도하면 백엔드의 FAILED 행을 나중에 SUCCESS 로 덮는
+    계약 변경이 된다. 배치는 콜백 내용을 안 보므로 발행 성공 여부가 유일한 기준이다.
+    """
+
+    async def failed_callback(alert, inquiries, *, product_name=None):
+        return _FakeCallback(alert.alert_id)  # status=FAILED_* 였다고 가정
+
+    async def sent(alert, rec, trace_id, versions=None):
+        return None
+
+    async def guideline_publish_ok(guideline, trace_id):
+        return None
+
+    monkeypatch.setattr(daily, "generate_guideline", failed_callback)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+    monkeypatch.setattr(daily, "publish_guideline_generated", guideline_publish_ok)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json",
+        pending_path=_pending_path(tmp_path),
+        load_inputs=_stub_inputs,
+    )
+
+    assert summary["guideline_pending"] == 0
+    assert json.loads(_pending_path(tmp_path).read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.asyncio
+async def test_retry_pass_republishes_and_dequeues(tmp_path, monkeypatch):
+    """대기열의 건이 다음 배치에서 재생성 → 재발행되고 대기열에서 빠진다."""
+    pending_path = _pending_path(tmp_path)
+    daily.save_pending_guidelines(
+        [{"alert": _alert("ALT-PENDING", date(2026, 8, 27)), "attempts": 0}],
+        pending_path,
+    )
+
+    published: list[str] = []
+
+    async def fake_guideline(alert, inquiries, *, product_name=None):
+        return _FakeCallback(alert.alert_id)
+
+    async def sent(alert, rec, trace_id, versions=None):
+        return None
+
+    async def record_publish(guideline, trace_id):
+        published.append(guideline.guideline_id)
+
+    monkeypatch.setattr(daily, "generate_guideline", fake_guideline)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+    monkeypatch.setattr(daily, "publish_guideline_generated", record_publish)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json",
+        pending_path=pending_path,
+        load_inputs=_stub_inputs,
+    )
+
+    assert "GD-ALT-PENDING" in published, "대기 건이 재발행돼야 한다"
+    assert summary["guideline_retried"] == 1
+    assert summary["guideline_pending"] == 0
+    assert json.loads(pending_path.read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.asyncio
+async def test_retry_failure_increments_attempts_and_keeps_entry(tmp_path, monkeypatch):
+    """재시도가 또 실패하면 attempts 만 오르고 대기열에 남는다 + 요약에도 남는다."""
+    pending_path = _pending_path(tmp_path)
+    daily.save_pending_guidelines(
+        [{"alert": _alert("ALT-PENDING", date(2026, 8, 27)), "attempts": 0}],
+        pending_path,
+    )
+
+    async def fake_guideline(alert, inquiries, *, product_name=None):
+        return _FakeCallback(alert.alert_id)
+
+    async def sent(alert, rec, trace_id, versions=None):
+        return None
+
+    async def guideline_publish_fails(guideline, trace_id):
+        raise RuntimeError("MQ still down")
+
+    monkeypatch.setattr(daily, "generate_guideline", fake_guideline)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+    monkeypatch.setattr(daily, "publish_guideline_generated", guideline_publish_fails)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json",
+        pending_path=pending_path,
+        load_inputs=_stub_inputs,
+    )
+
+    saved = {
+        item["alert"]["alert_id"]: item
+        for item in json.loads(pending_path.read_text(encoding="utf-8"))
+    }
+    assert saved["ALT-PENDING"]["attempts"] == 1, "재시도 1회 소진이 기록돼야 한다"
+    assert summary["guideline_retried"] == 0
+    retry_failures = [f for f in summary["failures"] if f["stage"] == "가이드라인 재시도"]
+    # 식별자 키는 target_key 하나다(#80 후속) — alert_id 로 넣으면 print_summary 가
+    # "식별자 없음" 으로 찍는다.
+    assert retry_failures and retry_failures[0]["target_key"] == "ALT-PENDING"
+    # 이 배치 자신의 신규 실패도 attempts=0 으로 같이 들어간다 — 서로 안 겹친다.
+    assert all(
+        item["attempts"] == 0 for aid, item in saved.items() if aid != "ALT-PENDING"
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_exhausted_is_dropped_not_retried_forever(tmp_path, monkeypatch):
+    """상한을 소진하면 포기한다 — 영구 실패(S3 미구성)의 매일 재지불을 막는다."""
+    pending_path = _pending_path(tmp_path)
+    daily.save_pending_guidelines(
+        [
+            {
+                "alert": _alert("ALT-PENDING", date(2026, 8, 27)),
+                "attempts": daily.GUIDELINE_RETRY_MAX_ATTEMPTS - 1,
+            }
+        ],
+        pending_path,
+    )
+
+    async def guideline_for_pending_only(alert, inquiries, *, product_name=None):
+        # 메인 루프의 신규 알림은 대상 아님(None) — 재시도 경로만 검사한다.
+        if alert.alert_id == "ALT-PENDING":
+            return _FakeCallback(alert.alert_id)
+        return None
+
+    async def sent(alert, rec, trace_id, versions=None):
+        return None
+
+    async def guideline_publish_fails(guideline, trace_id):
+        raise RuntimeError("S3 미구성 — 영구 실패")
+
+    monkeypatch.setattr(daily, "generate_guideline", guideline_for_pending_only)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+    monkeypatch.setattr(daily, "publish_guideline_generated", guideline_publish_fails)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json",
+        pending_path=pending_path,
+        load_inputs=_stub_inputs,
+    )
+
+    assert summary["guideline_retry_exhausted"] == 1
+    assert summary["guideline_pending"] == 0, "포기한 건은 대기열에서 빠져야 한다"
+    assert json.loads(pending_path.read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.asyncio
+async def test_dry_run_counts_pending_but_touches_nothing(tmp_path, monkeypatch):
+    """dry-run 은 대기 건을 비용 추정에 더하되, 재시도도 저장도 하지 않는다."""
+    pending_path = _pending_path(tmp_path)
+    daily.save_pending_guidelines(
+        [
+            {"alert": _alert("ALT-P1", date(2026, 8, 27)), "attempts": 0},
+            {"alert": _alert("ALT-P2", date(2026, 8, 26)), "attempts": 1},
+        ],
+        pending_path,
+    )
+    before = pending_path.read_text(encoding="utf-8")
+
+    published: list = []
+
+    async def record_publish(guideline, trace_id):
+        published.append(guideline)
+
+    monkeypatch.setattr(daily, "publish_guideline_generated", record_publish)
+
+    summary = await daily.run_batch(
+        dry_run=True,
+        state_path=tmp_path / "state.json",
+        pending_path=pending_path,
+        load_inputs=_stub_inputs,
+    )
+
+    # 스텁 알림은 inquiry_ids 가 비어 게이트가 닫히므로(0건) 대기 2건이 전부다.
+    assert summary["llm_calls"].get("가이드라인") == 2, (
+        "재시도 비용이 추정에 들어가야 한다"
+    )
+    assert published == [], "dry-run 은 발행하지 않는다"
+    assert pending_path.read_text(encoding="utf-8") == before, (
+        "dry-run 은 파일을 안 건드린다"
+    )
+    assert summary["guideline_pending"] == 2
+
+
+def test_pending_entries_older_than_retention_are_dropped(tmp_path):
+    """보관 기간(35일) 밖의 대기 건은 로드에서 포기된다 — 원문이 입력 창 밖이라 성공 불가."""
+    path = _pending_path(tmp_path)
+    now = date(2026, 8, 28)
+    old = date.fromordinal(now.toordinal() - daily.STATE_RETENTION_DAYS - 1)
+    daily.save_pending_guidelines(
+        [
+            {"alert": _alert("ALT-FRESH", now), "attempts": 1},
+            {"alert": _alert("ALT-STALE", old), "attempts": 0},
+        ],
+        path,
+    )
+
+    loaded = daily.load_pending_guidelines(now, path)
+
+    assert [e["alert"].alert_id for e in loaded] == ["ALT-FRESH"]
+    assert loaded[0]["attempts"] == 1, "왕복에서 attempts 가 보존돼야 한다"
+
+
+def test_corrupt_pending_file_degrades_to_empty(tmp_path):
+    """깨진 대기열은 빈 대기열로 강등된다 — 파일 하나로 배치가 영구히 못 뜨면 안 된다."""
+    path = _pending_path(tmp_path)
+    path.write_text("{ not json", encoding="utf-8")
+    assert daily.load_pending_guidelines(date(2026, 8, 28), path) == []
+
+    path.write_text(
+        json.dumps([{"alert": {"broken": True}, "attempts": 0}]), encoding="utf-8"
+    )
+    assert daily.load_pending_guidelines(date(2026, 8, 28), path) == []
+
+
+@pytest.mark.asyncio
+async def test_pending_path_derives_from_custom_state_path(tmp_path, monkeypatch):
+    """--state-path 를 주면 대기열도 그 옆 파생 이름으로 따라간다.
+
+    디렉토리가 아니라 **파일명에서** 파생한다 — 파일명만 바꿔 운영 디렉토리를 준
+    디버그 실행이 운영 대기열을 소비·저장하는 사고를 막는다.
+    """
+
+    async def guideline_gen_fails(alert, inquiries, *, product_name=None):
+        raise RuntimeError("boom")
+
+    async def sent(alert, rec, trace_id, versions=None):
+        return None
+
+    monkeypatch.setattr(daily, "generate_guideline", guideline_gen_fails)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+
+    await daily.run_batch(state_path=tmp_path / "debug.json", load_inputs=_stub_inputs)
+
+    derived = tmp_path / "debug.pending_guidelines.json"
+    assert derived.exists(), "대기열이 state_path 옆 파생 이름으로 생겨야 한다"
+    assert len(json.loads(derived.read_text(encoding="utf-8"))) == 1
+
+
+# ── PR #90 리뷰 반영 (서영, 2026-08-14) ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pending_save_failure_does_not_suppress_the_alert(tmp_path, monkeypatch):
+    """🔴 P1 — 대기열 저장이 실패하면 그 알림을 억제 캐시에도 넣지 않는다.
+
+    억제 캐시를 먼저 저장하면 두 쓰기 사이에서 실패했을 때 알림은 억제되는데 대기
+    항목이 없어 가이드라인이 영구 유실된다 — 이 PR 이 막으려는 구멍 그대로다.
+    영구 유실 대신 다음 배치의 통째 재처리(중복 비용)를 택한다.
+    """
+
+    async def fake_guideline(alert, inquiries, *, product_name=None):
+        return _FakeCallback(alert.alert_id)
+
+    async def sent(alert, rec, trace_id, versions=None):
+        return None
+
+    async def guideline_publish_fails(guideline, trace_id):
+        raise RuntimeError("MQ down")
+
+    def pending_save_fails(entries, path):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(daily, "generate_guideline", fake_guideline)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+    monkeypatch.setattr(daily, "publish_guideline_generated", guideline_publish_fails)
+    monkeypatch.setattr(daily, "save_pending_guidelines", pending_save_fails)
+
+    state_path = tmp_path / "state.json"
+    summary = await daily.run_batch(
+        state_path=state_path,
+        pending_path=_pending_path(tmp_path),
+        load_inputs=_stub_inputs,
+    )
+
+    assert any(f["stage"] == "대기열 저장" for f in summary["failures"])
+    assert summary["state_cached"] == 0, "대기 기록이 없는 알림은 억제되면 안 된다"
+    assert not state_path.exists(), "억제 캐시에 들어가면 가이드라인이 영구 유실된다"
+
+
+@pytest.mark.asyncio
+async def test_alert_publish_failure_is_not_enqueued_for_retry(tmp_path, monkeypatch):
+    """🔴 P2 — 알림 발행까지 실패한 건은 대기열에 안 넣는다.
+
+    그 알림은 억제 캐시에 없어 다음 배치가 신규 target 으로 통째로 재처리한다
+    (가이드라인도 그 경로에서 다시 만들어진다). 대기열에도 넣으면 같은
+    guideline_id 가 두 경로에서 두 번 생성·발행된다 — 서영님 실측 그대로.
+    """
+
+    async def fake_guideline(alert, inquiries, *, product_name=None):
+        return _FakeCallback(alert.alert_id)
+
+    async def anomaly_publish_fails(alert, rec, trace_id, versions=None):
+        raise RuntimeError("MQ down")
+
+    async def guideline_publish_fails(guideline, trace_id):
+        raise RuntimeError("MQ down")
+
+    monkeypatch.setattr(daily, "generate_guideline", fake_guideline)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", anomaly_publish_fails)
+    monkeypatch.setattr(daily, "publish_guideline_generated", guideline_publish_fails)
+
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json",
+        pending_path=_pending_path(tmp_path),
+        load_inputs=_stub_inputs,
+    )
+
+    assert summary["delivered"] == 0
+    assert summary["guideline_pending"] == 0, "알림째 재처리될 건이 대기열에 있으면 이중 생성"
+    assert json.loads(_pending_path(tmp_path).read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.asyncio
+async def test_max_alerts_zero_holds_pending_retries(tmp_path, monkeypatch):
+    """🔴 P2 — 재시도가 --max-alerts 예산을 우회하면 안 된다.
+
+    max_alerts=0 은 "이 실행에서 LLM·S3 비용 0" 이라는 뜻이다. 대기열이 그걸
+    우회하면 장애 복구 직후 대기열 규모만큼 비용이 한 번에 나간다. 예산 밖 대기
+    건은 attempts 를 쓰지 않고 그대로 다음 배치로 넘어간다.
+    """
+    pending_path = _pending_path(tmp_path)
+    daily.save_pending_guidelines(
+        [
+            {"alert": _alert("ALT-P1", date(2026, 8, 27)), "attempts": 0},
+            {"alert": _alert("ALT-P2", date(2026, 8, 26)), "attempts": 1},
+        ],
+        pending_path,
+    )
+    before = pending_path.read_text(encoding="utf-8")
+
+    generated: list[str] = []
+
+    async def record_generate(alert, inquiries, *, product_name=None):
+        generated.append(alert.alert_id)
+        return _FakeCallback(alert.alert_id)
+
+    async def sent(alert, rec, trace_id, versions=None):
+        return None
+
+    async def publish_ok(guideline, trace_id):
+        return None
+
+    monkeypatch.setattr(daily, "generate_guideline", record_generate)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+    monkeypatch.setattr(daily, "publish_guideline_generated", publish_ok)
+
+    summary = await daily.run_batch(
+        max_alerts=0,
+        state_path=tmp_path / "state.json",
+        pending_path=pending_path,
+        load_inputs=_stub_inputs,
+    )
+
+    assert generated == [], "예산 0 인데 재생성이 돌면 상한이 무의미하다"
+    assert summary["guideline_retried"] == 0
+    assert summary["guideline_pending"] == 2
+    assert pending_path.read_text(encoding="utf-8") == before, "attempts 도 안 쓴다"
+
+    # dry-run 비용 추정도 같은 예산을 적용한다 — 실측(위)과 어긋나면 추정을 못 믿는다.
+    dry = await daily.run_batch(
+        max_alerts=0,
+        dry_run=True,
+        state_path=tmp_path / "state.json",
+        pending_path=pending_path,
+        load_inputs=_stub_inputs,
+    )
+    assert dry["llm_calls"].get("가이드라인", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_retry_budget_is_what_max_alerts_leaves_over(tmp_path, monkeypatch):
+    """P2 — 예산은 신규 target 이 먼저 쓰고, 남는 만큼만 재시도한다."""
+    pending_path = _pending_path(tmp_path)
+    daily.save_pending_guidelines(
+        [
+            {"alert": _alert("ALT-P1", date(2026, 8, 27)), "attempts": 0},
+            {"alert": _alert("ALT-P2", date(2026, 8, 26)), "attempts": 1},
+        ],
+        pending_path,
+    )
+
+    async def fake_guideline(alert, inquiries, *, product_name=None):
+        return _FakeCallback(alert.alert_id)
+
+    async def sent(alert, rec, trace_id, versions=None):
+        return None
+
+    async def publish_ok(guideline, trace_id):
+        return None
+
+    monkeypatch.setattr(daily, "generate_guideline", fake_guideline)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+    monkeypatch.setattr(daily, "publish_guideline_generated", publish_ok)
+
+    # 스텁 입력은 alert 1건을 낸다 → max_alerts=2 면 재시도 몫은 1.
+    summary = await daily.run_batch(
+        max_alerts=2,
+        state_path=tmp_path / "state.json",
+        pending_path=pending_path,
+        load_inputs=_stub_inputs,
+    )
+
+    assert summary["processed"] == 1
+    assert summary["guideline_retried"] == 1, "남은 예산 1 만큼만 재시도"
+    saved = json.loads(pending_path.read_text(encoding="utf-8"))
+    assert [(e["alert"]["alert_id"], e["attempts"]) for e in saved] == [("ALT-P2", 1)], (
+        "예산 밖 건은 attempts 그대로 대기열에 남는다"
+    )
+
+
+@pytest.mark.asyncio
+async def test_crash_between_pending_and_suppression_saves_single_path(
+    tmp_path, monkeypatch
+):
+    """🔴 2회전 P1 — "대기열 저장 성공 + 억제 캐시 저장 실패" 크래시 창의 재실행.
+
+    두 상태 파일은 원자적으로 같이 못 쓴다. 그 사이에서 죽으면 다음 실행에 같은
+    알림이 신규 target(억제 안 됨)과 대기열 **양쪽**에 있다 — 조정 없이는 같은
+    guideline_id 가 2회 생성·발행된다(서영님 실측). 실행 초입에 겹치는 대기 항목을
+    걷어내 메인 루프 한 경로만 태운다.
+    """
+    pending_path = _pending_path(tmp_path)
+    state_path = tmp_path / "state.json"
+    published: list[str] = []
+
+    async def fake_guideline(alert, inquiries, *, product_name=None):
+        return _FakeCallback(alert.alert_id)
+
+    async def sent(alert, rec, trace_id, versions=None):
+        return None
+
+    async def guideline_publish_fails(guideline, trace_id):
+        raise RuntimeError("MQ down")
+
+    async def record_publish(guideline, trace_id):
+        published.append(guideline.guideline_id)
+
+    monkeypatch.setattr(daily, "generate_guideline", fake_guideline)
+    monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
+
+    # 1차 실행: 가이드라인 발행 실패(→ 대기열 write-ahead 저장 성공) 직후
+    # 억제 캐시 저장이 죽는다 — 서영님 재현 그대로.
+    real_save_published = daily.save_published
+
+    def save_published_crashes(published_alerts, window_end, path):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(daily, "publish_guideline_generated", guideline_publish_fails)
+    monkeypatch.setattr(daily, "save_published", save_published_crashes)
+    with pytest.raises(OSError):
+        await daily.run_batch(
+            state_path=state_path,
+            pending_path=pending_path,
+            load_inputs=_stub_inputs,
+        )
+
+    assert json.loads(pending_path.read_text(encoding="utf-8")), (
+        "write-ahead 라 대기열은 남는다"
+    )
+    assert not state_path.exists(), "억제 캐시는 안 써졌다 — 불일치 상태 재현"
+
+    # 2차 실행: 전부 정상. 같은 alert_id 가 target 과 대기열 양쪽에 있는 상태다.
+    monkeypatch.setattr(daily, "save_published", real_save_published)
+    monkeypatch.setattr(daily, "publish_guideline_generated", record_publish)
+    summary = await daily.run_batch(
+        state_path=state_path,
+        pending_path=pending_path,
+        load_inputs=_stub_inputs,
+    )
+
+    assert len(published) == 1, f"한 경로만 발행해야 한다 — 실제 {published}"
+    assert summary["guideline_retried"] == 0, "대기 항목은 신규 target 에 밀려 걷힌다"
+    assert json.loads(pending_path.read_text(encoding="utf-8")) == []
+    assert state_path.exists(), "이번엔 억제 캐시까지 써져 불일치가 해소된다"
