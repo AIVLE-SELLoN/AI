@@ -22,11 +22,11 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(ROOT))
 
 from statsmodels.stats.multitest import multipletests
 
+from app.core.console import force_utf8_output
 from app.core.constants import (
     BH_FDR_Q,
     CURRENT_WINDOW_DAYS,
@@ -167,6 +167,11 @@ def coverage_by_need(cache, docs, truth) -> dict:
 
 
 def main() -> None:
+    # 🔴 첫 문장이어야 한다 — 이 파일 요약 출력이 `—`·`⚠️` 를 쓰는데 cp949 에 없다.
+    #    ⚠️ 형제 파일들과 달리 여기는 `def main()`(동기)이라 가드가 `main()` 을 진입
+    #    지점으로 본다. 호출을 `__main__` 블록으로 옮기면 가드가 실패한다.
+    force_utf8_output()
+
     items, docs = load_inputs()
     cache = json.loads(CACHE.read_text(encoding="utf-8"))
     truth = load_truth()

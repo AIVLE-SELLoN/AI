@@ -27,13 +27,13 @@ from datetime import date, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(ROOT))
 
 from statsmodels.stats.multitest import multipletests
 
 import app.detection.statistics as stats_mod
 from app.batch.daily import STATE_RETENTION_DAYS, CountingClient
+from app.core.console import force_utf8_output
 from app.core.constants import BH_FDR_Q, CURRENT_WINDOW_DAYS
 from app.core.schemas import AspectSentiment
 from app.detection.service import detect_anomaly
@@ -351,4 +351,10 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    # 🔴 첫 문장이어야 한다 — 이 파일 요약 출력이 `—`·`⚠️` 를 쓰는데 cp949 에 없다.
+    # ⚠️ `async def main()` 이라 `main()` 안이 아니라 **여기**다. 가드
+    #    (`tests/test_console_encoding.py::_entry_body`)가 `ast.FunctionDef` 만 보고
+    #    `AsyncFunctionDef` 는 못 찾아 `__main__` 블록을 진입 지점으로 삼는다.
+    force_utf8_output()
+
     asyncio.run(main())
