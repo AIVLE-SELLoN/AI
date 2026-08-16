@@ -1146,7 +1146,7 @@ class ClassificationWorker:
 
 
 if __name__ == "__main__":
-    # 🔴 **첫 문장이어야 한다.** `--reclassify-stale` 도움말에 `—`(U+2014) 가 있어서,
+    # 🔴 **첫 문장이어야 한다.** `--limit` 도움말(1167행)에 `—`(U+2014) 가 있어서,
     #    아래 `parse_args()` 가 그걸 먼저 찍으면 cp949 콘솔에서는 도움말만 요청해도
     #    `UnicodeEncodeError` 로 죽는다(2026-08-14 실측). 사유 전문은 `app/core/console.py`.
     force_utf8_output()
