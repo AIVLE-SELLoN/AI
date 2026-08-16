@@ -20,9 +20,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from pydantic import BaseModel
 
 from app.core import exit_codes, logging_setup
+from tests.conftest import bad_log_level_settings, unloadable_settings
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -61,32 +61,16 @@ def _launch(argv: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-class _PortOnly(BaseModel):
-    """`MQ_PORT=abc` 를 흉내내기 위한 최소 모델 — 진짜 `ValidationError` 를 얻는다."""
-
-    port: int
-
-
-def _bad_log_level():
-    """설정은 읽히는데 레벨 값이 틀린 경우 — 진짜 `basicConfig` 가 던진다."""
-    return SimpleNamespace(log_level="info")
-
-
-def _unloadable_settings():
-    """설정 로딩 자체가 실패하는 경우. `ValidationError` 는 `ValueError` 하위다."""
-    return _PortOnly(port="abc")
-
-
 @pytest.mark.parametrize(
     "fake_get_settings, expect_in_message, why",
     [
         (
-            _bad_log_level,
+            bad_log_level_settings,
             "Unknown level",
             "logging 이 거부하는 레벨 — 진짜 basicConfig 가 던진다",
         ),
         (
-            _unloadable_settings,
+            unloadable_settings,
             # 🔴 **필드명이 나와야 한다.** pydantic 은 첫 줄이 `1 validation error for
             #    Settings` 라는 개수 헤더뿐이라, 그것만 남기면 운영자가 **어느 값이 틀렸는지
             #    모른다** — 이 PR 이 없애려던 "원인을 모르는 실패" 가 형태만 바뀌어 남는다.
@@ -154,7 +138,7 @@ def test_the_message_never_echoes_the_offending_value(monkeypatch, capsys):
     ⚠️ 리뷰에서 *"원값도 넣자"* 는 제안이 있었는데(용준님 PR #96 ①) 이 사유로 안 넣었다.
     """
     monkeypatch.setattr(logging.root, "handlers", [])
-    monkeypatch.setattr(logging_setup, "get_settings", _unloadable_settings)
+    monkeypatch.setattr(logging_setup, "get_settings", unloadable_settings)
 
     with pytest.raises(SystemExit):
         logging_setup.configure_logging_or_exit("서버")
@@ -185,7 +169,7 @@ def test_valid_config_applies_the_configured_level(monkeypatch):
     "fake_get_settings, expectation",
     [
         (lambda: SimpleNamespace(log_level="ERROR"), "applies"),
-        (_bad_log_level, "exits"),
+        (bad_log_level_settings, "exits"),
     ],
 )
 def test_the_guard_survives_a_preexisting_root_handler(

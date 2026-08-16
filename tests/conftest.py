@@ -10,7 +10,10 @@ import os
 os.environ.setdefault("LANGSMITH_TRACING", "false")
 os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
 
+from types import SimpleNamespace
+
 import pytest
+from pydantic import BaseModel
 
 from app.config import get_settings
 from app.core.schemas import (
@@ -24,6 +27,58 @@ from app.core.schemas import (
     SourceSignals,
     Verdict,
 )
+
+
+class _PortOnly(BaseModel):
+    """`MQ_PORT=abc` 를 흉내내기 위한 최소 모델 — 진짜 `ValidationError` 를 얻는다."""
+
+    port: int
+
+
+def bad_log_level_settings():
+    """설정은 읽히는데 **레벨 값이 틀린** 경우 — 진짜 `basicConfig` 가 던진다.
+
+    진입점의 부팅 가드(`app/core/logging_setup.configure_logging_or_exit`)가 덮는 실패는
+    둘인데 이게 그 하나다. `monkeypatch.setattr(logging_setup, "get_settings", ...)` 로
+    끼워 쓴다.
+
+    ⚠️ **여기(conftest)에 둔 이유** — 진입점이 셋이라 같은 가짜가 테스트 파일 3개에
+       복제될 참이었다. `Settings` 검증이 바뀌면 세 곳을 같이 고쳐야 하는데, 한 곳만
+       고치면 **나머지 둘은 조용히 옛 실패 모드를 재는** 테스트가 된다.
+    """
+    return SimpleNamespace(log_level="info")
+
+
+def unloadable_settings():
+    """**설정 로딩 자체가 실패**하는 경우 — 부팅 가드가 덮는 다른 갈래.
+
+    `ValidationError` 는 `ValueError` 하위라 같은 `except` 에 걸린다.
+    """
+    return _PortOnly(port="abc")
+
+
+def pin_settings(monkeypatch, log_level: str = "INFO") -> None:
+    """진입점의 부팅 가드가 **개발자 환경을 안 타게** 못박는다.
+
+    🔴 **이게 없으면 `LOG_LEVEL=info` 가 걸린 머신에서 무관한 테스트가 빨개진다** —
+       `main()` 이 설정 오류로 exit 2 하고, 화면에는 *"인코딩 배선이 깨졌다"* 처럼 보인다.
+       PR #79 의 `.env` 의존 사고와 같은 계열이고, **개발자 로컬이 곧 CI 인 구조**라
+       사람마다 결과가 갈린다.
+
+    🔴 **root 핸들러는 일부러 안 비운다.** 비우면 pytest 의 `caplog` 핸들러가 사라져서
+       **로그는 나가는데 `caplog.records` 가 비는** 상태가 된다 — #96 에서 `force=True`
+       로 밟았던 그 함정이고, 여기서도 컨슈머 테스트 3개가 같은 모양으로 깨졌다(실측).
+       비우는 것이 필요한 쪽은 *"잘못된 레벨로 `basicConfig` 를 **실제로** 터뜨리는"*
+       테스트뿐이라, 그건 각 테스트가 직접 한다.
+
+    ⚠️ `main()` 을 부르는 테스트는 **전부** 이걸 써야 한다. 안 쓰면 "그 머신에서만"
+       실패해서 원인을 엉뚱한 데서 찾게 된다.
+    """
+    from app.core import logging_setup
+
+    monkeypatch.setattr(
+        logging_setup, "get_settings", lambda: SimpleNamespace(log_level=log_level)
+    )
 
 
 @pytest.fixture(autouse=True)

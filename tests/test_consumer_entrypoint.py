@@ -10,30 +10,13 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
-from pydantic import BaseModel
 
 from app import consumer
 from app.core import logging_setup
 from app.core.exceptions import MqDisabledError
-
-
-class _PortOnly(BaseModel):
-    """`MQ_PORT=abc` 를 흉내내기 위한 최소 모델 — 진짜 `ValidationError` 를 얻는다."""
-
-    port: int
-
-
-def _bad_log_level():
-    """설정은 읽히는데 레벨 값이 틀린 경우 — 진짜 `basicConfig` 가 던진다."""
-    return SimpleNamespace(log_level="info")
-
-
-def _unloadable_settings():
-    """설정 로딩 자체가 실패하는 경우. `ValidationError` 는 `ValueError` 하위다."""
-    return _PortOnly(port="abc")
+from tests.conftest import bad_log_level_settings, pin_settings, unloadable_settings
 
 
 def test_config_error_exits_nonzero(monkeypatch, caplog):
@@ -46,6 +29,7 @@ def test_config_error_exits_nonzero(monkeypatch, caplog):
     async def disabled():
         raise MqDisabledError("MQ_ENABLED=false 라 컨슈머를 띄우지 않습니다")
 
+    pin_settings(monkeypatch)
     monkeypatch.setattr(consumer, "consume", disabled)
 
     with pytest.raises(SystemExit) as exc:
@@ -58,8 +42,8 @@ def test_config_error_exits_nonzero(monkeypatch, caplog):
 @pytest.mark.parametrize(
     "fake_get_settings, why",
     [
-        (_bad_log_level, "logging 이 거부하는 레벨 — 진짜 basicConfig 가 던진다"),
-        (_unloadable_settings, "설정 로딩 자체가 실패 — get_settings() 가 던진다"),
+        (bad_log_level_settings, "logging 이 거부하는 레벨 — 진짜 basicConfig 가 던진다"),
+        (unloadable_settings, "설정 로딩 자체가 실패 — get_settings() 가 던진다"),
     ],
 )
 def test_config_failures_exit_as_config_error(monkeypatch, capsys, fake_get_settings, why):
@@ -158,6 +142,7 @@ def test_interrupt_is_a_clean_shutdown(monkeypatch, caplog):
     async def interrupted():
         raise KeyboardInterrupt
 
+    pin_settings(monkeypatch)
     monkeypatch.setattr(consumer, "consume", interrupted)
 
     consumer.main()  # SystemExit 이 나면 안 된다
@@ -200,6 +185,7 @@ def test_unexpected_error_is_logged_as_one_record(monkeypatch, caplog):
     async def broker_down():
         raise ConnectionResetError("broker down")
 
+    pin_settings(monkeypatch)
     monkeypatch.setattr(consumer, "consume", broker_down)
 
     with pytest.raises(SystemExit) as exc:
@@ -253,6 +239,7 @@ def test_main_switches_encoding_before_running(monkeypatch):
     # 이 테스트가 전역 HANDLERS 를 더럽히지 않게 — main() 이 wire_handlers() 를 탄다.
     monkeypatch.setattr(mq_consumer, "HANDLERS", {})
     monkeypatch.setattr(consumer, "force_utf8_output", lambda: calls.append("utf8"))
+    pin_settings(monkeypatch)
     monkeypatch.setattr(consumer, "consume", interrupted)
 
     consumer.main()
