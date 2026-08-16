@@ -25,9 +25,17 @@ input_cs_inquiries.csv 와 golden_cs_labels.csv 는 생성기가 같은 순서�
 
 import argparse
 import csv
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# scripts/ 는 저장소 루트의 형제 폴더 — app 패키지를 절대경로로 import하려면
+# 저장소 루트를 sys.path에 넣어야 함(실행 방식에 따라 자동으로 안 잡힐 수 있어서 명시).
+# ⚠️ 아래 `generate_cs_review_data` 는 형제 모듈이라 `scripts/` 가 sys.path 에 있어야 하는데,
+#    ROOT 를 0번에 끼워도 `scripts/` 는 뒤에 그대로 남으므로 둘 다 해결된다.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.core.console import force_utf8_output
 from generate_cs_review_data import load_channel_product_id_map, get_channel_product_id
 
 
@@ -105,6 +113,10 @@ def verify_case(case_id: str, anomaly_rows: list[dict], data_by_source: dict,
 
 
 def main():
+    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    #    (`description=__doc__` · `--golden-dir`)에 `—` 가 있다. `app/core/console.py`.
+    force_utf8_output()
+
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--anomaly-config", default="config_anomaly.csv")
     ap.add_argument("--generated-dir", default="./output", help="input_*.csv 위치")

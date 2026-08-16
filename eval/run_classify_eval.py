@@ -49,6 +49,7 @@ sys.path.insert(0, str(ROOT))
 
 import app.classification.service as classification_service
 from app.classification.service import ClassifyRequestItem
+from app.core.console import force_utf8_output
 from app.core.constants import KST
 from app.core.exceptions import AiServiceError
 from app.core.llm_client import get_llm_client
@@ -967,6 +968,11 @@ async def main_async(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    #    (`--only-negative` · `--leak-threshold` · `--no-cache` · `--mode`)에 `—`·`⚠️` 가 있다.
+    #    `app/core/console.py`.
+    force_utf8_output()
+
     parser = argparse.ArgumentParser(description="실험③ 프롬프트1 aspect 분류 정확도")
     parser.add_argument("--golden", default=str(GOLDEN_LABELS), help="골든 라벨 CSV 경로")
     parser.add_argument("--limit", type=int, default=300, help="표본 수 (0=전량)")

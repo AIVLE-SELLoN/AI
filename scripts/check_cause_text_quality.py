@@ -21,7 +21,15 @@ LLM이 실제로 만든 cause_text_cache.json을 읽어서, "정답이 없는 �
 import argparse
 import json
 import re
+import sys
 from collections import Counter
+from pathlib import Path
+
+# scripts/ 는 저장소 루트의 형제 폴더 — app 패키지를 절대경로로 import하려면
+# 저장소 루트를 sys.path에 넣어야 함(실행 방식에 따라 자동으로 안 잡힐 수 있어서 명시)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.core.console import force_utf8_output
 
 CS_MARKERS = [
     "?", "까요", "부탁", "가능", "해주세요", "해주실", "드립니다", "드려요",
@@ -90,6 +98,13 @@ def check_case(case_id_aspect: str, items: list[dict]) -> dict:
 
 
 def main():
+    # 🔴 첫 문장이어야 한다. ⚠️ 이 파일만 `--help` 가 원래 통과한다 —
+    #    `ArgumentParser()` 에 `description=` 이 없어 docstring 의 `—` 가 도움말에 안 실린다.
+    #    대신 아래 진단 출력(119·124·127행)이 `⚠️`·`✅`·`—` 를 쓰므로
+    #    **점검 결과가 통째로 사라진다.**
+    #    `app/core/console.py`.
+    force_utf8_output()
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache", default="cause_text_cache.json")
     args = ap.parse_args()
