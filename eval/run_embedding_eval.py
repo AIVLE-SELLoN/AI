@@ -37,8 +37,6 @@ from app.core.console import force_utf8_output
 from app.core.constants import EMBEDDING_MODEL, SIMILAR_CASE_TOP_N
 from app.core.vectordb import get_embedding_function, query_documents, upsert_documents
 
-force_utf8_output()
-
 # (aspect, root_cause_label, 개선안 본문, 라벨을 안 쓴 고객 말투 쿼리)
 #
 # 같은 aspect 안에 **서로 붙어 있는 원인**을 일부러 모아뒀다(사진_색감_오차·조명_보정_차이·
@@ -177,6 +175,10 @@ def main(dry_run: bool = False) -> None:
 
 
 if __name__ == "__main__":
+    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍는다.
+    #    예전엔 모듈 최상단에서 불렀는데, 그러면 **import 만 해도** 남의 스트림을 바꾼다.
+    force_utf8_output()
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="표본만 출력하고 임베딩은 안 부른다.")
     main(dry_run=parser.parse_args().dry_run)

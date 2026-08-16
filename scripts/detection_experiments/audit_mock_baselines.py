@@ -21,11 +21,12 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from validate_anomaly import BASELINE_RATE
+
+from app.core.console import force_utf8_output
 
 OUT_CSV = ROOT / "eval/results/mock_baseline_audit_20260806.csv"
 OUT_MD = ROOT / "eval/results/mock_baseline_audit_20260806.md"
@@ -331,6 +332,10 @@ def write_outputs(rows: list[dict]) -> None:
 
 
 def main() -> None:
+    # 🔴 첫 문장이어야 한다 — 사설 `sys.stdout.reconfigure()` 를 대체한다(stderr 미변경 ·
+    #    `contextlib.suppress` 부재). 사유 전문은 `app/core/console.py`.
+    force_utf8_output()
+
     rows = rows_from_counts(collect())
     write_outputs(rows)
     print(f"rows: {len(rows)}")

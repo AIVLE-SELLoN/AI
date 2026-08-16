@@ -42,6 +42,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# ⚠️ 이 파일의 다른 `app` import 는 전부 함수 안이다 — `os.environ["MQ_ENABLED"]` 를
+#    먼저 세팅해야 `get_settings()`(lru_cache)에 반영되기 때문이다. **`console` 은 예외다:**
+#    `contextlib`·`sys` 만 쓰고 설정을 안 읽어서 여기 둬도 안전하고, 모듈 최상단이어야
+#    배선 테스트가 몽키패치를 걸 수 있다.
+from app.core.console import force_utf8_output
+
 SMOKE_QUEUE = "smoke.ai.inbound"
 """검증 전용 큐. 운영 큐(`main.inbound`)는 백엔드 소유라 건드리지 않는다."""
 
@@ -352,6 +358,13 @@ def _report(received: list, trace_id: str) -> int:
 
 
 def main() -> None:
+    # 🔴 **첫 문장이어야 한다.** 예전엔 `parse_args()` 뒤에 있었는데, `description` 이
+    #    모듈 docstring 첫 줄이고 거기 `—`(U+2014)가 있어서 **`--help` 만 쳐도 죽었다**
+    #    (2026-08-16 실측 exit 1). 윈도우 콘솔 기본 코드페이지(cp949)는 한글은 되지만
+    #    em대시·`❌` 에서 터진다. payload 를 그대로 찍는 스크립트라 검증이 아니라
+    #    출력에서 죽는다. 사유 전문은 `app/core/console.py`.
+    force_utf8_output()
+
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--host", default="localhost")
     ap.add_argument("--port", type=int, default=5672)
@@ -364,15 +377,6 @@ def main() -> None:
         help="메인 → AI 방향(feedback.# → ai.inbound)을 검증한다. 기본은 AI → 메인.",
     )
     args = ap.parse_args()
-
-    # 윈도우 콘솔 기본 코드페이지(cp949)는 한글은 되지만 em대시·`❌` 같은 문자에서 터진다.
-    # payload 를 그대로 찍는 스크립트라 내용에 따라 검증이 아니라 출력에서 죽는다.
-    # 원래 여기서 stdout 만 직접 돌렸는데, 같은 처리가 배치·셋업 스크립트에도 필요해져
-    # 공용 헬퍼로 뺐다(stderr 까지 함께 돌린다). app/core/console.py 참고.
-    # import 가 함수 안인 이유는 이 파일의 다른 app import 와 같다 — sys.path 조정 뒤여야 한다.
-    from app.core.console import force_utf8_output
-
-    force_utf8_output()
 
     # get_settings() 는 lru_cache 라 **import 전에** 넣어야 반영된다. .env 를 고치지 않고
     # 이 스크립트만으로 검증할 수 있게 하려는 것 — 운영 기본값은 MQ_ENABLED=false 다.
