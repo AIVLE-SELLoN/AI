@@ -30,10 +30,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.console import force_utf8_output
 
-# stdout 만 바꾸면 안 된다 — 로깅은 **stderr** 로 나가서 cp949 로 깨진다.
-# 라우팅 사유(한글)가 이 로그로 나오므로 진단이 통째로 못 읽는 글자가 된다.
-force_utf8_output()
-
 # 라우팅이 왜 그 도구를 골랐는지(pipeline.route_proposal_type 의 INFO 로그)를 보려면
 # 로거를 켜야 한다 — MISS 케이스 진단의 유일한 단서다.
 logging.basicConfig(level=logging.INFO, format="    · %(message)s")
@@ -624,6 +620,13 @@ def build_alerts_from_real_cs_data() -> list[
 
 
 def main() -> None:
+    # 🔴 첫 문장이어야 한다. stdout 만 바꾸면 안 된다 — 로깅은 **stderr** 로 나가서
+    #    cp949 로 깨지고, 라우팅 사유(한글)가 그 로그로 나오므로 진단이 통째로 못 읽는
+    #    글자가 된다. 예전엔 모듈 최상단에서 불렀는데 **import 만 해도** 남의 스트림을 바꿨다.
+    # ⚠️ 위 `logging.basicConfig()` 가 먼저 핸들러를 만들어도 무해하다 — `reconfigure` 는
+    #    스트림 객체를 교체하지 않고 제자리에서 바꾼다(`app/core/console.py`).
+    force_utf8_output()
+
     run_grounding = "--grounding" in sys.argv
     run_rag_baseline = "--rag-baseline" in sys.argv
     run_routing = "--routing" in sys.argv

@@ -9,7 +9,9 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.stdout.reconfigure(encoding="utf-8")
+sys.path.insert(0, str(ROOT))
+
+from app.core.console import force_utf8_output
 
 IN_CSV = ROOT / "eval/results/no_true_false_breakdown_20260807.csv"
 OUT_CSV = ROOT / "eval/results/unexplained_false_rows_20260807.csv"
@@ -175,6 +177,10 @@ def write_outputs(rows: list[dict]) -> None:
 
 
 def main() -> None:
+    # 🔴 첫 문장이어야 한다 — 사설 `sys.stdout.reconfigure()` 를 대체한다(stderr 미변경 ·
+    #    `contextlib.suppress` 부재). 사유 전문은 `app/core/console.py`.
+    force_utf8_output()
+
     rows = analyze()
     write_outputs(rows)
     print(f"unexplained rows: {len(rows)}")

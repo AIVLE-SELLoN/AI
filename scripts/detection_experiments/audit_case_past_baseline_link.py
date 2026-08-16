@@ -18,10 +18,12 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.stdout.reconfigure(encoding="utf-8")
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from validate_anomaly import BASELINE_RATE
+
+from app.core.console import force_utf8_output
 
 DAY1 = datetime(2026, 6, 30).date()
 OUT_CSV = ROOT / "eval/results/case_past_baseline_link_20260807.csv"
@@ -125,6 +127,12 @@ def fmt_pct(value: float) -> str:
 
 
 def main() -> None:
+    # 🔴 첫 문장이어야 한다. 예전엔 모듈 최상단에서 `sys.stdout` 만 직접 돌렸는데,
+    #    stderr 를 안 바꿔 로깅·traceback 은 그대로 깨졌고 `contextlib.suppress` 가 없어
+    #    `.reconfigure` 없는 스트림에서는 **import 만 해도** `AttributeError` 로 터졌다.
+    #    사유 전문은 `app/core/console.py`.
+    force_utf8_output()
+
     docs = load_docs()
     config = read_csv("data/config/config_anomaly.csv")
     case_products = {r["golden_group_id"] for r in config}
