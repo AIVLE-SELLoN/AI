@@ -18,10 +18,10 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from app.core.console import force_utf8_output
 from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
 
 IN_CSV = ROOT / "eval/results/remaining_false_breakdown_20260807.csv"
@@ -229,6 +229,10 @@ def write_outputs(rows: list[dict]) -> None:
 
 
 def main() -> None:
+    # 🔴 첫 문장이어야 한다 — 사설 `sys.stdout.reconfigure()` 를 대체한다(stderr 미변경 ·
+    #    `contextlib.suppress` 부재). 사유 전문은 `app/core/console.py`.
+    force_utf8_output()
+
     daily = build_daily_counts()
     source_rows = [
         r for r in read(IN_CSV)

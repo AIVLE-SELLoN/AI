@@ -1,4 +1,4 @@
-"""**배포되는 진입점**이 콘솔 인코딩을 바꾸는지 고정한다.
+"""**진입점**이 콘솔 인코딩을 바꾸는지 고정한다 — 배포되는 것 + 출력이 깨질 수 있는 것.
 
 왜 배선을 손으로 세는 테스트를 그만두는가
 ------------------------------------------
@@ -46,7 +46,6 @@
 from __future__ import annotations
 
 import ast
-import importlib
 import os
 import re
 import subprocess
@@ -59,15 +58,36 @@ ROOT = Path(__file__).resolve().parents[1]
 
 COMPOSE = ROOT / "docker-compose.yml"
 
+DOCKERFILE = ROOT / "Dockerfile"
+
+DOCKER_COPY_DIR = re.compile(r"^COPY\s+(?:--\S+\s+)*([\w-]+)/?(?=\s)", re.MULTILINE)
+"""`COPY app/ ./app/` 형태에서 **소스 디렉터리**만 뽑는다.
+
+⚠️ **끝 `/` 는 선택이다** — `COPY app ./app` 도 도커에선 같은 뜻인데, 처음에 `/` 를 필수로
+   뒀더니 그 형태를 통째로 놓쳤다(자체 검수에서 발견). 유도 집합이 **조용히 좁아지는**
+   방향이라, 이 파일이 "Dockerfile 이 바뀌면 가드가 따라온다" 고 주장하는 근거가 깨진다.
+⚠️ 파일 이름은 안 잡는다 — `[\\w-]+` 가 점을 못 먹어 `COPY requirements.txt .` 는 매칭에
+   실패한다(`requirements` 뒤에 `/` 도 공백도 아닌 `.` 이 온다).
+⚠️ `--from=builder` · `--chown=u:g` 같은 플래그가 붙어도 잡는다.
+⚠️ 중첩 경로(`COPY data/config/ ...`)는 안 잡지만, 비교 대상이 최상위 폴더명뿐이라 무해하다.
+"""
+
 HELPER = "force_utf8_output"
+
+HELPER_MODULE = "app.core.console"
+"""helper 의 정본 위치. 진입점은 **여기서** import 해야 한다(사설 복사본 금지)."""
 
 YAML_COMMENT = re.compile(r"(?:^|\s)#.*$")
 """compose 의 주석 — **전체줄과 인라인을 모두** 지운다.
 
-🔴 **주석을 빼지 않으면 오탐이 6건 난다** — 이 파일 주석이 사용법으로
+🔴 **주석을 빼지 않으면 오탐이 난다** — 이 파일 주석이 사용법으로
 `python scripts/classification_worker.py` · `setup_local_mq.py` · `app/core/mq.py` 를
 적어 두고 있어서, 서비스가 아닌 것들이 "배포되는 진입점"으로 잡힌다. 실제로 처음에
 그렇게 걸렸다(2026-08-14). 안내 문구를 고쳤다고 가드가 요구사항을 늘리면 안 된다.
+
+⚠️ 범위를 넓힌 뒤로는 앞의 둘이 **다른 사유**(위험 문자)로 어차피 대상이라 이 제외가
+   덜 보이지만, `app/core/mq.py` 는 여전히 `__main__` 블록이 없는 라이브러리 모듈이다 —
+   주석 제외가 깨지면 그게 요구 대상이 되고, 넣을 자리조차 없어 영영 빨간 테스트가 된다.
 
 ⚠️ 처음엔 `^\\s*#` 로 **전체줄만** 지웠는데 `app/core/mq.py` 하나가 계속 남았다 —
    포트 매핑 뒤 **인라인** 주석(`- "5672:5672"  # AMQP … app/core/mq.py …`)이었다.
@@ -127,19 +147,62 @@ def _has_main_block(tree: ast.Module) -> bool:
     return any(_is_main_guard(node) for node in tree.body)
 
 
-def _entry_body(tree: ast.Module) -> list[ast.stmt] | None:
-    """진입 지점의 문장 목록. `main()` 이 있으면 그쪽, 없으면 `__main__` 블록.
+def _skip_docstring(stmts: list[ast.stmt]) -> list[ast.stmt]:
+    """맨 앞 docstring 한 문장을 건너뛴다."""
+    if (
+        stmts
+        and isinstance(stmts[0], ast.Expr)
+        and isinstance(stmts[0].value, ast.Constant)
+        and isinstance(stmts[0].value.value, str)
+    ):
+        return stmts[1:]
+    return stmts
 
-    ⚠️ `main()` 을 먼저 보는 이유: 대부분의 진입점은 `__main__` 블록이
-       `main()` 한 줄이라, 블록을 보면 "첫 문장이 `main()` 이다" 가 되어 검사가 무의미해진다.
+
+def _delegation_target(stmts: list[ast.stmt], tree: ast.Module) -> ast.stmt | None:
+    """`__main__` 블록이 **위임 한 줄**뿐이면 그 함수 노드. 아니면 `None`.
+
+    `main()` · `asyncio.run(main())` 둘 다 본다.
     """
+    if len(stmts) != 1 or not isinstance(stmts[0], ast.Expr):
+        return None
+    call = stmts[0].value
+    name = _call_name(call)
+    if name == "run" and isinstance(call, ast.Call) and call.args:
+        name = _call_name(call.args[0])
+    if not name:
+        return None
     for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "main":
-            return node.body
-    for node in tree.body:
-        if _is_main_guard(node):
-            return node.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
+            return node
     return None
+
+
+def _entry_body(tree: ast.Module) -> list[ast.stmt] | None:
+    """진입 지점의 문장 목록 — **`__main__` 블록이 기준**이다.
+
+    블록이 *위임 한 줄*(`main()` · `asyncio.run(main())`)뿐일 때만 그 함수로 내려간다.
+    그때는 함수 첫 문장이 곧 프로세스의 첫 문장이라 같은 검사가 성립한다.
+
+    🔴 **예전 규칙("모듈 레벨 `def main` 이 있으면 무조건 그쪽")은 두 방향으로 틀렸다.**
+
+       - **오탐** — `scripts/seed_vectordb.py` 는 `__main__` 블록이 argparse 를 돌린 뒤
+         `main(reset=...)` 을 부르는 형태다. 즉 그 `main()` 은 진입점이 아니라 **작업 함수**인데
+         옛 규칙이 그쪽을 봐서 실패로 잡았다. 그 말을 믿고 호출을 `main()` 안으로 옮기면
+         **argparse 가 다시 앞서게 되어 PR #89 가 잡은 `daily.py` 버그가 되살아난다.**
+       - **미탐** — `ast.FunctionDef` 만 봐서 `async def main()` 을 못 찾고 조용히
+         `__main__` 블록으로 폴백했다. 규칙이 파일 모양에 따라 말없이 바뀌던 셈이다.
+
+    ⚠️ 그래서 `async def main()` 파일들은 호출이 `__main__` 블록에 있다
+       (`asyncio.run()` **앞**이라 오히려 더 이르다). 이 규칙은 그 배치를 그대로 통과시킨다 —
+       `AsyncFunctionDef` 를 인식하도록 "고치면" 그 파일들이 전부 깨진다.
+    """
+    guard = next((node for node in tree.body if _is_main_guard(node)), None)
+    if guard is None:
+        return None
+    stmts = _skip_docstring(list(guard.body))
+    target = _delegation_target(stmts, tree)
+    return list(target.body) if target is not None else stmts
 
 
 def _call_name(node: ast.expr) -> str | None:
@@ -151,6 +214,80 @@ def _call_name(node: ast.expr) -> str | None:
     if isinstance(func, ast.Attribute):
         return func.attr
     return None
+
+
+def _helper_binding(node: ast.stmt) -> bool | None:
+    """이 최상위 문장이 `force_utf8_output` **이름을 바인딩**하는지.
+
+    `None` = 안 건드림 · `True` = 별칭 없는 정본 import · `False` = 그 밖의 바인딩.
+
+    ⚠️ **바인딩이지 "언급" 이 아니다.** `from ... import X as Y` 는 `Y` 를 바인딩하고 `X` 는
+       바인딩하지 않는다 — 이름만 맞춰 보면 정확히 이 경우를 놓친다.
+    """
+    if isinstance(node, ast.ImportFrom):
+        for alias in node.names:
+            if (alias.asname or alias.name) != HELPER:
+                continue
+            return (
+                node.module == HELPER_MODULE
+                and alias.name == HELPER
+                and alias.asname is None
+            )
+        return None
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            if (alias.asname or alias.name.split(".")[0]) == HELPER:
+                return False
+        return None
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+        return False if node.name == HELPER else None
+    if isinstance(node, ast.Assign):
+        targets = [t for t in node.targets if isinstance(t, ast.Name)]
+        return False if any(t.id == HELPER for t in targets) else None
+    if isinstance(node, ast.AnnAssign):
+        target = node.target
+        return False if isinstance(target, ast.Name) and target.id == HELPER else None
+    return None
+
+
+def _imports_canonical_helper(tree: ast.Module) -> bool:
+    """`__main__` 가드 시점에 `force_utf8_output` 이 **정본 helper 로 바인딩돼 있는지.**
+
+    가드보다 앞선 최상위 문장을 **실행 순서대로** 훑어 그 이름을 바인딩하는 것을 모으고,
+    **마지막 유효 바인딩**이 별칭 없는 `from app.core.console import force_utf8_output`
+    인지 본다.
+
+    🔴 **"정본 import 가 어딘가 있으면 통과" 로는 부족하다 — 두 방향으로 뚫린다**
+       (서영님 PR #97 리뷰 2회전, 둘 다 재현함. 각각 37 passed 였다):
+
+         from app.core.console import force_utf8_output as utf8_output   # 이름을 안 바인딩
+         force_utf8_output()                                             # → NameError
+
+         from app.core.console import force_utf8_output                  # 정본 import 있음
+         def force_utf8_output(): pass                                   # 그런데 덮어씀
+         force_utf8_output()                                             # → 사설 no-op 이 돈다
+
+       그래서 **존재가 아니라 마지막 바인딩**을 본다. 이러면 `import 없음` · `가드 뒤 import` ·
+       `별칭` · `정본 뒤 재정의·재할당` 이 한 규칙으로 막힌다 —
+       `_calls_helper_first` 가 "어딘가 호출" 대신 "첫 문장" 을 보는 것과 같은 꼴이다.
+
+    ⚠️ **최상위 직속 문장만 본다.** `try:`/`if:` 안에 감춘 재정의는 안 잡는다. 저장소에 0건이고,
+       실행 경로가 갈리는 바인딩은 정적으로 판정할 수 없다 — 그런 게 생기면 그때 넓힐 것.
+    ⚠️ `import app.core.console` 후 `app.core.console.force_utf8_output()` 형태도 일부러
+       통과시키지 않는다(저장소 0건, 관용구를 하나로). 넓히려면 실패 메시지도 같이 고칠 것.
+    """
+    guard_line = next((n.lineno for n in tree.body if _is_main_guard(n)), None)
+    if guard_line is None:
+        return False
+
+    last: bool | None = None
+    for node in tree.body:
+        if node.lineno >= guard_line:
+            break
+        binding = _helper_binding(node)
+        if binding is not None:
+            last = binding
+    return last is True
 
 
 def _calls_helper_first(tree: ast.Module) -> bool:
@@ -181,15 +318,7 @@ def _calls_helper_first(tree: ast.Module) -> bool:
     if not body:
         return False
 
-    stmts = list(body)
-    first = stmts[0]
-    if (
-        isinstance(first, ast.Expr)
-        and isinstance(first.value, ast.Constant)
-        and isinstance(first.value.value, str)
-    ):
-        stmts = stmts[1:]  # docstring 은 건너뛴다
-
+    stmts = _skip_docstring(list(body))
     if not stmts:
         return False
     head = stmts[0]
@@ -224,39 +353,74 @@ def _compose_command_blocks(text: str) -> list[str]:
     return blocks
 
 
-def _deployed_entrypoints() -> list[Path]:
-    """**배포되는** 진입점 집합. 손으로 적은 목록이 아니라 유도한다.
+def _has_uncp949_literal(tree: ast.Module) -> bool:
+    """문자열 리터럴에 cp949 로 인코딩 못 하는 문자가 있는지(docstring 포함).
 
-    두 곳에서 온다:
-      - `app/**` 의 `__main__` 블록 — 우리가 배포하는 패키지 코드
-      - `docker-compose.yml` 의 `command:`/`entrypoint:` 가 가리키는 파이썬 파일
+    ⚠️ **한글은 cp949 에 있다.** 걸리는 건 `—`(U+2014) · `⚠️` · `ℹ️` · `❌` 같은 것들이라,
+       한국어를 쓴다고 대상이 되지는 않는다. 그래서 이 검사가 실제로 집합을 좁힌다.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            for char in node.value:
+                try:
+                    char.encode("cp949")
+                except UnicodeEncodeError:
+                    return True
+    return False
 
-    ⚠️ **범위를 왜 여기서 끊었나.** `scripts/`·`eval/` 전체로 넓히면 대상이 수십 개다.
-       전부 두 줄짜리 기계적 변경이지만 대부분 남의 파일이라 한 PR 에 몰면 리뷰가
-       불가능하다. 넓히려면 이 함수만 고치면 되고, 그때는 파일 소유자별로 나눠 올릴 것
-       (그렇게 진행 중이다 — PR #92·#93·#94).
 
-    🔴 **여기에 개수를 적지 말 것.** 예전 docstring 이 *"28개"* 와
-       *"`run_reporting_eval.py:53` 에 손수 `sys.stdout.reconfigure()` 가 남아 있다"* 를
-       박아뒀는데, **그 파일을 고치는 PR 이 같은 문장을 거짓으로 만들었다**(용준님 PR #92
-       리뷰 A-2). 스윕이 진행되는 동안 이 숫자는 PR 마다 바뀐다 — 세고 싶으면
-       `MANUALLY_CONVERTED` 아래 주석의 명령으로 그때그때 유도할 것.
+def _image_source_dirs() -> list[str]:
+    """운영 이미지에 실리는 소스 디렉터리 — `Dockerfile` 의 `COPY <dir>/ ...` 에서 읽는다.
 
-    ⚠️ 남은 사설 사본들은 stderr 를 안 바꾸고 `contextlib.suppress` 도 없어, 범위 확대
-       때 한꺼번에 걷는 편이 낫다. **범위 밖 파일을 임의로 몇 개만 더 걷으면 "배포되는
-       것만" 이라는 기준이 흐려진다** — 그래서 손으로 전환한 것은 `MANUALLY_CONVERTED`
-       에 모아 두고 별도 테스트로 잠근다. (용준님 PR #89 2회전 · #92 리뷰 지적)
+    🔴 **손으로 적지 않는 이유.** 예전에는 `app/**` 를 코드에 박아뒀는데, PR #95 가
+       `COPY scripts/ ./scripts/` 를 추가하면서 **그 목록이 조용히 낡았다.** 분류 워커는
+       노션 CI_방향성 §8-1 대로 k8s CronJob(`python scripts/classification_worker.py`)으로
+       도는데, k8s 매니페스트는 이 저장소에 없어 compose 만 보던 옛 기준으로는 영영
+       안 잡혔다. Dockerfile 은 우리 저장소에 있으므로 여기서 유도할 수 있다.
+    """
+    return sorted(set(DOCKER_COPY_DIR.findall(DOCKERFILE.read_text(encoding="utf-8"))))
+
+
+def _guarded_entrypoints() -> list[Path]:
+    """가드 대상 진입점. 손으로 적은 목록이 아니라 **두 가지 사유로 유도**한다.
+
+    1. **우리가 실제로 돌리는 것** — 운영 이미지에 실리는 디렉터리(`Dockerfile` 의 `COPY`)의
+       `__main__` 진입점 + `docker-compose.yml` 의 `command:`/`entrypoint:` 가 가리키는 파일.
+    2. **깨질 수 있는 것** — `app/`·`scripts/`·`eval/` 의 `__main__` 진입점 중 문자열에
+       cp949 불가 문자를 가진 것.
+
+    ⚠️ **1 의 근거를 오해하지 말 것 — "컨테이너에서 깨진다" 가 아니다.** 이미지는 리눅스라
+       기본 인코딩이 UTF-8 이고 거기서는 이 헬퍼가 사실상 no-op 다. 1 이 의미가 있는 이유는
+       **"이미지에 실린다 = 우리가 진짜 쓰는 도구다"** 이고, 그 도구를 **윈도우에서 직접
+       치는 것이 실제 경로**이기 때문이다(분류 워커를 로컬에서 돌린 이력). 즉 1 은 위험의
+       원인이 아니라 **"사람이 칠 확률" 의 대리 지표**다.
+
+    ⚠️ **두 사유를 합집합으로 두는 이유.** 한쪽이 다른 쪽을 대체하지 않는다 — 출력이 ASCII
+       뿐인 배포물은 2 에서 빠지고, `eval/` 은 `.dockerignore` 라 1 에서 빠진다.
+
+    🔴 **왜 `scripts/`·`eval/` 로 넓혔나.** 예전에는 "배포되는 것" 으로 끊고 나머지는
+       `MANUALLY_CONVERTED` 라는 손 목록에 뒀는데, **그 목록이 대장 노릇을 못 했다** —
+       유도 대상에도 목록에도 없이 helper 를 부르는 파일이 19개까지 늘었고 아무 테스트도
+       그것들을 안 잡았다(용준님 PR #92 리뷰 2회전). 소유자별 3 PR(#92·#93·#94)로 파일이
+       전부 전환됐으므로, 이제 손 목록을 지우고 기준을 기계로 유도한다.
+
+    🔴 **여기에 개수를 적지 말 것.** 예전 docstring 이 *"28개"* 와 특정 파일의 줄 번호를
+       박아뒀는데 **그 파일을 고치는 PR 이 같은 문장을 거짓으로 만들었다**(같은 리뷰 A-2).
 
     ⚠️ `app/main.py` 는 대상이 아니다 — `__main__` 블록이 없고 Dockerfile 이
        `uvicorn app.main:app` 으로 띄운다. 스트림 소유자가 uvicorn 이라 우리가 끼어들
-       자리가 아니다.
+       자리가 아니다. (그 파일의 설정 오류 처리는 별건 — PR #96)
     """
     found: set[Path] = set()
+    shipped = set(_image_source_dirs())
 
-    for path in (ROOT / "app").rglob("*.py"):
-        tree = _parse(path)
-        if tree is not None and _has_main_block(tree):
-            found.add(path)
+    for folder in ("app", "scripts", "eval"):
+        for path in (ROOT / folder).rglob("*.py"):
+            tree = _parse(path)
+            if tree is None or not _has_main_block(tree):
+                continue
+            if folder in shipped or _has_uncp949_literal(tree):
+                found.add(path)
 
     for block in _compose_command_blocks(COMPOSE.read_text(encoding="utf-8")):
         for rel in SCRIPT_TARGET.findall(block):
@@ -271,101 +435,111 @@ def _deployed_entrypoints() -> list[Path]:
     return sorted(found)
 
 
-def test_deployed_entrypoints_switch_console_encoding() -> None:
-    """🔴 배포되는 진입점은 전부 `force_utf8_output()` 을 불러야 한다.
+def test_guarded_entrypoints_switch_console_encoding() -> None:
+    """🔴 가드 대상 진입점은 전부 `force_utf8_output()` 을 불러야 한다.
 
-    걸렸다면 `main()` 안에 **직속 문장으로** 넣을 것:
+    걸렸다면 **진입 지점의 첫 문장**으로 넣을 것:
 
-        from app.core.console import force_utf8_output
+        from app.core.console import force_utf8_output    # 모듈 최상단
         ...
         force_utf8_output()
 
-    ⚠️ **import 를 모듈 최상단에 둘 것.** 함수 안에서 import 하면 배선 테스트가
-       몽키패치를 못 걸어 호출 여부를 고정할 수 없다.
-    """
-    missing = [
-        p.relative_to(ROOT).as_posix()
-        for p in _deployed_entrypoints()
-        if (tree := _parse(p)) is None or not _calls_helper_first(tree)
-    ]
+    어디가 "진입 지점" 인지는 `_entry_body()` 가 정한다 — `__main__` 블록이 기준이고,
+    그 블록이 `main()` 위임 한 줄뿐일 때만 그 함수 안이다.
 
-    assert not missing, (
-        "배포되는 진입점인데 진입 지점에서 force_utf8_output() 을 안 부릅니다:\n  "
-        + "\n  ".join(missing)
+    🔴 **호출과 import 를 둘 다 본다.** 호출만 보면 `import` 한 줄만 지운 회귀를 놓친다 —
+       가드는 통과하는데 CLI 는 첫 문장에서 `NameError` 로 죽는다(서영님 PR #97 리뷰에서
+       실측). 사유는 `_imports_canonical_helper`.
+
+    ⚠️ **import 는 모듈 최상단, `__main__` 가드보다 앞.** 함수 안에 두면 실행은 되더라도
+       배선을 테스트로 고정할 수 없고, 가드보다 뒤에 두면 그대로 `NameError` 다.
+    """
+    no_call: list[str] = []
+    no_import: list[str] = []
+    for path in _guarded_entrypoints():
+        rel = path.relative_to(ROOT).as_posix()
+        tree = _parse(path)
+        if tree is None or not _calls_helper_first(tree):
+            no_call.append(rel)
+        # ⚠️ 두 목록을 **따로** 모은다. 합쳐 보고하면 어느 쪽이 빠졌는지 몰라 고치는 사람이
+        #    호출을 또 넣거나 import 를 또 넣는다.
+        if tree is not None and not _imports_canonical_helper(tree):
+            no_import.append(rel)
+
+    assert not no_call, (
+        "진입 지점의 첫 문장에서 force_utf8_output() 을 안 부릅니다:\n  "
+        + "\n  ".join(no_call)
+    )
+    assert not no_import, (
+        f"모듈 최상단(=`__main__` 가드보다 앞)에서 `from {HELPER_MODULE} import {HELPER}` 를 "
+        "하지 않습니다 — 호출만 있으면 CLI 가 NameError 로 죽습니다:\n  "
+        + "\n  ".join(no_import)
     )
 
 
 def test_the_derivation_actually_finds_the_known_entrypoints() -> None:
     """가드가 **무엇을 보고 있는지** 고정한다.
 
-    이게 없으면 정규식이 조용히 아무것도 안 잡게 바뀌어도 위 테스트가 통과한다 —
+    이게 없으면 유도가 조용히 아무것도 안 잡게 바뀌어도 위 테스트가 통과한다 —
     "테스트가 있는데 안 잡는" 상태가 제일 나쁘다.
     """
-    found = {p.relative_to(ROOT).as_posix() for p in _deployed_entrypoints()}
+    found = {p.relative_to(ROOT).as_posix() for p in _guarded_entrypoints()}
 
+    # 사유 1(배포된다) — compose 파싱이 죽으면 여기가 먼저 터진다.
     assert "app/batch/daily.py" in found
     assert "app/consumer.py" in found
     assert "scripts/mock_producer.py" in found, "compose command 파싱이 죽었습니다"
     assert "eval/run_detection_eval.py" in found, "compose command 파싱이 죽었습니다"
 
-    # uvicorn 이 스트림을 소유하므로 대상이 아니다(위 docstring 참고).
+    # 사유 2(깨질 수 있다) — compose 밖·`app/` 밖인데 위험 문자가 있는 것들.
+    # 🔴 예전에는 이 셋이 **대상 아님**으로 단언돼 있었다(compose 주석에만 있으므로).
+    #    범위를 넓히면서 사유가 바뀌었다 — 배포 여부와 무관하게 문자로 잡힌다.
+    #    특히 `classification_worker.py` 는 PR #95 로 k8s CronJob 배포가 됐는데,
+    #    k8s 매니페스트는 이 저장소에 없어서 compose 만 보던 옛 기준으로는 영영 안 잡혔다.
+    assert "scripts/classification_worker.py" in found
+    assert "scripts/verify_counts.py" in found
+    assert "eval/run_pipeline_eval.py" in found
+
+    # 사유 1(이미지에 실린다) — 위험 문자가 **없는데도** 대상인 것.
+    # 🔴 이 파일은 한글만 써서 사유 2 로는 안 잡힌다. Dockerfile 이 `scripts/` 를 COPY 하기
+    #    때문에 대상이고, 그래서 `_image_source_dirs()` 가 죽으면 여기가 먼저 터진다.
+    assert "scripts/detection_experiments/audit_mock_baselines.py" in found
+
+    # uvicorn 이 스트림을 소유하므로 대상이 아니다(`_guarded_entrypoints` docstring 참고).
     assert "app/main.py" not in found
 
-    # 🔴 compose **주석**에만 있는 것은 서비스가 아니다.
-    for mentioned_only_in_comments in (
-        "scripts/classification_worker.py",
-        "scripts/setup_local_mq.py",
-        "app/core/mq.py",
-    ):
-        assert mentioned_only_in_comments not in found, (
-            f"{mentioned_only_in_comments} 은 compose 주석에만 있습니다 — "
-            "주석 제외가 깨졌습니다"
-        )
 
+# ── 실제 크래시 경로 (구조가 아니라 동작을 잰다) ────────────────────────
 
-# ── 범위 밖인데 손으로 전환한 진입점 ────────────────────────────────────
-
-MANUALLY_CONVERTED = [
+CP949_HELP_SMOKE = [
     "eval/run_reporting_eval.py",
     "scripts/build_mapped_data_input.py",
     "scripts/classification_worker.py",
+    "scripts/smoke_mq.py",
 ]
-"""**이 PR(#92)에서** 손으로 전환한 진입점 — `_deployed_entrypoints()` 유도 대상 밖이다.
+"""cp949 에서 `--help` 만으로 **실제로 죽었던** 진입점 표본.
 
-⚠️ **저장소 전체의 "전환된 진입점" 대장이 아니다.** 유도 대상에도 이 목록에도 없이
-   `force_utf8_output()` 을 부르는 파일이 따로 있고(대부분 PR #93·#94 전환분), 그것들은
-   **어떤 테스트도 안 잡는다.** 그 구멍은 이 목록을 늘려서가 아니라
-   **`_deployed_entrypoints()` 범위를 `scripts/`·`eval/` 로 넓혀서** 닫는다 — 그때 이 목록은
-   통째로 지운다. (용준님 PR #92 리뷰 A-1·2회전)
+⚠️ **대장이 아니라 표본이다.** 전수 검사는 위 `test_guarded_entrypoints_...` 가 AST 로 한다.
+   여기는 그 구조 검사가 못 보는 것 — *"`force_utf8_output()` 자체가 망가지면?"* — 을 잡는
+   유일한 자리라, 실제로 프로세스를 띄워 종료코드를 본다.
 
-   세려면(숫자를 박지 말고 그때그때 유도할 것)::
-
-       import sys; sys.path.insert(0, "tests")
-       import test_console_encoding as g
-       derived = {p.relative_to(g.ROOT).as_posix() for p in g._deployed_entrypoints()}
-       conv = {f.relative_to(g.ROOT).as_posix()
-               for f in [*g.ROOT.glob("scripts/**/*.py"), *g.ROOT.glob("eval/*.py")]
-               if "force_utf8_output()" in f.read_text(encoding="utf-8")}
-       print(sorted(conv - derived - set(g.MANUALLY_CONVERTED)))
-
-🔴 **여기 넣으려면 그 파일 `main()` 이 argv 를 파싱해야 한다.** 아래 배선 테스트가
-   `module.main()` 을 **실제로 호출**하기 때문이다 — `--help` 로 `SystemExit` 이 나야
-   거기서 멈춘다. 파싱하지 않는 `main()` 을 넣으면 **진짜 작업이 돌아간다.**
-   예: `scripts/seed_vectordb.py` 는 `main(reset=False)` 가 argparse 를 안 거치고 바로
-   시딩해서(argparse 는 `__main__` 블록에 있다) 넣는 순간 임베딩 504건이 과금된다.
-   `scripts/setup_local_mq.py`(모듈 레벨 `main()` 없음) ·
-   `scripts/smoke_mq.py`(helper import 가 함수 안이라 monkeypatch 불가)도 그대로는 못 넣는다.
+🔴 **전수로 돌리지 말 것.** 유도 집합에는 **argparse 가 없는 파일이 섞여 있다.**
+   그런 파일에 `--help` 를 주면 파싱이 없으니 **스크립트가 그대로 실행된다**
+   (`scripts/detection_experiments/demo_sim.py` 등은 LLM·파일 쓰기까지 간다).
+   그래서 표본은 argparse 가 확실한 것만 손으로 고른다.
 """
 
 
-@pytest.mark.parametrize("rel", MANUALLY_CONVERTED)
-def test_manually_converted_entrypoints_survive_cp949_help(rel: str) -> None:
+@pytest.mark.parametrize("rel", CP949_HELP_SMOKE)
+def test_sampled_entrypoints_survive_cp949_help(rel: str) -> None:
     """cp949 콘솔에서 `--help` 만 요청해도 죽지 않아야 한다.
 
     argparse 는 우리 코드가 첫 줄을 찍기 전에 자기 출력을 내보내므로, 전환이
-    `parse_args()` 뒤로 밀리거나 통째로 빠지면 여기서 exit 1 로 잡힌다. 이 세 파일은
-    유도 집합 밖이라 **이 테스트가 없으면 고친 줄을 지워도 스위트가 초록이다**
-    (용준님 PR #92 리뷰 A-1).
+    `parse_args()` 뒤로 밀리거나 통째로 빠지면 여기서 exit 1 로 잡힌다.
+
+    ⚠️ **구조 가드와 역할이 다르다.** 위 `test_guarded_entrypoints_...` 는 AST 로
+       *"호출이 첫 문장인가"* 만 본다. 그건 `force_utf8_output()` **자신이** 망가져도
+       통과한다. 여기는 실제로 프로세스를 띄워 종료코드를 보므로 그 경우를 잡는다.
 
     🔴 **`text=True` 를 쓰지 말 것 — bytes 로 받는다.** 자식은 `force_utf8_output()`
        때문에 UTF-8 로 쓰는데 부모는 `PYTHONIOENCODING` 이 아니라 **자기 locale** 로
@@ -392,65 +566,35 @@ def test_manually_converted_entrypoints_survive_cp949_help(rel: str) -> None:
     assert proc.stdout, f"{rel} 이 --help 에 아무것도 출력하지 않았습니다"
 
 
-def _main_parses_argv(path: Path) -> bool:
-    """모듈 레벨 `main()` 이 `parse_args()` 를 **실제로 호출**하는지.
-
-    🔴 **문자열 매칭이 아니라 AST 다.** 처음엔 `"parse_args" in inspect.getsource(main)`
-       으로 썼는데, 그러면 **docstring·주석에 그 단어만 있어도 통과**한다. 파싱을 안 하는
-       `main()` 이 가드를 지나 **실제로 실행되는** 방향의 오검출이라 제일 나쁘다 —
-       `_calls_helper_first` 가 정규식·tokenize 를 버린 것과 같은 사유(이 파일 머리말).
-    """
-    tree = _parse(path)
-    if tree is None:
-        return False
-    fn = next(
-        (n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main"),
-        None,
-    )
-    if fn is None:
-        return False
-    return any(_call_name(n) == "parse_args" for n in ast.walk(fn) if isinstance(n, ast.Call))
-
-
-@pytest.mark.parametrize("rel", MANUALLY_CONVERTED)
-def test_manually_converted_entrypoints_call_the_helper_before_parsing(
-    rel: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`main()` 이 `parse_args()` **전에** `force_utf8_output()` 을 부르는지.
-
-    🔴 **위 서브프로세스 테스트만으로는 부족하다 — 3개 중 1개를 못 잡는다.**
-       `eval/run_reporting_eval.py` 는 `description` 이 리터럴(`"실험⑦ …"`)이고
-       `⑦`(U+2465)은 **cp949 에 있어서** `--help` 가 애초에 안 죽는다. 호출을 통째로
-       지워도 서브프로세스 테스트는 초록이다(실측). 그 파일의 위험은 `--help` 가 아니라
-       **채점 결과 출력**에 있는데 그건 LLM 비용이 들어 테스트에서 돌릴 수 없다.
-
-    `--help` 는 `SystemExit(0)` 을 던지므로, 호출이 `parse_args()` 뒤로 밀리면
-    여기 도달하기 전에 빠져나가 `calls` 가 비고 실패한다 — 순서까지 같이 잠근다.
-    """
-    module = importlib.import_module(rel.removesuffix(".py").replace("/", "."))
-
-    # ⚠️ **호출 전에** 막는다. 아래는 `main()` 을 실제로 실행하므로, 조건이 안 맞는 파일이
-    #    목록에 들어오면 `AttributeError`·`DID NOT RAISE` 로 죽기 **전에 진짜 작업이 돈다**
-    #    (`seed_vectordb.py` 면 임베딩 과금). 조건은 위 `MANUALLY_CONVERTED` docstring 참고.
-    assert hasattr(module, "main"), (
-        f"{rel} 에 모듈 레벨 main() 이 없습니다 — `__main__` 블록에서 추출할 것"
-    )
-    assert _main_parses_argv(ROOT / rel), (
-        f"{rel} 의 main() 이 argv 를 파싱하지 않습니다. 이 테스트는 main() 을 실제로 부르므로 "
-        "파싱이 없으면 --help 에서 안 멈추고 본 작업이 돌아갑니다"
-    )
-
-    calls: list[str] = []
-    monkeypatch.setattr(module, "force_utf8_output", lambda: calls.append("utf8"))
-    monkeypatch.setattr(module.sys, "argv", [rel, "--help"])
-
-    with pytest.raises(SystemExit):
-        module.main()
-
-    assert calls, f"{rel} 의 main() 이 force_utf8_output() 을 (먼저) 부르지 않았습니다"
+# ⚠️ PR #92 의 monkeypatch 배선 테스트(`module.main()` 을 직접 호출)는 여기서 지웠다.
+#    그때는 세 파일이 유도 집합 **밖**이라 그것만이 호출을 잠갔지만, 범위를 넓힌 지금은
+#    구조 가드가 같은 것을 전수로 본다. 되살리지 말 것 — `main()` 을 실제로 부르는
+#    테스트는 argparse 없는 파일이 목록에 들어오는 순간 **본 작업을 실행한다.**
 
 
 # ── 검출기 자체를 고정한다 (전부 초안이 실제로 틀렸던 입력) ──────────────
+
+MAIN_GUARD = 'if __name__ == "__main__":\n    main()\n'
+"""위임 한 줄짜리 `__main__` 블록. 아래 표본에서 `main()` 을 진입점으로 만들어 준다."""
+
+ASYNC_DELEGATION = (
+    'async def main():\n    force_utf8_output()\nif __name__ == "__main__":\n'
+    "    asyncio.run(main())\n"
+)
+"""#94 의 `demo_sim` 계열 모양 — 옛 규칙은 `AsyncFunctionDef` 를 못 봤다."""
+
+WORKER_MAIN_OK = (
+    'def main(reset=False):\n    do_work()\nif __name__ == "__main__":\n'
+    "    force_utf8_output()\n    ap = build_parser()\n"
+    "    main(reset=ap.parse_args().reset)\n"
+)
+"""`seed_vectordb` 모양 — `main()` 은 진입점이 아니라 **작업 함수**다."""
+
+WORKER_MAIN_BAD = (
+    'def main(reset=False):\n    force_utf8_output()\nif __name__ == "__main__":\n'
+    "    ap = build_parser()\n    main(reset=ap.parse_args().reset)\n"
+)
+"""위와 같은 모양인데 호출이 작업 함수 안 — argparse 가 이미 앞섰다."""
 
 
 def _tmp_module(tmp_path: Path, body: str) -> ast.Module:
@@ -484,41 +628,155 @@ def test_main_block_ignores_mentions_in_docstrings_and_comments(tmp_path: Path) 
     assert not _has_main_block(_tmp_module(tmp_path, body))
 
 
+CANONICAL_IMPORT = f"from {HELPER_MODULE} import {HELPER}\n"
+
+CALL_WITHOUT_IMPORT = f"def main():\n    {HELPER}()\n{MAIN_GUARD}"
+"""🔴 서영님 PR #97 리뷰에서 실측된 회귀 — 호출만 남기고 import 를 지운 모양."""
+
+IMPORT_AFTER_GUARD = f"def main():\n    {HELPER}()\n{MAIN_GUARD}{CANONICAL_IMPORT}"
+"""import 가 `__main__` 가드보다 뒤 — 실행 순서상 그대로 `NameError`."""
+
+PRIVATE_HELPER_DEF = (
+    f"def {HELPER}():\n    pass\ndef main():\n    {HELPER}()\n{MAIN_GUARD}"
+)
+"""사설 동명 함수 — `app/core/console.py` 가 "떠나온 안티패턴" 이라 적어 둔 그것."""
+
+IMPORT_INSIDE_FUNCTION = (
+    f"def main():\n    from {HELPER_MODULE} import {HELPER}\n    {HELPER}()\n{MAIN_GUARD}"
+)
+"""함수 안 import — 실행은 되지만 배선을 테스트로 고정할 수 없다."""
+
+IMPORT_FROM_OTHER_MODULE = (
+    f"from app.core.constants import KST\ndef main():\n    {HELPER}()\n{MAIN_GUARD}"
+)
+"""엉뚱한 모듈에서 온 import — 이름만 맞다고 통과하면 안 된다."""
+
+# 🔴 아래 넷은 "정본 import 가 어딘가 있으면 통과" 를 뚫는다 (서영님 #97 2회전, 재현됨).
+ALIASED_IMPORT = (
+    f"from {HELPER_MODULE} import {HELPER} as utf8_output\n"
+    f"def main():\n    {HELPER}()\n{MAIN_GUARD}"
+)
+"""`as` 별칭 — 정본에서 왔지만 **그 이름을 바인딩하지 않는다.** 실제로는 `NameError`."""
+
+REDEFINED_AFTER_IMPORT = (
+    f"{CANONICAL_IMPORT}def {HELPER}():\n    pass\ndef main():\n    {HELPER}()\n{MAIN_GUARD}"
+)
+"""정본 import 뒤 **사설 재정의** — 호출은 no-op 으로 간다."""
+
+REASSIGNED_AFTER_IMPORT = (
+    f"{CANONICAL_IMPORT}{HELPER} = lambda: None\n"
+    f"def main():\n    {HELPER}()\n{MAIN_GUARD}"
+)
+"""정본 import 뒤 **재할당** — 위와 같은 사고, 문법만 다르다."""
+
+REDEFINED_THEN_REIMPORTED = (
+    f"def {HELPER}():\n    pass\n{CANONICAL_IMPORT}"
+    f"def main():\n    {HELPER}()\n{MAIN_GUARD}"
+)
+"""사설 정의가 **먼저**고 정본 import 가 나중 — 마지막 바인딩이 정본이라 통과해야 한다."""
+
+
 @pytest.mark.parametrize(
     "body, expected, why",
     [
         (
-            "def main():\n    force_utf8_output()\n",
+            f"{CANONICAL_IMPORT}def main():\n    force_utf8_output()\n{MAIN_GUARD}",
             True,
-            "직속 호출",
+            "모듈 최상단 import + 가드보다 앞",
         ),
         (
-            'name = "x"\ndef main():\n    print(f"hint: force_utf8_output() {name}")\n',
+            CALL_WITHOUT_IMPORT,
+            False,
+            "🔴 import 없이 호출만 — 가드는 통과하는데 CLI 는 NameError (서영님 #97 실측)",
+        ),
+        (
+            IMPORT_AFTER_GUARD,
+            False,
+            "🔴 import 가 __main__ 가드보다 **뒤** — 모듈은 위에서 아래로 도니 역시 NameError",
+        ),
+        (
+            PRIVATE_HELPER_DEF,
+            False,
+            "🔴 사설 동명 함수 — 공용 helper 로부터의 import 가 아니다",
+        ),
+        (
+            IMPORT_INSIDE_FUNCTION,
+            False,
+            "🔴 함수 안 import — 모듈 최상단이 아니라 배선을 고정할 수 없다",
+        ),
+        (
+            IMPORT_FROM_OTHER_MODULE,
+            False,
+            "🔴 다른 모듈에서 온 import 는 근거가 안 된다",
+        ),
+        (
+            ALIASED_IMPORT,
+            False,
+            "🔴 `as` 별칭은 그 이름을 안 바인딩한다 — 실제로는 NameError (서영님 #97 2회전)",
+        ),
+        (
+            REDEFINED_AFTER_IMPORT,
+            False,
+            "🔴 정본 import 뒤 사설 재정의 — 호출이 no-op 으로 간다 (같은 리뷰)",
+        ),
+        (
+            REASSIGNED_AFTER_IMPORT,
+            False,
+            "🔴 정본 import 뒤 재할당 — 위와 같은 사고, 문법만 다르다",
+        ),
+        (
+            REDEFINED_THEN_REIMPORTED,
+            True,
+            "사설 정의가 먼저고 정본 import 가 나중 — **마지막** 바인딩이 정본이라 통과",
+        ),
+    ],
+)
+def test_import_detector_requires_the_canonical_helper_import(
+    tmp_path: Path, body: str, expected: bool, why: str
+) -> None:
+    """🔴 호출 검사와 **짝**이다. 하나만 있으면 반대쪽 회귀를 통째로 놓친다.
+
+    ⚠️ 마지막 두 케이스가 *"존재하면 통과"* 와 *"마지막 바인딩이 정본"* 을 가른다 —
+       둘 다 정본 import 를 **갖고 있는데** 기대값이 반대다.
+    """
+    assert _imports_canonical_helper(_tmp_module(tmp_path, body)) is expected, why
+
+
+@pytest.mark.parametrize(
+    "body, expected, why",
+    [
+        (
+            f"def main():\n    force_utf8_output()\n{MAIN_GUARD}",
+            True,
+            "위임 한 줄 → main() 첫 문장",
+        ),
+        (
+            f'name = "x"\ndef main():\n    print(f"hint: force_utf8_output() {{name}}")\n{MAIN_GUARD}',
             False,
             "🔴 f-string 안 언급 — 3.12 는 FSTRING_MIDDLE 이라 tokenize 로 안 지워졌다",
         ),
         (
-            "def force_utf8_output():\n    pass\ndef main():\n    pass\n",
+            f"def force_utf8_output():\n    pass\ndef main():\n    pass\n{MAIN_GUARD}",
             False,
             "🔴 정의를 호출로 세면 사설 복사본 회귀를 못 잡는다",
         ),
         (
-            "def main():\n    if False:\n        force_utf8_output()\n",
+            f"def main():\n    if False:\n        force_utf8_output()\n{MAIN_GUARD}",
             False,
             "🔴 안 닿는 분기로 숨기면 안 된다",
         ),
         (
-            "def main():\n    ap = build_parser()\n    force_utf8_output()\n",
+            f"def main():\n    ap = build_parser()\n    force_utf8_output()\n{MAIN_GUARD}",
             False,
             "🔴 다른 문장 뒤로 밀면 안 된다 — daily.py 가 이 모양으로 `--help` 에서 죽었다",
         ),
         (
-            "X = 1\n\x0c\ndef main():\n    # force_utf8_output() 주석뿐\n    pass\n",
+            f"X = 1\n\x0c\ndef main():\n    # force_utf8_output() 주석뿐\n    pass\n{MAIN_GUARD}",
             False,
             "🔴 폼피드가 있으면 splitlines/tokenize 행이 어긋나 주석이 살아남았다",
         ),
         (
-            'def main():\n    """force_utf8_output() 을 부른다."""\n    pass\n',
+            f'def main():\n    """force_utf8_output() 을 부른다."""\n    pass\n{MAIN_GUARD}',
             False,
             "docstring 언급",
         ),
@@ -527,12 +785,67 @@ def test_main_block_ignores_mentions_in_docstrings_and_comments(tmp_path: Path) 
             True,
             "main() 없이 __main__ 블록에서 직접 부르는 형태",
         ),
+        # 🔴 아래 셋이 새 `_entry_body` 규칙의 핵심이다 (PR #92 후속에서 확인된 실제 모양).
+        (
+            ASYNC_DELEGATION,
+            True,
+            "🔴 async def main() 도 위임 한 줄이면 그 안을 본다 — 옛 규칙은 못 찾았다",
+        ),
+        (
+            WORKER_MAIN_OK,
+            True,
+            "🔴 seed_vectordb 모양 — main() 은 작업 함수다. 옛 규칙은 이걸 실패로 오탐했다",
+        ),
+        (
+            WORKER_MAIN_BAD,
+            False,
+            "🔴 위와 반대 — 호출이 작업 함수 안이면 argparse 가 이미 앞선다",
+        ),
     ],
 )
 def test_call_detector_counts_only_real_calls_at_entry(
     tmp_path: Path, body: str, expected: bool, why: str
 ) -> None:
     assert _calls_helper_first(_tmp_module(tmp_path, body)) is expected, why
+
+
+@pytest.mark.parametrize(
+    "line, expected",
+    [
+        ("COPY app/ ./app/", ["app"]),
+        # 🔴 끝 `/` 없는 형태 — 도커에선 같은 뜻인데 처음 정규식이 통째로 놓쳤다.
+        #    유도 집합이 **조용히 좁아지는** 방향이라 자체 검수에서 잡았다.
+        ("COPY app ./app", ["app"]),
+        ("COPY --from=builder app/ ./app/", ["app"]),
+        ("COPY --chown=u:g scripts/ ./scripts/", ["scripts"]),
+        # 파일 하나를 옮기는 줄은 디렉터리가 아니다.
+        ("COPY requirements.txt .", []),
+        ("COPY .dockerignore .", []),
+    ],
+)
+def test_dockerfile_copy_forms_are_understood(line: str, expected: list[str]) -> None:
+    """`COPY` 파싱을 **직접** 고정한다.
+
+    ⚠️ 이게 없으면 파싱이 조용히 좁아져도 `_guarded_entrypoints()` 가 그냥 작아질 뿐이라
+       테스트는 통과한다 — "가드가 있는데 안 잡는" 상태다.
+    """
+    assert DOCKER_COPY_DIR.findall(line) == expected
+
+
+def test_the_real_dockerfile_still_parses() -> None:
+    """실제 `Dockerfile` 이 파싱되는지 — 형태가 바뀌면 여기가 먼저 터진다.
+
+    🔴 개수를 박지 않고 **아는 두 디렉터리만** 단언한다. `COPY` 가 하나 늘면 유도 대상도
+       늘어야 맞으므로 실패시킬 이유가 없지만, 파싱이 죽어 **빈 목록**이 되면 사유 1
+       (배포되는 것)이 통째로 사라지는데 그건 조용하다.
+    """
+    dirs = _image_source_dirs()
+
+    assert "app" in dirs, f"Dockerfile COPY 파싱이 죽었습니다: {dirs}"
+    assert "scripts" in dirs, (
+        "PR #95 로 `COPY scripts/` 가 들어왔는데 안 잡힙니다 — "
+        f"COPY 형태가 바뀌었으면 DOCKER_COPY_DIR 를 고칠 것: {dirs}"
+    )
 
 
 @pytest.mark.parametrize(

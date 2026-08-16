@@ -23,7 +23,6 @@ from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).parent))
@@ -41,6 +40,7 @@ from validate_anomaly import BASELINE_RATE
 
 import app.detection.statistics as stats_mod
 from app.batch.daily import STATE_RETENTION_DAYS, CountingClient
+from app.core.console import force_utf8_output
 from app.detection.service import detect_anomaly
 from scripts.golden_inputs import load_golden_inputs as load_inputs
 
@@ -306,4 +306,9 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    # 🔴 첫 문장이어야 한다 — 사설 `sys.stdout.reconfigure()` 를 대체한다(stderr 미변경 ·
+    #    `contextlib.suppress` 부재). ⚠️ `async def main()` 이라 `main()` 안이 아니라 **여기**다
+    #    (`tests/test_console_encoding.py::_entry_body` 참고). `app/core/console.py`.
+    force_utf8_output()
+
     asyncio.run(main())
