@@ -4,12 +4,19 @@
 LLM 은 부르지 않는다 — 발행·개선안·가이드라인을 전부 주입/몽키패치로 막는다.
 """
 
+import ast
 import json
+import logging
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 import pytest
 
 from app.batch import daily
+from app.core import exit_codes, logging_setup
+from tests.conftest import bad_log_level_settings, pin_settings, unloadable_settings
+
+ROOT = Path(__file__).resolve().parents[1]
 from app.core.constants import CURRENT_WINDOW_DAYS, PAST_WINDOW_DAYS
 from app.core.schemas import (
     Aspect,
@@ -696,6 +703,73 @@ async def test_cause_failure_is_reported_as_batch_failure(
     assert "P001/색상/COUPANG/cs [원인분류]" in capsys.readouterr().out
 
 
+def _fake_summary(**overrides) -> dict:
+    """`run_batch()` 반환값의 가짜. **실제 계약과 키가 정확히 같다.**
+
+    ⚠️ 예전엔 리터럴이 두 벌이었고 그중 하나에 실제로는 없는 `window_end` 가 들어 있었다
+       (용준님 PR #98 리뷰 잔가지). 가짜가 계약과 갈리면 다음 사람이 `summary["window_end"]`
+       를 쓰고 런타임에 `KeyError` 를 본다. **반대 방향(키 누락)도 같이 위험하다** —
+       `print_summary` 가 `.get()` 으로 읽는 항목은 가짜에 없어도 조용히 통과해서, 그
+       분기를 태운다고 믿는 테스트가 실제로는 안 태운다.
+
+    ⚠️ 아래 `test_fake_summary_matches_the_real_contract` 가 두 방향을 다 잠근다.
+    """
+    return {
+        "trace_id": "trace-1",
+        "dry_run": True,
+        "input_source": "db",
+        "elapsed_sec": 1.0,
+        "items": 0,
+        "documents": 0,
+        "coverage_gap_slots": 0,
+        "coverage_missing_documents": 0,
+        "prior_alerts": 0,
+        "published": 0,
+        "suppressed": 0,
+        "processed": 0,
+        "delivered": 0,
+        "llm_calls": {},
+        "cause_calls": 0,
+        "cause_failures": 0,
+        "no_evidence": 0,
+        "routing_miss": 0,
+        "guideline_retried": 0,
+        "guideline_pending": 0,
+        "guideline_retry_exhausted": 0,
+        "failures": [],
+        "state_cached": 0,
+        **overrides,
+    }
+
+
+def test_fake_summary_matches_the_real_contract():
+    """🔴 가짜 요약이 `run_batch()` 의 실제 반환 키와 **정확히 일치**하는지.
+
+    한쪽으로만 검사하면 안 된다 —
+      - 가짜에만 있는 키: 다음 사람이 그 키를 쓰고 런타임에 `KeyError` 를 본다
+        (실제로 `window_end` 가 그랬다)
+      - 실제에만 있는 키: `print_summary` 가 `.get()` 으로 읽는 분기를 **태운다고 믿는
+        테스트가 안 태운다**
+
+    `run_batch` 에 키가 하나 늘면 여기서 걸려서 가짜도 같이 갱신하게 된다.
+    """
+    source = (ROOT / "app" / "batch" / "daily.py").read_text(encoding="utf-8")
+    real: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == "run_batch":
+            for ret in ast.walk(node):
+                if isinstance(ret, ast.Return) and isinstance(ret.value, ast.Dict):
+                    real = {
+                        k.value for k in ret.value.keys if isinstance(k, ast.Constant)
+                    }
+
+    assert real, "run_batch 의 반환 dict 를 못 찾았습니다 — 이 가드가 헛돌고 있습니다"
+    assert set(_fake_summary()) == real, (
+        f"가짜가 계약과 갈립니다 — 실제에만: {sorted(real - set(_fake_summary()))} / "
+        f"가짜에만: {sorted(set(_fake_summary()) - real)}"
+    )
+
+
 def test_main_switches_encoding_before_printing(monkeypatch):
     """⚠️ `main()` 이 실제로 `force_utf8_output()` 을 부른다 — 배선까지 고정한다.
 
@@ -707,24 +781,10 @@ def test_main_switches_encoding_before_printing(monkeypatch):
 
     async def fake_run_batch(**_kwargs):
         calls.append("run_batch")
-        return {
-            "trace_id": "trace-1",
-            "dry_run": True,
-            "input_source": "load_golden_inputs",  # ⚠️ 줄을 태운다
-            "elapsed_sec": 1.0,
-            "items": 0,
-            "documents": 0,
-            "prior_alerts": 0,
-            "published": 0,
-            "suppressed": 0,
-            "processed": 0,
-            "delivered": 0,
-            "llm_calls": {},
-            "cause_calls": 0,
-            "failures": [],
-            "state_cached": 0,
-        }
+        # ⚠️ `input_source` 는 "golden 이면 경고" 줄을 태우려고 이 값을 쓴다.
+        return _fake_summary(input_source="load_golden_inputs")
 
+    pin_settings(monkeypatch)
     monkeypatch.setattr(daily, "force_utf8_output", lambda: calls.append("utf8"))
     monkeypatch.setattr(daily, "run_batch", fake_run_batch)
     monkeypatch.setattr(daily.sys, "argv", ["daily", "--dry-run"])
@@ -734,6 +794,180 @@ def test_main_switches_encoding_before_printing(monkeypatch):
     assert "utf8" in calls, "main() 이 force_utf8_output() 을 부르지 않았습니다"
     # 출력·로깅보다 먼저 불려야 한다.
     assert calls.index("utf8") < calls.index("run_batch")
+
+
+@pytest.mark.parametrize(
+    "fake_get_settings, why",
+    [
+        (bad_log_level_settings, "logging 이 거부하는 레벨 — 진짜 basicConfig 가 던진다"),
+        (unloadable_settings, "설정 로딩 자체가 실패 — get_settings() 가 던진다"),
+    ],
+)
+def test_config_error_exits_two_before_running_the_batch(
+    monkeypatch, capsys, fake_get_settings, why
+):
+    """🔴 설정 오류는 exit **2** 이고, `run_batch` 에 **들어가지도 않는다.**
+
+    예전엔 `get_settings()` 가 `run_batch` **안쪽**에서만 불려서
+    (`_active_version_params()` · `load_inputs_from_db()`) `MQ_PORT=abc` 같은 값 오류가
+    미포착 `ValidationError` 로 나갔다 — **exit 1 + raw traceback**. 그런데 1 은 이 파일이
+    *"배치는 돌았는데 일부가 실패"* 로 쓰는 값이라(`sys.exit(EXIT_RUNTIME_ERROR)`),
+    **"아예 못 떴다" 와 "돌다가 일부 실패" 가 종료코드로 구분이 안 됐다.**
+
+    ⚠️ **두 갈래를 다 돈다.** 초안은 `get_settings` 를 **성공하는** 가짜로 바꿔 레벨 갈래만
+       탔는데, 그러면 누가 `settings = get_settings()` 를 `try` 위로 올리는 "정리" 를 해도
+       이 파일은 초록이고 배치의 `MQ_PORT=abc` 가 조용히 exit 1 로 돌아간다
+       (용준님 PR #98 리뷰 잔가지).
+
+    ⚠️ `run_batch` 를 **안 탄다는 것까지** 본다. 종료코드만 보면, 배치를 끝까지 돌고 나서
+       실패로 끝나도 통과한다 — LLM 을 태운 뒤 죽는 것과 아예 안 시작하는 것은 다르다.
+    """
+    monkeypatch.setattr(logging.root, "handlers", [])
+    monkeypatch.setattr(logging_setup, "get_settings", fake_get_settings)
+
+    ran = []
+
+    # ⚠️ **코루틴이어야 한다.** 평범한 lambda 면 `asyncio.run(None)` 이 `ValueError` 로
+    #    죽어서, 가드가 사라지는 회귀에서 `SystemExit` 대신 엉뚱한 예외가 나고
+    #    `assert not ran` 이 **우연히** 지켜진다(용준님 리뷰 잔가지, 재현 확인).
+    async def fake_run_batch(**_kwargs):
+        ran.append(1)
+        return _fake_summary()
+
+    monkeypatch.setattr(daily, "run_batch", fake_run_batch)
+    monkeypatch.setattr(daily.sys, "argv", ["daily", "--dry-run"])
+
+    with pytest.raises(SystemExit) as exc:
+        daily.main()
+
+    assert exc.value.code == exit_codes.EXIT_CONFIG_ERROR, why
+    assert "설정을 읽지 못해" in capsys.readouterr().err, why
+    assert not ran, "설정이 틀렸는데 배치가 돌았습니다"
+
+
+@pytest.mark.parametrize(
+    "exc, why",
+    [
+        (
+            FileNotFoundError("raw DB 가 없습니다: /nope/raw.db — 볼륨 마운트 확인"),
+            "raw DB 경로 부재 — CronJob 에서 제일 잦다(볼륨 누락·경로 오타)",
+        ),
+        (
+            RuntimeError("분류 결과 테이블이 없습니다: /x/raw.db — worker 를 먼저 돌리세요"),
+            "스키마·분류결과 전제 — `_require_classified_tables` 계열",
+        ),
+        (
+            # 🔴 실제 `_check_version_cutover` 가 이 모양이다 — **조치 안내가 뒷줄에 있다.**
+            RuntimeError(
+                "윈도우 안 분류 결과가 옛 분류기 기준입니다\n"
+                "  섞인 채로는 돌리지 않습니다 — 기준선 부정률이 0 이 되어 오탐이 됩니다.\n"
+                "  활성 값이 의도한 것인지 확인하세요(LLM_MODEL 오타면 설정을 고치세요)."
+            ),
+            "여러 줄 — 첫 줄만 남기면 조치 안내를 잃는다",
+        ),
+    ],
+)
+def test_runtime_environment_failures_exit_two(monkeypatch, capsys, exc, why):
+    """🔴 실행 중 드러나는 **환경 전제**도 exit 2 다 — 부팅 가드만으로는 안 덮인다.
+
+    `configure_logging_or_exit()` 은 `Settings` 로 읽히는 값만 본다. 그런데 배치에서 제일
+    자주 나는 실패는 그 다음이다 — raw DB 경로가 틀렸거나, 스키마가 옛 버전이거나, 분류
+    결과 테이블이 없는 것. 전부 **재시작해도 같은데** exit 1 로 나가면 k8s 가 영원히
+    재시도한다(용준님 PR #98 리뷰 ①, 재현 확인).
+
+    ⚠️ **메시지 전문이 나가야 한다.** 이 전제 검사들은 여러 줄로 조치 방법까지 담고 있어서
+       (`LLM_MODEL 오타면 설정을 고치세요` 등) 첫 줄만 남기면 정작 필요한 안내를 잃는다 —
+       부팅 경로(한 줄 축약)와 일부러 다르다.
+    """
+    pin_settings(monkeypatch)
+
+    async def boom(**_kwargs):
+        raise exc
+
+    monkeypatch.setattr(daily, "run_batch", boom)
+    monkeypatch.setattr(daily.sys, "argv", ["daily", "--dry-run"])
+
+    with pytest.raises(SystemExit) as got:
+        daily.main()
+
+    assert got.value.code == exit_codes.EXIT_CONFIG_ERROR, why
+    err = capsys.readouterr().err
+    assert "환경이 준비되지 않아" in err, why
+    # 🔴 **전문**이 나가야 한다 — 첫 줄만 보면 위 여러 줄 케이스에서 조치 안내를 잃는다.
+    for line in str(exc).splitlines():
+        assert line.strip() in err, f"메시지가 잘렸습니다({why}): {line!r}"
+    assert "Traceback" not in err, why
+
+
+def test_runtime_error_stays_confined_to_preconditions():
+    """🔴 위 분류의 전제 — `RuntimeError` 를 던지는 곳이 배치 전제검사뿐인지.
+
+    `main()` 이 `(FileNotFoundError, RuntimeError)` 를 "환경 문제(=2)" 로 분류하는데,
+    누군가 `app/` 어딘가에서 `RuntimeError` 를 **진짜 버그** 신호로 쓰기 시작하면 그게
+    조용히 설정 오류로 오분류된다. 그때 이 테스트가 먼저 실패해서 분류를 다시 보게 한다.
+
+    ⚠️ 라이브러리가 던지는 `RuntimeError` 까지는 못 막는다. CronJob 이라 오분류 비용이
+       비대칭이라(다음 예약 실행은 그대로 돈다) 감수한 선택이다 — `daily.main()` 주석 참고.
+    """
+    hits = {
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / "app").rglob("*.py")
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Raise)
+        and isinstance(node.exc, ast.Call)
+        and isinstance(node.exc.func, ast.Name)
+        and node.exc.func.id == "RuntimeError"
+    }
+
+    assert hits == {"app/batch/daily.py"}, (
+        "RuntimeError 를 던지는 곳이 배치 전제검사 밖으로 늘었습니다 — "
+        f"daily.main() 의 (FileNotFoundError, RuntimeError) → exit 2 분류를 다시 보세요: {sorted(hits)}"
+    )
+
+
+def test_help_works_even_when_the_config_is_broken(monkeypatch):
+    """`--help` 는 설정이 깨져 있어도 나와야 한다 — 그래서 설정 로딩이 `parse_args()` **뒤**다.
+
+    ⚠️ 순서를 앞으로 옮기면 **설정 오타 하나로 사용법조차 못 본다.** 하필 그때가 사용법이
+       제일 필요한 순간이다(어떤 플래그로 고쳐 돌릴지 봐야 한다).
+    ⚠️ 반대 방향 제약도 있다 — `force_utf8_output()` 보다 뒤여야 한다(그건 첫 문장이어야
+       하고 `tests/test_console_encoding.py` 가 강제한다). 두 제약 사이의 자리다.
+    """
+    pin_settings(monkeypatch, log_level="info")  # 설정이 깨진 상태
+    monkeypatch.setattr(daily.sys, "argv", ["daily", "--help"])
+
+    with pytest.raises(SystemExit) as exc:
+        daily.main()
+
+    # argparse 의 정상 종료(0)여야 한다 — 설정 오류(2)로 먼저 죽으면 안 된다.
+    assert exc.value.code == 0, "설정 로딩이 parse_args() 보다 앞으로 옮겨졌습니다"
+
+
+def test_batch_failures_still_exit_one(monkeypatch):
+    """반대편 — "돌았는데 일부 실패" 는 여전히 **1** 이다.
+
+    ⚠️ 위 테스트만 있으면 누가 `sys.exit(EXIT_CONFIG_ERROR)` 로 통일해도 안 걸린다.
+       그러면 cron·k8s 가 **재시도해도 소용없는 실패**로 오해한다 — 이쪽은 다음 실행에
+       나을 수 있는 실패다.
+    """
+
+    async def fake_run_batch(**_kwargs):
+        return _fake_summary(
+            failures=[{"stage": "발행", "target_key": "P001", "error": "boom"}]
+        )
+
+    pin_settings(monkeypatch)
+    monkeypatch.setattr(daily, "run_batch", fake_run_batch)
+    monkeypatch.setattr(daily.sys, "argv", ["daily", "--dry-run"])
+
+    with pytest.raises(SystemExit) as exc:
+        daily.main()
+
+    # ⚠️ 두 코드가 서로 다르다는 단언은 여기 두지 않는다 —
+    #    `test_main_entrypoint.py::test_the_contract_values_are_what_k8s_expects` 가
+    #    이미 본다. 배치 동작 테스트 안에 두면 계약이 바뀔 때 두 곳이 서로 다른 메시지로
+    #    실패한다(용준님 PR #98 리뷰 잔가지).
+    assert exc.value.code == exit_codes.EXIT_RUNTIME_ERROR
 
 
 @pytest.mark.asyncio
