@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.config import get_settings
+from app.core import llm_client
 from app.core.exceptions import LlmParseError
 from app.core.llm_client import LlmClient
 
@@ -32,6 +34,25 @@ class _FakeAsyncOpenAI:
 
     async def _create(self, **kwargs):
         return self._response
+
+
+def test_get_llm_client_keeps_default_and_explicit_models_separate(monkeypatch):
+    """기본 경로와 원인분류 전용 경로가 서로 다른 모델 클라이언트를 쓴다."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "llm_model", "gpt-4o-mini")
+    monkeypatch.setattr(llm_client, "AsyncOpenAI", lambda **_kwargs: object())
+    monkeypatch.setattr(llm_client, "wrap_openai", lambda client: client)
+    llm_client.get_llm_client.cache_clear()
+
+    default_client = llm_client.get_llm_client()
+    cause_client = llm_client.get_llm_client(model="gpt-4o")
+
+    assert default_client._model == "gpt-4o-mini"
+    assert cause_client._model == "gpt-4o"
+    assert default_client is llm_client.get_llm_client()
+    assert cause_client is llm_client.get_llm_client(model="gpt-4o")
+
+    llm_client.get_llm_client.cache_clear()
 
 
 @pytest.mark.asyncio

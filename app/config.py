@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     # --- LLM ---
     llm_api_key: str = ""
     llm_model: str = "gpt-4o-mini"
+    cause_llm_model: str = "gpt-4o"
     llm_timeout_seconds: int = 60
 
     # --- 벡터DB ---

@@ -337,7 +337,7 @@ async def main_async(args: argparse.Namespace) -> int:
             "run_at": datetime.now(KST).isoformat(timespec="seconds"),
             "golden": golden_path.name,
             "prompt_version": args.prompt_version,
-            "model": get_settings().llm_model,
+            "model": get_settings().cause_llm_model,
             "seed": args.seed,
             "limit": args.limit,
             "batch_size": args.batch_size,
