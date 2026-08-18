@@ -8,6 +8,7 @@
   3. `execute_ddl()` 이 "이미 있음" 만 삼키고 나머지는 올린다.
   4. `unique_column_sets()` 가 유니크 제약을 보고, `find_legacy_tables()` 가 그걸 쓴다.
   5. 두 백엔드 DDL 이 **같은 테이블·같은 컬럼**을 낸다.
+  6. 코드 DDL 과 로컬 `docker/postgres/init/*.sql` 이 **같은 스키마를 낸다**(⑥ 절).
 
 ⚠️ LLM·네트워크 없음. sqlite in-memory 와 가짜 연결만 쓴다.
 """
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -212,13 +214,26 @@ def test_missing_tables_are_not_legacy():
 
 _CREATE_TABLE = re.compile(r"CREATE TABLE IF NOT EXISTS\s+(\w+)\s*\((.*)\)\s*;", re.DOTALL)
 
+# ⚠️ 위 정규식은 greedy 라 **한 파일에 CREATE TABLE 이 여러 개면 통째로 삼킨다.** 우리 DDL
+#    상수는 문장 하나씩이라 그쪽에는 문제가 없지만, `init/*.sql` 은 10개가 한 파일에 있어
+#    비탐욕 판이 따로 필요하다. `\)\s*;` 라서 `PRIMARY KEY (...)` 같은 안쪽 괄호에서는 안
+#    끊긴다(그 뒤에 오는 것이 `;` 가 아니다).
+_CREATE_TABLE_EACH = re.compile(
+    r"CREATE TABLE IF NOT EXISTS\s+(\w+)\s*\((.*?)\)\s*;", re.DOTALL | re.IGNORECASE
+)
 
-def _declared_columns(ddl: str) -> tuple[str, set[str]]:
-    """`CREATE TABLE` 문 → (테이블명, 컬럼명 집합). 표 수준 제약 줄은 뺀다."""
-    match = _CREATE_TABLE.search(ddl)
-    assert match, f"CREATE TABLE 을 못 읽었습니다: {ddl[:60]}"
-    table, body = match.group(1), match.group(2)
+# `CREATE [UNIQUE] INDEX [IF NOT EXISTS] 이름 ON 테이블 (컬럼...)`
+_CREATE_INDEX = re.compile(
+    r"CREATE\s+(UNIQUE\s+)?INDEX(?:\s+IF NOT EXISTS)?\s+(\w+)\s+ON\s+(\w+)\s*\(([^)]*)\)",
+    re.IGNORECASE,
+)
 
+# 표 수준 `UNIQUE (a, b)` — 인라인 제약이라 인덱스 정규식에는 안 잡힌다.
+_INLINE_UNIQUE = re.compile(r"UNIQUE\s*\(([^)]*)\)", re.IGNORECASE)
+
+
+def _split_columns(body: str) -> set[str]:
+    """`CREATE TABLE` 본문 → 컬럼명 집합. 표 수준 제약 줄은 뺀다."""
     columns: set[str] = set()
     depth = 0
     current = ""
@@ -235,7 +250,14 @@ def _declared_columns(ddl: str) -> tuple[str, set[str]]:
     if current.strip():
         columns.add(current.strip().split()[0])
     # UNIQUE (...) · PRIMARY KEY (...) 같은 표 수준 제약은 컬럼이 아니다.
-    return table, {c for c in columns if c.upper() not in {"UNIQUE", "PRIMARY", "FOREIGN", "CHECK"}}
+    return {c for c in columns if c.upper() not in {"UNIQUE", "PRIMARY", "FOREIGN", "CHECK"}}
+
+
+def _declared_columns(ddl: str) -> tuple[str, set[str]]:
+    """`CREATE TABLE` 문 하나 → (테이블명, 컬럼명 집합)."""
+    match = _CREATE_TABLE.search(ddl)
+    assert match, f"CREATE TABLE 을 못 읽었습니다: {ddl[:60]}"
+    return match.group(1), _split_columns(match.group(2))
 
 
 @pytest.mark.parametrize("group", ["source", "classified"])
@@ -273,3 +295,123 @@ def test_postgres_ddl_has_no_sqlite_only_syntax():
     ):
         for ddl in statements:
             assert "AUTOINCREMENT" not in ddl.upper()
+
+
+# ── ⑥ 코드 DDL ↔ 로컬 init SQL 대조 ─────────────────────────────────────────
+#
+# 🔴 **같은 스키마를 두 곳이 각자 정의하고 있다.** 08-18 확정으로 AI 소유 테이블과 우리 읽기
+#    모델은 `raw_schema.create_classified_tables()` 가 만드는데(운영 경로), 로컬 compose 의
+#    `init/*.sql` 도 같은 것을 만든다 — 빈 컨테이너에서 게이트 테스트가 바로 돌게 하려는
+#    것이다(`02_ai_read_model.sql` 머리말).
+#
+#    갈리면 **아무도 안 아프다가 한 곳만 아프다**: `tests/test_raw_db_postgres.py` 는 조회만
+#    해서 init SQL 이 만든 테이블을 그대로 쓰므로, 그 파일만 운영과 다른 스키마를 보게 된다.
+#    `CREATE TABLE IF NOT EXISTS` 라 뒤에 도는 우리 DDL 이 조용히 건너뛰기 때문이다.
+#
+# ⚠️ 타입은 안 본다(⑤와 같은 이유). 여기서 보는 것은 **구성** — 테이블·컬럼·인덱스·뷰다.
+
+INIT_SQL_FILES = (
+    "docker/postgres/init/01_schema.sql",
+    "docker/postgres/init/02_ai_read_model.sql",
+)
+
+
+def _init_sql_text() -> str:
+    root = Path(__file__).resolve().parents[1]
+    return "\n".join((root / name).read_text(encoding="utf-8") for name in INIT_SQL_FILES)
+
+
+def _code_postgres_ddl() -> list[str]:
+    """워커·프로듀서가 실제로 실행하는 Postgres DDL 전부."""
+    return [
+        *raw_schema._SOURCE_DDL[raw_db.POSTGRES],
+        *raw_schema._CLASSIFIED_DDL[raw_db.POSTGRES],
+        *raw_schema.SOURCE_INDEXES,
+        raw_schema.PRODUCTS_CHANNEL_PRODUCT_INDEX,
+        raw_schema.MAPPED_DATA_GROUP_INDEX,
+        *raw_schema.CLASSIFIED_INDEXES,
+        raw_schema._VOC_DOCUMENT_DDL[raw_db.POSTGRES],
+    ]
+
+
+def _tables_in(text: str) -> dict[str, set[str]]:
+    return {m.group(1): _split_columns(m.group(2)) for m in _CREATE_TABLE_EACH.finditer(text)}
+
+
+def _indexes_in(text: str) -> dict[str, tuple[str, frozenset[str]]]:
+    """인덱스 이름 → (테이블, 컬럼 집합). 유니크 여부는 아래에서 따로 본다."""
+    return {
+        m.group(2): (m.group(3), frozenset(c.strip() for c in m.group(4).split(",")))
+        for m in _CREATE_INDEX.finditer(text)
+    }
+
+
+def _inline_unique_sets(text: str) -> set[frozenset[str]]:
+    """`CREATE TABLE` 본문의 표 수준 `UNIQUE (a, b)` 컬럼 조합."""
+    return {
+        frozenset(c.strip() for c in m.group(1).split(","))
+        for table in _CREATE_TABLE_EACH.finditer(text)
+        for m in _INLINE_UNIQUE.finditer(table.group(2))
+    }
+
+
+def test_init_sql_declares_the_same_tables_as_the_code_ddl():
+    """로컬 init SQL 과 코드 DDL 이 같은 테이블·컬럼을 낸다."""
+    code = _tables_in("\n".join(_code_postgres_ddl()))
+    init = _tables_in(_init_sql_text())
+
+    assert code, "코드 DDL 에서 테이블을 하나도 못 읽었습니다 — 가드가 헛돌고 있습니다."
+    assert code.keys() == init.keys(), (
+        f"테이블 구성이 갈렸습니다. 코드만={sorted(code.keys() - init.keys())} "
+        f"init만={sorted(init.keys() - code.keys())}"
+    )
+    for name, columns in code.items():
+        assert columns == init[name], (
+            f"{name} 의 컬럼이 갈렸습니다. 코드만={sorted(columns - init[name])} "
+            f"init만={sorted(init[name] - columns)}"
+        )
+
+
+def test_every_init_sql_index_is_also_created_by_the_code():
+    """init SQL 이 만드는 인덱스는 코드도 만든다 — **인라인 제약까지 쳐서** 본다.
+
+    🔴 하나가 정확히 그 형태다. `ux_classified_item_aspect` 는 init SQL 에서 맨 유니크
+       인덱스지만 코드에서는 `classified_item_aspect` 의 **인라인 `UNIQUE (item_id, aspect)`**
+       다. 이름은 다르고 뜻은 같다 — 그래서 이름이 아니라 **컬럼 조합**으로 맞춘다
+       (`raw_db.unique_column_sets()` 가 `pg_index` 를 보는 것과 같은 판단이다).
+
+    ⚠️ 방향이 한쪽이다: **init 에 있는데 코드에 없으면** 실패한다. 반대(코드에만 있음)는
+       괜찮다 — 운영은 코드가 만들고, init 은 로컬 편의라 덜 만들어도 손해가 없다.
+    """
+    code_indexes = _indexes_in("\n".join(_code_postgres_ddl()))
+    code_inline_unique = _inline_unique_sets("\n".join(_code_postgres_ddl()))
+    init_indexes = _indexes_in(_init_sql_text())
+
+    assert init_indexes, "init SQL 에서 인덱스를 하나도 못 읽었습니다 — 가드가 헛돌고 있습니다."
+
+    missing = []
+    for name, (table, columns) in init_indexes.items():
+        if code_indexes.get(name) == (table, columns):
+            continue
+        if columns in code_inline_unique:
+            continue  # 인라인 제약으로 같은 것을 만든다
+        missing.append(f"{name}({table}: {sorted(columns)})")
+
+    assert not missing, (
+        "init SQL 이 만드는 인덱스를 코드가 안 만듭니다: " + ", ".join(missing)
+    )
+
+
+def test_init_sql_view_matches_the_code_view():
+    """`voc_document` 정의가 두 곳에서 같다. **분모의 정본이라 갈리면 안 된다.**"""
+
+    def body(text: str) -> str:
+        match = re.search(
+            r"CREATE OR REPLACE VIEW\s+voc_document\s+AS(.*?);",
+            text,
+            re.DOTALL | re.IGNORECASE,
+        )
+        assert match, "voc_document 뷰를 못 읽었습니다"
+        return re.sub(r"\s+", " ", match.group(1)).strip()
+
+    assert body(raw_schema._VOC_DOCUMENT_DDL[raw_db.POSTGRES]) == body(_init_sql_text())
