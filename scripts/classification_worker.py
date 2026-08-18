@@ -45,9 +45,17 @@
   적재가 upsert 라 재분류 결과가 옛 결과를 덮어쓴다 — 예전 `INSERT OR IGNORE` 시절에는
   재분류를 돌려도 아무것도 안 바뀌었다.
 
-DB 는 mock_producer 와 같은 sqlite 파일을 기본으로 본다(추가 의존성 없음).
-운영 DB 로 옮길 때는 open_db() 와 raw_schema 의 DDL 만 교체하면 되도록 표준 SQL 범위로
-유지했다.
+백엔드 2종 (Postgres 이식, 2026-08-18)
+  `RAW_DB_HOST` 가 있으면 **Postgres**, 없으면 sqlite 파일이다. 연결은
+  `app.core.raw_db.connect_readwrite()` 한 곳을 경유한다 — 여기서 `sqlite3.connect` 를
+  직접 부르면 `mode`·PRAGMA·오류 타입이 두 벌이 되고, 운영에서만 갈리는 조건이 생긴다.
+
+  🔴 **이 워커가 raw DB 에 쓰는 유일한 프로세스다.** 인프라가 RW 전면 부여로 회신해
+  (2026-08-18) DB 가 더는 `cs`·`reviews` 를 막아 주지 않으므로, 쓰기 대상이 AI 소유 4개
+  밖으로 나가지 않는 것은 `tests/test_raw_db_write_scope.py` 가 지킨다.
+
+  SQL 은 한 벌만 쓴다. `?` 바인딩은 `raw_db` 가 `%s` 로 옮기고, `INSERT OR IGNORE` 같은
+  sqlite 전용 문법 대신 양쪽이 같은 뜻으로 받는 `ON CONFLICT` 를 쓴다(`raw_db.upsert_sql`).
 """
 
 from __future__ import annotations
@@ -58,10 +66,9 @@ import json
 import logging
 import os
 import signal
-import sqlite3
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -74,7 +81,7 @@ from app.classification.service import (
     explode_to_rows,
 )
 from app.config import get_settings
-from app.core import constants, raw_schema
+from app.core import constants, raw_db, raw_schema
 from app.core.console import force_utf8_output
 from app.core.constants import KST
 from app.core.exceptions import LlmParseError
@@ -259,11 +266,20 @@ ON CONFLICT(item_id) DO UPDATE SET
 CLASSIFIED_ITEM_ASPECT_DELETE = "DELETE FROM classified_item_aspect WHERE item_id = ?"
 
 # 위에서 먼저 지우므로 남는 충돌은 **한 응답 안의 중복 aspect** 뿐이다(LLM 이 같은 속성을
-# 두 번 낸 경우). 그건 무시하는 게 맞아서 OR IGNORE 를 유지한다.
-CLASSIFIED_ITEM_ASPECT_INSERT = """
-INSERT OR IGNORE INTO classified_item_aspect (item_id, aspect, sentiment, mixed_signal)
-VALUES (?, ?, ?, ?)
-"""
+# 두 번 낸 경우). 그건 무시하는 게 맞아서 "이미 있으면 그대로 둔다" 를 유지한다.
+#
+# ⚠️ `INSERT OR IGNORE` 였다가 표준 `ON CONFLICT DO NOTHING` 으로 바꿨다 — 전자는 sqlite
+#    전용이라 Postgres 에서 구문 오류다. 뜻은 같고 sqlite 3.24+ 가 이 철자를 받는다.
+#
+# 🔴 **이 문장은 `UNIQUE (item_id, aspect)` 가 있어야 뜻이 선다.** 제약이 없으면 충돌 자체가
+#    안 나서 같은 쌍이 그냥 두 번 들어가고, 탐지 분자가 부푼다. 그래서 그 제약이 빠진
+#    테이블을 `raw_schema.find_legacy_tables()` 가 구버전으로 잡는다.
+CLASSIFIED_ITEM_ASPECT_INSERT = raw_db.upsert_sql(
+    "classified_item_aspect",
+    ("item_id", "aspect", "sentiment", "mixed_signal"),
+    conflict=("item_id", "aspect"),
+    update=(),
+)
 
 # (occurred_at, item_id) 복합 커서보다 큰 행만 타임라인 순으로 가져온다.
 # 튜플 비교 대신 풀어 쓴 이유는 구버전 sqlite 호환(row value 는 3.15+).
@@ -372,41 +388,67 @@ ORDER BY source, n DESC
 """
 
 
-def open_db(db_path_str: str) -> sqlite3.Connection:
-    """raw DB 연결 + AI 소유 테이블 보장.
+def cursor_origin(conn: raw_db.RawDbConnection) -> Any:
+    """"아직 아무것도 안 읽었다" 를 뜻하는 커서 시작값. 모든 실제 시각보다 작아야 한다.
+
+    🔴 **빈 문자열은 Postgres 에서 못 쓴다.** 커서 조건절이 `occurred_at > ?` 인데 그 컬럼이
+       TIMESTAMPTZ 라, `''` 를 넘기면 비교가 실패하는 게 아니라 **`invalid input syntax for
+       type timestamp with time zone` 로 조회 자체가 죽는다.** sqlite 는 컬럼이 TEXT 라
+       `''` 가 모든 ISO 문자열보다 작아서 지금까지 이 값이 통했다.
+
+    ⚠️ 이 값은 dead-letter 의 `occurred_at` 기본값이기도 하다 — `NULL` 로 두면 `f.occurred_at
+       > ?` 가 그 행을 **영원히 안 집어서**(NULL 비교는 항상 false) `--retry-failed` 회수가
+       조용히 망가진다.
+    """
+    if raw_db.dialect_of(conn) == raw_db.POSTGRES:
+        # TIMESTAMPTZ 하한(4713 BC)보다 훨씬 늦지만 실제 데이터보다는 확실히 이르다.
+        return datetime(1, 1, 1, tzinfo=timezone.utc)
+    return ""
+
+
+def open_db(db_path_str: str) -> raw_db.RawDbConnection:
+    """raw DB 연결 + AI 소유 테이블 보장. sqlite·Postgres 양쪽.
 
     원문 테이블(cs·reviews)은 main server 소유라 여기서 만들지 않는다(§1). 목
     파이프라인에서는 mock_producer 가 그 역할이다. 없으면 아직 원문이 한 건도 적재되지
     않은 상태이므로, 잘못된 경로를 조용히 새 빈 파일로 만들어 버리지 않도록 여기서 멈춘다.
+
+    ⚠️ **sqlite 파일 존재 확인은 `RAW_DB_HOST` 가 비었을 때만 뜻이 있다.** Postgres 경로에서
+       `db_path` 는 안 쓰이는 값이라, 거기서 `Path.exists()` 를 보면 멀쩡한 접속을 "raw DB
+       없음" 으로 막는다. 그래서 접속 문자열 유무로 먼저 가른다.
+
+    ⚠️ 원문 테이블 조회를 `raw_db.existing_tables()` 에 맡긴다 — `sqlite_master` 는 sqlite
+       에만 있어서 Postgres 에서는 이 확인 자체가 구문 오류로 죽는다(원문이 없다는 안내가
+       아니라 알 수 없는 에러가 나가는 모양이다).
     """
-    db_path = Path(db_path_str).resolve()
-    if not db_path.exists():
-        logger.error(f"[DB ERROR] raw DB 가 없습니다: {db_path} (mock_producer 를 먼저 실행하세요)")
+    dsn = raw_db.conninfo_from_settings()
+    target = raw_db.describe_target(db_path_str, dsn=dsn)
+    if not dsn and not Path(db_path_str).resolve().exists():
+        logger.error(f"[DB ERROR] raw DB 가 없습니다: {target} (mock_producer 를 먼저 실행하세요)")
         sys.exit(1)
 
-    conn = sqlite3.connect(str(db_path), timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA busy_timeout=30000;")
-    # 프로듀서와 같은 이유로 켠다(sqlite 기본 OFF). 여기서 지키는 것은
+    # FK 는 sqlite 에서 연결마다 켜야 한다(`connect_readwrite` 가 켠다). 여기서 지키는 것은
     # classified_item_aspect.item_id → classified_item.item_id 다 — 부모 없는 aspect 행이
     # 생기면 "분류 결과는 있는데 문서가 없는" 상태가 되어 커버리지 집계가 어긋난다.
-    conn.execute("PRAGMA foreign_keys=ON;")
+    #
+    # 🔴 **접속 실패를 여기서 잡는다.** 이 워커는 k8s CronJob 이라, 안 잡으면 raw traceback
+    #    으로 죽고 스케줄러가 **같은 설정으로 무한 재시도**한다 — 사람이 로그를 열기 전에는
+    #    무엇이 잘못됐는지 아무 데도 안 적힌다. `psycopg.Error` 는 `FileNotFoundError` 의
+    #    하위가 아니라 위 파일 확인으로는 절대 안 걸린다(PR #101 이 배치·REST 에서 닫은 것과
+    #    같은 구멍이고, 이 워커가 세 번째 호출부다).
+    try:
+        conn = raw_db.connect_readwrite(db_path_str, dsn=dsn)
+    except raw_db.connection_error_types() as exc:
+        logger.error(f"[DB ERROR] raw DB 에 접속하지 못했습니다: {target} - {exc}")
+        sys.exit(1)
 
-    placeholders = ", ".join(["?"] * len(raw_schema.SOURCE_TABLES))
-    found = {
-        row[0]
-        for row in conn.execute(
-            f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})",
-            raw_schema.SOURCE_TABLES,
-        )
-    }
-    missing = [t for t in raw_schema.SOURCE_TABLES if t not in found]
+    missing = sorted(set(raw_schema.SOURCE_TABLES) - raw_db.existing_tables(conn, raw_schema.SOURCE_TABLES))
     if missing:
         logger.error(
-            f"[DB ERROR] 원문 테이블이 없습니다: {', '.join(missing)} — {db_path} "
+            f"[DB ERROR] 원문 테이블이 없습니다: {', '.join(missing)} — {target} "
             "(mock_producer 를 먼저 실행하세요)"
         )
+        conn.close()
         sys.exit(1)
 
     legacy = raw_schema.find_legacy_tables(conn)
@@ -423,33 +465,47 @@ def open_db(db_path_str: str) -> sqlite3.Connection:
         #    `FOREIGN KEY constraint failed` 로 막힌다(실측). sqlite3 CLI 는 기본이 OFF 라
         #    보통은 그냥 돌지만, 켜 둔 셸에 붙여넣으면 안내가 통째로 실패한다 —
         #    순서만 바꾸면 양쪽 다 된다. (2026-08-13 리뷰 §4)
-        targets = [*legacy]
-        if "classified_item" in legacy and "classified_item_aspect" not in targets:
-            targets.insert(targets.index("classified_item"), "classified_item_aspect")
+        #
+        # ⚠️ `classified_item_aspect` 가 이제 **스스로** 구버전으로 잡힐 수 있다
+        #    (`UNIQUE (item_id, aspect)` 누락, 2026-08-18). 그때 `legacy` 안에서 부모 뒤에
+        #    올 수 있으므로, 목록 순서에 기대지 않고 자식을 항상 맨 앞으로 끌어온다.
+        child = "classified_item_aspect"
+        targets = [t for t in legacy if t != child]
+        if child in legacy or "classified_item" in legacy:
+            targets.insert(0, child)
         drops = " ".join(f"DROP TABLE IF EXISTS {t};" for t in targets)
+        # 어느 CLI 로 붙는지는 백엔드마다 다르다. 안내에 sqlite3 만 적으면 Postgres 쪽
+        # 사람은 실행할 수 없는 명령을 받는다.
+        command = (
+            f'    psql "<접속 문자열>" -c "{drops}"'
+            if dsn
+            else f'    sqlite3 "{db_path_str}" "{drops}"'
+        )
         logger.error(
             # 이 메시지는 cp949 로 나가도 읽혀야 한다. 윈도우 stderr 는 errors=backslashreplace
             # 라 크래시까지는 안 가지만, em dash 처럼 cp949 에 없는 문자는 "\\u2014" 로 뭉개져
             # 정작 복구 안내가 안 읽힌다. 여기서는 cp949 에 있는 문자만 쓴다.
-            f"[DB ERROR] 구버전 raw DB 입니다: {db_path}\n"
-            f"  {', '.join(legacy)} 가 8/7 확정 이전 구조입니다.\n"
+            f"[DB ERROR] 구버전 raw DB 입니다: {target}\n"
+            f"  {', '.join(legacy)} 가 확정 스키마와 다른 구조입니다"
+            "(컬럼 누락 또는 UNIQUE 제약 누락).\n"
             "  CREATE TABLE IF NOT EXISTS 는 옛 테이블을 그대로 두므로, 이걸 안 잡으면 "
-            "'no such column' 으로 터집니다.\n"
+            "'no such column' 으로 터지거나 중복 적재로 탐지 분자가 부풉니다.\n"
             "  원문(cs·reviews)은 그대로 두고 아래처럼 AI 소유 테이블을 지운 뒤 다시 실행하세요 "
             "(분류 결과는 다시 만들어야 합니다. 자식 테이블을 남기면 부모 없는 행이 "
             "월간 집계에 계속 잡힙니다):\n"
-            f'    sqlite3 "{db_path}" "{drops}"'
+            f"{command}"
         )
+        conn.close()
         sys.exit(1)
 
     raw_schema.create_classified_tables(conn)
     conn.commit()
 
-    logger.info(f"[DB] 연결 완료: {db_path}")
+    logger.info(f"[DB] 연결 완료: {target}")
     return conn
 
 
-def _to_request_item(row: sqlite3.Row) -> ClassifyRequestItem:
+def _to_request_item(row: Any) -> ClassifyRequestItem:
     """`voc_document` 1행 → 분류 입력 1건.
 
     원문은 CSV 를 거의 그대로 담고 있어서 스키마 enum 과 표기가 어긋날 수 있다
@@ -509,11 +565,11 @@ class ClassificationWorker:
         # 재처리·재분류 전용 페이지 커서(메모리에만 있음). 한 실행에서 같은 건을 두 번 부르지
         # 않으려고 둔다 — DB 의 classification_cursor 와는 무관하다. 두 모드가 각자 쓴다
         # (동시에 켤 수 없으므로 값이 섞이지는 않지만, 뜻이 다른 커서라 이름을 나눈다).
-        self.retry_page_cursor: tuple[str, str] = ("", "")
-        self.stale_page_cursor: tuple[str, str] = ("", "")
+        self.retry_page_cursor: tuple[Any, str] | None = None
+        self.stale_page_cursor: tuple[Any, str] | None = None
         self.total_reclassified = 0
         self.processed = 0
-        self.conn: sqlite3.Connection | None = None
+        self.conn: raw_db.RawDbConnection | None = None
         self.is_running = True
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
@@ -655,7 +711,7 @@ class ClassificationWorker:
 
     # ── 커서 ────────────────────────────────────────────────────────────────
 
-    def load_cursor(self) -> tuple[str, str]:
+    def load_cursor(self) -> tuple[Any, str]:
         """(마지막으로 처리한 발생 시각, item_id).
 
         컬럼명이 `last_inquired_at` 인데 리뷰는 시각 컬럼이 `created_at` 이다 —
@@ -667,7 +723,7 @@ class ClassificationWorker:
         ).fetchone()
         if row and row["last_inquired_at"] is not None:
             return row["last_inquired_at"], row["last_item_id"] or ""
-        return "", ""  # 빈 문자열은 모든 ISO 시각 문자열보다 작다 → 처음부터
+        return cursor_origin(self.conn), ""  # 모든 실제 시각보다 작다 → 처음부터
 
     def save_cursor(self, occurred_at: str, item_id: str) -> None:
         self.conn.execute(
@@ -684,7 +740,7 @@ class ClassificationWorker:
 
     # ── 조회 ────────────────────────────────────────────────────────────────
 
-    def fetch_next_batch(self) -> list[sqlite3.Row]:
+    def fetch_next_batch(self) -> list[Any]:
         last_occurred_at, last_item_id = self.load_cursor()
         batch_size = self.batch_size
         if self.limit is not None:
@@ -697,21 +753,21 @@ class ClassificationWorker:
         )
         return self.conn.execute(FETCH_BATCH_SQL, params).fetchall()
 
-    def fetch_failed_batch(self) -> list[sqlite3.Row]:
+    def fetch_failed_batch(self) -> list[Any]:
         batch_size = self.batch_size
         if self.limit is not None:
             batch_size = min(batch_size, self.limit - self.processed)
-        occurred_at, item_id = self.retry_page_cursor
+        occurred_at, item_id = self.retry_page_cursor or (cursor_origin(self.conn), "")
         return self.conn.execute(
             FETCH_FAILED_SQL, (self.max_attempts, occurred_at, occurred_at, item_id, batch_size)
         ).fetchall()
 
-    def fetch_stale_batch(self) -> list[sqlite3.Row]:
+    def fetch_stale_batch(self) -> list[Any]:
         """활성 분류기로 만들어지지 않은 분류 결과의 원문 1배치."""
         batch_size = self.batch_size
         if self.limit is not None:
             batch_size = min(batch_size, self.limit - self.processed)
-        occurred_at, item_id = self.stale_page_cursor
+        occurred_at, item_id = self.stale_page_cursor or (cursor_origin(self.conn), "")
         return self.conn.execute(
             FETCH_STALE_SQL,
             (*active_version_params(), occurred_at, occurred_at, item_id, batch_size),
@@ -738,7 +794,7 @@ class ClassificationWorker:
 
     # ── 처리 ────────────────────────────────────────────────────────────────
 
-    def process_batch(self, rows: list[sqlite3.Row], *, advance_cursor: bool = True) -> None:
+    def process_batch(self, rows: list[Any], *, advance_cursor: bool = True) -> None:
         """배치 1개(원문 N건)를 분류해 적재하고 커서를 전진시킨다.
 
         rows 는 이미 (occurred_at, item_id) 오름차순이라, 이 순서대로 INSERT 하면
@@ -892,7 +948,7 @@ class ClassificationWorker:
     def persist_batch(
         self,
         classified_items: list[ClassifiedItem],
-        last_row: sqlite3.Row,
+        last_row: Any,
         *,
         failures: list[tuple[str, str, str]] | None = None,
         occurred_at_by_id: dict[str, str] | None = None,
@@ -913,6 +969,12 @@ class ClassificationWorker:
            잠금 경합만 잠깐 재시도하고, 그래도 안 되면 롤백 후 워커를 정지시킨다 —
            사람이 보게 만드는 쪽이 조용히 돈을 태우는 것보다 낫다.
         """
+        # 오류 타입은 백엔드마다 다르다 — 여기서 한 번 물어보고 아래 except 가 쓴다.
+        # 🔴 **`sqlite3.OperationalError` 를 그대로 두면 안 된다.** Postgres 에서는 잠금
+        #    경합·직렬화 실패가 그 타입이 아니라, 잠깐 기다리면 될 것이 "치명적" 으로
+        #    분류돼 워커가 서고 다음 실행이 같은 배치를 LLM 에 다시 태운다.
+        retryable = raw_db.retryable_error_types(self.conn)
+        fatal = raw_db.db_error_types(self.conn)
         for attempt in range(1, DB_MAX_RETRY + 1):
             try:
                 inserted = self.save_classified_items(classified_items)
@@ -922,13 +984,13 @@ class ClassificationWorker:
                     self.save_cursor(last_row["occurred_at"], last_row["item_id"])
                 self.conn.commit()
                 return inserted
-            except sqlite3.OperationalError as exc:
+            except retryable as exc:
                 # 대개 잠금 경합(다른 프로세스가 쓰는 중) — 일시적이라 재시도 가치가 있다
                 self.conn.rollback()
                 logger.warning(f"[DB RETRY] 적재 실패 ({attempt}/{DB_MAX_RETRY}): {exc}")
                 if attempt < DB_MAX_RETRY:
                     time.sleep(2 ** attempt)
-            except sqlite3.Error as exc:
+            except fatal as exc:
                 self.conn.rollback()
                 logger.error(f"[DB ERROR] 적재 실패 — 재시도하지 않습니다: {exc}")
                 break
@@ -951,7 +1013,14 @@ class ClassificationWorker:
         for item_id, stage, error in failures:
             self.conn.execute(
                 FAILURE_UPSERT,
-                (item_id, occurred_at_by_id.get(item_id, ""), stage, error[:500], now, now),
+                (
+                    item_id,
+                    occurred_at_by_id.get(item_id, cursor_origin(self.conn)),
+                    stage,
+                    error[:500],
+                    now,
+                    now,
+                ),
             )
 
     def clear_failures(self, item_ids: list[str]) -> None:
@@ -976,7 +1045,7 @@ class ClassificationWorker:
                 "SELECT COUNT(*) FROM classification_failure WHERE attempts >= ?",
                 (self.max_attempts,),
             ).fetchone()[0]
-        except sqlite3.Error as exc:
+        except raw_db.db_error_types(self.conn) as exc:
             logger.warning(f"[COVERAGE] 집계 실패: {exc}")
             return
 
@@ -1012,7 +1081,7 @@ class ClassificationWorker:
             rows = self.conn.execute(COUNT_BY_VERSION_SQL).fetchall()
             stale = self.count_stale()
             orphan = self.count_orphan_stale()
-        except sqlite3.Error as exc:
+        except raw_db.db_error_types(self.conn) as exc:
             logger.warning(f"[VERSION] 집계 실패: {exc}")
             return
 
@@ -1101,7 +1170,9 @@ class ClassificationWorker:
                         row["item_id"],
                         row["aspect"],
                         row["sentiment"],
-                        None if row["mixed_signal"] is None else int(row["mixed_signal"]),
+                        # ⚠️ `int()` 로 캐스팅하지 말 것 — Postgres 컬럼이 BOOLEAN 이라
+                        #    정수를 받지 않는다. sqlite 는 bool 을 0/1 로 저장한다.
+                        None if row["mixed_signal"] is None else bool(row["mixed_signal"]),
                     ),
                 )
                 # 앞에서 옛 행을 지웠으므로 여기서 0 이 되는 것은 **한 응답 안의 중복
