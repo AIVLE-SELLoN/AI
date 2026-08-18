@@ -122,6 +122,42 @@ def dialect_of(conn: RawDbConnection) -> str:
     return getattr(conn, "dialect", SQLITE)
 
 
+def connection_error_types() -> tuple[type[BaseException], ...]:
+    """raw DB 를 **환경 탓에** 못 열거나 못 읽는 것을 뜻하는 예외 타입.
+
+    sqlite 는 `connect_readonly()` 가 `FileNotFoundError` 하나로 모아 주지만, Postgres 는
+    드라이버 계층이 그대로 올라온다. `psycopg.Error` 는 `FileNotFoundError` 도
+    `RuntimeError` 도 `OSError` 도 **아니라서**(실측, psycopg 3.3.4) 두 호출부의 기존
+    분기를 그냥 통과한다 — 배치는 exit 1 + raw traceback, REST 는 500 이 된다.
+
+    호출부가 각자 적지 않고 여기서 주는 이유: `app/` 이 psycopg 를 직접 import 하면
+    드라이버가 없는 sqlite 전용 환경의 import 가 깨진다. 여기서 늦게 import 한다.
+
+    ⚠️ **`psycopg.Error` 전부다 — `OperationalError` 만으로는 절반이 샌다.** 실패가 두
+       베이스로 갈리기 때문이다(실측):
+
+           OperationalError   DB 미기동 · 호스트 오타 · 비밀번호 틀림
+           ProgrammingError   DSN 형식 오타 · DB 이름 틀림 · 뷰/테이블 없음 · GRANT 누락
+
+       뒷줄이 하필 이식에서 제일 잦을 것들이다 — `voc_document` 뷰와 읽기 GRANT 는
+       지금 인프라에 요청해 둔 상태라, 첫 연동에서 정확히 이 모양으로 실패한다.
+
+    ⚠️ **우리가 쓴 SQL 의 버그도 `ProgrammingError` 라 여기 걸린다.** 그때는 환경 문제로
+       오분류된다. 우리 SQL 은 테스트가 먼저 보고 뷰·GRANT 는 테스트가 볼 수 없다는
+       판단이고, 두 호출부 모두 사유를 전문으로 남기므로 메시지에는 진짜 원인이 있다.
+
+    ⚠️ 드라이버가 없으면 **빈 튜플**이라 아무것도 새로 잡지 않는다. 그 환경에서
+       `RAW_DB_DSN` 을 켜면 `PostgresConnection` 의 `ModuleNotFoundError` 가 그대로
+       올라간다 — psycopg 는 `requirements.txt` 가 고정하는 의존이라 남는 것은 재설치를
+       건너뛴 개발 머신뿐이고, 거기서는 그 traceback 자체가 이미 정확한 안내다.
+    """
+    try:
+        import psycopg
+    except ModuleNotFoundError:
+        return ()
+    return (psycopg.Error,)
+
+
 def connect_readonly(
     db_path: str | None = None, *, dsn: str | None = None
 ) -> RawDbConnection:
