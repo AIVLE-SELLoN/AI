@@ -1,0 +1,150 @@
+# 계층 2 — 컨테이너. 이미지가 실제로 뜨고 PDF 를 만드는지 본다.
+#
+# 🔴 **유닛 테스트가 절대 못 잡는 것이 있어서 이 계층이 따로 있다.**
+#    `weasyprint` 네이티브 의존성(Pango·HarfBuzz)이 빠져도 **앱 import 는 성공한다** —
+#    컨테이너가 뜨고 헬스체크도 통과하고, PDF 를 만드는 순간에만 죽는다.
+#    폰트도 같다: `fonts-noto-cjk` 가 없으면 **에러 없이** 네모(두부) PDF 가 그냥 나간다.
+#    그래서 스모크가 "PDF 가 만들어졌는가" 가 아니라 **임베드된 폰트 이름까지** 본다.
+#
+# ⚠️ push 는 **main 에서만** 한다. PR 에서 밀면 (1) 포크 PR 에 시크릿이 안 내려가 실패하고
+#    (2) 리뷰 전 코드가 레지스트리에 올라간다.
+name: images
+
+on:
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'scripts/**'
+      - 'requirements*.txt'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/images.yml'
+  push:
+    branches: [main]
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  IMAGE: y0njunch0i/sellon-ai-node
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # `main-<7자리>` 태그용. `github.sha` 는 40자라 그대로 쓰면 태그가 길다.
+      - name: 짧은 SHA
+        id: meta
+        run: echo "short=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      # buildx 가 있어야 `cache-from/to: type=gha` 가 먹는다.
+      - uses: docker/setup-buildx-action@v3
+
+      # PR 에서는 로그인하지 않는다(시크릿이 없을 수 있고, 어차피 push 도 안 한다).
+      - uses: docker/login-action@v3
+        if: github.event_name == 'push'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 🔴 `platforms` 를 명시한다. Apple Silicon 등에서 그냥 빌드하면 arm64 가 나오고
+      #    EKS x86 노드에서 `exec format error` 로 죽는다. 러너가 amd64 라 지금은
+      #    자연히 맞지만, 명시해 두면 러너가 바뀌어도 계약이 유지된다.
+      #
+      # ⚠️ PR 에서는 push 하지 않으므로 레지스트리에 안 올라간다. 대신 `load: true` 로
+      #    로컬 데몬에 넣어야 아래 스모크가 `docker run` 할 수 있다.
+      - name: 빌드
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: ${{ github.event_name == 'push' }}
+          load: ${{ github.event_name != 'push' }}
+          tags: |
+            ${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}
+            ${{ env.IMAGE }}:main
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # push 한 경우엔 레지스트리에서 받아 와서 **올라간 그 이미지**를 검증한다.
+      - name: 스모크용 이미지 확보
+        if: github.event_name == 'push'
+        run: docker pull ${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}
+
+      # 🔴 이 계층의 존재 이유. `tests/` 는 이미지에 없으므로(.dockerignore) `app/` 만으로 돈다.
+      - name: PDF 스모크 (네이티브 의존성 + CJK 폰트)
+        run: |
+          docker run --rm -i ${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }} \
+            python - <<'PY'
+          import re, sys, zlib
+          sys.stdout.reconfigure(encoding="utf-8")
+
+          from app.reporting.pdf_compiler import _BASE_CSS
+          import weasyprint
+
+          html = (
+              '<!DOCTYPE html><html><head><meta charset="utf-8"></head>'
+              f"<style>{_BASE_CSS}</style><body>"
+              "<h1>한글 렌더링 확인 — 색상·사이즈·소재</h1>"
+              "<p>표본 부족으로 보류된 상품 42개</p></body></html>"
+          )
+          pdf = weasyprint.HTML(string=html).write_pdf()
+
+          assert pdf[:5] == b"%PDF-", f"PDF 매직바이트가 아님: {pdf[:8]!r}"
+          assert len(pdf) > 1000, f"PDF 가 너무 작음: {len(pdf)}B"
+
+          blob = bytes(pdf)
+          for m in re.finditer(rb"stream\r?\n", bytes(pdf)):
+              try:
+                  blob += zlib.decompress(
+                      bytes(pdf)[m.end() : bytes(pdf).find(b"endstream", m.end())]
+                  )
+              except Exception:
+                  pass
+          fonts = sorted({n.decode() for n in re.findall(rb"/BaseFont\s*/([A-Za-z0-9+#\-]+)", blob)})
+
+          print(f"PDF {len(pdf):,} bytes")
+          print(f"임베드 폰트: {fonts}")
+
+          cjk = [f for f in fonts if "CJK" in f or "Noto" in f]
+          if not cjk:
+              raise SystemExit(
+                  "CJK 폰트가 임베드되지 않았습니다 — fonts-noto-cjk 누락 의심.\n"
+                  "  이 경우 에러 없이 네모(두부) PDF 가 그대로 나갑니다.\n"
+                  f"  실제 임베드: {fonts}"
+              )
+          if not any("KR" in f for f in cjk):
+              raise SystemExit(
+                  f"한국어가 아닌 자형으로 폴백했습니다: {cjk}\n"
+                  "  _BASE_CSS 의 'Noto Sans CJK KR' 지정이 빠졌는지 확인하세요."
+              )
+          print(f"CJK 폰트 확인: {cjk}")
+          PY
+
+      # 진입점이 넷이라 CMD 하나만 봐서는 이미지가 멀쩡한지 알 수 없다.
+      - name: 진입점 import 확인
+        run: |
+          IMG=${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}
+          docker run --rm "$IMG" python -c "import app.main"
+          docker run --rm "$IMG" python -m app.consumer --help >/dev/null 2>&1 || true
+          docker run --rm "$IMG" python scripts/classification_worker.py --help >/dev/null
+          echo "진입점 확인 완료"
+
+      - name: 태그 요약
+        if: github.event_name == 'push'
+        run: |
+          {
+            echo "### 이미지 push 완료"
+            echo ""
+            echo '```'
+            echo "${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}   ← 배포는 이 태그로"
+            echo "${{ env.IMAGE }}:main                                    ← 움직임. 배포 금지"
+            echo '```'
+            echo ""
+            echo "platform: linux/amd64"
+          } >> "$GITHUB_STEP_SUMMARY"
