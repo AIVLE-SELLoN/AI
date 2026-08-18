@@ -10,6 +10,7 @@
 LLM·DB 를 안 탄다 — `pipeline.run` 과 조회 함수를 몽키패치로 막는다.
 """
 
+import psycopg
 import pytest
 
 from app.recommendation import service
@@ -58,6 +59,48 @@ async def test_missing_raw_db_degrades_with_a_warning(monkeypatch, biased_alert,
     monkeypatch.setattr(service.pipeline, "run", fake_run)
 
     assert await service.generate_recommendation(biased_alert) is None
-    assert any("raw DB 가 없어" in r.getMessage() for r in caplog.records), (
+    assert any("raw DB 를 읽지 못해" in r.getMessage() for r in caplog.records), (
         "조용히 넘기면 근거 없이 나온 결과를 아무도 못 알아챈다"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc, why",
+    [
+        (
+            psycopg.OperationalError("connection failed: server closed the connection"),
+            "DB 미기동·호스트 오타·비밀번호 틀림 — OperationalError 계열",
+        ),
+        (
+            psycopg.errors.UndefinedTable('relation "voc_document" does not exist'),
+            "뷰 없음·GRANT 누락·DSN 형식 오타 — ProgrammingError 계열",
+        ),
+    ],
+)
+async def test_unreachable_postgres_degrades_too(
+    monkeypatch, biased_alert, caplog, exc, why
+):
+    """🔴 같은 degrade 가 **Postgres 에서도** 돌아야 한다 — 안 그러면 여기만 500 이다.
+
+    위 테스트가 잠그는 `FileNotFoundError` 는 **sqlite 파일 부재**의 모양이다. raw DB 가
+    Postgres 로 가면 같은 상황(못 읽는다)이 `psycopg.Error` 로 오는데 그건
+    `FileNotFoundError` 가 아니라, `connection_error_types()` 가 빠지면 이 엔드포인트가
+    조용히 500 으로 바뀐다 — 배치의 exit 1 회귀와 **같은 결함이 문만 다른 것**이다.
+
+    ⚠️ **두 베이스를 다 넣었다** — `OperationalError` 로 좁히면 `UndefinedTable` 이
+       혼자 실패해서 알려준다.
+    """
+
+    def boom(alert):
+        raise exc
+
+    monkeypatch.setattr(service, "fetch_linked_inquiries", boom)
+
+    async def fake_run(alert, inquiries=()):
+        assert inquiries == [], why
+
+    monkeypatch.setattr(service.pipeline, "run", fake_run)
+
+    assert await service.generate_recommendation(biased_alert) is None
+    assert any("raw DB 를 읽지 못해" in r.getMessage() for r in caplog.records), why

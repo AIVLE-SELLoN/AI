@@ -64,6 +64,7 @@ from app.core.logging_setup import configure_logging_or_exit
 from app.core.raw_db import (
     RawDbConnection,
     connect_readonly,
+    connection_error_types,
     describe_target,
     existing_tables,
 )
@@ -495,11 +496,14 @@ def load_inputs_from_db(
         documents: **분모의 출처** (원본 문서)
 
     Raises:
-        FileNotFoundError: DB 파일이 없을 때. 목 파이프라인은 `scripts/mock_producer.py`
-            가 먼저 돌아야 원문이 생긴다.
+        FileNotFoundError: sqlite DB 파일이 없을 때. 목 파이프라인은
+            `scripts/mock_producer.py` 가 먼저 돌아야 원문이 생긴다.
         RuntimeError: 분류 결과 테이블이 없거나 구버전일 때
             (`_require_classified_tables`), 또는 윈도우 안 분류 결과가 전부 옛 프롬프트
             기준일 때(`_check_version_cutover`).
+        psycopg.Error: Postgres 백엔드에서 접속·스키마·권한이 안 될 때. 위 두 타입의
+            하위가 아니므로 `main()` 이 `raw_db.connection_error_types()` 를 같이 잡아
+            exit 2 로 가른다 — 빠지면 exit 1 + raw traceback 이다.
     """
     where, params = _window_clause(window_end)
     aspect_where = _aspect_window_clause(where)
@@ -1585,12 +1589,19 @@ def main() -> None:
     #    exit 1("재시작하면 나을 수 있다")로 보고하면 k8s 가 영원히 재시도한다.
     #    (용준님 PR #98 리뷰 ①, 재현 확인)
     #
-    #    ⚠️ **왜 이 두 타입인가.** `raise RuntimeError` 는 `app/` 전체에서 이 파일의 전제
+    #    ⚠️ **왜 이 타입들인가.** `raise RuntimeError` 는 `app/` 전체에서 이 파일의 전제
     #       검사 3곳뿐이고(`test_runtime_error_stays_confined_to_preconditions` 가 잠근다),
     #       `FileNotFoundError` 는 `raw_db.connect_readonly()` 의 "raw DB 없음" 하나다.
     #       ⚠️ `raw_db` 쪽 타입을 바꾸는 안은 못 쓴다 — `app/recommendation/service.py` 가
     #       `except FileNotFoundError` 로 **의도적 degrade** 를 하고 `inquiries.py` 가 그걸
     #       계약으로 문서화해 뒀다.
+    #
+    #    🔴 **`connection_error_types()` 는 Postgres 문을 같은 계약 안으로 넣는다.**
+    #       위 두 타입만으로 환경 전제가 다 덮인다는 것은 **sqlite 일 때만** 참이다 —
+    #       `psycopg.Error` 는 둘 중 어느 것도 아니라서(실측) DSN 오타·DB 미기동·뷰 없음·
+    #       GRANT 누락이 전부 **여기를 그냥 지나 exit 1 + raw traceback** 이 된다.
+    #       #98 이 없앤 상태가 백엔드만 바뀌어 그대로 돌아오는 자리이고, 하필 첫 연동에서
+    #       제일 잦다. 목록·근거는 `raw_db.connection_error_types()` docstring.
     #
     #    ⚠️ 라이브러리가 던진 `RuntimeError` 가 여기 걸리면 "환경 문제" 로 오분류된다.
     #       CronJob 이라 **다음 예약 실행은 그대로 돌아서** 비용이 비대칭이다 — 지금(exit 1)은
@@ -1611,7 +1622,7 @@ def main() -> None:
                 load_inputs=loader,
             )
         )
-    except (FileNotFoundError, RuntimeError) as exc:
+    except (FileNotFoundError, RuntimeError, *connection_error_types()) as exc:
         print(f"환경이 준비되지 않아 배치를 돌리지 못했습니다: {exc}", file=sys.stderr)
         sys.exit(EXIT_CONFIG_ERROR)
 

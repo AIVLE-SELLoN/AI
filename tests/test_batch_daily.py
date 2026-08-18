@@ -10,6 +10,7 @@ import logging
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+import psycopg
 import pytest
 
 from app.batch import daily
@@ -864,6 +865,24 @@ def test_config_error_exits_two_before_running_the_batch(
                 "  활성 값이 의도한 것인지 확인하세요(LLM_MODEL 오타면 설정을 고치세요)."
             ),
             "여러 줄 — 첫 줄만 남기면 조치 안내를 잃는다",
+        ),
+        # 🔴 **Postgres 문.** 아래 둘은 `FileNotFoundError` 도 `RuntimeError` 도 아니라서
+        #    `connection_error_types()` 가 빠지면 **미포착 → exit 1 + raw traceback** 이다.
+        #    ⚠️ **두 베이스를 일부러 다 넣었다** — 누가 `psycopg.OperationalError` 로 좁히면
+        #       아래 `UndefinedTable`(= ProgrammingError) 이 혼자 실패해서 알려준다.
+        (
+            psycopg.OperationalError(
+                'connection failed: could not translate host name "rawdb" to address'
+            ),
+            "DB 미기동·호스트 오타·비밀번호 틀림 — OperationalError 계열",
+        ),
+        (
+            psycopg.errors.UndefinedTable(
+                'relation "voc_document" does not exist\n'
+                "  운영 스키마에 우리 읽기 모델이 아직 없습니다 —"
+                " docker/postgres/init/02_ai_read_model.sql 을 인프라에 요청하세요."
+            ),
+            "뷰·테이블 없음, GRANT 누락, DSN 형식 오타 — ProgrammingError 계열",
         ),
     ],
 )

@@ -160,7 +160,11 @@ def fetch_linked_inquiries(
         CS 원문 리스트. 순서·중복·빈 원문 처리는 `build_linked_inquiries` 와 같다.
 
     Raises:
-        FileNotFoundError: raw DB 가 없을 때(`connect_readonly`).
+        FileNotFoundError: sqlite raw DB 파일이 없을 때(`connect_readonly`).
+        psycopg.Error: Postgres 백엔드에서 접속·스키마·권한이 안 될 때. **`FileNotFoundError`
+            의 하위가 아니다** — 한쪽만 잡으면 다른 백엔드에서 조용히 안 걸리므로,
+            잡는 쪽은 `raw_db.connection_error_types()` 를 같이 적는다
+            (`recommendation/service.py` 의 degrade 가 그 형태다).
     """
     ids = list(dict.fromkeys(alert.evidence.inquiry_ids))
     if not ids:

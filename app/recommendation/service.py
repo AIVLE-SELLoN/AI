@@ -12,6 +12,7 @@ import logging
 
 from app.core.inquiries import fetch_linked_inquiries
 from app.core.mq_consumer import RecommendationReviewed, load_hitl_context
+from app.core.raw_db import connection_error_types
 from app.core.schemas import DetectionAlert, Recommendation
 from app.recommendation import pipeline
 
@@ -29,17 +30,22 @@ async def generate_recommendation(alert: DetectionAlert) -> Recommendation | Non
     inquiries)` 로 선생성해 `ai.anomaly.analyzed` payload 에 실어 보낸다. 이 엔드포인트는
     재현·디버깅용이다.
 
-    ⚠️ **raw DB 가 없으면 원문 없이 진행한다.** 그 환경에서 500 을 내면 DB 없이 쓰던
+    ⚠️ **raw DB 를 못 읽으면 원문 없이 진행한다.** 그 환경에서 500 을 내면 DB 없이 쓰던
     copy_draft 디버깅까지 같이 막힌다. 대신 조용히 넘기지 않고 경고를 남긴다 — 근거가
     빠진 채 나온 결과를 "개선안이 안 만들어진다" 로 오해하지 않게 하려는 것이다.
+
+    🔴 **degrade 조건은 백엔드마다 다른 타입으로 온다.** sqlite 는 파일 부재
+    (`FileNotFoundError`)지만 Postgres 는 접속·스키마·권한 실패가 `psycopg.Error` 로
+    오고 그건 `FileNotFoundError` 가 아니다 — `connection_error_types()` 를 안 넣으면
+    이 degrade 가 sqlite 에서만 동작하고 Postgres 에서는 **500** 이 된다.
 
     # TODO: LangGraph 이식 후 pipeline.run(alert) → graph.ainvoke(초기 상태) 로 교체.
     """
     try:
         inquiries = fetch_linked_inquiries(alert)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, *connection_error_types()) as exc:
         logger.warning(
-            "raw DB 가 없어 CS 원문 없이 생성합니다 — image_guide 는 근거 0건으로"
+            "raw DB 를 읽지 못해 CS 원문 없이 생성합니다 — image_guide 는 근거 0건으로"
             " 개선안이 안 나옵니다 (%s)",
             exc,
         )
