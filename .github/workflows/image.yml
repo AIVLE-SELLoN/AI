@@ -8,7 +8,7 @@
 #
 # ⚠️ push 는 **main 에서만** 한다. PR 에서 밀면 (1) 포크 PR 에 시크릿이 안 내려가 실패하고
 #    (2) 리뷰 전 코드가 레지스트리에 올라간다.
-name: images
+name: image
 
 on:
   pull_request:
@@ -18,7 +18,7 @@ on:
       - 'requirements*.txt'
       - 'Dockerfile'
       - '.dockerignore'
-      - '.github/workflows/images.yml'
+      - '.github/workflows/image.yml'
   push:
     branches: [main]
 
