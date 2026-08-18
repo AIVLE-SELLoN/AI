@@ -12,16 +12,22 @@
    상품별로 따로 보정하면 다중검정 방어가 깨진다. 그래서 이 모듈은 상품 하나가 아니라
    **상품 목록을 한 번에** 집계한다.
 
-운영 DB(Postgres)로 옮길 때는 `_fetch_*` 계열 SQL 세 개만 바꾸면 된다.
+백엔드 2종 (Postgres 이식, 2026-08-18)
+  연결은 호출부(`scripts/generate_monthly_reports.py`)가 `raw_db.connect_readonly()` 로
+  열어 넘긴다 — 여기서 `sqlite3.connect` 를 직접 부르면 운영에서 못 붙는다. SQL 은 한
+  벌뿐이고, `?` 바인딩은 `raw_db` 가 `%s` 로 옮긴다.
+
+  ⚠️ **집계 결과를 컬럼 이름으로 읽는다.** 예전에는 `for aspect, sentiment, count in rows`
+     처럼 위치로 풀었는데, `COUNT(*)` 나 `UPPER(...)` 처럼 **이름 없는 식**이 섞여 있으면
+     백엔드에 따라 컬럼명이 달라진다. 별칭을 붙여 두면 두 백엔드에서 같은 코드가 선다.
 """
 
 from __future__ import annotations
 
 import logging
-import sqlite3
 from datetime import date, datetime, timedelta
 
-from app.core import raw_schema
+from app.core import raw_db, raw_schema
 from app.core.constants import KST
 from app.core.schemas import MONTHLY_ASPECTS as SCHEMA_MONTHLY_ASPECTS
 from app.core.schemas import (
@@ -105,7 +111,7 @@ def resolve_product_name(candidates: dict[str, str]) -> str | None:
     return None
 
 
-def has_product_name_tables(conn: sqlite3.Connection) -> bool:
+def has_product_name_tables(conn: raw_db.RawDbConnection) -> bool:
     """products·mapped_data 가 둘 다 있는가.
 
     ⚠️ 목 파이프라인도 이제 두 테이블을 만든다(2026-08-11) — `mock_producer` 가
@@ -126,16 +132,15 @@ def has_product_name_tables(conn: sqlite3.Connection) -> bool:
     상품 목록을 도는 루프 **바깥**에서 한 번만 부르라고 따로 뺐다. 상품이 126개면 안에서
     부를 때 같은 카탈로그 조회를 126번 한다 — 답이 실행 중에 바뀌지 않는 값이다.
     """
-    return (
-        conn.execute(
-            "SELECT COUNT(*) FROM sqlite_master "
-            "WHERE type='table' AND name IN ('products','mapped_data')"
-        ).fetchone()[0]
-        >= 2
-    )
+    # ⚠️ `sqlite_master` 를 직접 조회하지 않는다 — Postgres 에는 없는 테이블이라 이
+    #    확인 자체가 구문 오류로 죽는다(상품명이 빠지는 게 아니라 집계가 통째로 실패한다).
+    return raw_db.existing_tables(conn, ("products", "mapped_data")) == {
+        "products",
+        "mapped_data",
+    }
 
 
-def _fetch_product_names(conn: sqlite3.Connection, product_group_id: str) -> str | None:
+def _fetch_product_names(conn: raw_db.RawDbConnection, product_group_id: str) -> str | None:
     """products ⋈ mapped_data 에서 채널별 표기명을 모아 대표명을 고른다.
 
     두 테이블이 없으면 None 을 돌려 호출부가 product_group_id 를 그대로 쓰게 한다 —
@@ -145,7 +150,8 @@ def _fetch_product_names(conn: sqlite3.Connection, product_group_id: str) -> str
         return None
 
     rows = conn.execute(
-        "SELECT p.channel_id, p.channel_product_name FROM mapped_data m "
+        "SELECT p.channel_id AS channel_id, p.channel_product_name AS product_name "
+        "FROM mapped_data m "
         "JOIN products p ON p.variant_row_id = m.variant_row_id "
         "WHERE m.product_group_id = ? AND p.channel_product_name IS NOT NULL",
         (product_group_id,),
@@ -153,7 +159,8 @@ def _fetch_product_names(conn: sqlite3.Connection, product_group_id: str) -> str
 
     # 같은 채널에 여러 variant 가 있으면 채널 안에서도 최빈값을 먼저 고른다.
     by_channel: dict[str, dict[str, int]] = {}
-    for channel, name in rows:
+    for row in rows:
+        channel, name = row["channel_id"], row["product_name"]
         if not name:
             continue
         counter = by_channel.setdefault(str(channel), {})
@@ -196,7 +203,7 @@ def _window(report_month: str) -> tuple[str, str]:
     return start.isoformat(), (end + timedelta(days=1)).isoformat()
 
 
-def list_product_groups(conn: sqlite3.Connection, report_month: str) -> list[str]:
+def list_product_groups(conn: raw_db.RawDbConnection, report_month: str) -> list[str]:
     """해당 월에 원본이 하나라도 있는 상품 그룹. 리포트 생성 대상 목록이다."""
     start, end = _window(report_month)
     rows = conn.execute(
@@ -206,22 +213,24 @@ def list_product_groups(conn: sqlite3.Connection, report_month: str) -> list[str
         "ORDER BY product_group_id",
         (start, end),
     ).fetchall()
-    return [r[0] for r in rows]
+    return [r["product_group_id"] for r in rows]
 
 
-def _fetch_total_voc(conn: sqlite3.Connection, product_group_id: str, report_month: str) -> int:
+def _fetch_total_voc(
+    conn: raw_db.RawDbConnection, product_group_id: str, report_month: str
+) -> int:
     """분모 — 원본 테이블에서 센다(classified_item 에서 세지 않는다)."""
     start, end = _window(report_month)
     return conn.execute(
-        f"SELECT COUNT(*) FROM {SOURCE_TABLE} "
+        f"SELECT COUNT(*) AS n FROM {SOURCE_TABLE} "
         "WHERE source IN ('cs','review') AND product_group_id = ? "
         "  AND occurred_at >= ? AND occurred_at < ?",
         (product_group_id, start, end),
-    ).fetchone()[0]
+    ).fetchone()["n"]
 
 
 def _fetch_aspect_sentiments(
-    conn: sqlite3.Connection, product_group_id: str, report_month: str
+    conn: raw_db.RawDbConnection, product_group_id: str, report_month: str
 ) -> dict[str, dict[int, int]]:
     """{aspect: {sentiment: 건수}}. 분자 집계다.
 
@@ -232,7 +241,8 @@ def _fetch_aspect_sentiments(
     """
     start, end = _window(report_month)
     rows = conn.execute(
-        f"SELECT a.aspect, a.sentiment, COUNT(*) FROM {SOURCE_TABLE} r "
+        f"SELECT a.aspect AS aspect, a.sentiment AS sentiment, COUNT(*) AS n "
+        f"FROM {SOURCE_TABLE} r "
         "JOIN classified_item_aspect a ON a.item_id = r.item_id "
         "WHERE r.product_group_id = ? AND r.occurred_at >= ? AND r.occurred_at < ? "
         "GROUP BY a.aspect, a.sentiment",
@@ -240,14 +250,14 @@ def _fetch_aspect_sentiments(
     ).fetchall()
 
     result: dict[str, dict[int, int]] = {a: {} for a in JSD_ASPECT_ORDER}
-    for aspect, sentiment, count in rows:
-        if aspect in result:
-            result[aspect][int(sentiment)] = count
+    for row in rows:
+        if row["aspect"] in result:
+            result[row["aspect"]][int(row["sentiment"])] = row["n"]
     return result
 
 
 def _fetch_negative_aspect_counts_by_channel(
-    conn: sqlite3.Connection, product_group_id: str, report_month: str
+    conn: raw_db.RawDbConnection, product_group_id: str, report_month: str
 ) -> dict[str, list[int]]:
     """{채널: [속성별 부정 문서 수]}. 채널 분열(JSD)의 입력 분포다.
 
@@ -266,7 +276,8 @@ def _fetch_negative_aspect_counts_by_channel(
     """
     start, end = _window(report_month)
     rows = conn.execute(
-        f"SELECT UPPER(r.channel_id), a.aspect, COUNT(*) FROM {SOURCE_TABLE} r "
+        f"SELECT UPPER(r.channel_id) AS channel, a.aspect AS aspect, COUNT(*) AS n "
+        f"FROM {SOURCE_TABLE} r "
         "JOIN classified_item_aspect a ON a.item_id = r.item_id "
         "WHERE r.product_group_id = ? AND a.sentiment = -1 "
         "  AND r.occurred_at >= ? AND r.occurred_at < ? "
@@ -277,7 +288,8 @@ def _fetch_negative_aspect_counts_by_channel(
     counts: dict[str, list[int]] = {}
     index = {a: i for i, a in enumerate(JSD_ASPECT_ORDER)}
     unknown: dict[str | None, int] = {}
-    for channel, aspect, count in rows:
+    for row in rows:
+        channel, aspect, count = row["channel"], row["aspect"], row["n"]
         if aspect not in index:
             continue
         if channel not in KNOWN_CHANNELS:
@@ -347,7 +359,7 @@ def _build_drifts(
 
 
 def aggregate_monthly_inputs(
-    conn: sqlite3.Connection,
+    conn: raw_db.RawDbConnection,
     report_month: str,
     *,
     product_group_ids: list[str] | None = None,

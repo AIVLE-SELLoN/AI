@@ -277,9 +277,10 @@ services:
   #    적용하려면 `docker compose down -v rawdb` 로 볼륨을 지우고 다시 올려야 한다
   #    (고쳤는데 반영이 안 되는 것처럼 보이는 자리다).
   #
-  # ⚠️ **운영 Postgres 메이저 버전은 아직 확인 안 됐다**(인프라 회신 대기). 16 은 우리
-  #    쪽 가정이고, 우리가 쓰는 문법(TIMESTAMPTZ · GENERATED AS IDENTITY ·
-  #    IS NOT DISTINCT FROM · information_schema)은 12+ 면 전부 같다.
+  # ✅ **운영 Postgres = 16 으로 확정**(인프라 민준, 2026-08-18). 아래 이미지와 같은
+  #    메이저라 로컬에서 본 것이 운영에서도 같다. 우리가 쓰는 문법(TIMESTAMPTZ ·
+  #    GENERATED AS IDENTITY · IS NOT DISTINCT FROM · information_schema · pg_index)은
+  #    12+ 면 전부 같으므로 마이너 차이는 영향이 없다.
   rawdb:
     image: postgres:16-alpine
     container_name: sellon-rawdb

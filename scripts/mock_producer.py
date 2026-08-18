@@ -21,15 +21,15 @@
    뽑아 쓰려고" 남겨 둔 보험이었는데, 이제 컬럼이 정해져서 목적이 사라졌다. Kafka 메시지는
    그대로 전체 행을 싣는다.
 
-raw DB 는 stdlib sqlite3 로 구성한다(추가 의존성 없음). 운영 DB(Postgres)로 옮길 때는
-`open_raw_db()` 와 `raw_schema` 의 DDL 만 갈면 되도록 표준 SQL 범위를 유지했다.
+raw DB 는 기본이 sqlite 파일이고 `RAW_DB_HOST` 가 있으면 Postgres 다 — 연결·문법 차이는
+`app.core.raw_db` 가 흡수하므로 이 파일의 SQL 은 한 벌뿐이다. 운영에서 main server 가 하는
+일이라 **이 프로듀서는 운영에서 돌지 않는다**(Postgres 로도 붙는 것은 로컬 검증용).
 """
 
 import argparse
 import csv
 import json
 import logging
-import sqlite3
 import sys
 import time
 from datetime import date, datetime
@@ -40,7 +40,7 @@ import pandas as pd
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from app.core import raw_schema
+from app.core import raw_db, raw_schema
 from app.core.console import force_utf8_output
 from app.core.constants import KST
 from app.core.schemas import Channel
@@ -133,8 +133,14 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
 #
 # 확정 스키마 §2 의 실테이블에 그대로 넣는다. 테이블별 컬럼은 `app/core/raw_schema.py` 참고.
 #
-# ⚠️ INSERT OR REPLACE 를 쓰는 이유: 같은 대본을 다시 재생해도 중복 행이 쌓이지 않게
+# ⚠️ 멱등 INSERT(upsert)를 쓰는 이유: 같은 대본을 다시 재생해도 중복 행이 쌓이지 않게
 #    한다(PK 로 덮어쓴다). cs/reviews 는 원문 PK, orders 는 복합 PK 가 그 역할을 한다.
+#
+# 🔴 **`INSERT OR REPLACE` 였다가 표준 `ON CONFLICT DO UPDATE` 로 바꿨다(2026-08-18).**
+#    이유는 하나다 — 전자는 **sqlite 전용 문법**이라 Postgres 에서 구문 오류다.
+#    ⚠️ 뜻은 완전히 같지 않다(앞은 지우고 다시 넣기, 뒤는 제자리 갱신). 다만 우리 스키마에
+#       `ON DELETE CASCADE` 가 한 곳도 없어서 **동작이 안 바뀐다** — 재실행 시 자식
+#       (`mapped_data`)이 남는 것까지 실측으로 확인했다. CASCADE 를 새로 걸면 다시 볼 것.
 
 TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     "cs": (
@@ -151,11 +157,15 @@ TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# 충돌 판정 키 = 그 테이블의 PK. 같은 대본을 다시 재생해도 중복 행이 안 쌓이게 한다.
+TABLE_CONFLICT_KEYS: dict[str, tuple[str, ...]] = {
+    "cs": ("id",),
+    "reviews": ("id",),
+    "orders": ("channel_id", "channel_product_id", "order_date"),
+}
+
 TABLE_INSERTS: dict[str, str] = {
-    table: (
-        f"INSERT OR REPLACE INTO {table} ({', '.join(columns)}) "
-        f"VALUES ({', '.join(['?'] * len(columns))})"
-    )
+    table: raw_db.upsert_sql(table, columns, conflict=TABLE_CONFLICT_KEYS[table])
     for table, columns in TABLE_COLUMNS.items()
 }
 
@@ -176,28 +186,41 @@ def to_kst_iso(value: datetime) -> str:
     return aware.isoformat()
 
 
-def open_raw_db(db_path_str: str) -> sqlite3.Connection:
-    """raw DB 연결 + 스키마 보장. 없으면 파일째로 새로 만든다."""
-    db_path = Path(db_path_str).resolve()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+def open_raw_db(db_path_str: str) -> raw_db.RawDbConnection:
+    """raw DB 연결 + 스키마 보장. sqlite 면 없을 때 파일째로 새로 만든다.
 
-    conn = sqlite3.connect(str(db_path), timeout=30.0)
-    # WAL: 프로듀서가 쓰는 동안 워커가 같은 파일을 읽어도 서로 막히지 않게 한다.
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA synchronous=NORMAL;")
-    conn.execute("PRAGMA busy_timeout=30000;")
-    # ⚠️ sqlite 는 FK 가 **기본 OFF** 라 연결마다 켜야 한다. 안 켜면 DDL 의
-    #    REFERENCES 가 장식으로만 남아 채널 오타가 조용히 통과한다 — 운영 Postgres 는
-    #    기본으로 잡아 주므로, 목에서만 못 잡히면 거기서 처음 터진다.
-    conn.execute("PRAGMA foreign_keys=ON;")
+    ⚠️ **이 프로듀서는 목 파이프라인에서 main server 자리를 대신한다** — 운영에서는 돌지
+       않는다. Postgres 로도 붙을 수 있게 해 둔 것은 로컬 compose 검증용이다(원문을 넣어야
+       워커·집계를 실연결로 재볼 수 있다).
+
+    ⚠️ 연결·PRAGMA 는 `raw_db.connect_readwrite()` 가 한다 — 여기서 `sqlite3.connect` 를
+       직접 부르면 WAL·FK 설정이 워커 쪽과 두 벌이 되고, 한쪽만 바뀌어도 조용히 갈린다.
+    """
+    # ⚠️ Postgres 접속 실패는 `FileNotFoundError` 가 아니라 `psycopg.Error` 로 온다 —
+    #    안 잡으면 raw traceback 이라, 재생 대본이 잘못된 것처럼 보인다.
+    try:
+        conn = raw_db.connect_readwrite(db_path_str)
+    except raw_db.connection_error_types() as exc:
+        logger.error(
+            f"[RAW DB] 접속하지 못했습니다: {raw_db.describe_target(db_path_str)} - {exc}"
+        )
+        sys.exit(1)
     raw_schema.create_source_tables(conn)
     conn.commit()
 
-    logger.info(f"[RAW DB] 연결 완료: {db_path}")
+    logger.info(f"[RAW DB] 연결 완료: {raw_db.describe_target(db_path_str)}")
     return conn
 
 
-def seed_channels(conn: sqlite3.Connection, observed: set[str]) -> None:
+CHANNEL_UPSERT = raw_db.upsert_sql(
+    "channel",
+    ("channel_id", "display_name", "connected_at", "status"),
+    conflict=("channel_id",),
+    update=(),
+)
+
+
+def seed_channels(conn: raw_db.RawDbConnection, observed: set[str]) -> None:
     """§2-1 channel 마스터를 채운다. 마스터의 정본은 **`Channel` enum** 이다.
 
     확정 문서 §2-1 이 "channel_id 는 문자열 자체가 PK — 우리 `Channel` enum 과 그대로
@@ -212,11 +235,7 @@ def seed_channels(conn: sqlite3.Connection, observed: set[str]) -> None:
     """
     now = datetime.now(KST).isoformat()
     for channel_id in MASTER_CHANNELS:
-        conn.execute(
-            "INSERT OR IGNORE INTO channel (channel_id, display_name, connected_at, status) "
-            "VALUES (?, ?, ?, 'active')",
-            (channel_id, channel_id, now),
-        )
+        conn.execute(CHANNEL_UPSERT, (channel_id, channel_id, now, "active"))
     conn.commit()
     logger.info(f"[RAW DB] channel 마스터 {len(MASTER_CHANNELS)}건 보장: {list(MASTER_CHANNELS)}")
 
@@ -231,8 +250,25 @@ def seed_channels(conn: sqlite3.Connection, observed: set[str]) -> None:
         )
 
 
+PRODUCTS_UPSERT = raw_db.upsert_sql(
+    "products",
+    (
+        "variant_row_id", "channel_id", "channel_product_id", "channel_product_name",
+        "option_group_names", "channel_option_name", "sale_price", "original_price",
+        "fetched_at", "updated_at",
+    ),
+    conflict=("variant_row_id",),
+)
+
+MAPPED_DATA_UPSERT = raw_db.upsert_sql(
+    "mapped_data",
+    ("variant_row_id", "product_group_id", "mapped_at"),
+    conflict=("variant_row_id",),
+)
+
+
 def seed_product_catalog(
-    conn: sqlite3.Connection,
+    conn: raw_db.RawDbConnection,
     products: list[dict[str, str]],
     group_of_variant: dict[str, str],
 ) -> None:
@@ -272,9 +308,7 @@ def seed_product_catalog(
         variant_row_id = str(row.get("variant_row_id") or "").strip()
         known.add(variant_row_id)
         conn.execute(
-            "INSERT OR REPLACE INTO products (variant_row_id, channel_id, channel_product_id, "
-            "channel_product_name, option_group_names, channel_option_name, sale_price, "
-            "original_price, fetched_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            PRODUCTS_UPSERT,
             (
                 variant_row_id,
                 row.get("channel"),
@@ -294,11 +328,7 @@ def seed_product_catalog(
         if vrid not in known:
             orphan += 1
             continue
-        conn.execute(
-            "INSERT OR REPLACE INTO mapped_data (variant_row_id, product_group_id, mapped_at) "
-            "VALUES (?, ?, ?)",
-            (vrid, group, now),
-        )
+        conn.execute(MAPPED_DATA_UPSERT, (vrid, group, now))
     conn.commit()
 
     mapped = len(group_of_variant) - orphan
@@ -362,7 +392,8 @@ class RawDbSink:
        실패 건수는 self.failed 에 쌓여 종료 요약에 함께 찍힌다.
     """
 
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: raw_db.RawDbConnection) -> None:
+        self.errors = raw_db.db_error_types(conn)
         self.conn = conn
         self.buffers: dict[str, list[tuple]] = {table: [] for table in TABLE_INSERTS}
         self.last_flush = time.monotonic()
@@ -397,7 +428,7 @@ class RawDbSink:
                 self.conn.executemany(TABLE_INSERTS[table], rows)
             self.conn.commit()
             self.written += sum(len(rows) for rows in pending.values())
-        except sqlite3.Error as err:
+        except self.errors as err:
             self.conn.rollback()
             total = sum(len(rows) for rows in pending.values())
             logger.warning(f"[RAW DB] 배치 적재 실패({total}행) — 행 단위로 재시도합니다: {err}")
@@ -413,7 +444,7 @@ class RawDbSink:
                 self.conn.execute(TABLE_INSERTS[table], row)
                 self.conn.commit()
                 self.written += 1
-            except sqlite3.Error as err:
+            except self.errors as err:
                 self.conn.rollback()
                 self.failed += 1
                 logger.error(f"[RAW DB] 행 적재 실패 ({table}, key={row[0]}): {err}")
