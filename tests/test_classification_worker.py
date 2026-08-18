@@ -784,6 +784,43 @@ def test_stale_scan_covers_model_and_pipeline_axes(worker_instance) -> None:
     ]
 
 
+def test_stale_scan_catches_null_model_and_pipeline_axes(worker_instance) -> None:
+    """🔴 프롬프트는 맞고 **모델·파이프라인만 NULL** 인 행도 재분류 대상이다.
+
+    위 테스트와 행 하나 차이인데 잡는 것이 다르다. 저쪽은 축 값이 *다른* 경우라
+    `=` 로 비교해도 FALSE 가 나와 `NOT (...)` 이 참이 된다 — 즉 **널 안전 비교가
+    아니어도 통과한다.** 갈리는 것은 널일 때뿐이다:
+
+        prompt 일치 + model NULL 로 두고 stale 조회
+            IS NOT DISTINCT FROM  →  FALSE  →  NOT FALSE = 참  →  재분류 대상 ✅
+            =                     →  NULL   →  NOT NULL  = 널  →  **영원히 안 잡힌다**
+
+    그리고 이 행은 지어낸 것이 아니다 — 버전 컬럼이 `prompt_version` 하나뿐이던 시절
+    (4컬럼)에 적재된 뒤 2026-08-12 에 컬럼 2개가 늘면서 정확히 이 모양이 된다.
+
+    🔴 **놓치면 교착이다.** 배치 쪽 `_VERSION_COUNT_SQL` 은 `SUM(CASE WHEN ... ELSE 0)`
+       이라 널을 FALSE 와 똑같이 "옛 버전" 으로 세서 **배치는 선다.** 그런데 여기 조회가
+       그 행을 못 집으면 `--reclassify-stale` 이 "재분류할 문서가 없습니다" 로 끝나,
+       에러가 시키는 조치로는 빠져나갈 수 없다("배치를 세우는 집합 ⊆ 재분류가 고칠 수
+       있는 집합", 2026-08-12).
+    """
+    conn = _open_pipeline_db()
+    worker_instance.conn = conn
+    for i in (1, 2, 3):
+        _insert_cs(conn, f"INQ-{i}", f"2026-05-0{i}T10:00:00+09:00")
+    prompt, model, pipeline = _active_of("cs")
+    _mark_classified(conn, "INQ-1", "cs", prompt, model, pipeline)  # 전부 활성
+    _mark_classified(conn, "INQ-2", "cs", prompt, None, pipeline)  # 모델만 NULL
+    _mark_classified(conn, "INQ-3", "cs", prompt, model, None)  # 파이프라인만 NULL
+    conn.commit()
+
+    assert [row["item_id"] for row in worker_instance.fetch_stale_batch()] == [
+        "INQ-2",
+        "INQ-3",
+    ]
+    assert worker_instance.count_stale() == 2
+
+
 def test_stale_scan_is_per_source(worker_instance) -> None:
     """🔴 활성 버전은 source 마다 다르다 — CS 는 프롬프트1, 리뷰는 프롬프트2.
 

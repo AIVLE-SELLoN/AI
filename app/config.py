@@ -60,11 +60,21 @@ class Settings(BaseSettings):
     # 쓰는 쪽(`scripts/`)은 같은 이름의 환경변수를 직접 읽으므로 키 이름을 바꾸면
     # 양쪽이 갈린다.
     #
-    # ⚠️ **지금은 파일 경로 전용이다.** `core/raw_db.connect_readonly()` 가
-    #    `Path(...).exists()` 를 먼저 보므로 Postgres DSN 을 넣으면 `FileNotFoundError`
-    #    가 난다. 운영 DB 로 옮길 때는 이 값의 타입이 아니라 **연결 함수를** 바꿔야
-    #    한다(sqlite3 → psycopg). 그때 `?mode=ro` 도 DB 권한으로 대체된다.
+    # ⚠️ **이 값은 파일 경로 전용이다 — DSN 을 넣지 말 것.**
+    #    `core/raw_db.connect_readonly()` 가 `Path(...).exists()` 를 먼저 보므로 DSN 은
+    #    `FileNotFoundError` 로 떨어진다. Postgres 로 붙일 때는 아래 `raw_db_dsn` 을 쓴다.
     raw_db_path: str = "./data/raw.db"
+
+    # 운영 raw DB(Postgres `rawdb`) 접속 문자열. **비어 있으면 위 sqlite 파일을 쓴다.**
+    #
+    # 🔴 기본값이 빈 문자열인 것이 계약이다 — 아무것도 설정하지 않은 환경(데모·팀원
+    #    로컬·테스트)은 이 키가 생기기 전과 **완전히 같은 경로**로 돈다. 값이 있을 때만
+    #    `core/raw_db.py` 가 psycopg 로 붙는다.
+    #
+    # ⚠️ 읽기 전용은 **DB 권한(GRANT)이 정본**이다(§5-2). `core/raw_db.py` 가 세션에도
+    #    read-only 를 걸지만 그건 로컬 compose 처럼 우리가 superuser 인 환경용 방어선이다.
+    #    예) postgresql://sellon_ai_ro:비밀번호@localhost:5433/rawdb
+    raw_db_dsn: str = ""
 
     # --- 앱 ---
     log_level: str = "INFO"

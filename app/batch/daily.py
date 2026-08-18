@@ -38,7 +38,6 @@ import asyncio
 import json
 import logging
 import os
-import sqlite3
 import sys
 import uuid
 from collections import Counter
@@ -62,7 +61,12 @@ from app.core.constants import CURRENT_WINDOW_DAYS, KST, PAST_WINDOW_DAYS
 from app.core.exit_codes import EXIT_CONFIG_ERROR, EXIT_RUNTIME_ERROR
 from app.core.inquiries import build_linked_inquiries
 from app.core.logging_setup import configure_logging_or_exit
-from app.core.raw_db import connect_readonly
+from app.core.raw_db import (
+    RawDbConnection,
+    connect_readonly,
+    describe_target,
+    existing_tables,
+)
 from app.core.schemas import Channel, ClassifiedItem, DetectionAlert, Source
 from app.core.versions import CLASSIFIER_PIPELINE_VERSION
 from app.detection.loader import check_coverage, unreliable_slots
@@ -419,8 +423,13 @@ def _aspect_window_clause(where: str) -> str:
     return where.replace("occurred_at", "v.occurred_at").replace(" WHERE ", " AND ", 1)
 
 
-def _to_kst(value: str) -> datetime:
-    """저장된 ISO 문자열 → KST 시각. 날짜 절단의 유일한 경로다.
+def _to_kst(value: str | datetime) -> datetime:
+    """저장된 시각 → KST 시각. 날짜 절단의 유일한 경로다.
+
+    ⚠️ **입력 타입이 백엔드마다 다르다.** sqlite 는 시각을 TEXT 로 들고 있어 ISO 문자열이
+       오고, Postgres 는 `TIMESTAMPTZ` 라 psycopg 가 **aware `datetime` 을 그대로** 준다.
+       문자열만 받으면 Postgres 에서 `fromisoformat(datetime)` 이 `TypeError` 로 터진다 —
+       조회는 성공한 뒤 변환에서 죽는 모양이라 원인이 SQL 쪽으로 보이지 않는다.
 
     ⚠️ **문서에 넣는 `created_at` 도 이 값이어야 한다.** `build_rows` 가 `.date()` 로
        날짜를 다시 뽑는데, 여기서 거른 날짜와 그쪽이 뽑는 날짜가 다르면 윈도우 경계의
@@ -439,7 +448,7 @@ def _to_kst(value: str) -> datetime:
        인프라 연동 후에는 **적재하는 쪽이 백엔드로 바뀌므로** 방어가 필요하다.
        (2026-08-11 리뷰 ⑥)
     """
-    parsed = datetime.fromisoformat(value)
+    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(value)
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=KST)
     return parsed.astimezone(KST)
@@ -496,7 +505,7 @@ def load_inputs_from_db(
     aspect_where = _aspect_window_clause(where)
     conn = connect_readonly(db_path)
     try:
-        _require_classified_tables(conn, db_path or get_settings().raw_db_path)
+        _require_classified_tables(conn, describe_target(db_path))
         _check_version_cutover(conn, aspect_where, params)
         doc_rows = conn.execute(_DOCUMENT_SQL + where, params).fetchall()
         # 버전 파라미터가 먼저다 — WHERE 절이 윈도우 조건절보다 앞에 있다.
@@ -535,7 +544,7 @@ def _classifier_versions_for(loader: Callable) -> dict | None:
     }
 
 
-def _check_version_cutover(conn: sqlite3.Connection, aspect_where: str, params: tuple) -> None:
+def _check_version_cutover(conn: RawDbConnection, aspect_where: str, params: tuple) -> None:
     """윈도우 안에 옛 분류기 결과가 **하나라도** 있으면 세운다 (fail-closed).
 
     🔴 **경고로 넘기면 오탐이 난다 — 그것도 최대 강도로.** 활성 버전 필터는 `_ASPECT_SQL`
@@ -599,7 +608,7 @@ def _check_version_cutover(conn: sqlite3.Connection, aspect_where: str, params: 
     )
 
 
-def _require_classified_tables(conn: sqlite3.Connection, path: str | Path) -> None:
+def _require_classified_tables(conn: RawDbConnection, target: str) -> None:
     """분류 결과 테이블이 **쓸 수 있는 상태인지** 먼저 확인한다.
 
     두 가지를 가른다. 둘 다 원문만 적재된 DB 에서 실제로 나는 상태다:
@@ -616,23 +625,20 @@ def _require_classified_tables(conn: sqlite3.Connection, path: str | Path) -> No
     stale = raw_schema.find_legacy_tables(conn)
     if stale:
         raise RuntimeError(
-            f"raw DB 가 8/7 확정 이전 스키마입니다({', '.join(stale)}): {path} — "
+            f"raw DB 가 8/7 확정 이전 스키마입니다({', '.join(stale)}): {target} — "
             "구버전 파일을 지우고 mock_producer·classification_worker 를 다시 돌리세요."
         )
     # ⚠️ **두 테이블을 다 본다.** `classified_item` 만 보면 자식 테이블이 없는 DB 에서
     #    `no such table: classified_item_aspect` 가 조회 단계에서 그대로 올라온다 —
     #    이 가드가 막으려던 바로 그 모양이다. (2026-08-11 리뷰 잔가지)
-    found = {
-        row["name"]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-            " AND name IN ('classified_item', 'classified_item_aspect')"
-        )
-    }
-    missing = {"classified_item", "classified_item_aspect"} - found
+    #
+    # ⚠️ 목록 조회는 `raw_db.existing_tables()` 를 쓴다 — `sqlite_master` 는 sqlite 에만
+    #    있어서, 직접 쓰면 Postgres 에서 이 가드가 `UndefinedTable` 로 먼저 죽는다.
+    wanted = {"classified_item", "classified_item_aspect"}
+    missing = wanted - existing_tables(conn, wanted)
     if missing:
         raise RuntimeError(
-            f"분류 결과 테이블이 없습니다({', '.join(sorted(missing))}): {path} — "
+            f"분류 결과 테이블이 없습니다({', '.join(sorted(missing))}): {target} — "
             "scripts/classification_worker.py 를 먼저 돌려야 분자(부정 건수)가 생깁니다."
         )
 

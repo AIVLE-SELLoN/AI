@@ -117,10 +117,23 @@ def block_local_raw_db(monkeypatch, tmp_path):
 
     DB 를 실제로 쓰는 테스트는 `db_path=` 로 자기 임시 파일을 명시해서 이 기본값을
     덮는다(`tests/test_load_inputs_from_db.py`).
+
+    🔴 **`RAW_DB_DSN` 도 같이 비운다 — 이게 없으면 `db_path=` 가 통째로 무시된다.**
+       `connect_readonly()` 는 DSN 이 있으면 파일 경로를 **아예 안 본다**(그게 계약이다).
+       그래서 개발자 `.env` 에 그 키가 남아 있으면 자기 임시 파일을 명시한 테스트까지
+       개발자 Postgres 로 간다 — 실측 25 failed(2026-08-16). 그리고 이건 드문 사고가
+       아니다: `.env.example` 이 이식 검증 절차로 **"주석 해제 → 검증 → 다시 주석"** 을
+       안내하므로, 마지막 한 줄을 안 되돌린 사람은 반드시 밟는다.
+       ⚠️ Postgres 가 안 떠 있으면 접속 오류로, 떠 있으면 **엉뚱한 데이터로 통과**한다 —
+          후자가 더 나쁘다. PR #77 의 `.env` 사고(#79 로 수습)와 같은 계열이다.
+
+       실연결을 재는 테스트는 `RAW_DB_TEST_DSN` 을 **따로** 읽어 이 기본값을 덮는다
+       (`tests/test_raw_db_postgres.py`) — 키를 나눈 이유가 그것이다.
     """
     # `raising=True`(기본)로 둔다 — 필드명이 바뀌면 여기서 터지는 게 맞다. False 면
     # 이 가드가 조용히 죽고 테스트가 개발자 로컬 DB 를 다시 읽기 시작한다.
     monkeypatch.setattr(get_settings(), "raw_db_path", str(tmp_path / "없는-raw.db"))
+    monkeypatch.setattr(get_settings(), "raw_db_dsn", "")
 
 
 TEST_COMPANY_ID = "SLN-test"
