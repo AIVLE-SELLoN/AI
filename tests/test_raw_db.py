@@ -203,3 +203,33 @@ def test_null_safe_comparison_spelling_works_on_sqlite():
         ).fetchone()[0] == 1
     finally:
         conn.close()
+
+
+def test_connection_error_types_covers_both_psycopg_bases():
+    """🔴 Postgres 실패가 두 베이스로 갈린다 — 한쪽만 잡으면 절반이 샌다.
+
+    호출부(`daily.main()` 의 exit 2 분류, `service.generate_recommendation` 의 degrade)가
+    이 목록으로 "환경 탓" 을 가른다. `psycopg.OperationalError` 로 좁히면 **DSN 형식 오타 ·
+    DB 이름 틀림 · 뷰 없음 · GRANT 누락**이 전부 빠져나간다(전부 `ProgrammingError` 계열).
+    하필 그 넷이 첫 연동에서 제일 잦다.
+
+    ⚠️ **`FileNotFoundError`·`RuntimeError` 가 아닌 것까지 같이 본다.** 그게 이 함수가
+       존재하는 이유이므로(둘 중 하나였다면 호출부가 이미 잡고 있었다), 그 전제가
+       psycopg 버전이 올라가며 바뀌면 여기서 먼저 알려준다.
+    """
+    import psycopg
+
+    covered = raw_db.connection_error_types()
+    assert covered, "드라이버가 있는데 빈 튜플이면 호출부가 아무것도 새로 못 잡는다"
+
+    for code, kind in [
+        ("28P01", "비밀번호 틀림"),
+        ("3D000", "DB 이름 틀림"),
+        ("42P01", "뷰·테이블 없음"),
+        ("42501", "GRANT 누락"),
+    ]:
+        exc_type = psycopg.errors.lookup(code)
+        assert issubclass(exc_type, covered), f"{kind}({code}) 이 안 잡힌다: {exc_type}"
+        assert not issubclass(exc_type, FileNotFoundError | RuntimeError), (
+            f"{kind}({code}) 이 이미 호출부 분기에 걸린다면 이 함수가 필요 없다"
+        )
