@@ -358,9 +358,9 @@ def test_child_table_alone_missing_fails_loudly(tmp_path):
 
 
 def test_legacy_schema_fails_before_the_query(tmp_path):
-    """8/7 확정 이전 구조로 남은 DB 는 조회가 아니라 여기서 막는다.
+    """확정본과 다른 구조로 남은 DB 는 조회가 아니라 여기서 막는다.
 
-    `CREATE TABLE IF NOT EXISTS` 가 옛 테이블을 그대로 두기 때문에, 안 막으면 한참
+    `CREATE TABLE IF NOT EXISTS` 가 이미 있는 테이블을 그대로 두기 때문에, 안 막으면 한참
     뒤 `no such column` 으로 터져 원인이 메시지에 안 드러난다(PR #37 워커와 같은 함정).
     """
     path = tmp_path / "raw.db"
@@ -370,8 +370,39 @@ def test_legacy_schema_fails_before_the_query(tmp_path):
     conn.commit()
     conn.close()
 
-    with pytest.raises(RuntimeError, match="확정 이전 스키마"):
+    with pytest.raises(RuntimeError, match="확정 스키마와 다릅니다"):
         daily.load_inputs_from_db(WINDOW_END, db_path=str(path))
+
+
+def test_missing_unique_constraint_also_stops_the_batch(tmp_path):
+    """🔴 컬럼은 확정본과 같고 **UNIQUE 제약만 빠진** DB 도 여기서 막는다.
+
+    이 사유는 위와 **증상이 다르다.** 컬럼이 옛것이면 조회가 `no such column` 으로 시끄럽게
+    죽지만, 제약이 빠진 경우는 **아무것도 안 죽고** 재분류가 같은 `(item_id, aspect)` 를
+    중복 적재해 탐지 분자가 부푼다 — 오탐 방향이라 조용하다. 인프라가 낡은 문서로 테이블을
+    먼저 세워 뒀을 때 나오는 모양이다(2026-08-18).
+
+    ⚠️ **메시지가 사유를 단정하면 안 된다.** 예전 문구("8/7 확정 이전 스키마")를 그대로 두면
+       제약이 빠진 사람이 스키마 버전을 뒤지게 된다 — 그래서 문구도 같이 고정한다.
+    """
+    path = tmp_path / "raw.db"
+    conn = sqlite3.connect(str(path))
+    raw_schema.create_source_tables(conn)
+    conn.execute(raw_schema.CLASSIFIED_ITEM_DDL)
+    # 확정 DDL 과 컬럼은 같고 UNIQUE (item_id, aspect) 만 없다.
+    conn.execute(
+        "CREATE TABLE classified_item_aspect ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " item_id TEXT NOT NULL REFERENCES classified_item(item_id),"
+        " aspect TEXT NOT NULL, sentiment INTEGER NOT NULL, mixed_signal INTEGER)"
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError, match="UNIQUE 제약") as exc:
+        daily.load_inputs_from_db(WINDOW_END, db_path=str(path))
+    # 어느 테이블인지 알려 준다 — 사유만 알고 대상을 모르면 조치를 못 한다.
+    assert "classified_item_aspect" in str(exc.value)
 
 
 # ── 분류기 버전 (2026-08-12) ────────────────────────────────────────────────
