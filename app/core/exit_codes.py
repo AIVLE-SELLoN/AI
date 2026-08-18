@@ -2,10 +2,15 @@
 
 왜 core 에 있나
 ---------------
-진입점이 둘인데(`app/consumer.py` 상시 컨슈머 · `app/main.py` 웹 서버) 둘 다 같은 계약을
-쓴다. 각자 두면 한쪽만 바뀌어도 조용히 갈리고, **갈린 자리는 운영에서만 드러난다** —
-로컬에서 종료 코드를 보는 사람은 없다 (`raw_db.py`·`ids.py`·`KST` 가 core 로 온 것과
-같은 사유).
+**배포 진입점이 전부 같은 계약을 쓴다.** 각자 두면 한쪽만 바뀌어도 조용히 갈리고, **갈린
+자리는 운영에서만 드러난다** — 로컬에서 종료 코드를 보는 사람은 없다 (`raw_db.py`·
+`ids.py`·`KST` 가 core 로 온 것과 같은 사유).
+
+🔴 **여기에 진입점 목록이나 개수를 적지 말 것.** 적으면 다음 진입점이 생길 때 조용히
+   거짓이 된다 — 이 저장소가 이미 세 번 밟은 실패다(`tests/test_console_encoding.py` 의
+   `_deployed_entrypoints` docstring 이 같은 규칙을 적어 두고 있다). 대상 집합은
+   `tests/test_main_entrypoint.py::test_entrypoints_do_not_declare_their_own_exit_codes`
+   가 소스에서 **유도**하므로, 알고 싶으면 그 테스트를 볼 것.
 
 왜 `constants.py` 가 아니라 별도 파일인가
 ------------------------------------------
@@ -26,8 +31,8 @@
    안 남아서** 아무도 못 알아챈다. 실제로 `app/main.py` 가 그 상태였다 — `LOG_LEVEL=info`
    (소문자) 하나로 주 배포물이 exit 1 로 못 떴다(2026-08-16, PR #91 후속).
 
-⚠️ **이 계약을 쓰는 진입점은 아직 둘이다.** `app/batch/daily.py` 는 `sys.exit(1)` 리터럴을
-   쓰고 설정 오류도 exit 1 + raw traceback 으로 나간다(사유는 `logging_setup.py` docstring).
+⚠️ 진입점이 자기 숫자를 다시 선언하지 않는지는 위 유도 가드가 본다 — 새 진입점이 생기면
+   자동으로 걸리므로, 여기를 손으로 갱신할 일이 없다.
 """
 
 EXIT_CONFIG_ERROR = 2

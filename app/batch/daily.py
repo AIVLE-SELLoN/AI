@@ -58,7 +58,9 @@ from app.config import get_settings
 from app.core import raw_schema
 from app.core.console import force_utf8_output
 from app.core.constants import CURRENT_WINDOW_DAYS, KST, PAST_WINDOW_DAYS
+from app.core.exit_codes import EXIT_CONFIG_ERROR, EXIT_RUNTIME_ERROR
 from app.core.inquiries import build_linked_inquiries
+from app.core.logging_setup import configure_logging_or_exit
 from app.core.raw_db import (
     RawDbConnection,
     connect_readonly,
@@ -1563,25 +1565,67 @@ def main() -> None:
 
         loader = load_golden_inputs
 
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s"
-    )
-    summary = asyncio.run(
-        run_batch(
-            window_end=date.fromisoformat(args.window_end) if args.window_end else None,
-            max_alerts=args.max_alerts,
-            dry_run=args.dry_run,
-            state_path=Path(args.state_path) if args.state_path else STATE_PATH,
-            load_inputs=loader,
+    # ⚠️ **`parse_args()` 뒤에 둔다.** 앞으로 옮기면 설정 오타 하나로 `--help` 조차 못 본다.
+    #    ⚠️ 반대로 `force_utf8_output()` 보다 앞으로는 못 간다 — 그건 첫 문장이어야 한다
+    #       (`tests/test_console_encoding.py` 가 강제).
+    #
+    # 🔴 **여기서 설정을 한 번 읽는 것이 아래 깊은 호출부까지 덮는다.** `get_settings()` 가
+    #    `@lru_cache` 라, 이 시점에 성공하면 `_active_version_params()`·`load_inputs_from_db()`
+    #    가 나중에 부를 때 같은 인스턴스를 받는다. 실패하면 `run_batch` 에 들어가기 전에
+    #    exit 2 로 끝난다 — 예전엔 그 깊은 호출부에서 미포착 `ValidationError` 가 터져
+    #    **exit 1 + raw traceback** 이었고, 그건 아래 "실패가 있음"(=1)과 구분이 안 됐다.
+    #
+    # ⚠️ 로깅 레벨이 `logging.INFO` 고정에서 **`LOG_LEVEL` 을 따르는 것으로 바뀐다.**
+    #    기본값이 `INFO` 라 평소 동작은 그대로고, 다른 두 진입점과 같아진다.
+    configure_logging_or_exit("배치")
+    # 🔴 **바깥 껍질 — 실행 중 드러나는 환경 전제도 2 로 가른다.**
+    #    부팅 가드(`configure_logging_or_exit`)는 `Settings` 로 읽히는 값만 본다. 그런데
+    #    배치에서 **제일 자주 나는 실패는 그 다음**이다 — raw DB 경로가 틀렸거나(볼륨 마운트
+    #    누락) 스키마가 옛 버전이거나 분류 결과 테이블이 없는 것. 전부 **재시작해도 같으니**
+    #    exit 1("재시작하면 나을 수 있다")로 보고하면 k8s 가 영원히 재시도한다.
+    #    (용준님 PR #98 리뷰 ①, 재현 확인)
+    #
+    #    ⚠️ **왜 이 두 타입인가.** `raise RuntimeError` 는 `app/` 전체에서 이 파일의 전제
+    #       검사 3곳뿐이고(`test_runtime_error_stays_confined_to_preconditions` 가 잠근다),
+    #       `FileNotFoundError` 는 `raw_db.connect_readonly()` 의 "raw DB 없음" 하나다.
+    #       ⚠️ `raw_db` 쪽 타입을 바꾸는 안은 못 쓴다 — `app/recommendation/service.py` 가
+    #       `except FileNotFoundError` 로 **의도적 degrade** 를 하고 `inquiries.py` 가 그걸
+    #       계약으로 문서화해 뒀다.
+    #
+    #    ⚠️ 라이브러리가 던진 `RuntimeError` 가 여기 걸리면 "환경 문제" 로 오분류된다.
+    #       CronJob 이라 **다음 예약 실행은 그대로 돌아서** 비용이 비대칭이다 — 지금(exit 1)은
+    #       영구 오류에 무한 재시도이고, 오분류는 이번 실행 한 번을 포기하는 것뿐이다.
+    #
+    #    ⚠️ **여기서는 메시지를 자르지 않는다**(부팅 경로와 다르다). 위 전제 검사들은
+    #       여러 줄로 **조치 방법까지** 담고 있어서(`LLM_MODEL 오타면 설정을 고치세요` 등)
+    #       첫 줄만 남기면 정작 필요한 안내를 잃는다. raw traceback 이 아닌 것으로 충분하다.
+    try:
+        summary = asyncio.run(
+            run_batch(
+                window_end=(
+                    date.fromisoformat(args.window_end) if args.window_end else None
+                ),
+                max_alerts=args.max_alerts,
+                dry_run=args.dry_run,
+                state_path=Path(args.state_path) if args.state_path else STATE_PATH,
+                load_inputs=loader,
+            )
         )
-    )
+    except (FileNotFoundError, RuntimeError) as exc:
+        print(f"환경이 준비되지 않아 배치를 돌리지 못했습니다: {exc}", file=sys.stderr)
+        sys.exit(EXIT_CONFIG_ERROR)
+
     print_summary(summary)
 
     # ⚠️ 계속 도는 것과 성공으로 보고하는 것은 다르다. 실패가 있으면 비-0 으로 끝내야
     #    cron·k8s Job 이 알아챈다 — 안 그러면 모든 알림이 발행 실패해도 성공한 배치다.
     #    (지인님 PR 리뷰 §4, 2026-08-06)
+    #
+    # ⚠️ **값(1)은 그대로다 — 출처만 상수로 바꿨다.** 여기는 "배치가 돌긴 했는데 일부가
+    #    실패" 라 `EXIT_RUNTIME_ERROR` 의 정의(*"재시작하면 나을 수 있다"*)에 정확히 맞는다.
+    #    설정 오류(재시작해도 같음)는 위 `configure_logging_or_exit()` 이 2 로 가른다.
     if summary["failures"]:
-        sys.exit(1)
+        sys.exit(EXIT_RUNTIME_ERROR)
 
 
 if __name__ == "__main__":
