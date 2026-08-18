@@ -19,6 +19,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.config import get_settings
 from app.core.constants import CONSISTENT_COUNT, CONSISTENT_RATIO
 from app.core.llm_client import get_llm_client
 from app.core.prompts import load_prompt
@@ -241,7 +242,7 @@ async def classify_cause(
     if not items:
         return []
     if client is None:
-        client = get_llm_client()
+        client = get_llm_client(model=get_settings().cause_llm_model)
 
     aspect = _aspect_value(aspect)
     items = _validate_items(aspect, items)

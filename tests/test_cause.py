@@ -8,6 +8,8 @@ import re
 
 import pytest
 
+import app.detection.cause as cause_module
+from app.config import get_settings
 from app.core.prompts import load_prompt
 from app.detection.cause import (
     CAUSE_CHUNK_SIZE,
@@ -97,6 +99,31 @@ async def test_classify_cause_empty_skips_llm():
     results = await classify_cause("색상", [], client=client)
     assert results == []
     assert client.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_classify_cause_uses_dedicated_cause_model(monkeypatch):
+    """Agent2 [6]만 CAUSE_LLM_MODEL을 쓰고 기본 LLM 모델과 섞이지 않는다."""
+    payload = {"results": [
+        {"cs_id": "a1", "cause": "사진_색감_오차", "confidence": 0.9,
+         "evidence": "사진이랑 색이", "aspect_match": True},
+    ]}
+    fake_client = _FakeClient(payload)
+    requested_models: list[str | None] = []
+    settings = get_settings()
+    monkeypatch.setattr(settings, "cause_llm_model", "sentinel-cause-model")
+
+    def fake_get_llm_client(*, model=None):
+        requested_models.append(model)
+        return fake_client
+
+    monkeypatch.setattr(cause_module, "get_llm_client", fake_get_llm_client)
+
+    await cause_module.classify_cause(
+        "색상", [{"cs_id": "a1", "raw_text": "사진이랑 색이 달라요"}]
+    )
+
+    assert requested_models == ["sentinel-cause-model"]
 
 
 @pytest.mark.asyncio

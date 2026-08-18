@@ -226,15 +226,26 @@ class LlmClient:
 
 
 @lru_cache
-def get_llm_client() -> LlmClient:
-    """앱 전역 공용 클라이언트. 커넥션 풀 재사용을 위해 매번 새로 만들지 않는다.
-
-    wrap_openai()로 감싸서 실제 API 호출을 LangSmith에 남긴다. LANGSMITH_TRACING이
-    설정 안 돼 있으면 그냥 조용히 추적 없이 평소대로 동작한다(에러 안 남).
-    """
+def _get_llm_client_for_model(model: str) -> LlmClient:
+    """정규화된 모델명별 클라이언트와 커넥션 풀을 재사용한다."""
     settings = get_settings()
     client = AsyncOpenAI(
         api_key=settings.llm_api_key,
         timeout=settings.llm_timeout_seconds,
     )
-    return LlmClient(wrap_openai(client), settings.llm_model)
+    return LlmClient(wrap_openai(client), model)
+
+
+def get_llm_client(*, model: str | None = None) -> LlmClient:
+    """모델별 공용 클라이언트. 같은 모델은 프로세스 안에서 재사용한다.
+
+    model 을 생략하면 대량·기본 경로용 `LLM_MODEL`을 쓴다. 특정 단계가 실험으로
+    확정된 별도 모델을 써야 할 때만 명시적으로 넘긴다. 호출부에서 문자열을 직접
+    하드코딩하지 말고 해당 단계의 Settings 필드를 전달할 것.
+
+    wrap_openai()로 감싸서 실제 API 호출을 LangSmith에 남긴다. LANGSMITH_TRACING이
+    설정 안 돼 있으면 그냥 조용히 추적 없이 평소대로 동작한다(에러 안 남).
+    """
+    settings = get_settings()
+    selected_model = settings.llm_model if model is None else model
+    return _get_llm_client_for_model(selected_model)

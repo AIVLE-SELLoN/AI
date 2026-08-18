@@ -164,7 +164,7 @@ def pin_company_id(monkeypatch):
        **환경에 따라 갈리는 통과**로 나타나므로 눈에 안 띈다.
        → 설정 재로딩을 재는 테스트는 `monkeypatch.setenv("MQ_COMPANY_ID", ...)` 로
        **환경변수까지 명시적으로 고정**할 것. (서영님 PR #79 사후 리뷰 지적. 현재
-       저장소에 `cache_clear()` 호출은 0건이라 지금은 안전하다.)
+       저장소에 `get_settings.cache_clear()` 호출은 0건이라 지금은 안전하다.)
     """
     monkeypatch.setattr(get_settings(), "mq_company_id", TEST_COMPANY_ID)
 
