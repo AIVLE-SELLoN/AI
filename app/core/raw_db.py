@@ -10,14 +10,18 @@ AI 노드는 원본 DB 에 **읽기 권한만** 있다(「Raw DB 스키마 확�
 
 ── 백엔드 2종 (Postgres 이식 1단계, 2026-08-16) ─────────────────────────────────
 운영 raw DB 는 **Postgres**(`rawdb`)이고 로컬·목 파이프라인은 **sqlite 파일**이다.
-둘을 가르는 것은 `RAW_DB_DSN` 하나다 — 값이 있으면 Postgres, 없으면 sqlite.
+둘을 가르는 것은 `RAW_DB_HOST` 하나다 — 값이 있으면 Postgres, 없으면 sqlite.
 
-    RAW_DB_DSN 있음  →  Postgres            (운영 · 로컬 compose 검증)
-    RAW_DB_DSN 없음  →  sqlite raw_db_path  (기본값. 데모가 도는 경로)
+    RAW_DB_HOST 있음  →  Postgres            (운영 · 로컬 compose 검증)
+    RAW_DB_HOST 없음  →  sqlite raw_db_path  (기본값. 데모가 도는 경로)
 
-⚠️ **`RAW_DB_PATH` 에 DSN 을 넣는 방식은 안 된다.** 아래 sqlite 경로가 `Path.exists()`
-   를 먼저 보기 때문에 DSN 은 `FileNotFoundError` 로 떨어진다. 키를 나눈 이유이고,
-   기본값이 비어 있으므로 **아무것도 설정하지 않으면 동작이 이전과 완전히 같다.**
+⚠️ **`RAW_DB_PATH` 에 접속 정보를 넣는 방식은 안 된다.** 아래 sqlite 경로가
+   `Path.exists()` 를 먼저 보기 때문에 `FileNotFoundError` 로 떨어진다. 키를 나눈
+   이유이고, 기본값이 비어 있으므로 **아무것도 설정하지 않으면 동작이 이전과 같다.**
+
+🔴 **접속 문자열은 원자값에서 우리가 조립한다 — 남이 준 것을 파싱해 쓰지 않는다**
+   (2026-08-18 확정, `conninfo_from_settings` 참고). 백엔드와 공유하는 것은 host·port·
+   dbname·user·password 라는 **사실**이고, 그것을 어떤 문자열로 만드는지는 각자의 몫이다.
 
 🔴 **sqlite 는 `sqlite3.Connection` 을 그대로 돌려주고 Postgres 만 감싼다 — 의도적
    비대칭이다.** 양쪽을 다 감싸면 코드는 예뻐지지만 데모가 도는 경로가 바뀐다:
@@ -43,10 +47,45 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 
 SQLITE = "sqlite"
 POSTGRES = "postgres"
+
+
+def conninfo_from_settings(settings: Settings | None = None) -> str:
+    """raw DB 접속 원자값 → psycopg 접속 문자열. **호스트가 비면 빈 문자열**(= sqlite).
+
+    🔴 **f-string 으로 조립하지 말 것 — `make_conninfo` 가 이스케이프를 한다.** 값에
+       공백·작은따옴표·역슬래시가 들어가면 키워드 형식이 통째로 어긋나는데, 비밀번호는
+       그런 문자가 흔한 자리다(실측: `p w` → `password='p w'`, `p'w` → `password=p\\'w`,
+       역슬래시까지 round-trip 확인). 손으로 붙이면 **인증 실패로만 보이고 원인이
+       안 드러난다.**
+
+    🔴 **빈 값은 넘기지 않고 뺀다 — `password=''` 는 "생략" 과 다른 뜻이다.** libpq 에
+       빈 문자열을 명시하면 *빈 비밀번호를 쓰겠다*는 뜻이라 `.pgpass` 조회가 막힌다
+       (실측: `make_conninfo(password='')` → `password=''` 가 실제로 실린다). 그래서
+       채워진 값만 싣는다 — 정확히 그래서 `RAW_DB_SSLROOTCERT` 를 **키만 두고 비워도**
+       아무 일이 없다.
+
+    ⚠️ `sslmode` 는 항상 싣는다. 이 값을 빼면 libpq 기본값 `prefer` 로 떨어져 **서버가
+       거부하면 조용히 평문으로** 붙는다(`config.raw_db_sslmode` 주석 참고).
+    """
+    settings = settings if settings is not None else get_settings()
+    if not settings.raw_db_host:
+        return ""
+
+    from psycopg.conninfo import make_conninfo
+
+    return make_conninfo(
+        host=settings.raw_db_host,
+        port=settings.raw_db_port,
+        dbname=settings.raw_db_name,
+        user=settings.raw_db_username,
+        password=settings.raw_db_password or None,
+        sslmode=settings.raw_db_sslmode,
+        sslrootcert=settings.raw_db_sslrootcert or None,
+    )
 
 
 def translate_placeholders(sql: str) -> str:
@@ -147,7 +186,7 @@ def connection_error_types() -> tuple[type[BaseException], ...]:
        판단이고, 두 호출부 모두 사유를 전문으로 남기므로 메시지에는 진짜 원인이 있다.
 
     ⚠️ 드라이버가 없으면 **빈 튜플**이라 아무것도 새로 잡지 않는다. 그 환경에서
-       `RAW_DB_DSN` 을 켜면 `PostgresConnection` 의 `ModuleNotFoundError` 가 그대로
+       `RAW_DB_HOST` 를 켜면 `PostgresConnection` 의 `ModuleNotFoundError` 가 그대로
        올라간다 — psycopg 는 `requirements.txt` 가 고정하는 의존이라 남는 것은 재설치를
        건너뛴 개발 머신뿐이고, 거기서는 그 traceback 자체가 이미 정확한 안내다.
     """
@@ -163,8 +202,8 @@ def connect_readonly(
 ) -> RawDbConnection:
     """raw DB 를 **읽기 전용**으로 연다. sqlite 파일이면 없을 때 만들지 않고 던진다.
 
-    `dsn`(또는 `settings.raw_db_dsn`)이 있으면 Postgres 로 붙고, 없으면 sqlite 파일을
-    연다. **기본값은 sqlite** 라 설정을 안 건드리면 동작이 이전과 같다.
+    `dsn`(또는 원자값으로 조립한 `conninfo_from_settings()`)이 있으면 Postgres 로 붙고,
+    없으면 sqlite 파일을 연다. **기본값은 sqlite** 라 설정을 안 건드리면 동작이 이전과 같다.
 
     sqlite 를 `mode=ro` 로 여는 이유가 둘이다:
       1. 권한 그대로다 — 읽는 쪽이 원문을 고칠 일이 없다.
@@ -175,13 +214,15 @@ def connect_readonly(
 
     Args:
         db_path: sqlite DB 경로. 기본은 `settings.raw_db_path`.
-        dsn: Postgres 접속 문자열. 기본은 `settings.raw_db_dsn`.
+        dsn: Postgres 접속 문자열. 기본은 `conninfo_from_settings()` 가 조립한 값.
+            `""` 를 명시하면 **원자값이 설정돼 있어도** sqlite 로 간다
+            (`eval/run_monthly_oracle_eval.py` 가 그렇게 쓴다).
 
     Raises:
         FileNotFoundError: sqlite 파일이 없을 때. 목 파이프라인은 `scripts/mock_producer.py`
             가 원문을, `scripts/classification_worker.py` 가 분류 결과를 채운다.
     """
-    dsn = dsn if dsn is not None else get_settings().raw_db_dsn
+    dsn = dsn if dsn is not None else conninfo_from_settings()
     if dsn:
         return PostgresConnection(dsn)
 
@@ -212,7 +253,9 @@ def describe_target(db_path: str | None = None, *, dsn: str | None = None) -> st
        (2026-08-16 `Settings` 진단에서 `input` 을 뺀 것과 같은 사유)
 
     🔴 **`@`·`?` 로 잘라내는 방식은 쓰지 않는다 — 절반만 막힌다.** psycopg 는 URI 와
-       키워드, **두 형식을 다 받는다.** 문자열을 직접 자르면 키워드 형식이 통째로 샌다:
+       키워드, **두 형식을 다 받는다.** 우리가 조립하는 값은 이제 키워드 형식이지만
+       `dsn=` 로 URI 를 직접 넘기는 경로(`RAW_DB_TEST_DSN` 게이트)가 남아 있어 둘 다 온다.
+       문자열을 직접 자르면 키워드 형식이 통째로 샌다:
 
            postgresql://u:pw@host:5432/rawdb              →  가려짐
            host=10.0.0.5 dbname=rawdb user=u password=pw  →  **전체 노출** 🔴
@@ -227,7 +270,7 @@ def describe_target(db_path: str | None = None, *, dsn: str | None = None) -> st
        원인을 가린다** — 실제로는 `connect_readonly()` 가 먼저 붙어 잘못된 DSN 은 그쪽에서
        걸리지만, 진단 함수가 스스로 터지는 경로는 남겨두지 않는다.
     """
-    dsn = dsn if dsn is not None else get_settings().raw_db_dsn
+    dsn = dsn if dsn is not None else conninfo_from_settings()
     if not dsn:
         return str(db_path or get_settings().raw_db_path)
 

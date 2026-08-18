@@ -257,12 +257,18 @@ services:
   #    이 서비스가 틀린 것**이다. RabbitMQ 를 우리가 띄워 발행을 검증한 것과 같은 방식.
   #
   # 🔴 **띄운다고 데모가 이쪽을 보지는 않는다.** 백엔드를 가르는 것은 `.env` 의
-  #    `RAW_DB_DSN` 하나이고, 비어 있으면(기본값) 코드가 sqlite `RAW_DB_PATH` 로 간다.
-  #    즉 이 서비스를 올려도 `RAW_DB_DSN` 을 안 채우면 아무것도 안 바뀐다 — 의도다.
+  #    `RAW_DB_HOST` 하나이고, 비어 있으면(기본값) 코드가 sqlite `RAW_DB_PATH` 로 간다.
+  #    즉 이 서비스를 올려도 `RAW_DB_HOST` 를 안 채우면 아무것도 안 바뀐다 — 의도다.
   #
   #   docker compose up -d rawdb
-  #   .env 에  RAW_DB_DSN=postgresql://sellon:sellon@localhost:5433/rawdb
-  #   ⚠️ 검증이 끝나면 그 줄을 지울 것 — 남겨두면 sqlite 데모가 빈 Postgres 를 본다.
+  #   .env 에  RAW_DB_HOST=localhost / RAW_DB_PORT=5433 / RAW_DB_NAME=rawdb
+  #            RAW_DB_USERNAME=sellon / RAW_DB_PASSWORD=sellon
+  #   ⚠️ 검증이 끝나면 그 줄들을 지울 것 — 남겨두면 sqlite 데모가 빈 Postgres 를 본다.
+  #
+  # 🔴 **`RAW_DB_SSLMODE=disable` 이 같이 필요하다.** 이 이미지는 SSL 을 안 켜는데 우리
+  #    기본값이 `require` 라 접속이 거부된다. 기본값을 `require` 로 둔 이유는 libpq 기본값
+  #    `prefer` 가 **서버가 거부하면 조용히 평문으로** 붙기 때문이다 — 로컬이 편하자고
+  #    그 기본값을 되돌리면 운영에서 암호화가 조용히 사라진다.
   #
   # ⚠️ **호스트 포트가 5433 이다**(백엔드 관례). 5432 는 로컬에 이미 Postgres 를 깔아둔
   #    사람과 충돌한다. 컨테이너 안은 표준 5432 라 컨테이너끼리는 `rawdb:5432` 로 붙는다.
@@ -282,8 +288,10 @@ services:
     ports:
       - "5433:5432"
     environment:
-      POSTGRES_DB: rawdb
-      POSTGRES_USER: ${RAW_DB_USER:-sellon}
+      # ⚠️ 키 이름이 클라이언트 쪽과 **같다** — `RAW_DB_USERNAME`(구 `RAW_DB_USER`).
+      #    이 컨테이너의 계정과 우리가 붙을 계정이 갈리면 로컬 검증이 인증 실패로만 보인다.
+      POSTGRES_DB: ${RAW_DB_NAME:-rawdb}
+      POSTGRES_USER: ${RAW_DB_USERNAME:-sellon}
       POSTGRES_PASSWORD: ${RAW_DB_PASSWORD:-sellon}
     volumes:
       - rawdb-data:/var/lib/postgresql/data
@@ -291,7 +299,7 @@ services:
       # 02 머리말 참고 — 그 파일이 곧 인프라 요청 목록이다.
       - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${RAW_DB_USER:-sellon} -d rawdb"]
+      test: ["CMD-SHELL", "pg_isready -U ${RAW_DB_USERNAME:-sellon} -d ${RAW_DB_NAME:-rawdb}"]
       interval: 10s
       timeout: 5s
       retries: 5

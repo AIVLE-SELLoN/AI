@@ -6,12 +6,20 @@ SDK는 os.environ을 직접 읽으므로, 그런 라이브러리도 .env 값을 
 os.environ에 실제로 채워 넣는 load_dotenv()가 따로 필요하다.
 """
 
+import os
 from functools import lru_cache
+from typing import Self
 
 from dotenv import load_dotenv
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
+
+RAW_DB_SSLMODES = frozenset(
+    {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
+)
+"""libpq 가 받는 `sslmode` 값 전부. 오타를 **부팅에서** 걸러 접속 시점으로 미루지 않는다."""
 
 
 class Settings(BaseSettings):
@@ -61,24 +69,125 @@ class Settings(BaseSettings):
     # 쓰는 쪽(`scripts/`)은 같은 이름의 환경변수를 직접 읽으므로 키 이름을 바꾸면
     # 양쪽이 갈린다.
     #
-    # ⚠️ **이 값은 파일 경로 전용이다 — DSN 을 넣지 말 것.**
-    #    `core/raw_db.connect_readonly()` 가 `Path(...).exists()` 를 먼저 보므로 DSN 은
-    #    `FileNotFoundError` 로 떨어진다. Postgres 로 붙일 때는 아래 `raw_db_dsn` 을 쓴다.
+    # ⚠️ **이 값은 파일 경로 전용이다 — 접속 정보를 넣지 말 것.**
+    #    `core/raw_db.connect_readonly()` 가 `Path(...).exists()` 를 먼저 보므로 접속
+    #    문자열은 `FileNotFoundError` 로 떨어진다. Postgres 는 아래 원자값을 쓴다.
     raw_db_path: str = "./data/raw.db"
 
-    # 운영 raw DB(Postgres `rawdb`) 접속 문자열. **비어 있으면 위 sqlite 파일을 쓴다.**
+    # 운영 raw DB(Postgres `rawdb`) 접속 정보. **`RAW_DB_HOST` 가 비면 위 sqlite 를 쓴다.**
+    #
+    # 🔴 **커넥션 문자열 한 벌이 아니라 원자값으로 나눠 받는다**(2026-08-18 확정).
+    #    백엔드 Spring 이 같은 Secret 을 읽고 자기 JDBC URL 을 조립하는데, 형식을 공유하면
+    #    **그쪽 드라이버 설정 하나가 우리 장애가 된다** — pgjdbc 전용 인자
+    #    (`reWriteBatchedInserts`·`currentSchema`·`prepareThreshold`·`loggerLevel`)가 URL 에
+    #    붙는 순간 libpq 가 `invalid URI query parameter` 로 접속을 거부한다(실측). 일부만
+    #    통과하는 게 더 나쁘다 — 한동안 잘 돌다가 남의 yaml 한 줄로 우리 배치가 죽는다.
+    #    → **공유하는 것은 형식이 아니라 사실이고, 조립은 각자 한다.**
     #
     # 🔴 기본값이 빈 문자열인 것이 계약이다 — 아무것도 설정하지 않은 환경(데모·팀원
-    #    로컬·테스트)은 이 키가 생기기 전과 **완전히 같은 경로**로 돈다. 값이 있을 때만
-    #    `core/raw_db.py` 가 psycopg 로 붙는다.
+    #    로컬·테스트)은 이 키들이 생기기 전과 **완전히 같은 경로**로 돈다.
     #
-    # ⚠️ 읽기 전용은 **DB 권한(GRANT)이 정본**이다(§5-2). `core/raw_db.py` 가 세션에도
-    #    read-only 를 걸지만 그건 로컬 compose 처럼 우리가 superuser 인 환경용 방어선이다.
-    #    예) postgresql://sellon_ai_ro:비밀번호@localhost:5433/rawdb
-    raw_db_dsn: str = ""
+    # ⚠️ 읽기 전용은 **DB 권한(GRANT)이 정본**이었으나, 인프라가 AI 노드에 **RW 전면 부여**로
+    #    회신했다(2026-08-18). 즉 `core/raw_db.py` 의 세션 read-only 가 이제 **유일한
+    #    방어선**이다 — 로컬 superuser 용 방어선이라던 그 줄이 운영에도 해당한다.
+    raw_db_host: str = ""
+    raw_db_port: int = 5432
+    raw_db_name: str = ""
+    raw_db_username: str = ""
+    raw_db_password: str = ""
+
+    # 🔴 **`require` 가 기본값인 것이 안전장치다 — 비우면 libpq 기본값 `prefer` 로 떨어진다.**
+    #    `prefer` 는 SSL 을 시도하다 **서버가 거부하면 평문으로 붙고 실패하지 않는다**
+    #    (실측: `pq.Conninfo.get_defaults()` → `prefer`, libpq 18). "CA 를 안 쓴다" 를
+    #    "SSL 설정을 안 한다" 로 옮기면 조용히 암호화 없이 붙는 자리다.
+    #    ⚠️ 로컬 compose 의 Postgres 는 SSL 을 안 켜므로 `RAW_DB_SSLMODE=disable` 이 필요하다.
+    #
+    # 🔴 **`sslmode` 는 우리 전용 키다 — 백엔드와 공유하지 않는다.** pgjdbc 는 `ssl=true`,
+    #    libpq 는 `sslmode=...` 로 **철자가 다르다.** 한 값을 둘이 나눠 쓰면 어느 한쪽이
+    #    반드시 틀린 값을 받는다.
+    raw_db_sslmode: str = "require"
+    # CA 번들 경로. **비워 둔다** — `verify-*` 로 올릴 때만 채운다(2026-08-18: Spring 이
+    # 이미 `require` 로 돌고 ConfigMap 에 인증서가 없어 양쪽을 맞췄다).
+    raw_db_sslrootcert: str = ""
 
     # --- 앱 ---
     log_level: str = "INFO"
+
+    @model_validator(mode="after")
+    def _check_raw_db(self) -> Self:
+        """raw DB 접속 원자값이 **서로 맞는지** 부팅에서 본다.
+
+        🔴 **왜 접속 시점이 아니라 여기인가.** 전부 재시작해도 안 낫는 설정 오류이고,
+           런타임까지 미루면 libpq 메시지가 원인을 안 알려준다. 여기서 걸리면 진입점의
+           `configure_logging_or_exit()` 이 사유 한 줄 + **exit 2** 로 끝낸다.
+
+           CA 누락이 특히 그렇다 — 가드를 우회하고 SSL 켠 Postgres 에 실제로 붙여 보면
+           libpq 는 **아무도 설정한 적 없는 경로**를 대며 죽는다(실측):
+
+               root certificate file "…/AppData/Roaming/postgresql/root.crt" does not exist
+
+           `sslrootcert` 를 비우면 libpq 가 저 기본 경로로 폴백하기 때문인데, 보안을
+           조이려고 `verify-full` 만 켠 사람에게 저 문장은 원인을 안 알려준다.
+           ⚠️ 반대로 CA 를 제대로 주면 붙는다(`verify-ca`·`verify-full` 둘 다 실측) —
+              즉 막히는 건 **설정 조합**이지 `verify-*` 자체가 아니다.
+
+        ⚠️ **`RAW_DB_HOST` 가 비어 있으면 아무것도 안 본다.** sqlite 데모·팀원 로컬·테스트가
+           이 검사에 걸리면 안 된다 — 그게 위 "설정을 안 건드리면 이전과 같다" 계약이다.
+
+        ⚠️ 비밀번호는 검사하지 않는다. 빈 값이 정상인 접속 방식이 있고(trust·`.pgpass`),
+           틀린 비밀번호는 어차피 부팅에서 알 수 없다.
+
+        ⚠️ 메시지에 **값을 싣지 않는다.** `logging_setup._describe()` 가 `loc`·`msg` 만
+           찍어서 `raw_db_password` 가 로그로 새는 것을 이미 막고 있는데, 여기서 값을
+           문장에 넣으면 그 방어선을 우회한다.
+        """
+        # 🔴 **폐기된 `RAW_DB_DSN` 이 남아 있으면 세운다 — 이게 제일 조용한 사고다.**
+        #    `extra="ignore"` 라 그 키는 **아무 말 없이 무시된다.** 그런데 직전
+        #    `.env.example` 이 이식 검증 절차로 *"RAW_DB_DSN 주석 해제 → 검증 → 다시 주석"*
+        #    을 안내했으므로 **남겨둔 사람이 반드시 있다.** 그 사람은 Postgres 를 본다고
+        #    믿으면서 sqlite 를 읽는다 — `tests/conftest.block_local_raw_db` 가 *"떠 있으면
+        #    엉뚱한 데이터로 통과한다, 후자가 더 나쁘다"* 라고 적어둔 바로 그 모양이고,
+        #    이번엔 방향만 반대다.
+        #    ⚠️ 호스트 게이트 **밖**이다 — 피해자가 정확히 "원자값을 아직 안 넣은 사람" 이라
+        #       게이트 안에 두면 아무도 못 본다.
+        if os.environ.get("RAW_DB_DSN"):
+            raise ValueError(
+                "RAW_DB_DSN 은 더 이상 쓰지 않습니다 — 그대로 두면 조용히 무시되고"
+                " sqlite 를 읽습니다. RAW_DB_HOST·RAW_DB_PORT·RAW_DB_NAME·"
+                "RAW_DB_USERNAME·RAW_DB_PASSWORD 로 나눠 적고 그 줄은 지우세요"
+            )
+
+        if not self.raw_db_host:
+            return self
+
+        missing = [
+            name
+            for name, value in (
+                ("RAW_DB_NAME", self.raw_db_name),
+                ("RAW_DB_USERNAME", self.raw_db_username),
+            )
+            if not value
+        ]
+        if missing:
+            # 없으면 libpq 가 **OS 사용자 이름**으로 채운다 — 컨테이너에서는 `root` 라
+            # `database "root" does not exist` 로 죽고, 원인이 메시지에 안 드러난다.
+            raise ValueError(
+                f"RAW_DB_HOST 를 설정했으면 {'·'.join(missing)} 도 있어야 합니다"
+            )
+
+        if self.raw_db_sslmode not in RAW_DB_SSLMODES:
+            raise ValueError(
+                "RAW_DB_SSLMODE 가 libpq 값이 아닙니다"
+                f" (가능: {', '.join(sorted(RAW_DB_SSLMODES))})"
+            )
+
+        if self.raw_db_sslmode.startswith("verify-") and not self.raw_db_sslrootcert:
+            raise ValueError(
+                f"RAW_DB_SSLMODE={self.raw_db_sslmode} 는 CA 번들이 필요합니다 —"
+                " RAW_DB_SSLROOTCERT 를 채우거나 sslmode 를 require 로 두세요"
+            )
+
+        return self
 
 
 @lru_cache
