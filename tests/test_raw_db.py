@@ -185,7 +185,7 @@ def test_translate_placeholders(sql, expected):
 def test_null_safe_comparison_spelling_works_on_sqlite():
     """🔴 `IS NOT DISTINCT FROM` 이 sqlite 에서도 `IS` 와 같은 뜻이어야 한다.
 
-    두 방언의 교집합이라 이 철자 하나로 쓰는데, **sqlite 3.39 미만이면 구문 오류**다.
+    sqlite·Postgres 양쪽에서 같은 뜻이라 이 철자 하나로 쓰는데, **sqlite 3.39 미만이면 구문 오류**다.
     그 환경에서는 탐지 배치와 분류 워커가 통째로 못 돈다 — 팀원 로컬마다 파이썬이
     다르므로 "내 PC 에서 되니까" 로 넘길 수 없어 테스트로 잠근다.
     (호스트 3.49 · 런타임 이미지 python:3.12-slim 3.46 실측, 2026-08-16)

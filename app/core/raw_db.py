@@ -26,13 +26,14 @@ AI 노드는 원본 DB 에 **읽기 권한만** 있다(「Raw DB 스키마 확�
    `sqlite3.Row` 의 위치 접근이 전부 래퍼를 통과해야 한다. **1단계의 조건이 "데모를
    안 건드린다" 이므로** 이식은 새 경로에만 코드를 얹는다.
 
-두 백엔드에 걸친 SQL 은 아래 규칙으로 **한 벌만** 쓴다. 방언이 갈리는 자리는 여기 셋뿐이다:
+두 백엔드에 걸친 SQL 은 아래 규칙으로 **한 벌만** 쓴다. sqlite 와 Postgres 는
+문법이 다른 곳이 여기 셋뿐이라, 나머지 코드는 어느 DB 인지 몰라도 된다:
   1. **바인딩은 `?`** — Postgres 래퍼가 `%s` 로 옮긴다(`translate_placeholders`).
   2. **널 안전 비교는 `IS NOT DISTINCT FROM`** — sqlite 의 `IS` 와 같은 뜻이고 3.39+
      에서 이 철자를 그대로 받는다(호스트 3.49 · 이미지 3.46 실측). Postgres 는 `IS` 를
      널 안전 비교로 안 쓰므로 이쪽 철자가 유일한 교집합이다.
   3. **스키마 조회(`PRAGMA`·`sqlite_master` ↔ `information_schema`)는 이 모듈의
-     `table_columns()`·`existing_tables()` 를 쓴다** — 호출부에 방언을 흘리지 않는다.
+     `table_columns()`·`existing_tables()` 를 쓴다** — 여기서 갈라 준다.
 """
 
 from __future__ import annotations
@@ -117,7 +118,7 @@ RawDbConnection = sqlite3.Connection | PostgresConnection
 
 
 def dialect_of(conn: RawDbConnection) -> str:
-    """이 연결이 어느 방언인지. `SQLITE` / `POSTGRES`."""
+    """이 연결이 어느 DB 인지. `SQLITE` / `POSTGRES`."""
     return getattr(conn, "dialect", SQLITE)
 
 
@@ -210,7 +211,7 @@ def describe_target(db_path: str | None = None, *, dsn: str | None = None) -> st
 
 # ── 스키마 조회 ──────────────────────────────────────────────────────────────
 #
-# 두 방언이 완전히 다른 자리다(`PRAGMA`·`sqlite_master` ↔ `information_schema`).
+# 두 DB 의 문법이 완전히 다른 자리다(`PRAGMA`·`sqlite_master` ↔ `information_schema`).
 # 가드(`daily._require_classified_tables` · `raw_schema.find_legacy_tables`)가 이걸
 # 직접 쓰면 Postgres 에서 **가드 자신이 구문 오류로 죽는다** — 스키마가 멀쩡한지
 # 확인하려던 코드가 먼저 터지는 모양이라, 원인이 메시지에 안 드러난다.

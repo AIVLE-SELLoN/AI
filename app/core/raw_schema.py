@@ -30,7 +30,7 @@
    **문서와 인프라에 요청**해야 한다(§2-6 의 `UNIQUE (item_id, aspect)` 가 그 경우다).
    로컬 Postgres 스키마는 `docker/postgres/init/01_schema.sql` 이 세운다.
 
-⚠️ sqlite 방언을 피해 표준 SQL 범위로 유지한다. 시각은 전부 **오프셋이 붙은 ISO 문자열**로
+⚠️ sqlite 전용 문법을 피해 표준 SQL 범위로 유지한다. 시각은 전부 **오프셋이 붙은 ISO 문자열**로
    넣는다 — §3 이 날짜 경계를 Asia/Seoul 로 못박았는데, 오프셋 없이 넣으면 TIMESTAMPTZ 인
    운영 컬럼으로 옮길 때 어느 지역 시각인지 알 수 없어 하루가 밀린다.
 """
@@ -219,11 +219,11 @@ def active_version_predicate(alias: str = "ci") -> str:
        확실히 옛것인 행들이 하필 안 잡히는 형태다. null-safe 는 NULL 을 포함해 항상
        0/1 을 돌려주므로 `NOT (...)` 로 뒤집어도 정확하다(워커의 stale 조회가 그렇게 쓴다).
 
-    🔴 **철자가 `IS` 가 아니라 `IS NOT DISTINCT FROM` 인 이유 — 두 방언의 교집합이다.**
+    🔴 **철자가 `IS` 가 아니라 `IS NOT DISTINCT FROM` 인 이유 — 양쪽에서 같은 뜻인 유일한 철자다.**
        sqlite 는 `IS` 를 null-safe 비교로 쓰지만 **Postgres 는 안 그렇다**(거기서 `IS` 는
        `IS NULL`·`IS TRUE` 계열 전용이라 `x IS ?` 는 구문 오류다). 반대로 sqlite 도 3.39+
        부터 `IS NOT DISTINCT FROM` 을 `IS` 의 별칭으로 받는다(호스트 3.49 · 런타임 이미지
-       3.46 실측). 그래서 이 철자 하나로 양쪽이 같은 뜻이 되고, **방언 분기도 파라미터
+       3.46 실측). 그래서 이 철자 하나로 양쪽이 같은 뜻이 되고, **DB 별로 갈라 쓰는 코드도 파라미터
        개수 변화도 없다** — `version_params()` 의 순서 계약이 그대로 유지된다.
        `(a = b OR (a IS NULL AND b IS NULL))` 로 풀어쓰는 방식은 `?` 가 두 배로 늘어
        그 계약을 깨므로 쓰지 않는다.
@@ -439,7 +439,7 @@ def find_legacy_tables(conn) -> list[str]:
     정상 상태다. "있는데 컬럼이 옛것"인 경우만 골라낸다.
 
     ⚠️ 컬럼 조회를 `raw_db.table_columns()` 에 맡긴다 — sqlite 는 `PRAGMA table_info`,
-       Postgres 는 `information_schema.columns` 로 방언이 완전히 갈리는 자리다. 여기서
+       Postgres 는 `information_schema.columns` 로 문법이 완전히 갈리는 자리다. 여기서
        `PRAGMA` 를 직접 쓰면 **Postgres 에서 이 가드 자신이 구문 오류로 죽는다**(스키마가
        멀쩡한지 보려던 코드가 먼저 터지는 모양이라 원인이 메시지에 안 드러난다).
     """

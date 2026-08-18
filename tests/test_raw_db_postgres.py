@@ -10,7 +10,7 @@
     RAW_DB_TEST_DSN=postgresql://sellon:sellon@localhost:5433/rawdb pytest tests/test_raw_db_postgres.py
 
 여기서 잠그는 것은 **sqlite 에서는 원리적으로 못 잡는 것들**이다. 넷 다 조회는 성공한
-뒤에 터지거나 조용히 틀리는 종류라, 방언 분기를 되돌려도 나머지 테스트는 전부 초록이다:
+뒤에 터지거나 조용히 틀리는 종류라, DB 별 분기를 되돌려도 나머지 테스트는 전부 초록이다:
   1. `?` 바인딩이 `%s` 로 옮겨진다                (안 옮기면 `ProgrammingError`)
   2. `IS NOT DISTINCT FROM` 이 Postgres 에서도 널 안전 비교다 (`IS` 면 구문 오류)
   3. 스키마 가드가 `information_schema` 로 돈다   (`PRAGMA`·`sqlite_master` 면 죽는다)
