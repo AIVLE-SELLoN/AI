@@ -44,10 +44,15 @@ def _describe(exc: ValueError) -> str:
        가 있어서, 그 값이 검증에 걸리는 날 **비밀값이 로그로 나간다.** 같은 이유로
        `str(exc)` 전체를 이어붙이는 것도 안 된다 — 거기엔 `input_value='abc'` 가 들어
        있다. `loc` 과 `msg` 만으로도 "어느 키가 왜 틀렸는지" 는 다 나온다.
+
+    ⚠️ **`loc` 이 비는 경우가 있다 — `model_validator` 는 필드 하나에 안 매인다.**
+       (`raw_db` 원자값 조합 검사가 그렇다.) 그때 `loc` 을 그대로 붙이면 `": 사유"` 처럼
+       **빈 접두어**가 남아 사람이 읽다 멈칫한다. 그런 검사는 메시지 자체가 키 이름을
+       담고 있으므로 접두어를 아예 뺀다.
     """
     if isinstance(exc, ValidationError):
         parts = [
-            f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}"
+            f"{loc}: {err['msg']}" if (loc := ".".join(str(p) for p in err["loc"])) else err["msg"]
             for err in exc.errors()
         ]
         if parts:

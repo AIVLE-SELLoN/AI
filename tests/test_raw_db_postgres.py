@@ -7,7 +7,17 @@
 절차로 남는다.
 
     docker compose up -d rawdb
-    RAW_DB_TEST_DSN=postgresql://sellon:sellon@localhost:5433/rawdb pytest tests/test_raw_db_postgres.py
+    RAW_DB_TEST_DSN="postgresql://sellon:sellon@localhost:5433/rawdb?sslmode=disable" \
+        pytest tests/test_raw_db_postgres.py
+
+⚠️ **`sslmode=disable` 을 붙인다.** compose 의 Postgres 는 SSL 을 안 켜는데 우리 기본값이
+   `require` 라, 안 붙이면 접속 자체가 거부된다. 운영 기본값을 로컬 편의로 되돌리지 않으려고
+   여기서 명시하는 쪽을 골랐다(`config.raw_db_sslmode` 주석 참고).
+
+⚠️ **`RAW_DB_TEST_DSN` 만 단일 문자열이다.** 운영 경로는 원자값 5개를 우리가 조립하는데
+   (`raw_db.conninfo_from_settings`), 이 키는 `.env` 에 안 들어가는 테스트 게이트라 운영
+   경로와 섞이지 않는다. 아래 `pg` 픽스처가 psycopg 로 파싱해 **원자값으로 되돌려** 넣으므로
+   실연결 검증이 조립 경로를 그대로 통과한다 — 게이트만 우회하면 그 경로가 안 걸린다.
 
 여기서 잠그는 것은 **sqlite 에서는 원리적으로 못 잡는 것들**이다. 넷 다 조회는 성공한
 뒤에 터지거나 조용히 틀리는 종류라, DB 별 분기를 되돌려도 나머지 테스트는 전부 초록이다:
@@ -86,15 +96,39 @@ def _alert(inquiry_ids: list[str]) -> DetectionAlert:
 
 @pytest.fixture
 def pg(monkeypatch):
-    """`RAW_DB_DSN` 을 Postgres 로 돌리고 표식 행을 심는다. 끝나면 지운다.
+    """접속 원자값을 Postgres 로 돌리고 표식 행을 심는다. 끝나면 지운다.
+
+    🔴 **게이트 DSN 을 원자값으로 되돌려 넣는다 — `dsn=` 로 우회하지 않는다.** 우회하면
+       `conninfo_from_settings()` 조립 경로가 **실연결 검증을 통째로 안 탄다.** 값이
+       빠지거나 `sslmode` 가 안 실리는 회귀가 여기서도 안 걸리면, sqlite 에서도 안 걸리니
+       아무 데서도 안 걸린다. 파싱은 psycopg 에 맡긴다(우리 게이트 문자열이라 남의 형식을
+       파싱하는 것과 다르다).
 
     ⚠️ **별도 연결로 심는다.** 우리 조회 연결은 읽기 전용이라 자기 자신으로는 못 넣고,
        심는 트랜잭션이 열려 있으면 다른 연결에서 안 보이므로 commit 까지 해야 한다.
     """
     import psycopg
+    from psycopg.conninfo import conninfo_to_dict
 
     settings = get_settings()
-    monkeypatch.setattr(settings, "raw_db_dsn", DSN, raising=False)
+    atoms = conninfo_to_dict(DSN)
+    # `monkeypatch.setattr` 은 pydantic 검증을 안 거치므로 타입을 여기서 맞춘다 —
+    # 문자열 포트로도 붙기는 하지만, 필드 타입과 어긋난 채로 두면 다음 사람이 헷갈린다.
+    atoms["port"] = int(atoms["port"]) if atoms.get("port") else None
+    for field, key, default in (
+        ("raw_db_host", "host", "localhost"),
+        ("raw_db_port", "port", 5432),
+        ("raw_db_name", "dbname", "rawdb"),
+        ("raw_db_username", "user", ""),
+        ("raw_db_password", "password", ""),
+        # compose 는 SSL 을 안 켠다 — 게이트 DSN 이 지정하지 않으면 기본값 require 로
+        # 붙었다가 거부당한다. 그 실패는 "이식이 깨졌다" 처럼 보인다.
+        ("raw_db_sslmode", "sslmode", "disable"),
+    ):
+        # `raising=True`(기본)로 둔다 — 필드명이 바뀌면 여기서 터지는 게 맞다. False 면
+        # 오타가 조용히 새 속성을 만들고, 접속은 **빈 계정**으로 시도돼 인증 실패로만 보인다
+        # (`tests/conftest.block_local_raw_db` 와 같은 사유).
+        monkeypatch.setattr(settings, field, atoms.get(key) or default)
 
     versions = (PROMPT_ASPECT_VERSION, settings.llm_model, CLASSIFIER_PIPELINE_VERSION)
     review_versions = (

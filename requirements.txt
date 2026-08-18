@@ -82,7 +82,7 @@ aiormq>=6.8,<7
 pamqp>=3.3,<4
 
 # --- raw DB (운영 Postgres `rawdb`) ---
-# app/core/raw_db.py 가 **함수 안에서** import 한다 — `RAW_DB_DSN` 이 비어 있으면
+# app/core/raw_db.py 가 **함수 안에서** import 한다 — `RAW_DB_HOST` 가 비어 있으면
 # (기본값·데모·테스트) sqlite 로 가므로 이 패키지가 없어도 전부 돌아야 한다.
 # aio-pika·boto3 를 함수 안에서 import 하는 것과 같은 규율이다.
 #
