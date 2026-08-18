@@ -2,7 +2,8 @@
 #
 # 🔴 **시크릿·브로커·LLM 이 하나도 필요 없다.** 테스트가 LLM 호출을 전부 monkeypatch 로
 #    대체하고(`tests/`), MQ 테스트는 파일 첫 줄에 "브로커 없이 돈다" 라고 적혀 있다.
-#    그래서 이 워크플로는 포크 PR 에서도 그대로 돈다.
+#    그래서 이 워크플로는 포크 PR 에서도 그대로 돈다. 아래 Postgres 서비스도 예외가
+#    아니다 — 러너가 띄우는 빈 컨테이너라 시크릿도, 외부 접속도 없다.
 #
 # ⚠️ `eval/` 은 **절대 넣지 않는다.** LLM 과금이 발생하고 수십 분이 걸린다
 #    (`eval/README.md`: "사람이 수동으로 실행한다. CI 에 넣지 말 것").
@@ -29,6 +30,45 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
+    # 🔴 **Postgres 게이트 테스트를 실제로 돌리려고 띄운다.** 없으면
+    #    `tests/test_raw_db_postgres.py` · `tests/test_raw_db_postgres_write.py` 가
+    #    `RAW_DB_TEST_DSN` 이 비어 통째로 skip 된다 — sqlite 판이 전부 초록이어도
+    #    Postgres 방언(`%s` 바인딩 · `IS NOT DISTINCT FROM` · `information_schema` ·
+    #    TIMESTAMPTZ · 우리 DDL 자체)은 **한 번도 안 돈 채로** 머지된다.
+    #
+    # ⚠️ **16 을 고정한다.** 운영 Postgres 가 16 으로 확정됐고(인프라 민준, 2026-08-18)
+    #    `docker-compose.yml` 의 `rawdb` 도 같은 이미지다. 셋이 갈리면 로컬에서 본 것이
+    #    CI·운영에서 같다는 근거가 사라진다.
+    #
+    # ⚠️ 호스트 포트를 **5433** 으로 맞춘다(컨테이너 안은 표준 5432). compose 와 같은
+    #    번호라 게이트 테스트 docstring 의 DSN 을 그대로 쓸 수 있고, 러너에 미리 깔린
+    #    Postgres 와도 안 부딪힌다.
+    services:
+      rawdb:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: rawdb
+          POSTGRES_USER: sellon
+          POSTGRES_PASSWORD: sellon
+        ports:
+          - 5433:5432
+        # 헬스체크가 통과할 때까지 러너가 스텝 시작을 미룬다. 없으면 첫 psql 이
+        # "아직 부팅 중" 으로 죽는다.
+        options: >-
+          --health-cmd "pg_isready -U sellon -d rawdb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    # 🔴 **`sslmode=disable` 이 필수다.** 이 이미지는 SSL 을 안 켜는데 우리 운영 기본값은
+    #    `require` 라(`config.raw_db_sslmode`), 빼면 접속이 **거부**된다. 그 실패는
+    #    로그상 "이식이 깨졌다" 처럼 보여서 엉뚱한 데를 파게 된다.
+    #
+    # ⚠️ 이 키는 **게이트 전용**이라 운영 경로(원자값 5개 조립)와 섞이지 않는다. 픽스처가
+    #    psycopg 로 파싱해 원자값으로 되돌려 넣으므로 조립 경로도 같이 검증된다.
+    env:
+      RAW_DB_TEST_DSN: postgresql://sellon:sellon@localhost:5433/rawdb?sslmode=disable
+
     steps:
       - uses: actions/checkout@v7
 
@@ -45,11 +85,57 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # 빈 컨테이너라 테이블이 하나도 없다. compose 가 볼륨 초기화 때 한 번 돌리는 것과
+      # **같은 두 파일**을 여기서 적용한다 — 로컬과 CI 가 다른 스키마를 보면 게이트가
+      # 잡는 것도 달라진다.
+      #
+      # ⚠️ `01` 은 main server 소유(노션 DDL 전문), `02` 는 AI 소유 읽기 모델이다.
+      #    `02` 를 빼면 조회 게이트(`test_raw_db_postgres.py`)가 통합 뷰를 못 찾는다 —
+      #    그쪽은 조회만 해서 스키마를 안 만든다.
+      #
+      # ⚠️ **`psql` 이 아니라 psycopg 로 적용한다.** 러너 이미지에 psql 이 깔려 있다는
+      #    가정을 안 두려는 것이다 — psycopg 는 바로 위 스텝이 `requirements.txt`
+      #    (`psycopg[binary]==3.3.4`)로 방금 깔았으므로 있는 것이 보장되고, 로컬에서
+      #    같은 postgres:16-alpine 상대로 이 경로 그대로 검증했다(2026-08-18).
+      #    오류는 예외로 올라와 스텝이 죽는다 — psql 의 `ON_ERROR_STOP=1` 자리를 대신한다.
+      - name: raw DB 스키마 적재
+        run: |
+          python - <<'PY'
+          import os, pathlib, psycopg
+
+          FILES = (
+              "docker/postgres/init/01_schema.sql",       # main server 소유 (노션 DDL 전문)
+              "docker/postgres/init/02_ai_read_model.sql",  # AI 소유 읽기 모델 (뷰·UNIQUE·인덱스)
+          )
+          with psycopg.connect(os.environ["RAW_DB_TEST_DSN"], autocommit=True) as conn:
+              for f in FILES:
+                  conn.execute(pathlib.Path(f).read_text(encoding="utf-8"))
+                  print(f"적용: {f}")
+              n = conn.execute(
+                  "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"
+              ).fetchone()[0]
+
+          # 찍고 끝내지 않고 **단언한다.** 스키마가 반쯤 서면 게이트가 "이식이 깨졌다" 로
+          # 빨개져서 원인을 엉뚱한 데서 찾게 된다.
+          print(f"public 스키마 테이블+뷰: {n} (기대 11 = 테이블 10 + voc_document 뷰)")
+          if n != 11:
+              raise SystemExit(f"::error::raw DB 스키마 적재가 불완전합니다 ({n} != 11)")
+          PY
+
       # ⚠️ `data/**` 는 gitignore 라 CI 에 없다. 정본 데이터를 요구하는 테스트는
       #    `skipif` 로 스스로 빠진다(예: test_real_golden_mapping_converts_and_matches_catalog).
-      #    **CI 가 찍는 값은 925 passed / 6 skipped 다** — `data/` 가 있는 로컬은
-      #    926 passed / 5 skipped 로 그 하나가 통과 쪽으로 넘어간다(2026-08-18 실측,
-      #    main `58cbffd` 병합 기준). 수치를 대조할 땐 로컬 값이 아니라 위 CI 값을 본다.
+      #    **CI 가 찍는 값은 962 passed / 1 skipped 다** — `data/` 가 있는 로컬은 그 하나가
+      #    통과 쪽으로 넘어가 963 passed / 0 skipped 가 된다(2026-08-18 실측, main
+      #    `3c03d58` 병합 기준). 수치를 대조할 땐 로컬 값이 아니라 위 CI 값을 본다.
+      #    위 Postgres 서비스가 없으면 게이트 두 파일 **15개가 통째로 skip** 된다.
+      #
+      # 🔴 **병렬 실행(-n) 을 붙이지 않는다.** Postgres 게이트 두 파일이 같은 DB 를 쓰는데,
+      #    `test_raw_db_postgres_write.py` 의 픽스처가 AI 소유 4개 테이블과 뷰를 **지우고
+      #    우리 DDL 로 다시 세운다**(그래야 `CREATE TABLE IF NOT EXISTS` 가 건너뛰지 않아
+      #    검증 대상이 실제로 돈다). 그 사이 `test_raw_db_postgres.py` 가 다른 워커에서
+      #    조회하면 테이블이 없는 순간을 밟는다 — 코드가 아니라 **실행 배치 때문에** 빨개진다.
+      #    지금은 xdist 를 안 쓰므로 한 프로세스에서 순차로 돈다. 붙일 일이 생기면 두 파일을
+      #    같은 워커로 묶을 것(`--dist loadfile` 등).
       - name: pytest
         run: pytest -q
 

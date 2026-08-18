@@ -34,6 +34,19 @@ concurrency:
   group: image-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# 🔴 **이 레포지토리는 public 이다 — 확인하고 그렇게 두기로 한 것이다(2026-08-18 결정).**
+#    노션 §7-3 의 초기 결정은 private 이었으나, private 으로 돌리면 EKS 에
+#    `imagePullSecret` 이 필요해 인프라와 묶이는 비용이 있어 public 을 유지한다.
+#    따라서 **main 에 push 되는 매 이미지가 공개 pull 대상**이다. 들어가는 것과 아닌 것:
+#      · 안 들어감 — 시크릿(이미지에 `.env` 를 COPY 하지 않는다) · `data/` · `data/golden/`
+#      · 들어감  — `app/**/prompts/` · `scripts/prompts/` 의 프롬프트 32개
+#    프롬프트를 비공개로 돌려야 할 사유가 생기면 그때 인프라와 같이 정한다. **모르고 열린
+#    것이 아니므로 이 줄을 근거로 슬쩍 되돌리지 말 것** — 되돌리려면 배포 쪽이 같이 바뀐다.
+#
+# ⚠️ **`secrets.DOCKERHUB_TOKEN` 은 2026-09-15 에 만료된다 — 알고 그 기간으로 끊었다.**
+#    그날 이후 main push 는 로그인 스텝에서 인증 실패로 죽는다(빌드·스모크는 그 전에 끝나
+#    있으므로 실패 지점이 명확하다). 만료 전에 Docker Hub 에서 토큰을 새로 발급해
+#    레포 시크릿을 갈아끼울 것.
 env:
   IMAGE: y0njunch0i/sellon-ai-node
 
