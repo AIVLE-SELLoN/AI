@@ -17,6 +17,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -270,7 +271,12 @@ def test_naive_timestamp_is_kst_even_on_a_utc_host():
 
 
 def test_unmapped_product_is_dropped_with_a_warning(tmp_path, caplog):
-    """상품매핑이 안 붙은 원문은 어느 상품의 분모인지 모른다 — 세지 않고 건수만 남긴다."""
+    """상품매핑이 안 붙은 원문은 어느 상품의 분모인지 모른다 — 세지 않고 건수만 남긴다.
+
+    ⚠️ 수집기(`dropped=`)를 같이 본다. **경고와 수집기는 같은 사실의 두 출구**라
+       한쪽만 잠그면 나머지가 조용히 빠진다 — 실제로 이 카운터는 오랫동안 경고 로그로만
+       나갔고, 아무도 CronJob 로그를 안 봐서 미매핑이 늘어도 몰랐다.
+    """
     db = _db(
         tmp_path,
         cs_rows=[
@@ -279,10 +285,31 @@ def test_unmapped_product_is_dropped_with_a_warning(tmp_path, caplog):
         ],
     )
 
-    _, documents = daily.load_inputs_from_db(WINDOW_END, db_path=db)
+    dropped: Counter[str] = Counter()
+    _, documents = daily.load_inputs_from_db(WINDOW_END, db_path=db, dropped=dropped)
 
     assert [d["id"] for d in documents] == ["INQ-2"]
     assert any("상품매핑 없음" in r.getMessage() for r in caplog.records)
+    assert dropped == Counter({"상품매핑 없음": 1})
+
+
+def test_public_loader_contract_stays_a_pair(tmp_path):
+    """🔴 공개 로더는 **2-tuple 을 유지한다** — 수집기를 안 줘도 형태가 안 바뀐다.
+
+    같은 seam 의 반대쪽(`scripts/golden_inputs.load_golden_inputs`)과 시그니처가 맞아야
+    하고, `(items, documents)` 로 언패킹하는 호출부가 저장소에 9곳 있다
+    (`scripts/detection_experiments/` 7 · `eval/` 1 · Postgres 게이트 1). 그중 실험
+    스크립트에는 **테스트가 없어서**, 여기서 3-tuple 로 늘리면 아무 데서도 안 걸리고
+    실행 시점에야 `too many values to unpack` 으로 터진다.
+    """
+    db = _db(tmp_path, cs_rows=[("INQ-1", "P001", "COUPANG", "정상", _at(WINDOW_END))])
+
+    result = daily.load_inputs_from_db(WINDOW_END, db_path=db)
+
+    assert len(result) == 2
+    items, documents = result
+    assert [d["id"] for d in documents] == ["INQ-1"]
+    assert items == []
 
 
 def test_source_only_db_fails_loudly(tmp_path):
@@ -636,3 +663,35 @@ async def test_batch_runs_end_to_end_on_the_db_loader(tmp_path, monkeypatch):
     assert summary["documents"] == 1
     assert summary["items"] == 1
     assert summary["input_source"] == "load_inputs_from_db"
+    # 버린 게 없으면 **빈 dict** 다 — `None`("보고 안 함")과 다른 값이다.
+    assert summary["input_dropped"] == {}
+
+
+@pytest.mark.asyncio
+async def test_batch_summary_reports_dropped_inputs(tmp_path, monkeypatch):
+    """🔴 미매핑 건수가 **배치 요약과 화면까지** 간다.
+
+    로더가 세는 것만으로는 절반이다 — 지금까지도 세고는 있었고 `logger.warning` 으로만
+    나갔다. **CronJob 로그는 아무도 안 본다**(이 저장소가 반복해서 전제해 온 사실)라,
+    운영에서 상류 매핑이 밀려도 조용했다. 배선이 빠지면 그 상태로 돌아간다.
+
+    ⚠️ 종료코드는 **안 건드린다**. 미매핑은 상류의 데이터 갭이지 우리 고장이 아니고,
+       재매핑은 사람이 손으로 하는 흐름이라 배치를 세워도 할 수 있는 게 없다.
+    """
+    db = _db(
+        tmp_path,
+        cs_rows=[
+            ("INQ-1", "P001", "COUPANG", "색이 달라요", _at(WINDOW_END)),
+            ("INQ-2", None, "COUPANG", "매핑 없음", _at(WINDOW_END)),
+            ("INQ-3", "", "NAVER", "매핑 없음", _at(WINDOW_END)),
+        ],
+        classified=[("INQ-1", "cs", [("색상", -1)])],
+    )
+    monkeypatch.setattr(daily.get_settings(), "raw_db_path", db, raising=False)
+
+    summary = await daily.run_batch(
+        window_end=WINDOW_END, dry_run=True, state_path=tmp_path / "state.json"
+    )
+
+    assert summary["input_dropped"] == {"상품매핑 없음": 2}
+    assert summary["documents"] == 1, "버린 원문이 분모에 남아 있습니다"
