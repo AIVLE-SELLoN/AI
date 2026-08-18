@@ -111,7 +111,7 @@ async def test_classify_cause_uses_dedicated_cause_model(monkeypatch):
     fake_client = _FakeClient(payload)
     requested_models: list[str | None] = []
     settings = get_settings()
-    monkeypatch.setattr(settings, "cause_llm_model", "gpt-4o")
+    monkeypatch.setattr(settings, "cause_llm_model", "sentinel-cause-model")
 
     def fake_get_llm_client(*, model=None):
         requested_models.append(model)
@@ -123,7 +123,7 @@ async def test_classify_cause_uses_dedicated_cause_model(monkeypatch):
         "색상", [{"cs_id": "a1", "raw_text": "사진이랑 색이 달라요"}]
     )
 
-    assert requested_models == ["gpt-4o"]
+    assert requested_models == ["sentinel-cause-model"]
 
 
 @pytest.mark.asyncio

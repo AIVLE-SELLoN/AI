@@ -1,9 +1,11 @@
 """평가 도구의 무응답·캐시 누락 회귀 테스트. LLM 실호출 없음."""
 
 import asyncio
+import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -82,3 +84,37 @@ def test_cause_eval_main_exits_nonzero_when_a_batch_failed(monkeypatch):
         cause_eval.main()
 
     assert exc_info.value.code == 1
+
+
+def test_cause_eval_records_dedicated_model_in_result_meta(monkeypatch, tmp_path):
+    """실험⑥ 산출물이 기본 모델이 아니라 실제 원인분류 모델을 기록한다."""
+    settings = SimpleNamespace(
+        llm_model="sentinel-default-model",
+        cause_llm_model="sentinel-cause-model",
+    )
+
+    async def fake_run_batches(_rows, _batch_size, _concurrency):
+        return {}, []
+
+    monkeypatch.setattr(cause_eval, "get_settings", lambda: settings)
+    monkeypatch.setattr(cause_eval, "load_dataset", lambda _path: [])
+    monkeypatch.setattr(cause_eval, "run_batches", fake_run_batches)
+    monkeypatch.setattr(cause_eval, "score", lambda _rows, _predictions: {})
+    monkeypatch.setattr(cause_eval, "report", lambda _result: None)
+    monkeypatch.setattr(cause_eval, "RESULTS_DIR", tmp_path)
+
+    args = SimpleNamespace(
+        golden="golden.csv",
+        limit=0,
+        seed=42,
+        dry_run=False,
+        batch_size=20,
+        concurrency=1,
+        prompt_version="classify_cause_v1",
+    )
+    assert asyncio.run(cause_eval.main_async(args)) == 0
+
+    outputs = list(tmp_path.glob("cause_eval_*.json"))
+    assert len(outputs) == 1
+    result = json.loads(outputs[0].read_text(encoding="utf-8"))
+    assert result["meta"]["model"] == "sentinel-cause-model"

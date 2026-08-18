@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.core import llm_client
 from app.core.exceptions import LlmParseError
 from app.core.llm_client import LlmClient
@@ -42,17 +42,23 @@ def test_get_llm_client_keeps_default_and_explicit_models_separate(monkeypatch):
     monkeypatch.setattr(settings, "llm_model", "gpt-4o-mini")
     monkeypatch.setattr(llm_client, "AsyncOpenAI", lambda **_kwargs: object())
     monkeypatch.setattr(llm_client, "wrap_openai", lambda client: client)
-    llm_client.get_llm_client.cache_clear()
+    llm_client._get_llm_client_for_model.cache_clear()
 
-    default_client = llm_client.get_llm_client()
-    cause_client = llm_client.get_llm_client(model="gpt-4o")
+    try:
+        default_client = llm_client.get_llm_client()
+        cause_client = llm_client.get_llm_client(model="sentinel-cause-model")
 
-    assert default_client._model == "gpt-4o-mini"
-    assert cause_client._model == "gpt-4o"
-    assert default_client is llm_client.get_llm_client()
-    assert cause_client is llm_client.get_llm_client(model="gpt-4o")
+        assert default_client._model == "gpt-4o-mini"
+        assert cause_client._model == "sentinel-cause-model"
+        assert default_client is llm_client.get_llm_client(model="gpt-4o-mini")
+        assert cause_client is llm_client.get_llm_client(model="sentinel-cause-model")
+    finally:
+        llm_client._get_llm_client_for_model.cache_clear()
 
-    llm_client.get_llm_client.cache_clear()
+
+def test_cause_llm_model_default_is_gpt_4o():
+    """실험⑥으로 확정한 원인분류 기본 모델이 조용히 낮아지는 회귀를 막는다."""
+    assert Settings.model_fields["cause_llm_model"].default == "gpt-4o"
 
 
 @pytest.mark.asyncio

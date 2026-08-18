@@ -226,6 +226,16 @@ class LlmClient:
 
 
 @lru_cache
+def _get_llm_client_for_model(model: str) -> LlmClient:
+    """정규화된 모델명별 클라이언트와 커넥션 풀을 재사용한다."""
+    settings = get_settings()
+    client = AsyncOpenAI(
+        api_key=settings.llm_api_key,
+        timeout=settings.llm_timeout_seconds,
+    )
+    return LlmClient(wrap_openai(client), model)
+
+
 def get_llm_client(*, model: str | None = None) -> LlmClient:
     """모델별 공용 클라이언트. 같은 모델은 프로세스 안에서 재사용한다.
 
@@ -237,9 +247,5 @@ def get_llm_client(*, model: str | None = None) -> LlmClient:
     설정 안 돼 있으면 그냥 조용히 추적 없이 평소대로 동작한다(에러 안 남).
     """
     settings = get_settings()
-    selected_model = model or settings.llm_model
-    client = AsyncOpenAI(
-        api_key=settings.llm_api_key,
-        timeout=settings.llm_timeout_seconds,
-    )
-    return LlmClient(wrap_openai(client), selected_model)
+    selected_model = settings.llm_model if model is None else model
+    return _get_llm_client_for_model(selected_model)
