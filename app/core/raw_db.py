@@ -1,12 +1,22 @@
-"""raw DB(`cs`·`reviews`·`classified_item`) 읽기 연결. **읽는 쪽 공용.**
+"""raw DB(`cs`·`reviews`·`classified_item`) 연결. **읽는 쪽·쓰는 쪽 공용.**
 
-AI 노드는 원본 DB 에 **읽기 권한만** 있다(「Raw DB 스키마 확정 (8/7)」 §5-2 — 쓰기는
-분류 워커의 `classified_item` 계열뿐이고, 서비스 DB 는 main server 단독 소유다).
+AI 노드가 **쓰는** 것은 자기 소유 4개(`classified_item`·`classified_item_aspect`·
+`classification_failure`·`classification_cursor`)뿐이고, 원문(`cs`·`reviews`)과 카탈로그는
+main server 소유라 읽기만 한다(「Raw DB 스키마 확정 (8/7)」 §1·§5-2).
+
+🔴 **그 경계를 이제 DB 가 안 지켜 준다.** 인프라가 *"모든 테이블에 대한 RW 권한을 기능마다
+   따로 부여할 순 없다"* 며 **AI 노드에 raw DB RW 전면 부여**로 회신했다(2026-08-18).
+   §5-2 의 "읽기 전용" 전제가 인프라 차원에서 사라졌으므로 남는 방어선은 코드 쪽 둘뿐이다:
+     - 읽는 쪽: `connect_readonly()` 의 세션 read-only (아래)
+     - 쓰는 쪽: **없다.** 대신 워커가 실제로 어느 테이블에 쓰는지를 테스트가 고정한다
+       (`tests/test_raw_db_write_scope.py`) — 오타 하나로 `cs`·`reviews` 에 쓰는 것을
+       DB 가 더는 안 막기 때문이다.
 
 ⚠️ 이게 `app/core/` 에 있는 이유: **읽는 쪽이 둘로 갈려 있다.** 탐지 배치
 (`app/batch/daily.py`)와 CS 원문 조회(`app/core/inquiries.py`)가 같은 파일을 여는데,
 한쪽에만 두면 나머지가 연결 문자열을 다시 적게 되고 `mode=ro` 같은 조건이 조용히
-갈린다 — `raw_schema.py` 가 core 에 있는 것과 같은 사유다.
+갈린다 — `raw_schema.py` 가 core 에 있는 것과 같은 사유다. 쓰는 쪽(`scripts/`)도 같은
+이유로 여기를 경유한다.
 
 ── 백엔드 2종 (Postgres 이식 1단계, 2026-08-16) ─────────────────────────────────
 운영 raw DB 는 **Postgres**(`rawdb`)이고 로컬·목 파이프라인은 **sqlite 파일**이다.
@@ -43,7 +53,7 @@ AI 노드는 원본 DB 에 **읽기 권한만** 있다(「Raw DB 스키마 확�
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -123,35 +133,142 @@ def translate_placeholders(sql: str) -> str:
     return "".join(out)
 
 
-class PostgresConnection:
-    """`sqlite3.Connection` 처럼 쓰는 Postgres 읽기 연결.
+def upsert_sql(
+    table: str,
+    columns: Sequence[str],
+    *,
+    conflict: Sequence[str],
+    update: Sequence[str] | None = None,
+) -> str:
+    """멱등 INSERT 문. **두 백엔드에서 글자 그대로 같다.**
 
-    호출부가 아는 것은 `execute(sql, params) -> 커서` 와 `close()` 둘뿐이다 — sqlite
-    쪽과 같은 모양이라 조회 코드가 백엔드를 몰라도 된다. 행은 컬럼명으로 읽는다
-    (`row["item_id"]`, psycopg 의 `dict_row`).
+    🔴 **`INSERT OR IGNORE` · `INSERT OR REPLACE` 는 sqlite 전용이라 못 쓴다.** Postgres 에는
+       그 문법이 없고(구문 오류), 표준 `ON CONFLICT` 는 sqlite 3.24+ 가 같은 뜻으로 받는다 —
+       그래서 갈라 쓰지 않고 이쪽 한 벌로 통일한다.
+
+    ⚠️ **`INSERT OR REPLACE` → `ON CONFLICT DO UPDATE` 는 기계적 치환이 아니다.** 앞은
+       *지우고 다시 넣는* 것이고 뒤는 *제자리 갱신*이라, 그 행을 참조하는 자식이
+       `ON DELETE CASCADE` 로 붙어 있으면 앞에서만 자식이 사라진다.
+       **우리 스키마에는 CASCADE 가 한 곳도 없어서 이 치환이 동작을 안 바꾼다** — 실측으로도
+       `PRAGMA foreign_keys=ON` 인 sqlite 에서 `mapped_data` 가 참조 중인 `products` 행을
+       두 형태로 각각 다시 넣어 보면 둘 다 성공하고 자식 행 수도 같다.
+       🔴 **CASCADE 를 새로 거는 순간 이 문장이 거짓이 된다** — 그때 다시 볼 것.
+
+    Args:
+        conflict: 충돌 판정 키(=PK 또는 유니크 조합).
+        update: 충돌 시 덮어쓸 컬럼. `None` 이면 `conflict` 를 뺀 나머지 전부,
+            **빈 시퀀스면 `DO NOTHING`**(이미 있으면 그대로 둔다).
+    """
+    placeholders = ", ".join("?" * len(columns))
+    head = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})"
+    targets = list(update) if update is not None else [c for c in columns if c not in conflict]
+    if not targets:
+        return f"{head} ON CONFLICT DO NOTHING"
+    assignments = ", ".join(f"{c} = excluded.{c}" for c in targets)
+    return f"{head} ON CONFLICT ({', '.join(conflict)}) DO UPDATE SET {assignments}"
+
+
+class RawRow:
+    """`sqlite3.Row` 와 같은 모양의 행. 위치·이름 **양쪽**으로 읽힌다.
+
+    🔴 **psycopg 기본 행 타입(`tuple`·`dict_row`)으로는 코드가 한 벌로 안 선다.**
+       저장소의 조회 코드가 두 방식을 섞어 쓴다 — 탐지·CS 원문 조회는 `row["item_id"]`
+       인데, 월간 집계는 `for aspect, sentiment, count in rows` 로 풀고 커버리지 집계는
+       `.fetchone()[0]` 을 쓴다. `dict_row` 면 앞쪽만, `tuple_row` 면 뒤쪽만 산다.
+       그런데 **`dict` 를 순회하면 값이 아니라 키가 나오므로**, 언패킹 쪽은 에러 없이
+       컬럼 **이름**을 값으로 받아 조용히 틀린다 — 제일 나쁜 실패 모양이다.
+
+       sqlite 는 `sqlite3.Row` 로 둘 다 되므로, 여기서 같은 계약을 흉내 내면 호출부를
+       한 글자도 안 바꾸고 두 백엔드가 같은 코드를 탄다.
+
+    ⚠️ 순회는 **값**을 준다(`sqlite3.Row` 와 같다). `dict(row)` 가 필요하면
+       `dict(zip(row.keys(), row))` 를 쓸 것 — `dict(row)` 는 sqlite 에서도 안 된다.
+    """
+
+    __slots__ = ("_names", "_values")
+
+    def __init__(self, names: tuple[str, ...], values: Sequence[Any]) -> None:
+        self._names = names
+        self._values = tuple(values)
+
+    def __getitem__(self, key: int | str | slice) -> Any:
+        if isinstance(key, str):
+            try:
+                return self._values[self._names.index(key)]
+            except ValueError:
+                raise IndexError(key) from None  # sqlite3.Row 와 같은 예외 타입
+        return self._values[key]
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def keys(self) -> list[str]:
+        return list(self._names)
+
+    def __repr__(self) -> str:
+        return f"RawRow({dict(zip(self._names, self._values))!r})"
+
+
+def _raw_row_factory(cursor: Any) -> Any:
+    """psycopg 행 팩토리 — 결과 행을 `RawRow` 로 만든다."""
+    description = cursor.description
+    if description is None:  # INSERT/DDL 처럼 결과 집합이 없는 문장
+        return lambda values: values
+    names = tuple(column.name for column in description)
+    return lambda values: RawRow(names, values)
+
+
+class PostgresConnection:
+    """`sqlite3.Connection` 처럼 쓰는 Postgres 연결.
+
+    호출부가 아는 것은 `execute(sql, params) -> 커서` · `executemany` · `commit` ·
+    `rollback` · `close` 다 — sqlite 쪽과 같은 모양이라 조회·적재 코드가 백엔드를 몰라도
+    된다. 행은 위치·이름 양쪽으로 읽힌다(`RawRow`).
 
     ⚠️ **execute 마다 새 커서를 만든다.** sqlite 의 `Connection.execute()` 가 그렇고,
        커서를 재사용하면 앞 결과를 다 읽기 전에 다음 질의를 돌렸을 때 조용히 결과가
        사라진다(`fetch_linked_inquiries` 가 청크마다 execute 한다).
+
+    ⚠️ **읽기 연결만 autocommit 이다.** 쓰기 연결에서 autocommit 을 켜면 워커의
+       `persist_batch()` 가 "적재 + 실패 기록 + 커서 전진을 한 트랜잭션으로" 라고 적어 둔
+       계약이 조용히 깨진다 — 중간에 죽으면 커서만 전진하고 dead-letter 가 빠져 그 건이
+       영구 유실된다.
     """
 
     dialect = POSTGRES
 
-    def __init__(self, dsn: str) -> None:
+    def __init__(self, dsn: str, *, readonly: bool = True) -> None:
         import psycopg
-        from psycopg.rows import dict_row
 
-        self._conn = psycopg.connect(dsn, autocommit=True, row_factory=dict_row)
-        # 🔴 **읽기 전용을 세션에도 건다.** 운영에서는 GRANT 가 막지만(§5-2), 로컬
-        #    compose 는 우리가 superuser 라 아무것도 안 막는다 — sqlite 쪽 `mode=ro`
-        #    가 지키던 계약①(읽는 쪽이 원문을 못 고친다)이 백엔드를 바꾸는 순간
-        #    조용히 사라지는 자리다. 위반은 `psycopg.errors.ReadOnlySqlTransaction`.
-        self._conn.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
+        self._conn = psycopg.connect(
+            dsn, autocommit=readonly, row_factory=_raw_row_factory
+        )
+        self.readonly = readonly
+        if readonly:
+            # 🔴 **읽기 전용을 세션에도 건다.** 인프라가 RW 전면 부여로 회신해(2026-08-18)
+            #    운영에서도 GRANT 가 아무것도 안 막는다 — sqlite 쪽 `mode=ro` 가 지키던
+            #    계약①(읽는 쪽이 원문을 못 고친다)이 **이 한 줄로만** 남아 있다.
+            #    위반은 `psycopg.errors.ReadOnlySqlTransaction`.
+            self._conn.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
 
     def execute(self, sql: str, params: Iterable[Any] = ()) -> Any:
         cursor = self._conn.cursor()
         cursor.execute(translate_placeholders(sql), tuple(params))
         return cursor
+
+    def executemany(self, sql: str, seq_of_params: Iterable[Iterable[Any]]) -> Any:
+        cursor = self._conn.cursor()
+        cursor.executemany(translate_placeholders(sql), [tuple(p) for p in seq_of_params])
+        return cursor
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
 
     def close(self) -> None:
         self._conn.close()
@@ -253,6 +370,123 @@ def connect_readonly(
     return conn
 
 
+def connect_readwrite(db_path: str | None = None, *, dsn: str | None = None) -> RawDbConnection:
+    """raw DB 를 **쓰기 가능**하게 연다. sqlite 파일이면 없을 때 새로 만든다.
+
+    쓰는 쪽은 목 프로듀서(main server 대역)와 분류 워커 둘이다. 읽기와 갈라 둔 이유는
+    `connect_readonly()` 가 sqlite 를 `mode=ro` 로 열고 Postgres 세션에 read-only 를
+    걸어서, 그 연결로는 적재가 아예 안 되기 때문이다.
+
+    🔴 **이 연결에는 "AI 소유 테이블만" 을 강제하는 장치가 없다.** 인프라가 RW 전면
+       부여로 회신해(2026-08-18) GRANT 도 안 막으므로, 오타 하나로 main server 소유
+       `cs`·`reviews` 에 쓸 수 있다. 대신 **쓰기 SQL 의 대상 테이블을 테스트가 고정한다**
+       (`tests/test_raw_db_write_scope.py`) — 새 쓰기 문장이 그 밖으로 나가면 거기서 걸린다.
+       계정 분리는 인프라가 이미 거절한 요청이라 다시 올리지 않는다.
+
+    ⚠️ sqlite 는 없는 파일을 **만든다** — 읽기와 반대다. 프로듀서가 첫 실행에서 DB 를
+       만드는 것이 정상 절차라 경로 오타를 여기서 못 가른다. 그 위험은 읽는 쪽
+       (`connect_readonly` 의 `FileNotFoundError`)이 대신 잡는다.
+
+    Args:
+        db_path: sqlite DB 경로. 기본은 `settings.raw_db_path`.
+        dsn: Postgres 접속 문자열. 기본은 `conninfo_from_settings()` 가 조립한 값.
+            `""` 를 명시하면 원자값이 설정돼 있어도 sqlite 로 간다.
+    """
+    dsn = dsn if dsn is not None else conninfo_from_settings()
+    if dsn:
+        return PostgresConnection(dsn, readonly=False)
+
+    path = Path(db_path or get_settings().raw_db_path).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    # WAL: 프로듀서가 쓰는 동안 워커가 같은 파일을 읽어도 서로 막히지 않게 한다.
+    # ⚠️ Postgres 에는 대응물이 없다(MVCC 가 기본) — 그래서 이 세 줄이 sqlite 분기 안에 있다.
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=30000;")
+    # ⚠️ sqlite 는 FK 가 **기본 OFF** 라 연결마다 켜야 한다. 안 켜면 DDL 의 REFERENCES 가
+    #    장식으로만 남아 채널 오타가 조용히 통과한다 — Postgres 는 항상 켜져 있으므로,
+    #    목에서만 못 잡으면 운영에 올라가서야 처음 터진다.
+    conn.execute("PRAGMA foreign_keys=ON;")
+    return conn
+
+
+def retryable_error_types(conn: RawDbConnection) -> tuple[type[BaseException], ...]:
+    """**다시 해 볼 가치가 있는** DB 오류 타입. 잠금 경합·직렬화 실패 계열이다.
+
+    워커가 이걸로 "잠깐 기다렸다 재시도" 와 "사람이 봐야 하는 고장" 을 가른다
+    (`persist_batch`). 둘을 안 가르면 스키마 오류에도 지수 백오프로 매달리거나, 반대로
+    잠금 경합 한 번에 워커가 서서 **다음 실행이 같은 배치를 LLM 에 다시 태운다.**
+
+    ⚠️ **Postgres 는 `OperationalError` 만으로 부족하다.** 거기서 잠금·직렬화 실패는
+       `DeadlockDetected`·`SerializationFailure`·`LockNotAvailable` 이고 이들은
+       `OperationalError` 가 아니라 **`DatabaseError` 계열**이라, 그것만 잡으면 잠깐 기다리면
+       될 것이 "치명적 오류" 로 분류돼 워커가 선다.
+    """
+    if dialect_of(conn) != POSTGRES:
+        return (sqlite3.OperationalError,)
+    import psycopg
+
+    return (
+        psycopg.OperationalError,
+        psycopg.errors.DeadlockDetected,
+        psycopg.errors.SerializationFailure,
+        psycopg.errors.LockNotAvailable,
+    )
+
+
+def db_error_types(conn: RawDbConnection) -> tuple[type[BaseException], ...]:
+    """그 백엔드의 DB 오류 최상위 타입. `retryable_error_types()` 를 포함한다.
+
+    `connection_error_types()` 와 뜻이 다르다 — 저쪽은 **접속·환경**을 못 여는 것이라
+    호출부가 종료 코드를 가르는 데 쓰고, 이쪽은 **이미 연 연결에서 문장이 실패한 것**이라
+    적재 루프가 롤백/중단을 정하는 데 쓴다.
+    """
+    if dialect_of(conn) != POSTGRES:
+        return (sqlite3.Error,)
+    import psycopg
+
+    return (psycopg.Error,)
+
+
+# 이미 있는 객체를 또 만들려다 나는 오류의 SQLSTATE.
+#   23505 unique_violation      — 동시 CREATE 가 pg_type/pg_class 유니크 인덱스에서 부딪힘
+#   42P07 duplicate_table       42710 duplicate_object       42P16 invalid_table_definition
+DUPLICATE_OBJECT_SQLSTATES = frozenset({"23505", "42P07", "42710", "42P16"})
+
+
+def execute_ddl(conn: RawDbConnection, statement: str) -> bool:
+    """DDL 한 문장을 **동시 실행에 견디게** 돌린다. 이미 있어서 건너뛰었으면 False.
+
+    🔴 **`CREATE TABLE IF NOT EXISTS` 는 Postgres 에서 동시 실행에 안전하지 않다.**
+       `IF NOT EXISTS` 검사와 실제 생성 사이에 창이 있어서, 두 프로세스가 같은 순간에
+       만들면 진 쪽이 `duplicate key value violates unique constraint "pg_type_typname_
+       nsp_index"`(23505) 로 죽는다 — "이미 있으니 넘어간다" 가 아니라 **에러**다.
+       sqlite 는 파일 락이 직렬화해 줘서 이 창이 없다(그래서 지금까지 안 드러났다).
+
+       분류 워커가 k8s CronJob 이라 겹쳐 뜰 수 있고, 그러면 진 쪽이 exit 1 로 죽어
+       **CronJob 이 무한 재시도**한다. 창은 최초 배포 때뿐이지만 하필 그때 사람이 보고 있다.
+
+    ⚠️ **인프라의 `concurrencyPolicy` 에 기대지 않는다.** 남의 매니페스트 설정은 우리
+       모르게 바뀌고, 바뀌어도 우리 테스트는 초록이다. 여기서 삼키는 쪽이 싸다.
+
+    ⚠️ **문장마다 commit 한다.** Postgres 는 문장 하나가 실패하면 트랜잭션 전체가 abort 라,
+       한 트랜잭션에 몰아 넣으면 뒤 문장이 전부 `InFailedSqlTransaction` 으로 죽는다.
+       DDL 은 각각 멱등이므로 쪼개도 잃는 것이 없다.
+    """
+    try:
+        conn.execute(statement)
+    except Exception as exc:
+        # 타입으로 못 가른다 — 백엔드마다 다르고, psycopg 쪽은 같은 예외 클래스가 다른
+        # 사유로도 온다. SQLSTATE 만 보고 아니면 그대로 올린다(=삼키지 않는다).
+        if getattr(exc, "sqlstate", None) not in DUPLICATE_OBJECT_SQLSTATES:
+            raise
+        conn.rollback()
+        return False
+    conn.commit()
+    return True
+
+
 def describe_target(db_path: str | None = None, *, dsn: str | None = None) -> str:
     """지금 연결이 가리키는 곳을 **사람이 읽을 수 있게**. 오류 메시지·로그용.
 
@@ -349,3 +583,48 @@ def existing_tables(conn: RawDbConnection, names: Iterable[str]) -> set[str]:
             names,
         ).fetchall()
     return {row["name"] for row in rows}
+
+
+def unique_column_sets(conn: RawDbConnection, table: str) -> set[frozenset[str]]:
+    """그 테이블에 걸린 **유니크 제약이 덮는 컬럼 조합**. 없으면 빈 집합.
+
+    컬럼만 보는 가드는 "컬럼은 다 있는데 제약이 빠진" 테이블을 통과시킨다. 하필 우리가
+    제일 의존하는 제약(`classified_item_aspect` 의 `UNIQUE (item_id, aspect)`)이 없어도
+    적재는 성공하고 **재분류가 같은 쌍을 중복 적재해 탐지 분자가 부푼다** — 오탐 방향이라
+    시끄럽지도 않다. 그래서 `raw_schema.find_legacy_tables()` 가 이걸 같이 본다.
+
+    🔴 **Postgres 는 `information_schema.table_constraints` 로 보면 안 된다.** 거기에는
+       `CREATE UNIQUE INDEX` 로 만든 **맨 유니크 인덱스가 안 잡힌다**(제약이 아니라 인덱스라).
+       우리 로컬 init SQL(`docker/postgres/init/02_ai_read_model.sql`)이 정확히 그 형태로
+       만들고, 인프라가 먼저 세운 스키마도 어느 쪽일지 모른다 — information_schema 로 보면
+       멀쩡한 DB 를 "구버전" 이라고 잘못 세운다. `pg_index` 는 둘 다 본다.
+
+    ⚠️ 이름은 안 본다. 인라인 `UNIQUE (a, b)` 와 명시 인덱스는 이름이 다른데 뜻은 같다 —
+       **컬럼 조합이 계약이고 이름은 아니다.**
+    """
+    if dialect_of(conn) == POSTGRES:
+        rows = conn.execute(
+            "SELECT i.indexrelid AS idx, a.attname AS col"
+            " FROM pg_index i"
+            " JOIN pg_class c ON c.oid = i.indrelid"
+            " JOIN pg_namespace n ON n.oid = c.relnamespace"
+            " JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey)"
+            " WHERE c.relname = ? AND n.nspname = current_schema() AND i.indisunique",
+            (table,),
+        ).fetchall()
+        grouped: dict[Any, set[str]] = {}
+        for row in rows:
+            grouped.setdefault(row["idx"], set()).add(row["col"])
+        return {frozenset(cols) for cols in grouped.values()}
+
+    # sqlite: PRAGMA index_list 가 유니크 인덱스를, index_info 가 그 컬럼을 준다.
+    # 인라인 `UNIQUE (a, b)` 는 origin='u' 인 자동 인덱스로 잡힌다.
+    # ⚠️ `INTEGER PRIMARY KEY`(rowid 별칭)는 여기 안 나온다 — 우리가 계약으로 삼는 것이
+    #    복합 유니크라 문제되지 않지만, "PK 도 세겠지" 하고 쓰면 안 된다.
+    indexes = [row for row in conn.execute(f"PRAGMA index_list({table})") if row[2]]
+    result: set[frozenset[str]] = set()
+    for index in indexes:
+        columns = {row[2] for row in conn.execute(f"PRAGMA index_info({index[1]})")}
+        if columns:
+            result.add(frozenset(columns))
+    return result
