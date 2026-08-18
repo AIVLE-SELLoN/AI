@@ -459,6 +459,7 @@ def load_inputs_from_db(
     window_end: date | None = None,
     *,
     db_path: str | None = None,
+    dropped: Counter[str] | None = None,
 ) -> tuple[list[ClassifiedItem], list[dict]]:
     """(items, documents) 를 원본 DB 에서 읽는다. **기본 입력원.**
 
@@ -490,6 +491,19 @@ def load_inputs_from_db(
             날짜로 윈도우를 정한다 — 첫 실행·백필용이고, 매일 배치에서는 반드시 줄 것
             (현재 목 데이터 기준 128,228건 풀스캔이다).
         db_path: raw DB 경로. 기본은 `settings.raw_db_path`(테스트 주입용 인자다).
+        dropped: 주면 **사유별 제외 건수**를 여기에 채운다(`_build_inputs`). 안 주면
+            지금까지처럼 경고 로그로만 남는다.
+
+            🔴 **반환값을 3-tuple 로 늘리지 말 것 — 그게 자연스러워 보이지만 위험하다.**
+            이 함수는 로더 seam 의 한쪽이라 `load_golden_inputs` 와 시그니처가 같아야
+            하고, 그쪽을 같이 늘리면 `(items, documents)` 로 언패킹하는 **저장소 밖 호출부
+            9곳**(`scripts/detection_experiments/` 7 + `eval/` 1 + 테스트 fake 들)이 전부
+            깨진다. 그 실험 스크립트들에는 **테스트가 없어서** 하나를 빠뜨려도 아무 데서도
+            안 걸리고 실행 시점에야 터진다 — 2026-08-16 의 *"`py_compile`·ruff 는 import
+            깨짐을 못 잡는다"* 와 같은 계열이다.
+            수집기로 받으면 공개 계약이 안 바뀌어 그 9곳이 무변경이고, **배치가 부르는
+            함수가 남들이 부르는 함수와 여전히 같다** — 별도 private 본체를 두면 그쪽이
+            갈려서 테스트가 배치의 실제 경로를 안 타게 된다(#99 게이트 픽스처와 같은 사유).
 
     Returns:
         items: 분자의 출처 (ClassifiedItem)
@@ -519,7 +533,33 @@ def load_inputs_from_db(
     finally:
         conn.close()
 
-    return _build_inputs(doc_rows, aspect_rows, window_end)
+    items, documents, drops = _build_inputs(doc_rows, aspect_rows, window_end)
+    if dropped is not None:
+        dropped.update(drops)
+    return items, documents
+
+
+def _read_inputs(
+    loader: Callable[..., tuple[list[ClassifiedItem], list[dict]]],
+    window_end: date | None,
+) -> tuple[list[ClassifiedItem], list[dict], dict[str, int] | None]:
+    """입력을 읽고, **관측할 수 있으면** 사유별 제외 건수도 같이 낸다. 못 보면 `None`.
+
+    🔴 **`None`("이 입력원은 보고하지 않는다")과 `{}`("봤고 0건")은 다른 값이다.**
+       `_classifier_versions_for` 가 골든 입력에 `None` 을 싣는 것과 같은 규칙이다 —
+       안 가르면 골든으로 돌린 배치가 "제외 0건" 이라고 **주장**하게 되는데, 골든 로더는
+       매핑이 없는 행을 세지 않고 그냥 건너뛴다(`scripts/golden_inputs.py`). 즉 0 은
+       관측이 아니라 무지다.
+
+    ⚠️ 수집기를 **모든 로더에** 넘기면 안 된다 — 테스트가 주입하는 fake 는
+       `lambda window_end: ([], [])` 라 키워드 인자를 안 받는다.
+    """
+    if loader is not load_inputs_from_db:
+        return (*loader(window_end), None)
+
+    dropped: Counter[str] = Counter()
+    items, documents = loader(window_end, dropped=dropped)
+    return items, documents, dict(dropped)
 
 
 def _classifier_versions_for(loader: Callable) -> dict | None:
@@ -668,8 +708,8 @@ def _window_clause(window_end: date | None) -> tuple[str, tuple]:
 
 def _build_inputs(
     doc_rows: list, aspect_rows: list, window_end: date | None
-) -> tuple[list[ClassifiedItem], list[dict]]:
-    """조회 결과 → (items, documents). 못 쓰는 행은 버리고 건수만 경고로 남긴다.
+) -> tuple[list[ClassifiedItem], list[dict], Counter[str]]:
+    """조회 결과 → (items, documents, 사유별 제외 건수).
 
     ⚠️ **버리는 방향은 항상 "분모에서도 뺀다" 이다.** 문서는 남기고 분류 결과만 버리면
        그 슬롯이 분류 커버리지 미달로 잡혀(`check_coverage`) 검정에서 통째로 빠지는데,
@@ -765,7 +805,7 @@ def _build_inputs(
         len(items),
         window_end,
     )
-    return items, documents
+    return items, documents, dropped
 
 
 # ── 발행 기록 캐시 ──────────────────────────────────────────────
@@ -983,7 +1023,7 @@ async def run_batch(
     started = datetime.now(timezone.utc)
     logger.info("배치 시작 trace_id=%s dry_run=%s", trace_id, dry_run)
 
-    items, documents = loader(window_end)
+    items, documents, input_dropped = _read_inputs(loader, window_end)
 
     # ⚠️ **window_end 를 여기서 한 번만 확정한다.** 로드·탐지·저장이 같은 값을 써야 한다.
     #    읽기는 실행 시각(`date.today()`), 쓰기는 데이터 시각(`window_end`)이면, 데이터가
@@ -1409,6 +1449,18 @@ async def run_batch(
         "elapsed_sec": round((datetime.now(timezone.utc) - started).total_seconds(), 1),
         "items": len(items),
         "documents": len(documents),
+        # 입력에서 **버린** 행의 사유별 건수. 지금까지 경고 로그로만 남아서, 미매핑이
+        # 늘어도 아무도 몰랐다 — CronJob 로그를 여는 사람이 없다는 것이 이 저장소가
+        # 반복해서 전제해 온 사실이다.
+        #
+        # ⚠️ **종료코드에 안 싣는다.** 미매핑은 상류(백엔드 상품 매핑)의 데이터 갭이지
+        #    우리 배치의 고장이 아니고, 사람이 손으로 재매핑하는 흐름이라(2026-08-18 규리
+        #    확인) 배치를 세워도 그 자리에서 할 수 있는 게 없다. `no_evidence` 를 실패에서
+        #    뺀 것과 같은 기준이다 — **갭은 카운터로, 고장은 종료코드로.**
+        #
+        # ⚠️ 값이 `None` 이면 "0건" 이 아니라 **"이 입력원은 보고하지 않는다"** 이다
+        #    (`_read_inputs`).
+        "input_dropped": input_dropped,
         "coverage_gap_slots": len(unreliable),
         "coverage_missing_documents": sum(
             gap["documents"] - gap["classified"] for gap in coverage_gaps
@@ -1448,6 +1500,14 @@ def print_summary(summary: dict) -> None:
         f"  입력          items {summary['items']} / documents {summary['documents']}"
         f"  [{summary['input_source']}]"
     )
+    # 🔴 요약에 실어 두기만 하면 절반이다 — 사람이 실제로 보는 것은 이 화면이다.
+    #    비어 있으면(또는 관측 불가면) 줄을 안 낸다: 매번 "0건" 을 찍으면 눈에 안 띄는
+    #    줄이 하나 늘 뿐이고, 이 항목의 목적은 **늘었을 때 보이는 것**이다.
+    if summary.get("input_dropped"):
+        detail = " / ".join(
+            f"{reason} {count}건" for reason, count in summary["input_dropped"].items()
+        )
+        print(f"  ⚠️ 입력 제외   {detail}  ← 분모에서 빠진 원문")
     print(
         f"  분류 coverage 제외 슬롯 {summary.get('coverage_gap_slots', 0)} / "
         f"부모 레코드 누락 {summary.get('coverage_missing_documents', 0)}건"

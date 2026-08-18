@@ -58,6 +58,7 @@ def _settings(monkeypatch, **overrides) -> Settings:
         "RAW_DB_PASSWORD",
         "RAW_DB_SSLMODE",
         "RAW_DB_SSLROOTCERT",
+        "RAW_DB_CONNECT_TIMEOUT",
     ):
         monkeypatch.delenv(key, raising=False)
     return Settings(_env_file=None, **{**_ATOMS, **overrides})
@@ -191,6 +192,24 @@ def test_sslmode_is_always_carried(monkeypatch):
     )
 
 
+def test_connect_timeout_is_always_carried(monkeypatch):
+    """🔴 **`connect_timeout` 이 빠지면 무한 대기다** — sslmode 와 같은 계열의 회귀다.
+
+    libpq 기본값이 미지정이고, 그때 실패는 OS 의 TCP 재시도가 끝날 때까지 간다
+    (blackhole IP `10.255.255.1` 실측, libpq 18):
+
+        미지정(이 항목이 빠진 모양)   130.0초   ConnectionTimeout
+        connect_timeout=3              3.0초   ConnectionTimeout
+
+    ⚠️ **접속 실패로 나타나지 않는다** — 결국 같은 예외가 나오므로 #101 의 분류는 그때도
+       정상 동작한다. 달라지는 것은 **그 답을 받기까지 걸리는 시간**뿐이라, 이 항목이
+       빠져도 다른 테스트는 전부 초록이다. 여기가 유일한 방어선이다.
+    """
+    info = conninfo_to_dict(conninfo_from_settings(_settings(monkeypatch)))
+
+    assert info["connect_timeout"] == "10"
+
+
 @pytest.mark.parametrize(
     "password",
     [
@@ -280,6 +299,22 @@ def test_unknown_sslmode_is_refused_at_boot(monkeypatch):
         _settings(monkeypatch, raw_db_sslmode="requre")
 
 
+@pytest.mark.parametrize("value", [0, -1, 1])
+def test_unbounded_connect_timeout_is_refused_at_boot(monkeypatch, value):
+    """🔴 **libpq 가 존중하지 않는 값은 부팅에서 막는다.** 실측(libpq 18):
+
+        connect_timeout=0    130.0초   ← 미지정과 같다. 0·음수 = 무한 대기
+        connect_timeout=1      2.1초   ← 조용히 2 로 올라간다
+        connect_timeout=2      2.0초   ← 여기부터 값이 그대로 먹는다
+
+    0 이 제일 위험하다 — "상한 없음" 이라는 뜻으로 적기 쉬운데, 그 순간 이 PR 이 없애려는
+    무한 대기가 **값이 설정된 채로** 돌아온다. 설정한 사람은 상한이 걸렸다고 믿는다.
+    1 은 설정값과 실제가 어긋나는 자리라 같이 막는다.
+    """
+    with pytest.raises(ValidationError, match="RAW_DB_CONNECT_TIMEOUT"):
+        _settings(monkeypatch, raw_db_connect_timeout=value)
+
+
 def test_retired_dsn_key_is_refused_loudly(monkeypatch):
     """🔴 폐기된 `RAW_DB_DSN` 이 남아 있으면 **부팅에서 세운다.**
 
@@ -310,6 +345,7 @@ def test_sqlite_default_skips_the_raw_db_guards(monkeypatch):
         raw_db_name="",
         raw_db_username="",
         raw_db_sslmode="이것은-libpq-값이-아니다",
+        raw_db_connect_timeout=0,
     )
 
     assert conninfo_from_settings(settings) == ""
