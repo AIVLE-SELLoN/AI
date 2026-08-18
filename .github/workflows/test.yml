@@ -43,6 +43,11 @@ jobs:
     # ⚠️ 호스트 포트를 **5433** 으로 맞춘다(컨테이너 안은 표준 5432). compose 와 같은
     #    번호라 게이트 테스트 docstring 의 DSN 을 그대로 쓸 수 있고, 러너에 미리 깔린
     #    Postgres 와도 안 부딪힌다.
+    #
+    # ⚠️ **값이 공짜가 아니다 — 잡이 119초 → 169초가 된다**(2026-08-18 러너 실측.
+    #    pytest 자체는 86초이고, 나머지는 이미지 pull·기동·스키마 적재다). 그래서 노션 §3 의
+    #    "2분 예산" 은 이제 **잡 전체가 아니라 pytest 스텝 기준**으로 읽어야 맞다.
+    #    늘어난 50초로 게이트 15개를 얻는다.
     services:
       rawdb:
         image: postgres:16-alpine
@@ -52,8 +57,8 @@ jobs:
           POSTGRES_PASSWORD: sellon
         ports:
           - 5433:5432
-        # 헬스체크가 통과할 때까지 러너가 스텝 시작을 미룬다. 없으면 첫 psql 이
-        # "아직 부팅 중" 으로 죽는다.
+        # 헬스체크가 통과할 때까지 러너가 스텝 시작을 미룬다. 없으면 아래 스키마 적재의
+        # 첫 접속이 "아직 부팅 중" 으로 죽는다.
         options: >-
           --health-cmd "pg_isready -U sellon -d rawdb"
           --health-interval 10s
@@ -98,28 +103,79 @@ jobs:
       #    (`psycopg[binary]==3.3.4`)로 방금 깔았으므로 있는 것이 보장되고, 로컬에서
       #    같은 postgres:16-alpine 상대로 이 경로 그대로 검증했다(2026-08-18).
       #    오류는 예외로 올라와 스텝이 죽는다 — psql 의 `ON_ERROR_STOP=1` 자리를 대신한다.
+      #
+      # 🔴 **기대 목록을 SQL 파일에서 유도한다. 개수를 손으로 적지 않는다.** 상수(`11`)로
+      #    두면 스키마에 테이블이 하나 늘 때 이 숫자만 안 고쳐도 스텝이 빨개진다 —
+      #    실패가 시끄러운 쪽이라 위험하진 않지만, CI 를 고치는 일이 스키마 작업에 딸려
+      #    붙는다. 적재한 파일이 곧 기대값이라 그 일이 없어지고, 덤으로 **어떤 객체가
+      #    빠졌는지**까지 이름으로 찍힌다(개수 비교는 "몇 개 모자라다" 까지만 말한다).
+      #
+      # 🔴 **파일 목록도 디렉터리에서 읽는다 — 여기 손으로 나열하지 않는다.** 유도의 함정이
+      #    하나 있어서다: 목록에서 파일이 빠지면 **기대값도 같이 줄어 그냥 통과한다**
+      #    (실측으로 확인했다 — `02` 를 빼니 "기대 10 · 실제 10" 으로 초록불이었다).
+      #    정렬 순서는 Postgres 의 `docker-entrypoint-initdb.d` 와 같은 사전순이라 compose 가
+      #    볼륨 초기화 때 도는 순서와 정확히 같다.
+      #
+      # 🔴 위 유도만으로는 **파일 하나가 통째로 사라진 경우**를 못 잡는다(없는 파일은 아무것도
+      #    기대하지 않는다). 그래서 **파일당 대표 객체 하나씩**을 바닥값으로 못박는다 —
+      #    `cs` 는 `01`(main server 소유), `voc_document` 는 `02`(AI 읽기 모델)에서만 나온다.
+      #    개수가 아니라 이름이라, 왜 그게 있어야 하는지가 같이 읽힌다.
       - name: raw DB 스키마 적재
         run: |
           python - <<'PY'
-          import os, pathlib, psycopg
+          import os, pathlib, re, psycopg
 
-          FILES = (
-              "docker/postgres/init/01_schema.sql",       # main server 소유 (노션 DDL 전문)
-              "docker/postgres/init/02_ai_read_model.sql",  # AI 소유 읽기 모델 (뷰·UNIQUE·인덱스)
+          INIT_DIR = pathlib.Path("docker/postgres/init")
+          # 사전순 = Postgres 의 docker-entrypoint-initdb.d 순서 = compose 가 도는 순서
+          FILES = sorted(INIT_DIR.glob("*.sql"))
+
+          # 파일당 대표 객체. 파일이 통째로 없어져도 여기서 걸린다.
+          REQUIRED = {
+              "cs": "01_schema.sql (main server 소유)",
+              "voc_document": "02_ai_read_model.sql (AI 읽기 모델)",
+          }
+
+          # `--` 주석을 먼저 걷어낸다. 02 의 주석 본문에 `CREATE TABLE IF NOT EXISTS` 라는
+          # 문구가 그대로 들어 있어서, 안 걷으면 그걸 객체 선언으로 오인한다.
+          COMMENT = re.compile(r"--.*")
+          DECL = re.compile(
+              r"CREATE\s+(?:OR\s+REPLACE\s+)?(TABLE|VIEW)\s+"
+              r"(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)",
+              re.IGNORECASE,
           )
+
+          expected = {}
+          for f in FILES:
+              for kind, name in DECL.findall(COMMENT.sub("", f.read_text(encoding="utf-8"))):
+                  expected[name.lower()] = kind.upper()
+
           with psycopg.connect(os.environ["RAW_DB_TEST_DSN"], autocommit=True) as conn:
               for f in FILES:
-                  conn.execute(pathlib.Path(f).read_text(encoding="utf-8"))
-                  print(f"적용: {f}")
-              n = conn.execute(
-                  "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"
-              ).fetchone()[0]
+                  conn.execute(f.read_text(encoding="utf-8"))
+                  print(f"적용: {f.as_posix()}")
+              actual = {
+                  r[0]
+                  for r in conn.execute(
+                      "SELECT table_name FROM information_schema.tables"
+                      " WHERE table_schema = 'public'"
+                  ).fetchall()
+              }
 
-          # 찍고 끝내지 않고 **단언한다.** 스키마가 반쯤 서면 게이트가 "이식이 깨졌다" 로
-          # 빨개져서 원인을 엉뚱한 데서 찾게 된다.
-          print(f"public 스키마 테이블+뷰: {n} (기대 11 = 테이블 10 + voc_document 뷰)")
-          if n != 11:
-              raise SystemExit(f"::error::raw DB 스키마 적재가 불완전합니다 ({n} != 11)")
+          print(f"기대 {len(expected)}개({len(FILES)}개 파일에서 유도) · 실제 {len(actual)}개")
+
+          missing = sorted(n for n in expected if n not in actual)
+          if missing:
+              raise SystemExit(
+                  "::error::raw DB 스키마 적재가 불완전합니다 — 없는 객체: "
+                  + ", ".join(f"{n}({expected[n]})" for n in missing)
+              )
+          absent = sorted(n for n in REQUIRED if n not in actual)
+          if absent:
+              raise SystemExit(
+                  "::error::init SQL 이 통째로 빠진 것 같습니다 — 다음이 없습니다: "
+                  + ", ".join(f"{n} ← {REQUIRED[n]}" for n in absent)
+              )
+          print("스키마 확인 완료:", ", ".join(sorted(expected)))
           PY
 
       # ⚠️ `data/**` 는 gitignore 라 CI 에 없다. 정본 데이터를 요구하는 테스트는

@@ -29,6 +29,20 @@
 *.sh    text eol=lf
 Dockerfile text eol=lf
 
+# ⚠️ ruff 기준선은 CI 가 `diff` 로 **바이트 단위 비교**하는 파일이라 개행도 계약이다.
+#    이 줄이 없으면 윈도우에서 로컬 재현이 안 된다 —
+#    `diff -u .github/ruff-baseline.txt <(ruff check . --statistics)` 가 내용이 같은데도
+#    **13줄 전체 불일치**로 보인다(2026-08-18 실측. 리뷰어가 한 번 오판했고 이어서 나도 밟았다).
+#
+#    🔴 원인이 `core.autocrlf` 가 아니다 — 이 저장소는 `.git/config` 에서 `false` 로 꺼 두는데도
+#       그대로 밟는다. 위 `*.txt text` 가 **명시적 text 속성**이라 autocrlf 와 무관하게 EOL
+#       변환이 걸리고, 그때 쓰이는 `core.eol` 의 기본값이 `native`(윈도우=CRLF)여서다.
+#       그래서 "autocrlf 껐으니 괜찮겠지" 는 여기서 안 통한다.
+#
+#    CI 는 리눅스라 native 가 LF 이므로 **CI 만 초록인 파일**이 되는 셈이라 더 헷갈린다.
+#    `git archive` 도 이 속성을 따르므로 컨테이너로 재현할 때도 같이 맞는다.
+.github/ruff-baseline.txt text eol=lf
+
 # 바이너리 — 변환 금지
 *.pdf   binary
 *.png   binary
