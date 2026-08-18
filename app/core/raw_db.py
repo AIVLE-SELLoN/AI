@@ -391,6 +391,9 @@ def connect_readwrite(db_path: str | None = None, *, dsn: str | None = None) -> 
         db_path: sqlite DB 경로. 기본은 `settings.raw_db_path`.
         dsn: Postgres 접속 문자열. 기본은 `conninfo_from_settings()` 가 조립한 값.
             `""` 를 명시하면 원자값이 설정돼 있어도 sqlite 로 간다.
+            ⚠️ `connect_readonly` 와 같다 — **문자열을 직접 넘기면 `connect_timeout` 도
+            직접 넣어야 한다.** 기본값 주입은 `conninfo_from_settings()` 한 곳에서만 하고,
+            그래서 이 인자는 "전부 네가 정한다" 는 뜻이다.
     """
     dsn = dsn if dsn is not None else conninfo_from_settings()
     if dsn:
