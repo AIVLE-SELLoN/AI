@@ -168,18 +168,44 @@ def connect_readonly(
 def describe_target(db_path: str | None = None, *, dsn: str | None = None) -> str:
     """지금 연결이 가리키는 곳을 **사람이 읽을 수 있게**. 오류 메시지·로그용.
 
-    🔴 **DSN 의 비밀번호를 절대 싣지 않는다.** `postgresql://user:pw@host/db` 를 그대로
-       찍으면 raw DB 계정 비밀번호가 로그·배치 요약·PR 본문으로 나간다. 여기서는
-       스킴과 자격증명을 통째로 버리고 `host/db` 만 남긴다 — 어느 DB 를 봤는지 가리는
-       데는 그걸로 충분하다. (2026-08-16 `Settings` 진단에서 `input` 을 뺀 것과 같은 사유)
+    🔴 **DSN 의 비밀번호를 절대 싣지 않는다.** 이 문자열은
+       `daily._require_classified_tables()` 의 `RuntimeError` 로 나가 배치 로그·요약에
+       박히므로, 한 번 새면 회수가 안 된다. 필요한 정보는 "어느 DB 를 봤나" 뿐이라
+       host·port·dbname 만 남기고 나머지는 버린다.
+       (2026-08-16 `Settings` 진단에서 `input` 을 뺀 것과 같은 사유)
+
+    🔴 **`@`·`?` 로 잘라내는 방식은 쓰지 않는다 — 절반만 막힌다.** psycopg 는 URI 와
+       키워드, **두 형식을 다 받는다.** 문자열을 직접 자르면 키워드 형식이 통째로 샌다:
+
+           postgresql://u:pw@host:5432/rawdb              →  가려짐
+           host=10.0.0.5 dbname=rawdb user=u password=pw  →  **전체 노출** 🔴
+
+       그래서 파싱을 psycopg 에 맡긴다(`conninfo_to_dict` 가 두 형식을 다 읽는다).
+       인프라가 어느 형식으로 줄지 모르므로 이건 가정이 아니라 대비다.
+       (2026-08-16 용준님 리뷰 §2, 실측)
+
+    ⚠️ **읽기에 실패해도 절대 원문을 되돌려주지 않는다.** 폴백에 DSN 을 넣으면 막으려던
+       것이 폴백으로 새어나간다. 그리고 이 함수는 인자 자리에서 **항상 평가**되므로
+       (`_require_classified_tables(conn, describe_target(...))`) 여기서 던지면 **진단이
+       원인을 가린다** — 실제로는 `connect_readonly()` 가 먼저 붙어 잘못된 DSN 은 그쪽에서
+       걸리지만, 진단 함수가 스스로 터지는 경로는 남겨두지 않는다.
     """
     dsn = dsn if dsn is not None else get_settings().raw_db_dsn
     if not dsn:
         return str(db_path or get_settings().raw_db_path)
 
-    location = dsn.rsplit("@", 1)[-1]  # 자격증명이 있으면 통째로 버린다
-    location = location.split("?", 1)[0]  # 쿼리 인자에 password 가 올 수 있다
-    return f"Postgres {location}"
+    import psycopg
+    from psycopg.conninfo import conninfo_to_dict
+
+    try:
+        info = conninfo_to_dict(dsn)
+    except psycopg.Error:
+        return "Postgres (DSN 형식을 읽지 못했습니다)"
+
+    host = info.get("host") or "?"
+    port = info.get("port")
+    dbname = info.get("dbname") or "?"
+    return f"Postgres {f'{host}:{port}' if port else host}/{dbname}"
 
 
 # ── 스키마 조회 ──────────────────────────────────────────────────────────────

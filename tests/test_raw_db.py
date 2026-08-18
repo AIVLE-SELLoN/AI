@@ -114,24 +114,55 @@ def test_dsn_switches_to_postgres_without_touching_the_file(tmp_path, monkeypatc
     assert opened["dsn"] == "postgresql://x@h/rawdb"
 
 
-def test_describe_target_never_leaks_the_password():
-    """🔴 오류 메시지·로그에 raw DB 비밀번호를 싣지 않는다.
+@pytest.mark.parametrize(
+    "dsn",
+    [
+        # URI — 자격증명이 `@` 앞에
+        "postgresql://sellon_ai:S3cr3t@db.internal:5432/rawdb",
+        # URI — 자격증명이 쿼리 인자로
+        "postgresql://db.internal/rawdb?password=S3cr3t",
+        # 🔴 키워드 형식. psycopg 가 이것도 받는데 `@`·`?` 가 없어서, 문자열을 잘라내는
+        #    방식으로는 **통째로 샌다**(2026-08-16 용준님 리뷰 §2, 실측).
+        "host=db.internal dbname=rawdb user=sellon_ai password=S3cr3t",
+        "dbname=rawdb password=S3cr3t",
+    ],
+)
+def test_describe_target_never_leaks_the_password(dsn):
+    """🔴 오류 메시지·로그에 raw DB 비밀번호를 싣지 않는다 — **DSN 형식 불문.**
 
-    `_require_classified_tables` 가 "어느 DB 를 봤는지" 를 메시지에 넣는데, DSN 을
-    그대로 찍으면 그 문자열이 배치 요약·로그·PR 본문으로 그대로 나간다.
+    `_require_classified_tables` 가 "어느 DB 를 봤는지" 를 메시지에 넣는데, DSN 이 새면
+    그 문자열이 배치 요약·로그로 그대로 나가 회수가 안 된다.
+
+    ⚠️ **URI 만 재면 안 된다.** 세 번째 케이스가 옛 구현에서 실제로 통째로 샜다 —
+       한 형식만 잠그면 나머지 형식으로 같은 사고가 그대로 재발한다.
     """
-    described = describe_target(dsn="postgresql://sellon_ai:S3cr3t@db.internal:5432/rawdb")
+    described = describe_target(dsn=dsn)
 
     assert "S3cr3t" not in described
     assert "sellon_ai" not in described
-    assert "db.internal:5432/rawdb" in described
 
 
-def test_describe_target_drops_query_credentials():
-    """자격증명이 `@` 가 아니라 쿼리 인자로 오는 형태도 막는다."""
-    described = describe_target(dsn="postgresql://db.internal/rawdb?password=S3cr3t")
+def test_describe_target_reports_where_it_looked():
+    """가리되 **쓸모는 남긴다** — 어느 호스트·DB 를 봤는지는 나와야 진단이 된다."""
+    assert describe_target(
+        dsn="postgresql://u:pw@db.internal:5432/rawdb"
+    ) == "Postgres db.internal:5432/rawdb"
+    assert describe_target(
+        dsn="host=db.internal dbname=rawdb user=u password=pw"
+    ) == "Postgres db.internal/rawdb"
+
+
+def test_describe_target_survives_an_unreadable_dsn():
+    """🔴 읽기 실패해도 **던지지 않고, 원문도 안 싣는다.**
+
+    이 함수는 인자 자리에서 항상 평가되므로(`_require_classified_tables(conn,
+    describe_target(...))`) 여기서 던지면 **진단이 진짜 원인을 가린다.** 그렇다고 폴백에
+    DSN 을 넣으면 막으려던 것이 폴백으로 새어나간다 — 둘 다 안 되게 잠근다.
+    """
+    described = describe_target(dsn="=== password=S3cr3t ===")
 
     assert "S3cr3t" not in described
+    assert "Postgres" in described
 
 
 @pytest.mark.parametrize(
