@@ -58,6 +58,6 @@ async def test_missing_raw_db_degrades_with_a_warning(monkeypatch, biased_alert,
     monkeypatch.setattr(service.pipeline, "run", fake_run)
 
     assert await service.generate_recommendation(biased_alert) is None
-    assert any("raw DB 가 없어" in r.getMessage() for r in caplog.records), (
+    assert any("raw DB 를 읽지 못해" in r.getMessage() for r in caplog.records), (
         "조용히 넘기면 근거 없이 나온 결과를 아무도 못 알아챈다"
     )
