@@ -38,6 +38,21 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
+LAUNCH_TIMEOUT_SECONDS = 180
+"""서브프로세스 기동을 기다리는 한계.
+
+🔴 **60 으로 되돌리지 말 것 — 그 값으로 헛실패가 났다**(2026-08-18).
+   조용한 머신에서 이 기동은 **7~9초**다(실측 3회: import 9.1/7.8/7.0 · uvicorn 6.8/6.8/7.4).
+   60 이면 여유가 6배쯤인데, 같은 머신에서 pytest 가 **3개** 돌던 날 그걸 넘겨서 이 테스트만
+   빨갛게 떴다 — 회귀가 아니라 **머신 부하**였다.
+
+⚠️ 여유를 크게 잡는 게 맞는 이유는 **실패 방향이 비대칭**이라서다. 우리가 잡으려는 회귀는
+   *"부팅 가드가 안 걸려 서버가 그냥 뜬다"* 인데 그건 **영원히 안 끝난다** — 한계가 60 이든
+   180 이든 반드시 걸린다. 늘려서 잃는 건 진짜 회귀일 때의 보고 지연뿐이고, 줄여서 잃는 건
+   **멀쩡한 트리를 의심하며 쓰는 사람 시간**이다(실제로 그렇게 썼다).
+"""
+
+
 def _launch(argv: list[str]) -> subprocess.CompletedProcess[str]:
     """설정 오타(`LOG_LEVEL=info`)를 준 채로 진짜 프로세스를 띄운다.
 
@@ -56,7 +71,7 @@ def _launch(argv: list[str]) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         encoding="utf-8",
-        timeout=60,
+        timeout=LAUNCH_TIMEOUT_SECONDS,
         check=False,  # 0 이 아닌 종료코드가 **기대값**이다 — check=True 면 안 된다
     )
 
@@ -348,9 +363,18 @@ def test_the_exit_code_survives_the_real_launcher(argv, why):
     except subprocess.TimeoutExpired:
         # 🔴 회귀(=설정 오류인데 서버가 그냥 뜸)는 타임아웃으로 나타난다. 그대로 두면
         #    `TimeoutExpired` 만 뜨고 **무엇이 틀렸는지 안 나온다**(용준님 리뷰 잔가지).
+        #
+        # 🔴 **사유를 단정하지 않는다.** 예전 문구가 *"서버가 떴다는 뜻입니다"* 라고 결론을
+        #    박아서, 머신 부하로 늦어진 날 그걸 읽은 사람이 **회귀를 의심하며 시간을 썼다**
+        #    (2026-08-18 실제 사고). 타임아웃이 구분하지 못하는 두 원인을 **둘 다** 적고,
+        #    제일 싼 판정 방법을 같이 준다.
         pytest.fail(
-            f"{why}: 설정 오타인데 프로세스가 끝나지 않았습니다 — "
-            "부팅이 막히지 않고 서버가 떴다는 뜻입니다."
+            f"{why}: 설정 오타인데 프로세스가 {LAUNCH_TIMEOUT_SECONDS}초 안에 "
+            "끝나지 않았습니다. 원인이 둘일 수 있습니다 — "
+            "① 회귀(부팅 가드가 안 걸려 서버가 그대로 떴다) "
+            "② 머신 부하(조용할 때 기동은 7~9초다). "
+            "먼저 다른 pytest·python 프로세스가 도는지 보고, 조용한 상태에서 "
+            "이 테스트만 다시 돌려보세요 — 거기서 통과하면 ②입니다."
         )
 
     assert proc.returncode == exit_codes.EXIT_CONFIG_ERROR, (
