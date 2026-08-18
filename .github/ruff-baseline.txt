@@ -1,0 +1,13 @@
+32	DTZ001 	[ ] call-datetime-without-tzinfo
+ 8	I001   	[*] unsorted-imports
+ 6	F401   	[*] unused-import
+ 5	BLE001 	[ ] blind-except
+ 3	DTZ007 	[ ] call-datetime-strptime-without-zone
+ 2	FURB167	[*] regex-flag-alias
+ 2	RUF100 	[*] unused-noqa
+ 1	FURB192	[ ] sorted-min-max
+ 1	RUF015 	[ ] unnecessary-iterable-allocation-for-first-element
+ 1	RUF046 	[ ] unnecessary-cast-to-int
+ 1	SIM118 	[ ] in-dict-keys
+Found 62 errors.
+[*] 18 fixable with the `--fix` option (4 hidden fixes can be enabled with the `--unsafe-fixes` option).

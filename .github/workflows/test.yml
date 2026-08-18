@@ -1,0 +1,236 @@
+# 계층 1 — 빠른 검증. 모든 PR 에서 돈다.
+#
+# 🔴 **시크릿·브로커·LLM 이 하나도 필요 없다.** 테스트가 LLM 호출을 전부 monkeypatch 로
+#    대체하고(`tests/`), MQ 테스트는 파일 첫 줄에 "브로커 없이 돈다" 라고 적혀 있다.
+#    그래서 이 워크플로는 포크 PR 에서도 그대로 돈다. 아래 Postgres 서비스도 예외가
+#    아니다 — 러너가 띄우는 빈 컨테이너라 시크릿도, 외부 접속도 없다.
+#
+# ⚠️ `eval/` 은 **절대 넣지 않는다.** LLM 과금이 발생하고 수십 분이 걸린다
+#    (`eval/README.md`: "사람이 수동으로 실행한다. CI 에 넣지 말 것").
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# 이 워크플로는 체크아웃(읽기) 말고 레포에 손대는 일이 없다. 기본 토큰 권한은 조직·레포
+# 설정에 따라 달라지므로 최소 권한을 명시해 고정한다.
+permissions:
+  contents: read
+
+# 같은 브랜치에 연속 push 하면 앞 실행을 취소한다. main 은 취소하지 않는다
+# (머지된 커밋의 결과는 남아 있어야 한다).
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # 🔴 **Postgres 게이트 테스트를 실제로 돌리려고 띄운다.** 없으면
+    #    `tests/test_raw_db_postgres.py` · `tests/test_raw_db_postgres_write.py` 가
+    #    `RAW_DB_TEST_DSN` 이 비어 통째로 skip 된다 — sqlite 판이 전부 초록이어도
+    #    Postgres 방언(`%s` 바인딩 · `IS NOT DISTINCT FROM` · `information_schema` ·
+    #    TIMESTAMPTZ · 우리 DDL 자체)은 **한 번도 안 돈 채로** 머지된다.
+    #
+    # ⚠️ **16 을 고정한다.** 운영 Postgres 가 16 으로 확정됐고(인프라 민준, 2026-08-18)
+    #    `docker-compose.yml` 의 `rawdb` 도 같은 이미지다. 셋이 갈리면 로컬에서 본 것이
+    #    CI·운영에서 같다는 근거가 사라진다.
+    #
+    # ⚠️ 호스트 포트를 **5433** 으로 맞춘다(컨테이너 안은 표준 5432). compose 와 같은
+    #    번호라 게이트 테스트 docstring 의 DSN 을 그대로 쓸 수 있고, 러너에 미리 깔린
+    #    Postgres 와도 안 부딪힌다.
+    #
+    # ⚠️ **값이 공짜가 아니다 — 잡이 119초 → 169초가 된다**(2026-08-18 러너 실측.
+    #    pytest 자체는 86초이고, 나머지는 이미지 pull·기동·스키마 적재다). 그래서 노션 §3 의
+    #    "2분 예산" 은 이제 **잡 전체가 아니라 pytest 스텝 기준**으로 읽어야 맞다.
+    #    늘어난 50초로 게이트 15개를 얻는다.
+    services:
+      rawdb:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: rawdb
+          POSTGRES_USER: sellon
+          POSTGRES_PASSWORD: sellon
+        ports:
+          - 5433:5432
+        # 헬스체크가 통과할 때까지 러너가 스텝 시작을 미룬다. 없으면 아래 스키마 적재의
+        # 첫 접속이 "아직 부팅 중" 으로 죽는다.
+        options: >-
+          --health-cmd "pg_isready -U sellon -d rawdb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    # 🔴 **`sslmode=disable` 이 필수다.** 이 이미지는 SSL 을 안 켜는데 우리 운영 기본값은
+    #    `require` 라(`config.raw_db_sslmode`), 빼면 접속이 **거부**된다. 그 실패는
+    #    로그상 "이식이 깨졌다" 처럼 보여서 엉뚱한 데를 파게 된다.
+    #
+    # ⚠️ 이 키는 **게이트 전용**이라 운영 경로(원자값 5개 조립)와 섞이지 않는다. 픽스처가
+    #    psycopg 로 파싱해 원자값으로 되돌려 넣으므로 조립 경로도 같이 검증된다.
+    env:
+      RAW_DB_TEST_DSN: postgresql://sellon:sellon@localhost:5433/rawdb?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # 🔴 3.12 고정. 3.13+ 는 검증 안 됐다 — scipy·chromadb 바이너리 패키지가
+      #    3.12 에 묶여 있다(CLAUDE.md "반드시 Python 3.12").
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 빈 컨테이너라 테이블이 하나도 없다. compose 가 볼륨 초기화 때 한 번 돌리는 것과
+      # **같은 두 파일**을 여기서 적용한다 — 로컬과 CI 가 다른 스키마를 보면 게이트가
+      # 잡는 것도 달라진다.
+      #
+      # ⚠️ `01` 은 main server 소유(노션 DDL 전문), `02` 는 AI 소유 읽기 모델이다.
+      #    `02` 를 빼면 조회 게이트(`test_raw_db_postgres.py`)가 통합 뷰를 못 찾는다 —
+      #    그쪽은 조회만 해서 스키마를 안 만든다.
+      #
+      # ⚠️ **`psql` 이 아니라 psycopg 로 적용한다.** 러너 이미지에 psql 이 깔려 있다는
+      #    가정을 안 두려는 것이다 — psycopg 는 바로 위 스텝이 `requirements.txt`
+      #    (`psycopg[binary]==3.3.4`)로 방금 깔았으므로 있는 것이 보장되고, 로컬에서
+      #    같은 postgres:16-alpine 상대로 이 경로 그대로 검증했다(2026-08-18).
+      #    오류는 예외로 올라와 스텝이 죽는다 — psql 의 `ON_ERROR_STOP=1` 자리를 대신한다.
+      #
+      # 🔴 **기대 목록을 SQL 파일에서 유도한다. 개수를 손으로 적지 않는다.** 상수(`11`)로
+      #    두면 스키마에 테이블이 하나 늘 때 이 숫자만 안 고쳐도 스텝이 빨개진다 —
+      #    실패가 시끄러운 쪽이라 위험하진 않지만, CI 를 고치는 일이 스키마 작업에 딸려
+      #    붙는다. 적재한 파일이 곧 기대값이라 그 일이 없어지고, 덤으로 **어떤 객체가
+      #    빠졌는지**까지 이름으로 찍힌다(개수 비교는 "몇 개 모자라다" 까지만 말한다).
+      #
+      # 🔴 **파일 목록도 디렉터리에서 읽는다 — 여기 손으로 나열하지 않는다.** 유도의 함정이
+      #    하나 있어서다: 목록에서 파일이 빠지면 **기대값도 같이 줄어 그냥 통과한다**
+      #    (실측으로 확인했다 — `02` 를 빼니 "기대 10 · 실제 10" 으로 초록불이었다).
+      #    정렬 순서는 Postgres 의 `docker-entrypoint-initdb.d` 와 같은 사전순이라 compose 가
+      #    볼륨 초기화 때 도는 순서와 정확히 같다.
+      #
+      # 🔴 위 유도만으로는 **파일 하나가 통째로 사라진 경우**를 못 잡는다(없는 파일은 아무것도
+      #    기대하지 않는다). 그래서 **파일당 대표 객체 하나씩**을 바닥값으로 못박는다 —
+      #    `cs` 는 `01`(main server 소유), `voc_document` 는 `02`(AI 읽기 모델)에서만 나온다.
+      #    개수가 아니라 이름이라, 왜 그게 있어야 하는지가 같이 읽힌다.
+      - name: raw DB 스키마 적재
+        run: |
+          python - <<'PY'
+          import os, pathlib, re, psycopg
+
+          INIT_DIR = pathlib.Path("docker/postgres/init")
+          # 사전순 = Postgres 의 docker-entrypoint-initdb.d 순서 = compose 가 도는 순서
+          FILES = sorted(INIT_DIR.glob("*.sql"))
+
+          # 파일당 대표 객체. 파일이 통째로 없어져도 여기서 걸린다.
+          REQUIRED = {
+              "cs": "01_schema.sql (main server 소유)",
+              "voc_document": "02_ai_read_model.sql (AI 읽기 모델)",
+          }
+
+          # `--` 주석을 먼저 걷어낸다. 02 의 주석 본문에 `CREATE TABLE IF NOT EXISTS` 라는
+          # 문구가 그대로 들어 있어서, 안 걷으면 그걸 객체 선언으로 오인한다.
+          COMMENT = re.compile(r"--.*")
+          DECL = re.compile(
+              r"CREATE\s+(?:OR\s+REPLACE\s+)?(TABLE|VIEW)\s+"
+              r"(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)",
+              re.IGNORECASE,
+          )
+
+          expected = {}
+          for f in FILES:
+              for kind, name in DECL.findall(COMMENT.sub("", f.read_text(encoding="utf-8"))):
+                  expected[name.lower()] = kind.upper()
+
+          with psycopg.connect(os.environ["RAW_DB_TEST_DSN"], autocommit=True) as conn:
+              for f in FILES:
+                  conn.execute(f.read_text(encoding="utf-8"))
+                  print(f"적용: {f.as_posix()}")
+              actual = {
+                  r[0]
+                  for r in conn.execute(
+                      "SELECT table_name FROM information_schema.tables"
+                      " WHERE table_schema = 'public'"
+                  ).fetchall()
+              }
+
+          print(f"기대 {len(expected)}개({len(FILES)}개 파일에서 유도) · 실제 {len(actual)}개")
+
+          missing = sorted(n for n in expected if n not in actual)
+          if missing:
+              raise SystemExit(
+                  "::error::raw DB 스키마 적재가 불완전합니다 — 없는 객체: "
+                  + ", ".join(f"{n}({expected[n]})" for n in missing)
+              )
+          absent = sorted(n for n in REQUIRED if n not in actual)
+          if absent:
+              raise SystemExit(
+                  "::error::init SQL 이 통째로 빠진 것 같습니다 — 다음이 없습니다: "
+                  + ", ".join(f"{n} ← {REQUIRED[n]}" for n in absent)
+              )
+          print("스키마 확인 완료:", ", ".join(sorted(expected)))
+          PY
+
+      # ⚠️ `data/**` 는 gitignore 라 CI 에 없다. 정본 데이터를 요구하는 테스트는
+      #    `skipif` 로 스스로 빠진다(예: test_real_golden_mapping_converts_and_matches_catalog).
+      #    **CI 가 찍는 값은 962 passed / 1 skipped 다** — `data/` 가 있는 로컬은 그 하나가
+      #    통과 쪽으로 넘어가 963 passed / 0 skipped 가 된다(2026-08-18 실측, main
+      #    `3c03d58` 병합 기준). 수치를 대조할 땐 로컬 값이 아니라 위 CI 값을 본다.
+      #    위 Postgres 서비스가 없으면 게이트 두 파일 **15개가 통째로 skip** 된다.
+      #
+      # 🔴 **병렬 실행(-n) 을 붙이지 않는다.** Postgres 게이트 두 파일이 같은 DB 를 쓰는데,
+      #    `test_raw_db_postgres_write.py` 의 픽스처가 AI 소유 4개 테이블과 뷰를 **지우고
+      #    우리 DDL 로 다시 세운다**(그래야 `CREATE TABLE IF NOT EXISTS` 가 건너뛰지 않아
+      #    검증 대상이 실제로 돈다). 그 사이 `test_raw_db_postgres.py` 가 다른 워커에서
+      #    조회하면 테이블이 없는 순간을 밟는다 — 코드가 아니라 **실행 배치 때문에** 빨개진다.
+      #    지금은 xdist 를 안 쓰므로 한 프로세스에서 순차로 돈다. 붙일 일이 생기면 두 파일을
+      #    같은 워커로 묶을 것(`--dist loadfile` 등).
+      - name: pytest
+        run: pytest -q
+
+      # 🔴 **기준선 방식이다. `ruff check .` 를 그대로 게이트로 걸지 않는다.**
+      #    지금 main 에 62건이 남아 있어서 그냥 걸면 첫날부터 전 PR 이 빨간불이 된다.
+      #
+      # 🔴 **비교 축은 총계가 아니라 규칙별(`--statistics`) 카운트다.** 총계로 걸면
+      #    "한 규칙이 늘고 다른 규칙이 그만큼 줄어든" 회귀가 그대로 통과한다. 실제로
+      #    PR #78 1회전이 그렇게 새어 나갔다 — 총계가 줄어드는 동안 그 안에서 I001 이 늘었고
+      #    다른 규칙의 감소가 그걸 가렸다. 지금 기준선으로 재현하면 `I001 8→10` ·
+      #    `DTZ001 32→28` 일 때 총계는 62→60 이라 총계 게이트는 초록불이다(실측).
+      #    이 게이트의 목적이 리뷰어가 PR 마다 손으로 하던 `--statistics` 대조를 기계화하는
+      #    것인데, 총계로 걸면 그 수작업은 그대로 남으면서 사람은 초록불을 보고 안 하게 된다.
+      #
+      #    기준선 정본은 `.github/ruff-baseline.txt` 다(워크플로 안의 숫자가 아니다).
+      #    줄였을 때는 `ruff check . --statistics > .github/ruff-baseline.txt` 로 다시 뜨고
+      #    같은 PR 에 함께 커밋한다 — 운영 방식은 전과 같고, 숫자가 파일에 있다는 것만 다르다.
+      #
+      # ⚠️ 이 파일은 **ruff 버전에 통째로 묶여 있다.** 저장소에 ruff 설정 파일이 없어서
+      #    규칙집합이 곧 ruff 의 기본값이고, `requirements.txt` 의 `ruff==0.16.0` 이 그걸
+      #    러너와 로컬에 똑같이 고정한다. 이 핀을 올리면 기준선도 같이 다시 떠야 한다.
+      - name: ruff (규칙별 기준선)
+        run: |
+          # `|| rc=$?` 가 필수다. 그냥 쓰면 기본 셸 bash -e 가 여기서 스텝을 끝낸다
+          # (2026-08-18 이 PR 에서 pipefail 로 실제로 그렇게 죽었다 — 기준선과 무관하게
+          # 항상 실패해서 게이트가 아무것도 안 재고 있었다).
+          # ruff 종료코드: 0=위반 없음 / 1=위반 있음 / 2+=ruff 자체 실패
+          #
+          # 🔴 `|| true` 로 뭉개면 안 되는 이유가 여기 있다. 그건 exit 1 뿐 아니라
+          #    exit 2(설정·규칙 오류)까지 흡수해서, ruff 가 아예 못 돈 것을 `ruff: 0` 으로
+          #    — 사람이 읽으면 "main 보다 깨끗해졌다" 로 — 보고한다. 조용히 실패하는 게
+          #    아니라 **성공으로 보이는** 쪽이라 더 안 잡힌다.
+          rc=0
+          ruff check . --statistics > /tmp/now.txt 2>/tmp/err.txt || rc=$?
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::ruff 실행 자체가 실패했습니다 (exit $rc)"; head -3 /tmp/err.txt; exit 1
+          fi
+          if ! diff -u .github/ruff-baseline.txt /tmp/now.txt; then
+            echo "::error::규칙별 ruff 카운트가 기준선과 다릅니다. 줄였다면 기준선 파일도 같이 내려 주세요."
+            exit 1
+          fi
+          echo "ruff: 규칙별 기준선과 일치"

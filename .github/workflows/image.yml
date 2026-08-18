@@ -1,0 +1,208 @@
+# 계층 2 — 컨테이너. 이미지가 실제로 뜨고 PDF 를 만드는지 본다.
+#
+# 🔴 **유닛 테스트가 절대 못 잡는 것이 있어서 이 계층이 따로 있다.**
+#    `weasyprint` 네이티브 의존성(Pango·HarfBuzz)이 빠져도 **앱 import 는 성공한다** —
+#    컨테이너가 뜨고 헬스체크도 통과하고, PDF 를 만드는 순간에만 죽는다.
+#    폰트도 같다: `fonts-noto-cjk` 가 없으면 **에러 없이** 네모(두부) PDF 가 그냥 나간다.
+#    그래서 스모크가 "PDF 가 만들어졌는가" 가 아니라 **임베드된 폰트 이름까지** 본다.
+#
+# ⚠️ push 는 **main 에서만** 한다. PR 에서 밀면 (1) 포크 PR 에 시크릿이 안 내려가 실패하고
+#    (2) 리뷰 전 코드가 레지스트리에 올라간다.
+#
+# ⚠️ **필수 체크(required check)로는 `test` 만 건다.** 아래 `paths:` 필터 때문에 그 경로를
+#    안 건드리는 PR(문서 수정 등)에서는 이 잡이 **아예 생성되지 않는다** — 필수로 걸어 두면
+#    그런 PR 이 "대기 중"에서 영원히 안 풀린다. 이걸 필수로 만들려면 skip 용 더미 잡이 있어야 한다.
+name: image
+
+on:
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'scripts/**'
+      - 'requirements*.txt'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/image.yml'
+  push:
+    branches: [main]
+
+# 레지스트리 인증은 `secrets.DOCKERHUB_*` 로 하고 `GITHUB_TOKEN` 은 체크아웃에만 쓴다.
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# 🔴 **이 레포지토리는 public 이다 — 확인하고 그렇게 두기로 한 것이다(2026-08-18 결정).**
+#    노션 §7-3 의 초기 결정은 private 이었으나, private 으로 돌리면 EKS 에
+#    `imagePullSecret` 이 필요해 인프라와 묶이는 비용이 있어 public 을 유지한다.
+#    따라서 **main 에 push 되는 매 이미지가 공개 pull 대상**이다. 들어가는 것과 아닌 것:
+#      · 안 들어감 — 시크릿(이미지에 `.env` 를 COPY 하지 않는다) · `data/` · `data/golden/`
+#      · 들어감  — `app/**/prompts/` · `scripts/prompts/` 의 프롬프트 32개
+#    프롬프트를 비공개로 돌려야 할 사유가 생기면 그때 인프라와 같이 정한다. **모르고 열린
+#    것이 아니므로 이 줄을 근거로 슬쩍 되돌리지 말 것** — 되돌리려면 배포 쪽이 같이 바뀐다.
+#
+# 🔴 **다만 "나중에 정해도 된다" 의 유효 범위는 *앞으로 밀 이미지* 까지다.** private 전환은
+#    되돌리기가 비대칭이라 — 한 번 push 된 이미지는 그 시점에 이미 누가 pull·캐시했을 수 있고,
+#    나중에 private 으로 돌려도 **그때까지 나간 것은 회수되지 않는다.** 즉 이 결정은 "언제든
+#    무를 수 있는 선택" 이 아니라 **매 main push 마다 한 번씩 확정되는 선택**이다.
+#    프롬프트를 비공개로 둘 가능성이 조금이라도 있으면, 미루지 말고 **첫 main push 전에** 정할 것.
+#
+# ⚠️ **`secrets.DOCKERHUB_TOKEN` 은 2026-09-15 에 만료된다 — 알고 그 기간으로 끊었다.**
+#    그날 이후 main push 는 로그인 스텝에서 인증 실패로 죽는다(빌드·스모크는 그 전에 끝나
+#    있으므로 실패 지점이 명확하다). 만료 전에 Docker Hub 에서 토큰을 새로 발급해
+#    레포 시크릿을 갈아끼울 것.
+env:
+  IMAGE: y0njunch0i/sellon-ai-node
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # `main-<7자리>` 태그용. `github.sha` 는 40자라 그대로 쓰면 태그가 길다.
+      - name: 짧은 SHA
+        id: meta
+        run: echo "short=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      # buildx 가 있어야 `cache-from/to: type=gha` 가 먹는다.
+      - uses: docker/setup-buildx-action@v4
+
+      # PR 에서는 로그인하지 않는다(시크릿이 없을 수 있고, 어차피 push 도 안 한다).
+      - uses: docker/login-action@v4
+        if: github.event_name == 'push'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 🔴 `platforms` 를 명시한다. Apple Silicon 등에서 그냥 빌드하면 arm64 가 나오고
+      #    EKS x86 노드에서 `exec format error` 로 죽는다. 러너가 amd64 라 지금은
+      #    자연히 맞지만, 명시해 두면 러너가 바뀌어도 계약이 유지된다.
+      #
+      # 🔴 **main 에서도 여기서는 push 하지 않는다.** 빌드는 항상 `load: true` 로 로컬
+      #    데몬에만 넣고, 아래 스모크를 **통과한 뒤에** 민다. 빌드 스텝에서 바로 밀면
+      #    스모크가 빨간불이어도 이미지는 이미 레지스트리에 있고 `:main` 태그가 거기로
+      #    옮겨간 뒤다 — 요약 스텝이 건너뛰어 태그가 안 찍힐 뿐, 백엔드가 `:main` 을 보면
+      #    두부 PDF 를 만드는 이미지를 받는다. "리뷰 전 코드가 레지스트리에 올라간다" 를
+      #    이유로 PR push 를 막은 논리가 여기에도 그대로 적용된다.
+      #    단일 플랫폼(amd64)이라 이 순서가 가능하다.
+      - name: 빌드
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: |
+            ${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}
+            ${{ env.IMAGE }}:main
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 🔴 이 계층의 존재 이유. 이미지에 `tests/` 가 없어서 `app/` 만으로 도는 스모크다
+      #    — `tests/` 가 빠지는 건 `.dockerignore` 때문이 아니라(그건 `tests/fixtures/` 만
+      #    제외한다) Dockerfile 이 `app/` 과 `scripts/` 만 COPY 하기 때문이다.
+      - name: PDF 스모크 (네이티브 의존성 + CJK 폰트)
+        run: |
+          docker run --rm -i ${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }} \
+            python - <<'PY'
+          import re, sys, zlib
+          sys.stdout.reconfigure(encoding="utf-8")
+
+          from app.reporting.pdf_compiler import _BASE_CSS
+          import weasyprint
+
+          html = (
+              '<!DOCTYPE html><html><head><meta charset="utf-8"></head>'
+              f"<style>{_BASE_CSS}</style><body>"
+              "<h1>한글 렌더링 확인 — 색상·사이즈·소재</h1>"
+              "<p>표본 부족으로 보류된 상품 42개</p></body></html>"
+          )
+          pdf = weasyprint.HTML(string=html).write_pdf()
+
+          assert pdf[:5] == b"%PDF-", f"PDF 매직바이트가 아님: {pdf[:8]!r}"
+          assert len(pdf) > 1000, f"PDF 가 너무 작음: {len(pdf)}B"
+
+          blob = bytes(pdf)
+          for m in re.finditer(rb"stream\r?\n", bytes(pdf)):
+              try:
+                  blob += zlib.decompress(
+                      bytes(pdf)[m.end() : bytes(pdf).find(b"endstream", m.end())]
+                  )
+              except Exception:
+                  pass
+          fonts = sorted({n.decode() for n in re.findall(rb"/BaseFont\s*/([A-Za-z0-9+#\-]+)", blob)})
+
+          print(f"PDF {len(pdf):,} bytes")
+          print(f"임베드 폰트: {fonts}")
+
+          cjk = [f for f in fonts if "CJK" in f or "Noto" in f]
+          if not cjk:
+              raise SystemExit(
+                  "CJK 폰트가 임베드되지 않았습니다 — fonts-noto-cjk 누락 의심.\n"
+                  "  이 경우 에러 없이 네모(두부) PDF 가 그대로 나갑니다.\n"
+                  f"  실제 임베드: {fonts}"
+              )
+          if not any("KR" in f for f in cjk):
+              raise SystemExit(
+                  f"한국어가 아닌 자형으로 폴백했습니다: {cjk}\n"
+                  "  _BASE_CSS 의 'Noto Sans CJK KR' 지정이 빠졌는지 확인하세요."
+              )
+          print(f"CJK 폰트 확인: {cjk}")
+          PY
+
+      # 진입점이 넷이라 CMD 하나만 봐서는 이미지가 멀쩡한지 알 수 없다.
+      #
+      # ⚠️ **넷을 다 건드린다.** `app.batch.daily` 는 psycopg·raw_db·개선안 파이프라인·MQ 를
+      #    한꺼번에 끌고 오는, 넷 중 import 가 제일 깨지기 쉬운 진입점이다.
+      - name: 진입점 import 확인
+        run: |
+          IMG=${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}
+          docker run --rm "$IMG" python -c "import app.main"
+          docker run --rm "$IMG" python -m app.batch.daily --help >/dev/null
+          docker run --rm "$IMG" python scripts/classification_worker.py --help >/dev/null
+
+          # 🔴 컨슈머만 `--help` 로 확인할 수 없다 — argparse 가 없어서 인자를 그냥 무시하고
+          #    실제로 부팅한다. 이미지에 `.env` 가 없어 `mq_enabled` 가 기본값 false 라
+          #    `MqDisabledError` → **exit 2**(`EXIT_CONFIG_ERROR`)로 끝나는 것이 정상이다.
+          #    그래서 `|| true` 로 덮으면 안 된다 — 그러면 진짜 ImportError 여도 똑같이 통과한다.
+          #    import 가 깨지면 2 가 아니라 1 이 나오므로, "2 여야 한다" 가 정상 부팅과
+          #    import 깨짐을 가른다.
+          rc=0
+          docker run --rm "$IMG" python -m app.consumer >/dev/null 2>&1 || rc=$?
+          if [ "$rc" -ne 2 ]; then
+            echo "::error::app.consumer 가 exit $rc 로 끝났습니다 (기대 2 = MQ_ENABLED=false). import 실패 의심"
+            docker run --rm "$IMG" python -m app.consumer || true
+            exit 1
+          fi
+          echo "진입점 확인 완료 (app.main · app.batch.daily · classification_worker · app.consumer)"
+
+      # 스모크를 통과한 **바로 그 이미지**를 민다. 빌드를 다시 돌리지 않으므로 검증한 것과
+      # 밀리는 것이 같은 바이트임이 보장된다.
+      #
+      # ℹ️ `build-push-action` 이 미는 게 아니라 데몬에서 직접 밀기 때문에 provenance
+      #    attestation 이 붙지 않는다 — 태그가 인덱스가 아니라 단일 매니페스트로 남아
+      #    (Docker Hub 에 `unknown/unknown` 항목이 안 생긴다) 인프라에 넘기기 깔끔하다.
+      - name: 레지스트리 push
+        if: github.event_name == 'push'
+        run: |
+          docker push "${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}"
+          docker push "${{ env.IMAGE }}:main"
+
+      - name: 태그 요약
+        if: github.event_name == 'push'
+        run: |
+          {
+            echo "### 이미지 push 완료"
+            echo ""
+            echo '```'
+            echo "${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}   ← 배포는 이 태그로"
+            echo "${{ env.IMAGE }}:main                                    ← 움직임. 배포 금지"
+            echo '```'
+            echo ""
+            echo "platform: linux/amd64"
+          } >> "$GITHUB_STEP_SUMMARY"
