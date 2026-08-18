@@ -53,7 +53,6 @@ import asyncio
 import json
 import logging
 import os
-import sqlite3
 import sys
 import time
 from collections import Counter
@@ -63,7 +62,7 @@ from typing import Any
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.core import constants
+from app.core import constants, raw_db
 from app.core.console import force_utf8_output
 from app.core.constants import KST
 from app.core.mq import close_mq, new_trace_id, publish_report_generated
@@ -150,14 +149,21 @@ def _month_path(directory: Path, report_month: str, suffix: str) -> Path:
 
 
 def run_aggregate(args: argparse.Namespace) -> int:
-    db_path = Path(args.db).resolve()
-    if not db_path.exists():
-        logger.error(f"[DB ERROR] raw DB 가 없습니다: {db_path}")
-        return 1
-
+    # ⚠️ **연결은 `raw_db.connect_readonly()` 를 경유한다.** 집계는 읽기만 하므로 읽기
+    #    전용이 맞고, 여기서 `sqlite3.connect` 를 직접 부르면 `RAW_DB_HOST` 가 설정된
+    #    운영에서 **접속 정보를 파일 경로로 해석해** 못 붙는다.
+    #
+    # 🔴 **Postgres 실패는 `FileNotFoundError` 가 아니다** — `psycopg.Error` 는 그 하위가
+    #    아니라서 한쪽만 잡으면 다른 백엔드에서 raw traceback 이 나간다. 목록은
+    #    `raw_db.connection_error_types()` 가 준다(`app/batch/daily.py` 와 같은 형태).
     tracker = DeadlineTracker(args.deadline)
-    conn = sqlite3.connect(str(db_path), timeout=30.0)
-    conn.execute("PRAGMA busy_timeout=30000;")
+    try:
+        conn = raw_db.connect_readonly(args.db)
+    except (FileNotFoundError, *raw_db.connection_error_types()) as exc:
+        logger.error(
+            f"[DB ERROR] raw DB 를 읽지 못했습니다: {raw_db.describe_target(args.db)} - {exc}"
+        )
+        return 1
 
     try:
         inputs = aggregate_monthly_inputs(

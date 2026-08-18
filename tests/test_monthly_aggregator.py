@@ -73,8 +73,14 @@ def conn() -> sqlite3.Connection:
     확정 스키마 §2-4 `cs` · §2-5 `reviews` 를 그대로 쓰고, 집계가 읽는 것은 두 테이블을
     합친 `voc_document` 뷰다. 시각 컬럼명이 갈려 있어(inquired_at / created_at) 뷰가
     엉뚱한 쪽을 고르면 기간 절단이 통째로 어긋나므로, 픽스처도 실제 DDL 을 쓴다.
+
+    ⚠️ **`row_factory` 를 실제 경로와 맞춘다.** 운영에서는 `raw_db.connect_readonly()` 가
+       열어 주고 그 연결은 행을 **컬럼 이름으로** 읽게 돼 있다(sqlite 는 `sqlite3.Row`,
+       Postgres 는 `raw_db.RawRow`). 여기서 기본 튜플로 두면 집계가 이름으로 읽는 코드를
+       못 태우고, 정작 운영 경로에서만 `TypeError` 가 난다.
     """
     db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
     raw_schema.create_source_tables(db)
     raw_schema.create_classified_tables(db)
 

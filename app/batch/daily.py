@@ -658,10 +658,17 @@ def _require_classified_tables(conn: RawDbConnection, target: str) -> None:
     두 가지를 가른다. 둘 다 원문만 적재된 DB 에서 실제로 나는 상태다:
       - 테이블 자체가 없음 → 워커를 아직 안 돌렸다. 그냥 두면 `no such table` 이
         올라오는데, 원인이 "경로가 틀렸나"인지 "안 돌렸나"인지 안 드러난다.
-      - 8/7 확정 이전 구조로 남아 있음 → `find_legacy_tables`. `IF NOT EXISTS` 가 옛
-        테이블을 그대로 두기 때문에 **조회 단계에서 `no such column` 으로** 터진다
-        (PR #37 에서 워커가 같은 함정을 맞았다). `data/` 는 gitignore 라 팀원마다 DB
-        상태가 달라서 남아 있을 수 있다.
+      - 테이블 모양이 확정본과 다름 → `find_legacy_tables`. `IF NOT EXISTS` 가 이미 있는
+        테이블을 그대로 두기 때문에 **조회 단계에 가서야** 터진다(PR #37 에서 워커가 같은
+        함정을 맞았다). `data/` 는 gitignore 라 팀원마다 DB 상태가 달라서 남아 있을 수 있다.
+
+        ⚠️ **사유가 둘이고 증상이 다르다 — 메시지가 그 둘을 단정하면 안 된다.**
+          · 컬럼이 옛것    → 조회가 `no such column` 으로 **시끄럽게** 죽는다
+          · UNIQUE 제약 누락 → 아무것도 안 죽고 재분류가 같은 `(item_id, aspect)` 를
+            중복 적재해 **탐지 분자가 부푼다.** 오탐 방향이라 조용하다.
+        뒤쪽은 인프라가 낡은 문서로 테이블을 먼저 세워 뒀을 때 나오는 모양이다
+        (2026-08-18). 조치는 둘 다 "지우고 다시 만들기" 로 같지만, **사유를 "8/7 이전
+        스키마" 로 단정하면 제약이 빠진 사람이 스키마 버전을 뒤지게 된다.**
 
     조용히 빈 결과로 넘기지 않는 이유: items 가 0건이면 분자가 통째로 비어 **알림이
     한 건도 안 나오는데 배치는 정상 종료**한다. 무동작이 성공으로 보고되는 형태다.
@@ -669,8 +676,10 @@ def _require_classified_tables(conn: RawDbConnection, target: str) -> None:
     stale = raw_schema.find_legacy_tables(conn)
     if stale:
         raise RuntimeError(
-            f"raw DB 가 8/7 확정 이전 스키마입니다({', '.join(stale)}): {target} — "
-            "구버전 파일을 지우고 mock_producer·classification_worker 를 다시 돌리세요."
+            f"raw DB 의 분류 결과 테이블이 확정 스키마와 다릅니다({', '.join(stale)}): "
+            f"{target} — 컬럼이 옛것이거나 UNIQUE 제약이 빠져 있습니다. 해당 테이블을 지우고 "
+            "mock_producer·classification_worker 를 다시 돌리세요"
+            "(자세한 안내는 워커가 출력합니다)."
         )
     # ⚠️ **두 테이블을 다 본다.** `classified_item` 만 보면 자식 테이블이 없는 DB 에서
     #    `no such table: classified_item_aspect` 가 조회 단계에서 그대로 올라온다 —
