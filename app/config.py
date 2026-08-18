@@ -21,6 +21,21 @@ RAW_DB_SSLMODES = frozenset(
 )
 """libpq 가 받는 `sslmode` 값 전부. 오타를 **부팅에서** 걸러 접속 시점으로 미루지 않는다."""
 
+RAW_DB_MIN_CONNECT_TIMEOUT = 2
+"""libpq 가 실제로 존중하는 `connect_timeout` 최솟값. **그 아래는 다른 뜻이 된다.**
+
+blackhole IP(`10.255.255.1`) 실측, libpq 18:
+
+    connect_timeout=0    130.0초   ← 미지정과 같다. 0·음수는 "무한 대기" 다
+    connect_timeout=1      2.1초   ← 조용히 2 로 올라간다
+    connect_timeout=2      2.0초
+    connect_timeout=3      3.0초
+
+🔴 첫 줄이 이 상수가 있는 이유다 — "상한을 두지 않겠다" 는 뜻으로 0 을 적으면 **이 PR 이
+   없애려는 무한 대기가 그대로 돌아온다.** 둘째 줄은 설정값과 실제가 어긋나는 자리라
+   같이 막는다.
+"""
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -110,6 +125,25 @@ class Settings(BaseSettings):
     # 이미 `require` 로 돌고 ConfigMap 에 인증서가 없어 양쪽을 맞췄다).
     raw_db_sslrootcert: str = ""
 
+    # 접속 시도 상한(초). 🔴 **이 값이 없으면 무한 대기다** — libpq 기본값이 미지정이고
+    #    (실측: `pq.Conninfo.get_defaults()` → `''`), 그때 실패는 OS 의 TCP 재시도가 끝날
+    #    때까지 간다(blackhole IP 실측 **130초**). 두 호출부가 그동안 붙잡힌다:
+    #      배치 — CronJob 이 자리를 잡고 앉아 있다가 `activeDeadlineSeconds` 까지 간다.
+    #      REST — `service.generate_recommendation` 의 degrade 가 **발동하기 전에** 요청
+    #             하나가 그만큼 매달린다(배치만의 문제가 아니다).
+    #
+    # ⚠️ **#101 이 닫은 것과 축이 다르다.** 그 PR 은 *"예외를 어떻게 분류하나"* 를 고쳤고
+    #    이건 *"얼마나 매달리나"* 다. 130초를 기다린 뒤에도 결국 `OperationalError` 라
+    #    분류는 그때도 정상 동작했다 — 그래서 그 PR 로는 안 닫혔다.
+    #
+    # ⚠️ **짧을 때의 대가가 더 크다** — 배치가 그날 통째로 안 돌거나(데이터 갭) REST 가
+    #    CS 원문 없이 개선안을 만든다. 반대로 길 때 잃는 것은 시간뿐이다. 그래서 기대
+    #    지연(VPC 안 수십 ms)의 수백 배로 넉넉히 잡는다 — **무한만 없애면 목적은 달성된다.**
+    #
+    # ⚠️ 이건 **접속** 상한이지 질의 상한이 아니다. 붙은 뒤 질의가 멎는 경우는 별건이다
+    #    (`statement_timeout`). 지금 우리 조회는 인덱스가 있는 35일 범위라 범위 밖으로 둔다.
+    raw_db_connect_timeout: int = 10
+
     # --- 앱 ---
     log_level: str = "INFO"
 
@@ -185,6 +219,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"RAW_DB_SSLMODE={self.raw_db_sslmode} 는 CA 번들이 필요합니다 —"
                 " RAW_DB_SSLROOTCERT 를 채우거나 sslmode 를 require 로 두세요"
+            )
+
+        # 🔴 **0 을 "상한 없음" 으로 읽는 사람을 막는다.** libpq 에서 0·음수는 무한 대기라
+        #    (실측) 그렇게 적으면 이 키가 생기기 전 상태로 조용히 되돌아간다 — 값이 있으니
+        #    설정한 사람은 상한이 걸렸다고 믿는다. `RAW_DB_MIN_CONNECT_TIMEOUT` 참고.
+        if self.raw_db_connect_timeout < RAW_DB_MIN_CONNECT_TIMEOUT:
+            raise ValueError(
+                "RAW_DB_CONNECT_TIMEOUT 은"
+                f" {RAW_DB_MIN_CONNECT_TIMEOUT} 이상이어야 합니다 — libpq 에서 0·음수는"
+                " 무한 대기를 뜻하고 1 은 조용히 2 로 올라갑니다"
             )
 
         return self

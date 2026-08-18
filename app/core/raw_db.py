@@ -70,6 +70,10 @@ def conninfo_from_settings(settings: Settings | None = None) -> str:
 
     ⚠️ `sslmode` 는 항상 싣는다. 이 값을 빼면 libpq 기본값 `prefer` 로 떨어져 **서버가
        거부하면 조용히 평문으로** 붙는다(`config.raw_db_sslmode` 주석 참고).
+
+    ⚠️ `connect_timeout` 도 항상 싣는다. libpq 기본값이 미지정이라 빼면 **무한 대기**가
+       되고, 접속 못 하는 배치가 CronJob 자리를 130초씩 잡는다(실측). 값 검증은
+       `Settings._check_raw_db` 가 한다 — 0·음수가 다시 무한을 뜻하기 때문이다.
     """
     settings = settings if settings is not None else get_settings()
     if not settings.raw_db_host:
@@ -85,6 +89,7 @@ def conninfo_from_settings(settings: Settings | None = None) -> str:
         password=settings.raw_db_password or None,
         sslmode=settings.raw_db_sslmode,
         sslrootcert=settings.raw_db_sslrootcert or None,
+        connect_timeout=settings.raw_db_connect_timeout,
     )
 
 
@@ -217,6 +222,11 @@ def connect_readonly(
         dsn: Postgres 접속 문자열. 기본은 `conninfo_from_settings()` 가 조립한 값.
             `""` 를 명시하면 **원자값이 설정돼 있어도** sqlite 로 간다
             (`eval/run_monthly_oracle_eval.py` 가 그렇게 쓴다).
+            ⚠️ 여기에 **문자열을 직접 넘기면 `connect_timeout` 도 직접 넣어야 한다** —
+            기본값 주입은 `conninfo_from_settings()` 한 곳에서만 한다. 두 곳에서 같은
+            기본값을 넣으면 한쪽만 바뀌었을 때 조용히 갈리기 때문이고, 그래서 이 인자는
+            "전부 네가 정한다" 는 뜻이다. 지금 이 경로를 쓰는 것은 sqlite 로 되돌리는
+            `dsn=""` 뿐이다.
 
     Raises:
         FileNotFoundError: sqlite 파일이 없을 때. 목 파이프라인은 `scripts/mock_producer.py`

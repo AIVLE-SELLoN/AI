@@ -704,6 +704,36 @@ async def test_cause_failure_is_reported_as_batch_failure(
     assert "P001/색상/COUPANG/cs [원인분류]" in capsys.readouterr().out
 
 
+@pytest.mark.asyncio
+async def test_injected_loader_reports_unknown_not_zero(tmp_path):
+    """🔴 주입된 로더는 제외 건수가 **`None`(보고 안 함)** 이지 `0` 이 아니다.
+
+    골든 로더는 매핑이 없는 행을 세지 않고 그냥 건너뛴다(`scripts/golden_inputs.py`).
+    거기서 `{}` 나 `0` 을 실으면 배치가 **"제외 0건" 이라고 주장**하게 되는데, 그건
+    관측이 아니라 무지다. `classifier_versions` 가 골든 입력에 `None` 을 싣는 것과 같은
+    규칙이고, 같은 이유로 화면에도 줄이 안 나가야 한다.
+    """
+    summary = await daily.run_batch(
+        state_path=tmp_path / "state.json", load_inputs=_stub_inputs
+    )
+
+    assert summary["input_dropped"] is None
+
+
+def test_print_summary_shows_dropped_inputs_only_when_there_are_any(capsys):
+    """화면에 나야 값을 한다 — 요약 dict 에만 있으면 사람은 못 본다.
+
+    ⚠️ 반대편(비었거나 관측 불가면 줄을 안 낸다)도 같이 잠근다. 매번 "0건" 을 찍으면
+       눈에 안 띄는 줄이 하나 늘 뿐이고, 이 항목의 목적은 **늘었을 때 보이는 것**이다.
+    """
+    daily.print_summary(_fake_summary(input_dropped={"상품매핑 없음": 7}))
+    assert "상품매핑 없음 7건" in capsys.readouterr().out
+
+    for quiet in (None, {}):
+        daily.print_summary(_fake_summary(input_dropped=quiet))
+        assert "입력 제외" not in capsys.readouterr().out
+
+
 def _fake_summary(**overrides) -> dict:
     """`run_batch()` 반환값의 가짜. **실제 계약과 키가 정확히 같다.**
 
@@ -722,6 +752,9 @@ def _fake_summary(**overrides) -> dict:
         "elapsed_sec": 1.0,
         "items": 0,
         "documents": 0,
+        # None = "이 입력원은 제외 건수를 보고하지 않는다"(골든·테스트 fake).
+        # 0건과 다른 값이다 — `daily._read_inputs` 참고.
+        "input_dropped": None,
         "coverage_gap_slots": 0,
         "coverage_missing_documents": 0,
         "prior_alerts": 0,
