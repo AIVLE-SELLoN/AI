@@ -1,8 +1,8 @@
 # 계층 1 — 빠른 검증. 모든 PR 에서 돈다.
 #
-# 🔴 **시크릿·브로커·LLM 이 하나도 필요 없다.** 902개 테스트가 LLM 호출을 전부
-#    monkeypatch 로 대체하고(`tests/`), MQ 테스트는 파일 첫 줄에 "브로커 없이 돈다" 라고
-#    적혀 있다. 그래서 이 워크플로는 포크 PR 에서도 그대로 돈다.
+# 🔴 **시크릿·브로커·LLM 이 하나도 필요 없다.** 테스트가 LLM 호출을 전부 monkeypatch 로
+#    대체하고(`tests/`), MQ 테스트는 파일 첫 줄에 "브로커 없이 돈다" 라고 적혀 있다.
+#    그래서 이 워크플로는 포크 PR 에서도 그대로 돈다.
 #
 # ⚠️ `eval/` 은 **절대 넣지 않는다.** LLM 과금이 발생하고 수십 분이 걸린다
 #    (`eval/README.md`: "사람이 수동으로 실행한다. CI 에 넣지 말 것").
@@ -12,6 +12,11 @@ on:
   pull_request:
   push:
     branches: [main]
+
+# 이 워크플로는 체크아웃(읽기) 말고 레포에 손대는 일이 없다. 기본 토큰 권한은 조직·레포
+# 설정에 따라 달라지므로 최소 권한을 명시해 고정한다.
+permissions:
+  contents: read
 
 # 같은 브랜치에 연속 push 하면 앞 실행을 취소한다. main 은 취소하지 않는다
 # (머지된 커밋의 결과는 남아 있어야 한다).
@@ -42,29 +47,47 @@ jobs:
 
       # ⚠️ `data/**` 는 gitignore 라 CI 에 없다. 정본 데이터를 요구하는 테스트는
       #    `skipif` 로 스스로 빠진다(예: test_real_golden_mapping_converts_and_matches_catalog).
-      #    로컬 902 passed / CI 는 그만큼 skipped 가 더 나오는 게 정상이다.
+      #    **CI 가 찍는 값은 917 passed / 6 skipped 다** — `data/` 가 있는 로컬은
+      #    918 passed / 5 skipped 로 그중 하나가 통과 쪽으로 넘어간다(2026-08-18 실측).
+      #    수치를 대조할 땐 로컬 값이 아니라 위 CI 값을 본다.
       - name: pytest
         run: pytest -q
 
-      # 🔴 **`ruff` 의 종료코드를 `|| true` 로 흡수한다. `set -o pipefail` 을 쓰지 않는다.**
-      #    `ruff check .` 는 위반이 있으면 exit 1 을 돌려주는데, 그건 실패가 아니라
-      #    **우리가 세려는 값 그 자체**다. 그런데 Actions 기본 셸이 `bash -e` 라
-      #    `COUNT=$(...)` 대입이 그 1 을 물고 오는 순간 스크립트가 **비교 전에 중단**된다.
-      #    처음엔 pipefail 을 넣었다가 그렇게 죽었다 — 기준선과 무관하게 항상 실패해서
-      #    게이트가 아무것도 안 재고 있었다(2026-08-18 PR 체크에서 재현: 0초 만에 exit 1,
-      #    `ruff: 62` 조차 안 찍힘).
-      #
       # 🔴 **기준선 방식이다. `ruff check .` 를 그대로 게이트로 걸지 않는다.**
       #    지금 main 에 62건이 남아 있어서 그냥 걸면 첫날부터 전 PR 이 빨간불이 된다.
-      #    **늘어나는 것만** 막고, 줄이면 아래 숫자를 같이 내린다.
-      - name: ruff (기준선 62)
+      #
+      # 🔴 **비교 축은 총계가 아니라 규칙별(`--statistics`) 카운트다.** 총계로 걸면
+      #    "한 규칙이 늘고 다른 규칙이 그만큼 줄어든" 회귀가 그대로 통과한다 —
+      #    실측: `I001 8→10` · `DTZ001 32→28` 이면 총계는 62→60 이라 총계 게이트는 초록불이다
+      #    (PR #78 1회전에서 실제로 그렇게 새어 나갔다). 이 게이트의 목적이 리뷰어가 PR 마다
+      #    손으로 하던 `--statistics` 대조를 기계화하는 것인데, 총계로 걸면 수작업은 그대로
+      #    남으면서 사람은 초록불을 보고 안 하게 된다.
+      #
+      #    기준선 정본은 `.github/ruff-baseline.txt` 다(워크플로 안의 숫자가 아니다).
+      #    줄였을 때는 `ruff check . --statistics > .github/ruff-baseline.txt` 로 다시 뜨고
+      #    같은 PR 에 함께 커밋한다 — 운영 방식은 전과 같고, 숫자가 파일에 있다는 것만 다르다.
+      #
+      # ⚠️ 이 파일은 **ruff 버전에 통째로 묶여 있다.** 저장소에 ruff 설정 파일이 없어서
+      #    규칙집합이 곧 ruff 의 기본값이고, `requirements.txt` 의 `ruff==0.16.0` 이 그걸
+      #    러너와 로컬에 똑같이 고정한다. 이 핀을 올리면 기준선도 같이 다시 떠야 한다.
+      - name: ruff (규칙별 기준선)
         run: |
-          OUT=$(ruff check . 2>&1) || true
-          COUNT=$(printf '%s\n' "$OUT" | sed -n 's/^Found \([0-9]*\) error.*/\1/p')
-          COUNT=${COUNT:-0}
-          echo "ruff: $COUNT (기준선 62)"
-          if [ "$COUNT" -gt 62 ]; then
-            echo "::error::ruff 위반이 늘었습니다 ($COUNT > 62). 새로 추가된 것만 고치면 됩니다."
-            printf '%s\n' "$OUT"
+          # `|| rc=$?` 가 필수다. 그냥 쓰면 기본 셸 bash -e 가 여기서 스텝을 끝낸다
+          # (2026-08-18 이 PR 에서 pipefail 로 실제로 그렇게 죽었다 — 기준선과 무관하게
+          # 항상 실패해서 게이트가 아무것도 안 재고 있었다).
+          # ruff 종료코드: 0=위반 없음 / 1=위반 있음 / 2+=ruff 자체 실패
+          #
+          # 🔴 `|| true` 로 뭉개면 안 되는 이유가 여기 있다. 그건 exit 1 뿐 아니라
+          #    exit 2(설정·규칙 오류)까지 흡수해서, ruff 가 아예 못 돈 것을 `ruff: 0` 으로
+          #    — 사람이 읽으면 "main 보다 깨끗해졌다" 로 — 보고한다. 조용히 실패하는 게
+          #    아니라 **성공으로 보이는** 쪽이라 더 안 잡힌다.
+          rc=0
+          ruff check . --statistics > /tmp/now.txt 2>/tmp/err.txt || rc=$?
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::ruff 실행 자체가 실패했습니다 (exit $rc)"; head -3 /tmp/err.txt; exit 1
+          fi
+          if ! diff -u .github/ruff-baseline.txt /tmp/now.txt; then
+            echo "::error::규칙별 ruff 카운트가 기준선과 다릅니다. 줄였다면 기준선 파일도 같이 내려 주세요."
             exit 1
           fi
+          echo "ruff: 규칙별 기준선과 일치"

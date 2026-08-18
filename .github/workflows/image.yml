@@ -8,6 +8,10 @@
 #
 # ⚠️ push 는 **main 에서만** 한다. PR 에서 밀면 (1) 포크 PR 에 시크릿이 안 내려가 실패하고
 #    (2) 리뷰 전 코드가 레지스트리에 올라간다.
+#
+# ⚠️ **필수 체크(required check)로는 `test` 만 건다.** 아래 `paths:` 필터 때문에 그 경로를
+#    안 건드리는 PR(문서 수정 등)에서는 이 잡이 **아예 생성되지 않는다** — 필수로 걸어 두면
+#    그런 PR 이 "대기 중"에서 영원히 안 풀린다. 이걸 필수로 만들려면 skip 용 더미 잡이 있어야 한다.
 name: image
 
 on:
@@ -22,8 +26,12 @@ on:
   push:
     branches: [main]
 
+# 레지스트리 인증은 `secrets.DOCKERHUB_*` 로 하고 `GITHUB_TOKEN` 은 체크아웃에만 쓴다.
+permissions:
+  contents: read
+
 concurrency:
-  group: images-${{ github.ref }}
+  group: image-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
@@ -56,27 +64,29 @@ jobs:
       #    EKS x86 노드에서 `exec format error` 로 죽는다. 러너가 amd64 라 지금은
       #    자연히 맞지만, 명시해 두면 러너가 바뀌어도 계약이 유지된다.
       #
-      # ⚠️ PR 에서는 push 하지 않으므로 레지스트리에 안 올라간다. 대신 `load: true` 로
-      #    로컬 데몬에 넣어야 아래 스모크가 `docker run` 할 수 있다.
+      # 🔴 **main 에서도 여기서는 push 하지 않는다.** 빌드는 항상 `load: true` 로 로컬
+      #    데몬에만 넣고, 아래 스모크를 **통과한 뒤에** 민다. 빌드 스텝에서 바로 밀면
+      #    스모크가 빨간불이어도 이미지는 이미 레지스트리에 있고 `:main` 태그가 거기로
+      #    옮겨간 뒤다 — 요약 스텝이 건너뛰어 태그가 안 찍힐 뿐, 백엔드가 `:main` 을 보면
+      #    두부 PDF 를 만드는 이미지를 받는다. "리뷰 전 코드가 레지스트리에 올라간다" 를
+      #    이유로 PR push 를 막은 논리가 여기에도 그대로 적용된다.
+      #    단일 플랫폼(amd64)이라 이 순서가 가능하다.
       - name: 빌드
         uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64
-          push: ${{ github.event_name == 'push' }}
-          load: ${{ github.event_name != 'push' }}
+          push: false
+          load: true
           tags: |
             ${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}
             ${{ env.IMAGE }}:main
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # push 한 경우엔 레지스트리에서 받아 와서 **올라간 그 이미지**를 검증한다.
-      - name: 스모크용 이미지 확보
-        if: github.event_name == 'push'
-        run: docker pull ${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}
-
-      # 🔴 이 계층의 존재 이유. `tests/` 는 이미지에 없으므로(.dockerignore) `app/` 만으로 돈다.
+      # 🔴 이 계층의 존재 이유. 이미지에 `tests/` 가 없어서 `app/` 만으로 도는 스모크다
+      #    — `tests/` 가 빠지는 건 `.dockerignore` 때문이 아니라(그건 `tests/fixtures/` 만
+      #    제외한다) Dockerfile 이 `app/` 과 `scripts/` 만 COPY 하기 때문이다.
       - name: PDF 스모크 (네이티브 의존성 + CJK 폰트)
         run: |
           docker run --rm -i ${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }} \
@@ -127,13 +137,42 @@ jobs:
           PY
 
       # 진입점이 넷이라 CMD 하나만 봐서는 이미지가 멀쩡한지 알 수 없다.
+      #
+      # ⚠️ **넷을 다 건드린다.** `app.batch.daily` 는 psycopg·raw_db·개선안 파이프라인·MQ 를
+      #    한꺼번에 끌고 오는, 넷 중 import 가 제일 깨지기 쉬운 진입점이다.
       - name: 진입점 import 확인
         run: |
           IMG=${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}
           docker run --rm "$IMG" python -c "import app.main"
-          docker run --rm "$IMG" python -m app.consumer --help >/dev/null 2>&1 || true
+          docker run --rm "$IMG" python -m app.batch.daily --help >/dev/null
           docker run --rm "$IMG" python scripts/classification_worker.py --help >/dev/null
-          echo "진입점 확인 완료"
+
+          # 🔴 컨슈머만 `--help` 로 확인할 수 없다 — argparse 가 없어서 인자를 그냥 무시하고
+          #    실제로 부팅한다. 이미지에 `.env` 가 없어 `mq_enabled` 가 기본값 false 라
+          #    `MqDisabledError` → **exit 2**(`EXIT_CONFIG_ERROR`)로 끝나는 것이 정상이다.
+          #    그래서 `|| true` 로 덮으면 안 된다 — 그러면 진짜 ImportError 여도 똑같이 통과한다.
+          #    import 가 깨지면 2 가 아니라 1 이 나오므로, "2 여야 한다" 가 정상 부팅과
+          #    import 깨짐을 가른다.
+          rc=0
+          docker run --rm "$IMG" python -m app.consumer >/dev/null 2>&1 || rc=$?
+          if [ "$rc" -ne 2 ]; then
+            echo "::error::app.consumer 가 exit $rc 로 끝났습니다 (기대 2 = MQ_ENABLED=false). import 실패 의심"
+            docker run --rm "$IMG" python -m app.consumer || true
+            exit 1
+          fi
+          echo "진입점 확인 완료 (app.main · app.batch.daily · classification_worker · app.consumer)"
+
+      # 스모크를 통과한 **바로 그 이미지**를 민다. 빌드를 다시 돌리지 않으므로 검증한 것과
+      # 밀리는 것이 같은 바이트임이 보장된다.
+      #
+      # ℹ️ `build-push-action` 이 미는 게 아니라 데몬에서 직접 밀기 때문에 provenance
+      #    attestation 이 붙지 않는다 — 태그가 인덱스가 아니라 단일 매니페스트로 남아
+      #    (Docker Hub 에 `unknown/unknown` 항목이 안 생긴다) 인프라에 넘기기 깔끔하다.
+      - name: 레지스트리 push
+        if: github.event_name == 'push'
+        run: |
+          docker push "${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}"
+          docker push "${{ env.IMAGE }}:main"
 
       - name: 태그 요약
         if: github.event_name == 'push'
