@@ -79,6 +79,11 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
     "orders": {
         "file_name": "input_orders.csv",
         "time_column": "order_date",
+        # 🔴 **주문의 시각 컬럼은 날짜다 — 오프셋을 붙이지 않는다.** §2-9 가 `order_date` 를
+        #    DATE(하루 합산 키)로 정의했고 `build_db_row` 도 순수 날짜로 넣는다. payload 만
+        #    `2026-06-30T00:00:00` 처럼 시각을 달고 나가던 것을 여기서 맞춘다 —
+        #    날짜에 `+09:00` 을 붙이면 "그 날 09시"라는 없는 뜻이 생긴다.
+        "time_is_date": True,
         "topic": "raw.orders",
         "event_type": "ORDER",
         "id_column": None,          # 주문 CSV 에는 고유 ID 컬럼이 없어 행 순번으로 생성
@@ -90,6 +95,7 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
     "inquiries": {
         "file_name": "input_cs_inquiries.csv",
         "time_column": "inquired_at",
+        "time_is_date": False,
         "topic": "raw.inquiries",
         "event_type": "INQUIRY",
         "id_column": "inquiry_id",
@@ -101,6 +107,7 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
     "reviews": {
         "file_name": "input_reviews.csv",
         "time_column": "created_at",
+        "time_is_date": False,
         "topic": "raw.reviews",
         "event_type": "REVIEW",
         "id_column": "review_id",
@@ -115,6 +122,7 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
         #    변경 이벤트 대본(input_detail_changes.csv)이 생성되면 그때부터 자동으로 잡힌다.
         "file_name": "input_detail_changes.csv",
         "time_column": "changed_at",
+        "time_is_date": False,
         "topic": "raw.detail_changes",
         "event_type": "DETAIL_CHANGE",
         "id_column": "change_id",
@@ -536,10 +544,17 @@ def _resolve_group(
     group_of: dict[tuple[str, str], str],
     unmapped: set[tuple[str, str]],
 ) -> str:
-    """채널 상품 → 상품 그룹. 매핑에 없으면 채널 상품 ID 를 그대로 쓰고 기록해 둔다.
+    """채널 상품 → 상품 그룹. **매핑에 없으면 빈 문자열이다 — 대체값을 만들지 않는다.**
 
-    빈 문자열을 돌려주지 않는다 — 호출부의 `or None` 이 빈 값을 None 으로 접기 때문에
-    여기서 넘긴 대체값이 그대로 살아야 한다.
+    🔴 **예전에는 매핑 미스일 때 `channel_product_id` 를 그룹 자리에 넣었다(2026-08-18 제거).**
+       값이 채워져 있으니 조회는 성공하는데, 채널마다 다른 그룹이 되어(P001 →
+       C1057/N1024/Z1108) 한 그룹에 채널이 둘 이상 모이는 경우가 하나도 안 남았다
+       (실측: 채널 간 비교 42종 → 0종). 게다가 값이 있으니 탐지 배치의
+       `dropped["상품매핑 없음"]` 가드가 **발동하지 못해** 조용히 틀렸다. 비우면 호출부의
+       `or None` 이 `None` 으로 접고 그 가드가 제 일을 한다(제외 건수는 배치 요약에 뜬다).
+
+    ⚠️ 매핑 자체를 여기서 **하지 않는다.** 무엇으로 묶을지는 백엔드 소관이고(네이밍·임베딩),
+       우리는 이미 끝난 매핑을 조회할 뿐이다. 못 찾으면 비워서 내보내는 것이 정직하다.
     """
     if not channel_product_id:
         return ""
@@ -549,7 +564,7 @@ def _resolve_group(
         return resolved
     if group_of:  # 매핑은 있는데 이 상품만 빠진 경우 — 파일 부재와 구분해서 센다
         unmapped.add(key)
-    return channel_product_id
+    return ""
 
 
 def load_product_catalog(data_dir: Path) -> tuple[list[dict[str, str]], dict[str, str]]:
@@ -607,8 +622,9 @@ def build_channel_product_map(
 
     if not mapping:
         logger.warning(
-            f"상품 매핑 없음({CHANNEL_PRODUCTS_FILE} + {MAPPED_DATA_FILE}) — 채널 상품 ID 를 "
-            f"그룹 키로 대체합니다. 채널 간 비교와 상세페이지(ChromaDB) 조회가 빗나갑니다."
+            f"상품 매핑 없음({CHANNEL_PRODUCTS_FILE} + {MAPPED_DATA_FILE}) — product_group_id 를 "
+            f"전부 비워서 내보냅니다. 탐지가 분모에서 제외하므로 채널 간 비교·상세페이지"
+            f"(ChromaDB) 조회 결과가 통째로 비어 버립니다."
         )
     else:
         logger.info(
@@ -662,7 +678,17 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
             raw_dict = row.to_dict()
 
             sanitized_payload: dict[str, Any] = {k: _to_jsonable(v) for k, v in raw_dict.items()}
-            sanitized_payload[time_col] = event_time.isoformat()
+            # 🔴 **KST 오프셋을 붙여 내보낸다(2026-08-18 결정).** 대본 CSV 의 시각은 오프셋
+            #    없는 한국 벽시계인데 그대로 실어 보내면 받는 쪽이 UTC 로 읽어 9시간이 밀린다 —
+            #    그 시각이 탐지 윈도우의 날짜 경계를 정한다(§3). raw DB 적재 경로
+            #    (`build_db_row` 의 `to_kst_iso`)와 같은 표기로 맞춘 것이고, **값이 바뀌는 게
+            #    아니라 표기가 완성되는 것**이다.
+            #    ⚠️ 주문은 예외 — `order_date` 는 DATE 라 오프셋 대상이 아니다(§2-9).
+            sanitized_payload[time_col] = (
+                event_time.date().isoformat()
+                if config["time_is_date"]
+                else to_kst_iso(event_time)
+            )
             sanitized_payload["event_type"] = config["event_type"]
 
             channel = str(sanitized_payload.get("channel") or "")
@@ -691,7 +717,7 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
                 # ⚠️ 마스터 상품 그룹(P001…)은 답 노출 방지 설계상 input CSV 에 없다
                 #    (generate_mock_data.py 참고). 그래서 매핑으로 되찾는다 —
                 #    운영에서는 `products ⋈ mapped_data` 가 하는 일이다.
-                #    매핑에 없으면 채널 상품 ID 를 그대로 쓰되 아래에서 건수를 남긴다.
+                #    매핑에 없으면 **비워서** 내보내고 아래에서 건수를 남긴다(대체값 금지).
                 "product_group_id": (
                     sanitized_payload.get("product_group_id")
                     or _resolve_group(channel, channel_product_id, group_of, unmapped)
@@ -714,12 +740,12 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
         sys.exit(1)
 
     if unmapped:
-        # 매핑 파일은 있는데 일부 상품이 빠진 경우. 그 상품만 채널별로 갈리므로
-        # "일부만 조용히 틀리는" 상태가 된다 — 전량 실패보다 찾기 어렵다.
+        # 매핑 파일은 있는데 일부 상품이 빠진 경우. 그 행들은 `product_group_id` 가 비어
+        # 나가고 탐지가 분모에서 제외한다 — 전량 실패보다 찾기 어려우므로 건수를 남긴다.
         sample = ", ".join(f"{ch}:{cpid}" for ch, cpid in sorted(unmapped)[:3])
         logger.warning(
-            f"[MAP] 매핑에 없는 채널 상품 {len(unmapped)}종 — 채널 상품 ID 를 그룹 키로 대체합니다. "
-            f"예: {sample}"
+            f"[MAP] 매핑에 없는 채널 상품 {len(unmapped)}종 — product_group_id 를 비워서 "
+            f"내보냅니다(대체값을 만들지 않습니다). 예: {sample}"
         )
 
     return merged_events
