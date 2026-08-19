@@ -1,34 +1,26 @@
-"""담당: 지인 (2026-08-06 인수, 원작 서영) — 일 1회 탐지 배치. **운영 진입점.**
+"""담당: 지인 (원작 서영) — 일 1회 탐지 배치. 운영 진입점.
 
-왜 여기 있나
-------------
-백엔드 확정 구조상 탐지의 시작점은 **AI 노드 안에서 매일 도는 배치**다. 메인→AI 방향
-큐에 '탐지 요청'이 없고(셀러 피드백 2종뿐), `/detect` 는 body 로 items(분류 결과 전량)
-를 받는 API 인데 그걸 손에 든 건 분류를 수행하는 AI 노드 자신뿐이다 — 백엔드는 분류를
-하지 않는다. 그래서 `POST /detect` 는 운영 경로가 아니라 **재현·디버깅 창구**로 남는다.
-(2026-08-05 지인님 결선 정리)
+탐지의 시작점이 배치인 이유: 메인→AI 큐에 '탐지 요청' 이 없고, `/detect` 는 body 로 분류
+결과 전량을 받는데 그걸 손에 든 건 분류를 수행하는 AI 노드 자신뿐이다. 그래서
+`POST /detect` 는 운영 경로가 아니라 재현·디버깅 창구다.
 
-이 모듈이 `detection/service.py` 밖에 있는 이유
-    탐지 → 개선안 → CS 가이드라인 → 발행 루프를 detection 안에 넣으면 detection 이
-    recommendation 을 import 하게 되어 **"각 모듈은 core 에서만 가져다 쓴다"**는 팀
-    규칙이 깨진다. 그래서 양쪽 바깥에 있는 이 모듈이 둘 다 부른다.
+`detection/service.py` 밖에 있는 이유: 탐지 → 개선안 → 가이드라인 → 발행 루프를 detection
+안에 넣으면 detection 이 recommendation 을 import 하게 되어 "각 모듈은 core 에서만 가져다
+쓴다" 는 규칙이 깨진다.
 
-실행 (스케줄링은 아직 안 붙인다 — 주체가 백엔드인지 AI 노드인지 미정)::
+실행::
 
     python -m app.batch.daily --dry-run          # LLM 0회, 호출 횟수만 실측
     python -m app.batch.daily --max-alerts 3     # 비용 상한
     python -m app.batch.daily --window-end 2026-08-28
     python -m app.batch.daily --input-source golden --dry-run   # 평가·재현 (oracle)
 
-입력은 **주입**받는 형태다 — `run_batch(load_inputs=...)`. 기본값
-`load_inputs_from_db()` 는 raw DB(`cs`·`reviews`·`classified_item`)를 직접 읽는다.
-목 파이프라인에서는 그 테이블을 `scripts/mock_producer.py` 와
-`scripts/classification_worker.py` 가 채우므로, **둘을 먼저 돌려야 배치가 돈다.**
+입력은 주입받는다(`run_batch(load_inputs=...)`). 기본값은 raw DB 직접 읽기라, 목
+파이프라인에서는 `mock_producer` 와 `classification_worker` 를 먼저 돌려야 배치가 돈다.
 
-🔴 **이 모듈은 `data/golden/` 을 읽지 않는다.** `eval/README.md` §232("`data/golden/`
-   은 `eval/` 만 읽는다 — `app/` 이 import 하면 컨닝이다")를 지키기 위해 골든 로더를
-   `scripts/golden_inputs.py` 로 뺐다(2026-08-06). 평가·재현으로 배치를 돌릴 때만
-   `--input-source golden` 으로 주입하고, 그때는 요약이 oracle 경고를 함께 낸다.
+**이 모듈은 `data/golden/` 을 읽지 않는다** — `app/` 이 골든을 읽으면 컨닝이라 골든 로더를
+`scripts/golden_inputs.py` 로 뺐다. 평가·재현일 때만 주입하고, 그때는 요약이 oracle 경고를
+함께 낸다.
 """
 
 from __future__ import annotations
@@ -105,7 +97,7 @@ __all__ = [
 # 시그니처는 지인님 결선 정리(2026-08-05)의 예시 코드를 그대로 따른다.
 # 실물이 생기면 아래 except 가 안 타므로 이 파일은 손댈 필요가 없다.
 #
-# ⚠️ **모듈이 없을 때만 폴백한다.** `except ImportError` 로 통째로 삼키면, 모듈은
+# **모듈이 없을 때만 폴백한다.** `except ImportError` 로 통째로 삼키면, 모듈은
 #    올라왔는데 그 안의 의존성(예: `aio_pika`)이 없어서 나는 ImportError 까지 먹고
 #    조용히 no-op 이 된다 — 요약엔 "미연결"로 찍혀서 보는 사람은 "아직 안 만들었나"
 #    로 읽고, 이벤트가 하나도 안 나가는데 배치는 정상 종료한다.
@@ -215,7 +207,7 @@ STUB_CAUSE = "기타"
 라우팅·생성을 통째로 건너뛰어 호출 수 추정이 어긋난다. 이 값은 실제 원인·조치 분포를
 재현하지 않는다. dry-run에서 원인 검증 이후 게이트와 호출 수를 보존하기 위한 값이다.
 
-⚠️ `scripts/crosscheck_agent2_to_agent3.py` 도 이 값과 `CountingClient` 를 그대로
+`scripts/crosscheck_agent2_to_agent3.py` 도 이 값과 `CountingClient` 를 그대로
    가져다 쓴다. 두 도구가 같은 호출 수를 내야 하므로 복제하지 말 것."""
 
 
@@ -351,32 +343,19 @@ async def _process_alert(
     건너뛰면 셀러가 이상 자체를 못 본다
     (test_silent_recommendation_failure_still_shows_up).
     """
-    # 개선안·가이드라인이 **같은 CS 원문**을 근거로 쓴다. 여기서 한 번 만들어 둘 다
-    # 에게 넘긴다 — 각자 만들면 같은 매핑이 두 벌이 되고, C4(item_id ↔ cs/reviews PK)
-    # 가 풀려 DB 조회로 바뀔 때 고칠 곳이 두 곳이 된다.
+    # 개선안과 가이드라인이 같은 CS 원문을 쓴다. 한 번 만들어 둘 다에게 넘긴다 — 각자
+    # 만들면 같은 매핑이 두 벌이 된다.
     #
-    # 🔴 **아래 격리 안에 있어야 한다 — 밖에 두면 배치가 통째로 죽는다.** 이 루프를
-    #    감싸는 try(위 `finally: close_mq()`)엔 except 가 없어서 여기서 던지면
-    #    run_batch 밖으로 나가고, `save_published()` 가 try/finally **뒤**라 같이
-    #    건너뛴다 — **이미 발행에 성공한 앞쪽 알림이 캐시에 안 들어가서 다음 배치가
-    #    같은 알림을 다시 만들고 LLM 비용을 또 쓴다.** documents 한 행이 이상해서
-    #    죽을 수 있는 자리라(값 검증은 `LinkedCSInquiry` 가 한다) 격리 대상이다.
-    #
-    # ⚠️ **`continue` 하지 않는다 — 알림 자체는 발행한다.** 알림은 통계로 서고
-    #    CS 원문과 무관하다. 여기서 건너뛰면 셀러가 그 이상 자체를 못 본다.
-    #    이 루프의 다른 단계도 전부 같은 규율이다(`개선안`·`가이드라인` 실패가
-    #    발행을 막지 않는다 — test_silent_recommendation_failure_still_shows_up).
-    #    빈 리스트로 내려보내면 `generate_guideline` 이 "대상 알림인데 원문이
-    #    0건" 을 ValueError 로 올려서 그쪽 단계에도 정직하게 남는다(그 함수
-    #    docstring 의 Raises 가 바로 이 경우다). 두 항목이 남지만 단계 이름이
-    #    달라서 어느 쪽이 근본 원인인지 구분된다.
+    # **`continue` 하지 않는다 — 알림 자체는 발행한다.** 알림은 통계로 서고 CS 원문과
+    # 무관해서, 건너뛰면 셀러가 이상 자체를 못 본다. 빈 리스트로 내려보내면
+    # `generate_guideline` 이 ValueError 로 올려 그쪽 단계에도 정직하게 남는다.
     try:
         inquiries = build_linked_inquiries(alert, documents)
     except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
         inquiries = []
         tally.fail(alert.alert_id, "CS 원문 매핑", exc)
 
-    # ⚠️ alert 1건이 터져도 배치는 계속한다. 여기서 던지면 **이미 LLM 비용을 쓴
+    # alert 1건이 터져도 배치는 계속한다. 여기서 던지면 **이미 LLM 비용을 쓴
     #    앞쪽 알림들까지 발행되지 않고 날아간다.** 실패는 모아서 끝에 요약한다.
     rec = guideline = None
     # §4 — 대기열 적재 판정용. 아래 두 예외 지점이 후보만 표시하고, 실제 적재는
@@ -391,21 +370,14 @@ async def _process_alert(
             tally.counts["개선안"] += 1
             tally.fail(alert.alert_id, "개선안", exc)
         else:
-            # ⚠️ `generate_outcome_for_alert` 는 **계약상 예외를 안 던지고** 실패를
-            #    개선안 없는 결과로 돌려준다. 위 except 만 두면 실패가 요약에도
-            #    종료코드에도 안 남아서, 개선안이 하나도 안 붙은 배치가 "성공"으로
-            #    끝난다. else 인 이유: except 와 둘 다 타면 실패 1건이 요약에 2건으로
-            #    잡혀 배치 요약의 실패 건수를 못 믿게 된다.
+            # `generate_outcome_for_alert` 는 계약상 예외를 안 던지고 실패를 "개선안 없는
+            # 결과" 로 돌려준다. 위 except 만 두면 개선안이 하나도 안 붙은 배치가 "성공" 으로
+            # 끝난다. `else` 인 이유는 except 와 둘 다 타면 실패 1건이 2건으로 잡혀서다.
             #
-            # 🔴 **개선안이 없는 사유를 셋으로 가른다 (2026-08-10).**
-            #    상세페이지 미등록은 흔한 **데이터 갭**이고(mock 504행 중 489행이
-            #    "정보 없음"), 그걸 실패로 세면 배치가 상시 종료코드 1로 끝나서 진짜
-            #    장애가 묻힌다. 근거 0건(`is_evidence_gap`)과 모델이 빈 쪽을 고른 것
-            #    (`is_routing_miss`)은 **근본 원인이 같아** 둘 다 실패에서 뺀다.
-            #    대신 각각 따로 세서 요약에 남긴다 — 라우팅 미스가 조용해지면
-            #    프롬프트 v3 를 손볼 근거가 사라진다.
-            #    ⚠️ 판정은 `RecommendationOutcome` 이 한다(`counts_as_failure`).
-            #    여기서 사유를 다시 판정하면 사유가 늘 때 두 곳이 갈린다.
+            # 개선안이 없는 사유를 셋으로 가른다. 근거 0건과 라우팅 미스는 근본 원인이 같고
+            # (상세페이지 미등록, mock 504행 중 489행) 실패로 세면 배치가 상시 exit 1 이라
+            # 진짜 장애가 묻힌다. 대신 따로 세서 요약에 남긴다.
+            # 판정은 `RecommendationOutcome` 이 한다 — 여기서 다시 판정하면 두 곳이 갈린다.
             if outcome.is_evidence_gap:
                 # 라우팅 전에 걸러지므로 LLM 호출은 0회다 — 개선안 카운트에 안 넣는다.
                 tally.evidence_gaps += 1
@@ -424,7 +396,7 @@ async def _process_alert(
 
     try:
         guideline = await generate_guideline(alert, inquiries)
-        # ⚠️ `None` 은 **생성 대상이 아니라는 뜻**이지 실패가 아니다
+        # `None` 은 **생성 대상이 아니라는 뜻**이지 실패가 아니다
         #    (`is_guideline_target()` — `evidence.inquiry_ids` 가 빈 스코프 밖 알림).
         #    그것까지 세면 dry-run 추정과 실제 집계가 서로 다른 것을 세게 되고,
         #    비용 추정이 위로 어긋난다. 실패(FAILED_*)는 콜백을 돌려주므로 여기 든다.
@@ -513,7 +485,7 @@ async def run_batch(
 
     items, documents, input_dropped = _read_inputs(loader, window_end)
 
-    # ⚠️ **window_end 를 여기서 한 번만 확정한다.** 로드·탐지·저장이 같은 값을 써야 한다.
+    # **window_end 를 여기서 한 번만 확정한다.** 로드·탐지·저장이 같은 값을 써야 한다.
     #    읽기는 실행 시각(`date.today()`), 쓰기는 데이터 시각(`window_end`)이면, 데이터가
     #    오늘보다 STATE_RETENTION_DAYS 이상 뒤처진 상태(백필·유입 지연)에서 로드가 방금
     #    저장한 캐시를 통째로 버려 **매 배치가 첫 실행처럼 굴러간다.** 억제 모듈이 경과일을
@@ -548,25 +520,10 @@ async def run_batch(
                 gap["documents"],
             )
 
-    # **KST 로 오늘을 정한다.** 문서가 하나도 없어 window_end 를 데이터에서 못 정했을
-    # 때만 타는 분기다. `date.today()` 는 호스트 로컬이라 UTC 컨테이너에서는 KST 보다
-    # 하루 이른 날짜가 나오는데, **날짜 경계는 §3 이 KST 로 못박았으므로** 여기서도
-    # 같은 기준을 쓴다.
-    #
-    # ⚠️ **운영 사고를 막는 코드가 아니다 — 계약 일관성용이다** (서영님 사후 리뷰, PR #68).
-    #    이 분기에서 `prior` 는 바로 아래 로그의 건수에만 쓰인다: documents 가 0건이라
-    #    `detect_anomaly` 가 빈 rows 로 즉시 반환하고(`service.py` 의 `if not rows`),
-    #    `save_published` 도 window_end 가 None 이라 건너뛴다. `load_prior_alerts` 는
-    #    읽기 전용이라 상태 파일도 안 바뀐다.
-    #
-    #    처음엔 "기록이 하루 일찍 잘려 억제가 빨리 풀린다"고 적었는데 **방향이 반대다** —
-    #    여기서 넘긴 날짜로 `cutoff = 그 날짜 - STATE_RETENTION_DAYS` 를 잡고
-    #    **`alert.window_end >= cutoff`** 인 기록을 보관하므로(`load_prior_alerts`),
-    #    날짜가 이르면 cutoff 도 일러져 오히려 **더 오래** 남는다
-    #    (실측: today=1/28 → 3건 보관, today=1/29 → 2건).
-    #    ⚠️ 두 `window_end` 는 다른 값이다 — 앞은 이 함수의 인자(기준일), 뒤는 보관
-    #       후보 알림의 필드다. 이름이 같아 자기 자신과 비교하는 것처럼 읽힌다.
-    #       (서영님 PR #69 리뷰 잔가지)
+    # 문서가 0건이라 window_end 를 못 정한 경우에만 타는 분기. `date.today()` 는 호스트
+    # 로컬이라 UTC 컨테이너에서 KST 보다 하루 이르다 — 날짜 경계가 KST 로 못박혀 있으므로
+    # 여기서도 같은 기준을 쓴다. 운영 사고를 막는 코드가 아니라 계약 일관성용이다(그 경우
+    # `prior` 는 아래 로그 건수에만 쓰이고 상태 파일도 안 바뀐다).
     prior = load_prior_alerts(window_end or datetime.now(KST).date(), state_path)
     logger.info(
         "입력 items=%d documents=%d prior_alerts=%d window_end=%s",
@@ -583,7 +540,7 @@ async def run_batch(
     if pending:
         logger.info("가이드라인 재시도 대기 %d건", len(pending))
 
-    # ⚠️ dry-run 이어도 [6] 원인분류는 detect_anomaly 안에서 돈다. 스텁을 안 주면
+    # dry-run 이어도 [6] 원인분류는 detect_anomaly 안에서 돈다. 스텁을 안 주면
     #    "LLM 0회"라고 해놓고 실제로 과금된다.
     stub = CountingClient() if dry_run else None
     detection_diagnostics = DetectionDiagnostics()
@@ -609,13 +566,9 @@ async def run_batch(
             "원인분류",
             failure["error"],
         )
-    # §4 — 두 상태 파일(대기열·억제 캐시)은 원자적으로 같이 못 쓴다. 직전 실행이
-    # 대기열 저장(선행)과 억제 캐시 저장(후행) **사이**에서 죽으면 "대기열엔 있는데
-    # 억제는 안 된" 알림이 남고, 그 알림은 이번 실행에 신규 target 으로 다시 뜬다 —
-    # 메인 루프가 가이드라인까지 다시 만드므로 겹치는 대기 항목을 여기서 걷어내
-    # **한 경로만** 태운다 (PR #90 리뷰 2회전 P1 실측: 같은 guideline_id 2회 발행).
-    # 걷힌 건의 attempts 는 버려진다 — 메인 루프가 실패하면 attempts=0 으로 다시
-    # 들어오는데, 크래시 창 한정이라 재시도가 늘어나는 방향의 오차만 있다.
+    # 두 상태 파일(대기열·억제 캐시)을 원자적으로 같이 못 쓴다. 직전 실행이 그 사이에서
+    # 죽으면 "대기열엔 있는데 억제는 안 된" 알림이 남아 이번에 신규 target 으로 다시 뜨고,
+    # 그러면 같은 guideline_id 가 두 번 발행된다. 겹치는 대기 항목을 걷어내 한 경로만 태운다.
     target_ids = {a.alert_id for a in targets}
     superseded = sum(1 for e in pending if e["alert"].alert_id in target_ids)
     if superseded:
@@ -640,12 +593,9 @@ async def run_batch(
         # 실제 실행과 같은 예산을 적용해야 추정이 실측과 일치한다.
         tally.counts["가이드라인"] += min(len(pending), retry_budget)
 
-    # ⚠️ **연결을 반드시 닫는다.** app/core/mq.py 가 프로세스당 연결·채널을 재사용하는데,
-    #    닫지 않고 이벤트 루프가 내려가면 connect_robust 의 재연결 태스크가 정리되지 않아
-    #    "Task was destroyed but it is pending" 이 뜨고, 나중에 이 배치가 장수 프로세스에
-    #    얹히거나 반복 호출되면 연결이 샌다. 루프 도중 예외가 나가도 닫히도록 finally 다.
-    #    한 번도 발행하지 않았으면(dry-run 등) 연결 자체가 없어서 no-op 이다.
-    #    (서영님 PR 리뷰 §1, 2026-08-07)
+    # MQ 연결은 프로세스당 재사용이라 반드시 닫는다. 안 닫고 이벤트 루프가 내려가면
+    # 재연결 태스크가 남아 "Task was destroyed but it is pending" 이 뜨고, 반복 호출되면
+    # 연결이 샌다. 루프 도중 예외가 나가도 닫히도록 finally 다(발행이 없었으면 no-op).
     try:
         for alert in targets:
             if dry_run:
@@ -715,18 +665,10 @@ async def run_batch(
     finally:
         await close_mq()
 
-    # §4 대기열을 억제 캐시보다 **먼저** 저장한다(write-ahead) — 순서가 반대면 두 쓰기
-    # 사이에서 죽었을 때 알림은 억제되는데 대기 항목이 없어, 이 PR 이 막으려는 구멍
-    # (가이드라인 영구 유실)이 그대로 재현된다 (PR #90 리뷰 P1). 저장이 실패하면 해당
-    # 알림을 delivered 에서 빼서 다음 배치가 통째로 재처리하게 한다 — 영구 유실보다
-    # 중복 비용(재발행·재생성)을 택한다.
-    #
-    # 같은 alert_id 가 대기열과 신규 target 에 **정상 경로에서는** 겹치지 않지만(대기열은
-    # 알림 발행 성공 건만 받아 자기 window 동안 억제된다), 두 파일을 원자적으로 같이 쓸
-    # 수 없어 "대기열 저장 성공 + 억제 캐시 저장 실패" 크래시 창에서는 겹친다 — 그건
-    # 실행 초입의 대기열-target 조정이 걷어낸다(리뷰 2회전 P1). 억제 만료·갱신으로 다시
-    # 뜨는 알림은 window_end 가 달라 alert_id 도 다르다(별개 알림 = 각자 가이드라인).
-    # dry-run 은 읽기만 하고, window_end 가 없으면 로드도 안 했으므로 파일을 안 건드린다.
+    # 대기열을 억제 캐시보다 **먼저** 저장한다(write-ahead). 순서가 반대면 두 쓰기 사이에서
+    # 죽었을 때 알림은 억제되는데 대기 항목이 없어 가이드라인이 영구 유실된다. 저장이
+    # 실패하면 그 알림을 delivered 에서 빼 다음 배치가 통째로 재처리하게 한다 — 영구 유실보다
+    # 중복 비용을 택한다. 반대 방향의 크래시 창은 실행 초입의 대기열-target 조정이 걷어낸다.
     pending_after = still_pending + [
         {"alert": a, "attempts": 0} for a in tally.guideline_pending
     ]
@@ -757,17 +699,10 @@ async def run_batch(
         "elapsed_sec": round((datetime.now(timezone.utc) - started).total_seconds(), 1),
         "items": len(items),
         "documents": len(documents),
-        # 입력에서 **버린** 행의 사유별 건수. 지금까지 경고 로그로만 남아서, 미매핑이
-        # 늘어도 아무도 몰랐다 — CronJob 로그를 여는 사람이 없다는 것이 이 저장소가
-        # 반복해서 전제해 온 사실이다.
-        #
-        # ⚠️ **종료코드에 안 싣는다.** 미매핑은 상류(백엔드 상품 매핑)의 데이터 갭이지
-        #    우리 배치의 고장이 아니고, 사람이 손으로 재매핑하는 흐름이라(2026-08-18 규리
-        #    확인) 배치를 세워도 그 자리에서 할 수 있는 게 없다. `no_evidence` 를 실패에서
-        #    뺀 것과 같은 기준이다 — **갭은 카운터로, 고장은 종료코드로.**
-        #
-        # ⚠️ 값이 `None` 이면 "0건" 이 아니라 **"이 입력원은 보고하지 않는다"** 이다
-        #    (`_read_inputs`).
+        # 입력에서 버린 행의 사유별 건수. 경고 로그로만 남기면 CronJob 로그를 아무도 안 봐서
+        # 미매핑이 늘어도 모른다. **종료코드에는 안 싣는다** — 미매핑은 상류의 데이터 갭이고
+        # 사람이 손으로 재매핑하는 흐름이라 배치를 세워도 할 수 있는 게 없다(갭은 카운터로,
+        # 고장은 종료코드로). `None` 은 0건이 아니라 "이 입력원은 보고하지 않는다" 이다.
         "input_dropped": input_dropped,
         "coverage_gap_slots": len(unreliable),
         "coverage_missing_documents": sum(
@@ -808,7 +743,7 @@ def print_summary(summary: dict) -> None:
         f"  입력          items {summary['items']} / documents {summary['documents']}"
         f"  [{summary['input_source']}]"
     )
-    # 🔴 요약에 실어 두기만 하면 절반이다 — 사람이 실제로 보는 것은 이 화면이다.
+    # 요약에 실어 두기만 하면 절반이다 — 사람이 실제로 보는 것은 이 화면이다.
     #    비어 있으면(또는 관측 불가면) 줄을 안 낸다: 매번 "0건" 을 찍으면 눈에 안 띄는
     #    줄이 하나 늘 뿐이고, 이 항목의 목적은 **늘었을 때 보이는 것**이다.
     if summary.get("input_dropped"):
@@ -893,7 +828,7 @@ def print_summary(summary: dict) -> None:
 
 
 def main() -> None:
-    # 🔴 **argparse 를 만들기 전에 부른다.** 예전엔 `parse_args()` 뒤에 있었는데,
+    # **argparse 를 만들기 전에 부른다.** 예전엔 `parse_args()` 뒤에 있었는데,
     #    아래 `--state-path` 도움말에 `—` 가 들어 있어 **`--help` 나 잘못된 인자만으로
     #    cp949 콘솔에서 죽었다**(2026-08-14 재현: exit 1, UnicodeEncodeError).
     #    argparse 는 우리 코드가 첫 줄을 찍기 한참 전에 자기 출력을 내보낸다.
@@ -937,47 +872,21 @@ def main() -> None:
 
         loader = load_golden_inputs
 
-    # ⚠️ **`parse_args()` 뒤에 둔다.** 앞으로 옮기면 설정 오타 하나로 `--help` 조차 못 본다.
-    #    ⚠️ 반대로 `force_utf8_output()` 보다 앞으로는 못 간다 — 그건 첫 문장이어야 한다
-    #       (`tests/test_console_encoding.py` 가 강제).
-    #
-    # 🔴 **여기서 설정을 한 번 읽는 것이 아래 깊은 호출부까지 덮는다.** `get_settings()` 가
-    #    `@lru_cache` 라, 이 시점에 성공하면 `_active_version_params()`·`load_inputs_from_db()`
-    #    가 나중에 부를 때 같은 인스턴스를 받는다. 실패하면 `run_batch` 에 들어가기 전에
-    #    exit 2 로 끝난다 — 예전엔 그 깊은 호출부에서 미포착 `ValidationError` 가 터져
-    #    **exit 1 + raw traceback** 이었고, 그건 아래 "실패가 있음"(=1)과 구분이 안 됐다.
-    #
-    # ⚠️ 로깅 레벨이 `logging.INFO` 고정에서 **`LOG_LEVEL` 을 따르는 것으로 바뀐다.**
-    #    기본값이 `INFO` 라 평소 동작은 그대로고, 다른 두 진입점과 같아진다.
+    # 자리가 고정돼 있다. `parse_args()` 앞으로 옮기면 설정 오타 하나로 `--help` 조차 못
+    # 보고, `force_utf8_output()` 앞으로는 못 간다(그건 첫 문장이어야 한다).
+    # `get_settings()` 가 `@lru_cache` 라 여기서 한 번 읽으면 깊은 호출부까지 덮인다 —
+    # 실패해도 `run_batch` 전에 exit 2 로 끝나서, 아래 "실패가 있음"(=1)과 구분된다.
     configure_logging_or_exit("배치")
-    # 🔴 **바깥 껍질 — 실행 중 드러나는 환경 전제도 2 로 가른다.**
-    #    부팅 가드(`configure_logging_or_exit`)는 `Settings` 로 읽히는 값만 본다. 그런데
-    #    배치에서 **제일 자주 나는 실패는 그 다음**이다 — raw DB 경로가 틀렸거나(볼륨 마운트
-    #    누락) 스키마가 옛 버전이거나 분류 결과 테이블이 없는 것. 전부 **재시작해도 같으니**
-    #    exit 1("재시작하면 나을 수 있다")로 보고하면 k8s 가 영원히 재시도한다.
-    #    (용준님 PR #98 리뷰 ①, 재현 확인)
+    # 바깥 껍질 — 부팅 가드가 못 보는 **실행 중 환경 전제**도 exit 2 로 가른다. 배치에서
+    # 제일 잦은 실패가 그쪽이다(raw DB 경로·옛 스키마·분류 결과 테이블 부재). 전부 재시작해도
+    # 같으니 exit 1 로 보고하면 k8s 가 영원히 재시도한다.
     #
-    #    ⚠️ **왜 이 타입들인가.** `raise RuntimeError` 는 `app/` 전체에서 이 파일의 전제
-    #       검사 3곳뿐이고(`test_runtime_error_stays_confined_to_preconditions` 가 잠근다),
-    #       `FileNotFoundError` 는 `raw_db.connect_readonly()` 의 "raw DB 없음" 하나다.
-    #       ⚠️ `raw_db` 쪽 타입을 바꾸는 안은 못 쓴다 — `app/recommendation/service.py` 가
-    #       `except FileNotFoundError` 로 **의도적 degrade** 를 하고 `inquiries.py` 가 그걸
-    #       계약으로 문서화해 뒀다.
+    # 세 타입인 이유: `RuntimeError` 는 `app/` 전체에서 전제 검사뿐이고(AST 가드가 잠근다),
+    # `FileNotFoundError` 는 "raw DB 없음" 하나다. `psycopg.Error` 는 둘 중 어느 것도 아니라
+    # `connection_error_types()` 를 안 넣으면 Postgres 실패가 전부 exit 1 + traceback 이 된다.
     #
-    #    🔴 **`connection_error_types()` 는 Postgres 문을 같은 계약 안으로 넣는다.**
-    #       위 두 타입만으로 환경 전제가 다 덮인다는 것은 **sqlite 일 때만** 참이다 —
-    #       `psycopg.Error` 는 둘 중 어느 것도 아니라서(실측) DSN 오타·DB 미기동·뷰 없음·
-    #       GRANT 누락이 전부 **여기를 그냥 지나 exit 1 + raw traceback** 이 된다.
-    #       #98 이 없앤 상태가 백엔드만 바뀌어 그대로 돌아오는 자리이고, 하필 첫 연동에서
-    #       제일 잦다. 목록·근거는 `raw_db.connection_error_types()` docstring.
-    #
-    #    ⚠️ 라이브러리가 던진 `RuntimeError` 가 여기 걸리면 "환경 문제" 로 오분류된다.
-    #       CronJob 이라 **다음 예약 실행은 그대로 돌아서** 비용이 비대칭이다 — 지금(exit 1)은
-    #       영구 오류에 무한 재시도이고, 오분류는 이번 실행 한 번을 포기하는 것뿐이다.
-    #
-    #    ⚠️ **여기서는 메시지를 자르지 않는다**(부팅 경로와 다르다). 위 전제 검사들은
-    #       여러 줄로 **조치 방법까지** 담고 있어서(`LLM_MODEL 오타면 설정을 고치세요` 등)
-    #       첫 줄만 남기면 정작 필요한 안내를 잃는다. raw traceback 이 아닌 것으로 충분하다.
+    # 메시지를 자르지 않는다(부팅 경로와 다르다) — 전제 검사들이 조치 방법까지 담고 있어서
+    # 첫 줄만 남기면 정작 필요한 안내를 잃는다.
     try:
         summary = asyncio.run(
             run_batch(
@@ -996,11 +905,11 @@ def main() -> None:
 
     print_summary(summary)
 
-    # ⚠️ 계속 도는 것과 성공으로 보고하는 것은 다르다. 실패가 있으면 비-0 으로 끝내야
+    # 계속 도는 것과 성공으로 보고하는 것은 다르다. 실패가 있으면 비-0 으로 끝내야
     #    cron·k8s Job 이 알아챈다 — 안 그러면 모든 알림이 발행 실패해도 성공한 배치다.
     #    (지인님 PR 리뷰 §4, 2026-08-06)
     #
-    # ⚠️ **값(1)은 그대로다 — 출처만 상수로 바꿨다.** 여기는 "배치가 돌긴 했는데 일부가
+    # **값(1)은 그대로다 — 출처만 상수로 바꿨다.** 여기는 "배치가 돌긴 했는데 일부가
     #    실패" 라 `EXIT_RUNTIME_ERROR` 의 정의(*"재시작하면 나을 수 있다"*)에 정확히 맞는다.
     #    설정 오류(재시작해도 같음)는 위 `configure_logging_or_exit()` 이 2 로 가른다.
     if summary["failures"]:
