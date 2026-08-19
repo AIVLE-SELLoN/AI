@@ -41,6 +41,7 @@ import sys
 import uuid
 from collections import Counter
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -73,9 +74,7 @@ from app.core.constants import KST
 from app.core.exit_codes import EXIT_CONFIG_ERROR, EXIT_RUNTIME_ERROR
 from app.core.inquiries import build_linked_inquiries
 from app.core.logging_setup import configure_logging_or_exit
-from app.core.raw_db import (
-    connection_error_types,
-)
+from app.core.raw_db import connection_error_types
 from app.core.schemas import ClassifiedItem, DetectionAlert
 from app.detection.loader import check_coverage, unreliable_slots
 from app.detection.service import DetectionDiagnostics, detect_anomaly
@@ -100,7 +99,6 @@ __all__ = [
     "save_pending_guidelines",
     "save_published",
 ]
-
 
 
 # ── 담당자 미완성 함수 — import 폴백 ────────────────────────────
@@ -290,6 +288,181 @@ def _failure(target_key: str, stage: str, error: BaseException | str) -> dict[st
     }
 
 
+@dataclass
+class _Tally:
+    """알림을 돌며 쌓이는 값. 한 알림 처리의 산출물이 여섯 갈래라 묶어서 넘긴다.
+
+    묶는 진짜 이유는 `evidence_gaps`·`routing_misses` 다 — int 라 인자로 넘겨서는
+    증가시킬 수 없다. 리스트·Counter 만 있었으면 그냥 넘겨도 됐다.
+
+    셋을 한 자루에 담지 않는 이유: `failures` 는 **종료코드에 실리고**, 그 둘은
+    개선안이 안 나온 사유이긴 해도 **실패가 아니라서 안 실린다**(`counts_as_failure`).
+    합치면 상세페이지 미등록 같은 데이터 갭이 배치를 상시 exit 1 로 만든다.
+    """
+
+    counts: Counter[str] = field(default_factory=Counter)
+    failures: list[dict] = field(default_factory=list)
+    evidence_gaps: int = 0
+    routing_misses: int = 0
+    delivered: list[DetectionAlert] = field(default_factory=list)
+    guideline_pending: list[DetectionAlert] = field(default_factory=list)
+    """알림은 나갔는데 가이드라인만 못 나간 건. 다음 배치가 재시도한다(§4)."""
+
+    def fail(self, target_key: str, stage: str, error: BaseException | str) -> None:
+        self.failures.append(_failure(target_key, stage, error))
+
+
+
+def _count_dry_run(alert: DetectionAlert, tally: _Tally) -> None:
+    """LLM 을 안 부르고 **몇 번 부를지만** 센다. 추정이 아니라 실측이다.
+
+    게이트를 실제로 태운다 — 안 태우면 조치 7종 중 1종만 해당하는 개선안 비용이 크게
+    과대추정된다. 가이드라인도 `is_guideline_target()` 을 태운다: 스코프 밖 알림
+    (파손·오배송)은 LLM 을 아예 안 부르는데 세면 그만큼 부풀려진다.
+
+    개선안 수치는 **상한**이다. dry-run 은 근거 조회(ChromaDB·CS 원문)를 안 하므로 근거
+    0건으로 걸러질 알림을 미리 알 수 없다 — 실제 실행은 그것들을 `no_evidence` 로 빼서
+    더 작게 나온다. 어긋난 게 아니라 원리적으로 못 맞추는 값이다.
+    """
+    if should_generate(alert):
+        tally.counts["개선안"] += 1
+    if is_guideline_target(alert):
+        tally.counts["가이드라인"] += 1
+    tally.counts["발행:이상"] += 1
+
+
+async def _process_alert(
+    alert: DetectionAlert,
+    *,
+    documents: list[dict],
+    trace_id: str,
+    classifier_versions: dict[str, str] | None,
+    tally: _Tally,
+) -> None:
+    """알림 1건 — CS 원문 조회 → 개선안 → 가이드라인 → 발행 2종.
+
+    **예외를 밖으로 내보내지 않는다.** 호출부 루프를 감싸는 try 에는 except 가 없고
+    `finally: close_mq()` 뿐이라, 여기서 던지면 `run_batch` 밖으로 나간다. 그러면
+    `save_published()` 가 그 try/finally **뒤**라 같이 건너뛰어 **이미 발행에 성공한
+    앞쪽 알림이 캐시에 안 들어가고**, 다음 배치가 같은 알림을 다시 만들며 LLM 비용을
+    또 쓴다. 그래서 모든 단계가 각자 격리돼 실패를 `tally` 에 적기만 한다.
+
+    **단계가 실패해도 알림 발행은 막지 않는다.** 알림은 통계로 서고 CS 원문과 무관하다 —
+    건너뛰면 셀러가 이상 자체를 못 본다
+    (test_silent_recommendation_failure_still_shows_up).
+    """
+    # 개선안·가이드라인이 **같은 CS 원문**을 근거로 쓴다. 여기서 한 번 만들어 둘 다
+    # 에게 넘긴다 — 각자 만들면 같은 매핑이 두 벌이 되고, C4(item_id ↔ cs/reviews PK)
+    # 가 풀려 DB 조회로 바뀔 때 고칠 곳이 두 곳이 된다.
+    #
+    # 🔴 **아래 격리 안에 있어야 한다 — 밖에 두면 배치가 통째로 죽는다.** 이 루프를
+    #    감싸는 try(위 `finally: close_mq()`)엔 except 가 없어서 여기서 던지면
+    #    run_batch 밖으로 나가고, `save_published()` 가 try/finally **뒤**라 같이
+    #    건너뛴다 — **이미 발행에 성공한 앞쪽 알림이 캐시에 안 들어가서 다음 배치가
+    #    같은 알림을 다시 만들고 LLM 비용을 또 쓴다.** documents 한 행이 이상해서
+    #    죽을 수 있는 자리라(값 검증은 `LinkedCSInquiry` 가 한다) 격리 대상이다.
+    #
+    # ⚠️ **`continue` 하지 않는다 — 알림 자체는 발행한다.** 알림은 통계로 서고
+    #    CS 원문과 무관하다. 여기서 건너뛰면 셀러가 그 이상 자체를 못 본다.
+    #    이 루프의 다른 단계도 전부 같은 규율이다(`개선안`·`가이드라인` 실패가
+    #    발행을 막지 않는다 — test_silent_recommendation_failure_still_shows_up).
+    #    빈 리스트로 내려보내면 `generate_guideline` 이 "대상 알림인데 원문이
+    #    0건" 을 ValueError 로 올려서 그쪽 단계에도 정직하게 남는다(그 함수
+    #    docstring 의 Raises 가 바로 이 경우다). 두 항목이 남지만 단계 이름이
+    #    달라서 어느 쪽이 근본 원인인지 구분된다.
+    try:
+        inquiries = build_linked_inquiries(alert, documents)
+    except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
+        inquiries = []
+        tally.fail(alert.alert_id, "CS 원문 매핑", exc)
+
+    # ⚠️ alert 1건이 터져도 배치는 계속한다. 여기서 던지면 **이미 LLM 비용을 쓴
+    #    앞쪽 알림들까지 발행되지 않고 날아간다.** 실패는 모아서 끝에 요약한다.
+    rec = guideline = None
+    # §4 — 대기열 적재 판정용. 아래 두 예외 지점이 후보만 표시하고, 실제 적재는
+    # 알림 발행 성공 여부까지 보고 이 반복의 끝에서 한다 (PR #90 리뷰 P2).
+    anomaly_delivered = False
+    guideline_undelivered = False
+    if should_generate(alert):
+        try:
+            outcome = await generate_outcome_for_alert(alert, inquiries)
+            rec = outcome.recommendation
+        except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
+            tally.counts["개선안"] += 1
+            tally.fail(alert.alert_id, "개선안", exc)
+        else:
+            # ⚠️ `generate_outcome_for_alert` 는 **계약상 예외를 안 던지고** 실패를
+            #    개선안 없는 결과로 돌려준다. 위 except 만 두면 실패가 요약에도
+            #    종료코드에도 안 남아서, 개선안이 하나도 안 붙은 배치가 "성공"으로
+            #    끝난다. else 인 이유: except 와 둘 다 타면 실패 1건이 요약에 2건으로
+            #    잡혀 배치 요약의 실패 건수를 못 믿게 된다.
+            #
+            # 🔴 **개선안이 없는 사유를 셋으로 가른다 (2026-08-10).**
+            #    상세페이지 미등록은 흔한 **데이터 갭**이고(mock 504행 중 489행이
+            #    "정보 없음"), 그걸 실패로 세면 배치가 상시 종료코드 1로 끝나서 진짜
+            #    장애가 묻힌다. 근거 0건(`is_evidence_gap`)과 모델이 빈 쪽을 고른 것
+            #    (`is_routing_miss`)은 **근본 원인이 같아** 둘 다 실패에서 뺀다.
+            #    대신 각각 따로 세서 요약에 남긴다 — 라우팅 미스가 조용해지면
+            #    프롬프트 v3 를 손볼 근거가 사라진다.
+            #    ⚠️ 판정은 `RecommendationOutcome` 이 한다(`counts_as_failure`).
+            #    여기서 사유를 다시 판정하면 사유가 늘 때 두 곳이 갈린다.
+            if outcome.is_evidence_gap:
+                # 라우팅 전에 걸러지므로 LLM 호출은 0회다 — 개선안 카운트에 안 넣는다.
+                tally.evidence_gaps += 1
+            else:
+                # 라우팅까지는 갔으므로 LLM 을 썼다(미스여도 마찬가지).
+                tally.counts["개선안"] += 1
+                if outcome.is_routing_miss:
+                    tally.routing_misses += 1
+                elif outcome.counts_as_failure:
+                    tally.fail(
+                        alert.alert_id,
+                        "개선안",
+                        outcome.detail
+                        or "생성 실패 — 사유는 app.recommendation.pipeline 로그 참고",
+                    )
+
+    try:
+        guideline = await generate_guideline(alert, inquiries)
+        # ⚠️ `None` 은 **생성 대상이 아니라는 뜻**이지 실패가 아니다
+        #    (`is_guideline_target()` — `evidence.inquiry_ids` 가 빈 스코프 밖 알림).
+        #    그것까지 세면 dry-run 추정과 실제 집계가 서로 다른 것을 세게 되고,
+        #    비용 추정이 위로 어긋난다. 실패(FAILED_*)는 콜백을 돌려주므로 여기 든다.
+        if guideline is not None:
+            tally.counts["가이드라인"] += 1
+    except Exception as exc:  # noqa: BLE001
+        # §4 — 생성 예외 = 대상 알림인데 백엔드가 아무것도 못 들었다 → 대기 후보.
+        #    FAILED_* 는 예외가 아니라 반환값이라 여기 안 온다. 그 콜백은 아래
+        #    발행이 성공하는 순간 백엔드가 종결 상태를 들은 것이므로 재시도하지
+        #    않는다(재시도하면 FAILED 행을 SUCCESS 로 덮는 계약 변경이 된다).
+        guideline_undelivered = True
+        tally.fail(alert.alert_id, "가이드라인", exc)
+
+    try:
+        await publish_anomaly_analyzed(alert, rec, trace_id, classifier_versions)
+        tally.counts["발행:이상"] += 1
+        tally.delivered.append(alert)
+        anomaly_delivered = True
+    except Exception as exc:  # noqa: BLE001
+        tally.fail(alert.alert_id, "발행:이상", exc)
+
+    if guideline is not None:
+        try:
+            await publish_guideline_generated(guideline, trace_id)
+            tally.counts["발행:가이드"] += 1
+        except Exception as exc:  # noqa: BLE001
+            # §4 본체 — 만들어 놓고 백엔드가 못 들었다 → 대기 후보.
+            guideline_undelivered = True
+            tally.fail(alert.alert_id, "발행:가이드", exc)
+
+    # §4 — 대기열은 "알림은 **나갔는데** 가이드라인만 못 나간" 건만 받는다.
+    # 알림 발행까지 실패한 건은 캐시에 안 들어가 다음 배치가 그 알림을 통째로
+    # 재처리한다(가이드라인도 그 경로에서 다시 만들어진다) — 대기열에도 넣으면
+    # 같은 가이드라인이 두 경로에서 두 번 생성·발행된다 (PR #90 리뷰 P2 실측:
+    # 같은 guideline_id 가 2회 발행 + LLM·S3 이중 지불).
+    if guideline_undelivered and anomaly_delivered:
+        tally.guideline_pending.append(alert)
+
 
 async def run_batch(
     *,
@@ -428,20 +601,14 @@ async def run_batch(
     )
 
     targets = alerts if max_alerts is None else alerts[:max_alerts]
-    failures: list[dict] = [
-        _failure(
+    tally = _Tally()
+    for failure in detection_diagnostics.cause_failures:
+        tally.fail(
             f"{failure['product']}/{failure['aspect']}/"
             f"{failure['channel']}/{failure['source']}",
             "원인분류",
             failure["error"],
         )
-        for failure in detection_diagnostics.cause_failures
-    ]
-    counts: Counter[str] = Counter()
-    # 개선안이 안 나왔지만 **실패가 아닌** 두 사유의 건수. failures 와 분리해 두는
-    # 이유는 종료코드에 안 실리게 하기 위해서다(루프 안 주석 참고).
-    evidence_gaps = 0
-    routing_misses = 0
     # §4 — 두 상태 파일(대기열·억제 캐시)은 원자적으로 같이 못 쓴다. 직전 실행이
     # 대기열 저장(선행)과 억제 캐시 저장(후행) **사이**에서 죽으면 "대기열엔 있는데
     # 억제는 안 된" 알림이 남고, 그 알림은 이번 실행에 신규 target 으로 다시 뜬다 —
@@ -458,8 +625,6 @@ async def run_batch(
             superseded,
         )
         pending = [e for e in pending if e["alert"].alert_id not in target_ids]
-    # §4 — 이 배치에서 "가이드라인만 못 나간" 알림. 끝에 대기열로 들어간다.
-    new_pending: list[DetectionAlert] = []
     # 재시도 패스가 안 돌면(dry-run·documents 0건) 대기열은 그대로 다음 배치로 넘어간다.
     still_pending: list[dict] = list(pending)
     retried_ok = 0
@@ -473,9 +638,7 @@ async def run_batch(
     if dry_run and pending:
         # 재시도도 다음 실제 실행이 지불할 비용이다 — 안 세면 추정이 아래로 어긋난다.
         # 실제 실행과 같은 예산을 적용해야 추정이 실측과 일치한다.
-        counts["가이드라인"] += min(len(pending), retry_budget)
-    # ⚠️ **발행에 성공한 것만** 캐시에 넣는다. save_published docstring 참고.
-    delivered: list[DetectionAlert] = []
+        tally.counts["가이드라인"] += min(len(pending), retry_budget)
 
     # ⚠️ **연결을 반드시 닫는다.** app/core/mq.py 가 프로세스당 연결·채널을 재사용하는데,
     #    닫지 않고 이벤트 루프가 내려가면 connect_robust 의 재연결 태스크가 정리되지 않아
@@ -485,142 +648,16 @@ async def run_batch(
     #    (서영님 PR 리뷰 §1, 2026-08-07)
     try:
         for alert in targets:
-            # [2] 개선안 게이트 — 조치 7종 중 '개선안 생성' 일 때만 Agent3 가 돈다.
-            wants_recommendation = should_generate(alert)
-
             if dry_run:
-                # 실제로 몇 번 부를지만 센다. 추정이 아니라 실측이다 — 게이트를 안 태우면
-                # Agent3 비용이 크게 과대추정된다(조치 7종 중 1종만 해당).
-                #
-                # ⚠️ **개선안 수치는 상한이다.** dry-run 은 근거 조회(ChromaDB·CS 원문)를
-                #    안 하므로 근거 0건으로 걸러질 알림을 미리 알 수 없다. 실제 실행은
-                #    그것들을 `no_evidence` 로 빼므로 여기보다 작게 나온다 — **어긋난 게
-                #    아니라 원리적으로 못 맞추는 것**이다(가이드라인 쪽은 게이트가
-                #    `evidence.inquiry_ids` 만 보므로 조회 없이도 맞출 수 있어 태운다).
-                if wants_recommendation:
-                    counts["개선안"] += 1
-                # 가이드라인도 **게이트를 태워서** 센다. `evidence.inquiry_ids` 가 빈 알림
-                # (스코프 밖 — 파손·오배송)은 `is_guideline_target()` 이 걸러 LLM 을 아예
-                # 안 부르는데, 세면 그만큼 과대추정된다. 개선안과 달리 가이드라인은 발화한
-                # 알림 거의 전부에 돌아서 건수가 그대로 비용이다.
-                if is_guideline_target(alert):
-                    counts["가이드라인"] += 1
-                counts["발행:이상"] += 1
+                _count_dry_run(alert, tally)
                 continue
-
-            # 개선안·가이드라인이 **같은 CS 원문**을 근거로 쓴다. 여기서 한 번 만들어 둘 다
-            # 에게 넘긴다 — 각자 만들면 같은 매핑이 두 벌이 되고, C4(item_id ↔ cs/reviews PK)
-            # 가 풀려 DB 조회로 바뀔 때 고칠 곳이 두 곳이 된다.
-            #
-            # 🔴 **아래 격리 안에 있어야 한다 — 밖에 두면 배치가 통째로 죽는다.** 이 루프를
-            #    감싸는 try(위 `finally: close_mq()`)엔 except 가 없어서 여기서 던지면
-            #    run_batch 밖으로 나가고, `save_published()` 가 try/finally **뒤**라 같이
-            #    건너뛴다 — **이미 발행에 성공한 앞쪽 알림이 캐시에 안 들어가서 다음 배치가
-            #    같은 알림을 다시 만들고 LLM 비용을 또 쓴다.** documents 한 행이 이상해서
-            #    죽을 수 있는 자리라(값 검증은 `LinkedCSInquiry` 가 한다) 격리 대상이다.
-            #
-            # ⚠️ **`continue` 하지 않는다 — 알림 자체는 발행한다.** 알림은 통계로 서고
-            #    CS 원문과 무관하다. 여기서 건너뛰면 셀러가 그 이상 자체를 못 본다.
-            #    이 루프의 다른 단계도 전부 같은 규율이다(`개선안`·`가이드라인` 실패가
-            #    발행을 막지 않는다 — test_silent_recommendation_failure_still_shows_up).
-            #    빈 리스트로 내려보내면 `generate_guideline` 이 "대상 알림인데 원문이
-            #    0건" 을 ValueError 로 올려서 그쪽 단계에도 정직하게 남는다(그 함수
-            #    docstring 의 Raises 가 바로 이 경우다). 두 항목이 남지만 단계 이름이
-            #    달라서 어느 쪽이 근본 원인인지 구분된다.
-            try:
-                inquiries = build_linked_inquiries(alert, documents)
-            except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
-                inquiries = []
-                failures.append(_failure(alert.alert_id, "CS 원문 매핑", exc))
-
-            # ⚠️ alert 1건이 터져도 배치는 계속한다. 여기서 던지면 **이미 LLM 비용을 쓴
-            #    앞쪽 알림들까지 발행되지 않고 날아간다.** 실패는 모아서 끝에 요약한다.
-            rec = guideline = None
-            # §4 — 대기열 적재 판정용. 아래 두 예외 지점이 후보만 표시하고, 실제 적재는
-            # 알림 발행 성공 여부까지 보고 이 반복의 끝에서 한다 (PR #90 리뷰 P2).
-            anomaly_delivered = False
-            guideline_undelivered = False
-            if wants_recommendation:
-                try:
-                    outcome = await generate_outcome_for_alert(alert, inquiries)
-                    rec = outcome.recommendation
-                except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
-                    counts["개선안"] += 1
-                    failures.append(_failure(alert.alert_id, "개선안", exc))
-                else:
-                    # ⚠️ `generate_outcome_for_alert` 는 **계약상 예외를 안 던지고** 실패를
-                    #    개선안 없는 결과로 돌려준다. 위 except 만 두면 실패가 요약에도
-                    #    종료코드에도 안 남아서, 개선안이 하나도 안 붙은 배치가 "성공"으로
-                    #    끝난다. else 인 이유: except 와 둘 다 타면 실패 1건이 요약에 2건으로
-                    #    잡혀 배치 요약의 실패 건수를 못 믿게 된다.
-                    #
-                    # 🔴 **개선안이 없는 사유를 셋으로 가른다 (2026-08-10).**
-                    #    상세페이지 미등록은 흔한 **데이터 갭**이고(mock 504행 중 489행이
-                    #    "정보 없음"), 그걸 실패로 세면 배치가 상시 종료코드 1로 끝나서 진짜
-                    #    장애가 묻힌다. 근거 0건(`is_evidence_gap`)과 모델이 빈 쪽을 고른 것
-                    #    (`is_routing_miss`)은 **근본 원인이 같아** 둘 다 실패에서 뺀다.
-                    #    대신 각각 따로 세서 요약에 남긴다 — 라우팅 미스가 조용해지면
-                    #    프롬프트 v3 를 손볼 근거가 사라진다.
-                    #    ⚠️ 판정은 `RecommendationOutcome` 이 한다(`counts_as_failure`).
-                    #    여기서 사유를 다시 판정하면 사유가 늘 때 두 곳이 갈린다.
-                    if outcome.is_evidence_gap:
-                        # 라우팅 전에 걸러지므로 LLM 호출은 0회다 — 개선안 카운트에 안 넣는다.
-                        evidence_gaps += 1
-                    else:
-                        # 라우팅까지는 갔으므로 LLM 을 썼다(미스여도 마찬가지).
-                        counts["개선안"] += 1
-                        if outcome.is_routing_miss:
-                            routing_misses += 1
-                        elif outcome.counts_as_failure:
-                            failures.append(
-                                _failure(
-                                    alert.alert_id,
-                                    "개선안",
-                                    outcome.detail
-                                    or "생성 실패 — 사유는 app.recommendation.pipeline 로그 참고",
-                                )
-                            )
-
-            try:
-                guideline = await generate_guideline(alert, inquiries)
-                # ⚠️ `None` 은 **생성 대상이 아니라는 뜻**이지 실패가 아니다
-                #    (`is_guideline_target()` — `evidence.inquiry_ids` 가 빈 스코프 밖 알림).
-                #    그것까지 세면 dry-run 추정과 실제 집계가 서로 다른 것을 세게 되고,
-                #    비용 추정이 위로 어긋난다. 실패(FAILED_*)는 콜백을 돌려주므로 여기 든다.
-                if guideline is not None:
-                    counts["가이드라인"] += 1
-            except Exception as exc:  # noqa: BLE001
-                # §4 — 생성 예외 = 대상 알림인데 백엔드가 아무것도 못 들었다 → 대기 후보.
-                #    FAILED_* 는 예외가 아니라 반환값이라 여기 안 온다. 그 콜백은 아래
-                #    발행이 성공하는 순간 백엔드가 종결 상태를 들은 것이므로 재시도하지
-                #    않는다(재시도하면 FAILED 행을 SUCCESS 로 덮는 계약 변경이 된다).
-                guideline_undelivered = True
-                failures.append(_failure(alert.alert_id, "가이드라인", exc))
-
-            try:
-                await publish_anomaly_analyzed(alert, rec, trace_id, classifier_versions)
-                counts["발행:이상"] += 1
-                delivered.append(alert)
-                anomaly_delivered = True
-            except Exception as exc:  # noqa: BLE001
-                failures.append(_failure(alert.alert_id, "발행:이상", exc))
-
-            if guideline is not None:
-                try:
-                    await publish_guideline_generated(guideline, trace_id)
-                    counts["발행:가이드"] += 1
-                except Exception as exc:  # noqa: BLE001
-                    # §4 본체 — 만들어 놓고 백엔드가 못 들었다 → 대기 후보.
-                    guideline_undelivered = True
-                    failures.append(_failure(alert.alert_id, "발행:가이드", exc))
-
-            # §4 — 대기열은 "알림은 **나갔는데** 가이드라인만 못 나간" 건만 받는다.
-            # 알림 발행까지 실패한 건은 캐시에 안 들어가 다음 배치가 그 알림을 통째로
-            # 재처리한다(가이드라인도 그 경로에서 다시 만들어진다) — 대기열에도 넣으면
-            # 같은 가이드라인이 두 경로에서 두 번 생성·발행된다 (PR #90 리뷰 P2 실측:
-            # 같은 guideline_id 가 2회 발행 + LLM·S3 이중 지불).
-            if guideline_undelivered and anomaly_delivered:
-                new_pending.append(alert)
+            await _process_alert(
+                alert,
+                documents=documents,
+                trace_id=trace_id,
+                classifier_versions=classifier_versions,
+                tally=tally,
+            )
 
         # ── §4 가이드라인 재시도 패스 ────────────────────────────
         # 메인 루프 **뒤**다 — 대기 건의 알림은 억제돼 있어 targets 에 없으므로 두
@@ -656,15 +693,13 @@ async def run_batch(
                                 p_alert.alert_id,
                             )
                             continue
-                        counts["가이드라인"] += 1
+                        tally.counts["가이드라인"] += 1
                         await publish_guideline_generated(retry_guideline, trace_id)
-                        counts["발행:가이드"] += 1
+                        tally.counts["발행:가이드"] += 1
                         retried_ok += 1
                     except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
                         entry["attempts"] += 1
-                        failures.append(
-                            _failure(p_alert.alert_id, "가이드라인 재시도", exc)
-                        )
+                        tally.fail(p_alert.alert_id, "가이드라인 재시도", exc)
                         if entry["attempts"] >= GUIDELINE_RETRY_MAX_ATTEMPTS:
                             retry_exhausted += 1
                             logger.warning(
@@ -693,20 +728,22 @@ async def run_batch(
     # 뜨는 알림은 window_end 가 달라 alert_id 도 다르다(별개 알림 = 각자 가이드라인).
     # dry-run 은 읽기만 하고, window_end 가 없으면 로드도 안 했으므로 파일을 안 건드린다.
     pending_after = still_pending + [
-        {"alert": a, "attempts": 0} for a in new_pending
+        {"alert": a, "attempts": 0} for a in tally.guideline_pending
     ]
     if not dry_run and window_end:
         try:
             save_pending_guidelines(pending_after, pending_path)
         except Exception as exc:  # noqa: BLE001 - 저장 실패가 배치를 못 세우게
-            failures.append(_failure("(가이드라인 대기열)", "대기열 저장", exc))
-            undeliverable = {a.alert_id for a in new_pending}
-            delivered = [a for a in delivered if a.alert_id not in undeliverable]
+            tally.fail("(가이드라인 대기열)", "대기열 저장", exc)
+            undeliverable = {a.alert_id for a in tally.guideline_pending}
+            tally.delivered = [
+                a for a in tally.delivered if a.alert_id not in undeliverable
+            ]
 
     # 캐시는 dry-run 에서 건드리지 않는다 — 안 보낸 걸 보냈다고 기록하지 않는다.
     cached = (
-        save_published(delivered, window_end, state_path)
-        if (not dry_run and delivered and window_end)
+        save_published(tally.delivered, window_end, state_path)
+        if (not dry_run and tally.delivered and window_end)
         else 0
     )
 
@@ -744,21 +781,21 @@ async def run_batch(
         "processed": len(targets),
         # 발행에 성공해 캐시에 들어간 건수. published(탐지) 와 다를 수 있고,
         # 그 차이가 곧 "다음 배치에서 다시 시도될 알림"이다.
-        "delivered": len(delivered),
-        "llm_calls": dict(counts),
+        "delivered": len(tally.delivered),
+        "llm_calls": dict(tally.counts),
         "cause_calls": stub.calls if stub else None,
         "cause_failures": len(detection_diagnostics.cause_failures),
         # 개선안이 안 나왔지만 실패가 아닌 두 사유. failures 와 **별개**라 종료코드에
         # 안 실린다. `no_evidence` 가 계속 크면 상세페이지 시딩·CS 원문 조회를,
         # `routing_miss` 가 계속 크면 라우팅 프롬프트를 볼 것.
-        "no_evidence": evidence_gaps,
-        "routing_miss": routing_misses,
+        "no_evidence": tally.evidence_gaps,
+        "routing_miss": tally.routing_misses,
         # §4 가이드라인 재시도. retried = 이번 실행이 재발행에 성공한 건수 /
         # pending = 다음 배치가 다시 시도할 건수 / exhausted = 상한 소진으로 포기.
         "guideline_retried": retried_ok,
         "guideline_pending": len(pending_after),
         "guideline_retry_exhausted": retry_exhausted,
-        "failures": failures,
+        "failures": tally.failures,
         "state_cached": cached,
     }
 
