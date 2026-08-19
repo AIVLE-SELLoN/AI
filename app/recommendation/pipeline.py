@@ -96,7 +96,7 @@ def load_prompt(path: Path) -> str:
     그래서 첫 `---` 줄을 경계로 앞은 버린다. 구분선이 없으면 전체를 보낸다(안전한
     쪽) — 새 프롬프트를 머리말 없이 써도 깨지지 않게 하기 위해서다.
 
-    ⚠️ 첫 번째 구분선만 본다. 본문 안에 `---` 를 또 쓰면 그 뒤만 남는 게 아니라
+    첫 번째 구분선만 본다. 본문 안에 `---` 를 또 쓰면 그 뒤만 남는 게 아니라
     **첫 줄 기준으로만 잘리므로** 본문은 온전하다. 다만 머리말 안에 `---` 를 두 번
     쓰면 첫 번째에서 잘려 나머지 머리말이 본문으로 딸려 들어간다.
     """
@@ -207,7 +207,7 @@ def retrieve_context(
       고객 문의다. 없으면 NO_DETAIL_TEXT.
     - cs_summary: root_cause 통계 한 줄. **근거가 아니라 맥락**이다.
 
-    🔴 **cs_quotes 와 cs_summary 를 한 문자열로 합치지 말 것.** cs_summary 는 우리가
+    **cs_quotes 와 cs_summary 를 한 문자열로 합치지 말 것.** cs_summary 는 우리가
     f-string 으로 만든 문장이라, grounding 대조 대상에 넣으면 LLM 이 그 문장을
     되풀이하는 것만으로 통과한다 — 검증이 자기 자신을 대조하는 꼴이 된다.
     **evaluate() 가 대조하는 건 cs_quotes 하나뿐이다.**
@@ -222,7 +222,7 @@ def retrieve_context(
     rejection_reasons = get_rejection_reasons()
     query_text = alert.root_cause.label if alert.root_cause else alert.main_aspect.value
     tenant = current_tenant()
-    # 🔴 회사 축을 반드시 같이 좁힌다 — `aspect` 만으로 좁히면 **다른 회사의 반려 사례**가
+    # 회사 축을 반드시 같이 좁힌다 — `aspect` 만으로 좁히면 **다른 회사의 반려 사례**가
     #    similar_case 로 새어 나온다(`vectordb.current_tenant` docstring). 문서 ID 에
     #    회사 접두어가 붙어도 이 필터가 없으면 조회는 그대로 뚫린다 — 둘은 짝이다.
     similar_rows = query_documents(
@@ -250,7 +250,7 @@ def _get_detail_page_text(alert: DetectionAlert) -> str:
     """컬렉션1(상세페이지) get — 임베딩 안 거침. 미등록 SKU/빈 값이면 NO_DETAIL_TEXT(§4-5)."""
     detail_pages = get_detail_pages()
     tenant = current_tenant()
-    # 🔴 회사 축을 반드시 같이 좁힌다 — `product_group_id` 가 회사별 시퀀스라 A사 P001 과
+    # 회사 축을 반드시 같이 좁힌다 — `product_group_id` 가 회사별 시퀀스라 A사 P001 과
     #    B사 P001 이 구분되지 않는다. 이 필터가 없으면 **다른 회사 상세페이지**를 개선안의
     #    인용 근거로 쓰고, 그 문장이 `citations` 에 박제돼 셀러 화면까지 나간다.
     #    시딩 ID·metadata 와 셋이 짝이다(`scripts/seed_vectordb.py`).
@@ -285,13 +285,13 @@ def _log_detail_page_miss(alert: DetectionAlert, collection: Any, tenant: str) -
     비어 있는데, 그 상태가 "상세페이지 미등록" 과 **같은 모양(조회 0건)** 으로 나와
     구분이 안 됐다.
 
-    🔴 **가운데 줄이 회사 축 도입이 만든 새 사유다.** 축을 넣기 전에 시딩한 컬렉션은
+    **가운데 줄이 회사 축 도입이 만든 새 사유다.** 축을 넣기 전에 시딩한 컬렉션은
        문서에 `company_id` metadata 가 없어서, 조회 필터가 **전건을 걸러낸다** —
        504건이 멀쩡히 들어 있는데 조회는 0건이다. 이때 `collection.count()` 는 504 라
        첫 줄에 안 걸리고, 옛 코드였다면 **"상세페이지 미등록"(INFO)** 으로 조용히
        오진했다. 그러면 상품 등록 쪽을 파게 되는데 실제 조치는 시딩이다.
 
-    🔴 **`--reset` 을 안내하지 말 것 (서영님 #84 리뷰).** 가운데 줄은 두 상태가 **같은
+    **`--reset` 을 안내하지 말 것.** 가운데 줄은 두 상태가 **같은
        모양**이다 — ① 구형 문서만 있음 ② A사 문서는 정상이고 **새로 붙은 B사만** 아직
        없음. 둘 다 `count() > 0` + 현재 회사 조회 0건이라 런타임에선 구분이 안 되는데,
        `--reset` 은 `detail_pages` 와 **`rejection_reasons` 를 통째로** 지운다. ②에서
@@ -300,7 +300,7 @@ def _log_detail_page_miss(alert: DetectionAlert, collection: Any, tenant: str) -
        문서가 추가되고 조회가 즉시 정상화되며, 구형 문서는 필터에 걸려 안 쓰인다
        (실측 확인). 구형 정리는 **별도 migration** 이지 이 로그가 시킬 일이 아니다.
 
-    ⚠️ **①·②를 여기서 가르려 하지 말 것.** 한 번 시도했다가 되돌렸다 — 그건 알림별이
+    **①·②를 여기서 가르려 하지 말 것.** 한 번 시도했다가 되돌렸다 — 그건 알림별이
        아니라 **컬렉션 전체의 성질**이라 미스마다 다시 계산하는 게 구조적으로 틀렸고,
        핫 패스에서 전수를 못 보니 표본으로 어림잡게 된다(못 믿을 값). 정확한 판별은
        **`scripts/seed_vectordb.py` 가 시딩 직후 전수로** 한다 — 한 번만 돌고, 무엇보다
@@ -361,7 +361,7 @@ def evidence_for(proposal_type: ProposalType, context: dict) -> str:
     있는지)이 **같은 함수를 쓴다.** 셋이 각자 슬롯을 고르면 "프롬프트엔 A 를 주고
     검증은 B 와 하는" 어긋남이 생기는데, 그게 바로 이번에 고친 자기참조 버그의 모양이다.
 
-    ⚠️ image_guide 는 `cs_quotes`(고객 원문)다. `cs_summary`(우리가 만든 통계 문장)를
+    image_guide 는 `cs_quotes`(고객 원문)다. `cs_summary`(우리가 만든 통계 문장)를
     돌려주면 안 된다 — retrieve_context docstring 참고.
     """
     return context["detail_text"] if proposal_type == ProposalType.COPY_DRAFT else context["cs_quotes"]
@@ -389,7 +389,7 @@ def _summarize_cs_evidence(alert: DetectionAlert) -> str:
     프롬프트에 "몇 건 중 몇 건" 이라는 규모를 보여주는 용도이고, 컬렉션2 적재
     (`record_hitl_outcome`)의 검색용 텍스트에도 쓴다.
 
-    🔴 **grounding 대조 대상으로 쓰지 말 것.** 이 문자열은 우리가 만든 문장이라
+    **grounding 대조 대상으로 쓰지 말 것.** 이 문자열은 우리가 만든 문장이라
     LLM 이 그대로 되풀이하면 무조건 통과한다. 대조는 `_collect_cs_quotes()` 가
     만든 실제 원문(cs_quotes)하고만 한다.
     """
@@ -580,7 +580,7 @@ def evaluate(proposal: Proposal, alert: DetectionAlert, context: dict, attempt: 
     - grounding: proposal.current_text(LLM이 "이게 근거다"라고 주장한 인용)가 실제
       근거(context["detail_text"] 또는 context["cs_quotes"], §4-3 도구별 분리)에
       있는지 grounding.py로 대조. 없는 내용을 인용했다고 우기면 실패한다.
-      ⚠️ image_guide 쪽 대조 대상은 **cs_quotes(고객 원문)이지 cs_summary가 아니다.**
+      image_guide 쪽 대조 대상은 **cs_quotes(고객 원문)이지 cs_summary가 아니다.**
       cs_summary는 우리가 만든 문장이라 그걸 대조하면 LLM이 되풀이만 해도 통과한다.
     - consistency: rationale이 실제 원인 라벨(alert.root_cause.label)을 근거로
       삼고 있는지 — grounding은 통과했는데 사유가 엉뚱한 경우를 잡는다.
@@ -593,7 +593,7 @@ def evaluate(proposal: Proposal, alert: DetectionAlert, context: dict, attempt: 
     failure_reasons: list[str] = []
 
     if evidence_text == NO_DETAIL_TEXT:
-        # 🔴 근거가 없으면 무조건 실패다. 대조할 원문이 없는데 통과시키면 "검증했다"는
+        # 근거가 없으면 무조건 실패다. 대조할 원문이 없는데 통과시키면 "검증했다"는
         # 거짓 기록이 남는다. 프롬프트가 근거 없을 때 current_text 에 "정보 없음" 을
         # 쓰라고 지시하면 has_evidence 가 "정보 없음" 끼리 대조해 **통과해버린다** —
         # 고객 문의 0건인데 확신도 높음이 나간다. run() 이 이 상황을 미리 걸러 여기까지
@@ -738,7 +738,7 @@ def _build_citations(
     `quote` 에는 **LLM 이 인용한 문구(current_text)** 를 넣는다. 원문 전체가 아니라
     인용한 부분이 인용문이다.
 
-    ⚠️ 그래서 같은 문구가 여러 문의에 있으면 **quote 가 동일한 Citation 이 N 개** 나온다
+    그래서 같은 문구가 여러 문의에 있으면 **quote 가 동일한 Citation 이 N 개** 나온다
     (mock CS 는 템플릿 생성이라 흔하다). 의도된 동작이지만, 집계에서 "인용 N 건"을
     **"고객 N 명이 그렇게 말했다"로 읽으면 안 된다** — 문구는 하나고 그 문구가 등장한
     문의가 N 건이라는 뜻이다.
@@ -835,7 +835,7 @@ class RecommendationOutcome:
     def is_routing_miss(self) -> bool:
         """모델이 빈 쪽 도구를 골라서 못 만든 것인가. **배치가 실패로 세지 않는다.**
 
-        🔴 **`is_evidence_gap` 과 따로 두되, 종료코드에서는 똑같이 뺀다.** 근본 원인이
+        **`is_evidence_gap` 과 따로 두되, 종료코드에서는 똑같이 뺀다.** 근본 원인이
         **같기 때문**이다(상세페이지 미등록). 갈리는 건 모델이 빈 쪽을 골랐느냐뿐이고,
         그 선택을 코드로 강제하지 않는 것도 의도다. 안 고치기로 한 것을 매일 실패로
         세면 배치가 상시 종료코드 1 로 끝나 진짜 장애가 묻힌다 — 상세페이지 미등록은
@@ -873,7 +873,7 @@ async def run_with_outcome(
     `app/core/inquiries.py` 로 만들어 넘긴다). image_guide 의 근거이자 citations 의
     출처다.
 
-    🔴 **근거가 없으면 개선안을 만들지 않는다.** 근거 0건은 입력만 보고 결정론적으로
+    **근거가 없으면 개선안을 만들지 않는다.** 근거 0건은 입력만 보고 결정론적으로
     아는 사실이고 모델이 만들어낼 수 있는 게 아니라서, 생성을 태워봐야 일반론밖에 안
     나온다 — SCOPE_LIMIT 을 LLM 없이 처리하는 것과 같은 이유다. 셀러에겐 알림만 나가고
     개선안 카드가 안 붙는다(`recommendation: null` 은 조치 6종에서 이미 정상값이다).
@@ -936,7 +936,7 @@ async def run_with_outcome(
             alert.alert_id,
             proposal_type.value,
         )
-        # ⚠️ 여기는 NO_EVIDENCE 가 아니다 — 반대쪽엔 근거가 있었는데 모델이 빈 쪽을
+        # 여기는 NO_EVIDENCE 가 아니다 — 반대쪽엔 근거가 있었는데 모델이 빈 쪽을
         #    골라 버린 것이라, 데이터 갭이 아니라 우리가 놓친 건이다(배치 실패로 남는다).
         return RecommendationOutcome(
             reason=SkipReason.ROUTED_WITHOUT_EVIDENCE,
@@ -1037,11 +1037,11 @@ async def generate_for_alert(
     호출부가 `should_generate()`로 미리 걸러도 되고(배치 dry-run 이 그렇게 센다),
     안 걸러도 결과는 같다.
 
-    ⚠️ **`asyncio.CancelledError` 는 삼키지 않는다.** BaseException 이라
+    **`asyncio.CancelledError` 는 삼키지 않는다.** BaseException 이라
     `generate_outcome_for_alert()` 의 `except Exception` 에 안 걸리는데, 이게 의도다 —
     배치를 중단시켰는데 취소가 "개선안 실패"로 둔갑해 루프가 계속 돌면 안 된다.
 
-    ⚠️ **None 의 사유 4가지가 여기선 구분이 안 된다.** 근거 0건(데이터 갭)과 고장을
+    **None 의 사유 4가지가 여기선 구분이 안 된다.** 근거 0건(데이터 갭)과 고장을
     가르려면 `generate_outcome_for_alert()` 를 쓸 것 — `daily.py` 가 그렇게 한다.
 
     Args:
@@ -1105,7 +1105,7 @@ def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -
     cs_summary = _summarize_cs_evidence(alert)
     document = f"{root_cause_label} {cs_summary} {approved_text}"
 
-    # 🔴 **한 번만 읽어 ID·metadata 에 같이 쓴다** — 두 번 읽으면 어긋날 수 있고,
+    # **한 번만 읽어 ID·metadata 에 같이 쓴다** — 두 번 읽으면 어긋날 수 있고,
     #    조회 필터(retrieve_context)까지 셋이 같은 값이어야 격리가 성립한다.
     tenant = current_tenant()
     outcome = "반려" if recommendation.hitl_status == HitlStatus.REJECTED else "승인"
@@ -1137,7 +1137,7 @@ def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -
 
     upsert_documents(
         get_rejection_reasons(),
-        # 🔴 회사 축을 붙인다. `recommendation_id` 는 `alert_id` 파생이라 **회사 안에서만
+        # 회사 축을 붙인다. `recommendation_id` 는 `alert_id` 파생이라 **회사 안에서만
         #    유일**해서, 그대로 쓰면 회사가 다른 같은 논리 알림이 서로를 덮는다.
         ids=[scoped_document_id(tenant, recommendation.recommendation_id)],
         documents=[document],
