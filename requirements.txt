@@ -63,6 +63,11 @@ boto3==1.43.65
 # --- docker kafka 컨테이너 환경 ---
 # ⚠️ kafka-python 과 **같은 `kafka` 모듈**을 설치한다. 둘 다 깔면 충돌하므로,
 #    기존에 kafka-python 이 있으면 먼저 `pip uninstall kafka-python` 할 것.
+# ⚠️ **`scripts/mock_producer.py` 가 직접 import 한다.** 예전에는 statsmodels 를 타고
+#    들어오는 전이 의존성이라 여기 없었는데, 직접 쓰는 것을 전이에 기대면 상류가 의존을
+#    바꾸는 날 조용히 사라진다. mock producer 전용 슬림 이미지
+#    (`requirements-mock-producer.txt`)가 statsmodels 를 안 넣으므로 실제로 드러났다.
+pandas==3.0.3
 kafka-python-ng==2.2.3
 
 # --- RabbitMQ (AI → 메인 이벤트 발행 · docs/mq_events.md) ---

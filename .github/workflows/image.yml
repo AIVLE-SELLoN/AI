@@ -19,7 +19,13 @@ on:
     paths:
       - 'app/**'
       - 'scripts/**'
-      - 'requirements*.txt'
+      # ⚠️ **`requirements*.txt` 가 아니라 정확히 이 파일이다.** 와일드카드면
+      #    `requirements-mock-producer.txt` 까지 걸려, mock producer 의존성만 건드린 PR 이
+      #    1.57GB 짜리 AI 노드 이미지를 헛빌드한다. 이 이미지가 설치하는 건 이 파일뿐이므로
+      #    (루트 `Dockerfile` 의 `pip install -r requirements.txt`) 정확히 그것만 건다.
+      #    ⚠️ 새 requirements 파일을 만들어 이 이미지가 설치하게 되면 **여기 같이 추가할 것** —
+      #       와일드카드로 되돌리지 말고, 그 이미지가 실제로 읽는 파일만 나열한다.
+      - 'requirements.txt'
       - 'Dockerfile'
       - '.dockerignore'
       - '.github/workflows/image.yml'

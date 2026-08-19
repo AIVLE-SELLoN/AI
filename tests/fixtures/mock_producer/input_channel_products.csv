@@ -1,0 +1,4 @@
+variant_row_id,channel,channel_product_id,channel_product_name,option_group_names,channel_option_name,sale_price,original_price
+VR-0001,COUPANG,C1101,여름 린넨 원피스,"색상,사이즈",BLK_S,39900,49900
+VR-0002,NAVER,N2201,린넨 미니 원피스,"색상,사이즈",BLK_S,41000,49900
+VR-0003,ZIGZAG,Z3301,린넨원피스 블랙,"색상,사이즈",BLK_S,38500,49900

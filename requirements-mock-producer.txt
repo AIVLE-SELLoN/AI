@@ -1,0 +1,25 @@
+# mock producer 전용 의존성 — `docker/mock-producer/Dockerfile` 이 이것만 설치한다.
+#
+# 🔴 **`requirements.txt` 의 부분집합이고, 버전은 거기와 반드시 같아야 한다.** 갈리면
+#    "로컬(전체 의존성)에서는 되는데 producer 이미지에서만 깨지는" 클래스가 생기는데,
+#    그건 목 파이프라인을 돌리는 사람이 제일 늦게 알아채는 자리다.
+#
+# 무엇을 빼는가 — mock producer 가 import 하지 않는 것 전부:
+#   chromadb · scipy · statsmodels · weasyprint(+ fonts-noto-cjk ~120MB) ·
+#   openai · langgraph · langsmith · boto3 · aio-pika · fastapi · uvicorn · jinja2
+#   → AI 노드 이미지 1.57GB 의 대부분이 여기 있다. producer 는 CSV 를 읽어 Kafka 와
+#     raw DB 로 흘리는 일만 하므로 그 무게를 질 이유가 없다.
+#
+# 무엇이 남는가 — `scripts/mock_producer.py` 가 실제로 끌고 오는 것:
+#   pandas             ← mock_producer.py 가 직접 import (CSV 로드·NaN 처리·Timestamp)
+#   pydantic           ← app.core.schemas (Channel)
+#   pydantic-settings  ← app.config (raw_db 가 get_settings 를 부른다)
+#   python-dotenv      ← app.config 의 load_dotenv
+#   kafka-python-ng    ← 발행 경로
+#   psycopg[binary]    ← raw DB Postgres 경로 (sqlite 는 표준 라이브러리)
+pandas==3.0.3
+pydantic==2.13.4
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
+kafka-python-ng==2.2.3
+psycopg[binary]==3.3.4

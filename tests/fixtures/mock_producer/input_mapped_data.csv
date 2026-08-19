@@ -1,0 +1,4 @@
+variant_row_id,product_group_id,mapping_method,mapping_confidence
+VR-0001,P001,slm_embedding,0.97
+VR-0002,P001,slm_embedding,0.95
+VR-0003,P001,rule_naming,0.91
