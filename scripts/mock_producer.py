@@ -303,7 +303,7 @@ def seed_product_catalog(
     # main server 자리를 대신하므로 그게 실제로 이 행이 생긴 시각이다.
     #
     # ⚠️ `mapping_method`·`mapping_confidence` 는 채우지 않는다(§2-3). "무엇으로 묶었는지"
-    #    (slm_embedding/rule_naming/manual — `sim` 아니라 `slm`, 소형 언어모델)와 그
+    #    (slm_embedding/rule_naming/manual — `sim` 이 아니라 `slm`, 소형 언어모델)와 그
     #    확신도는 **백엔드 매핑의 산물**이라 우리가 아는 값이 아니다. 그럴듯한 값을 넣으면
     #    나중에 실제 매핑 품질을 볼 때 지어낸 수치가 섞인다. 모르는 것은 NULL 로 둔다.
     now = datetime.now(KST).isoformat()
@@ -554,7 +554,12 @@ def _resolve_group(
        `or None` 이 `None` 으로 접고 그 가드가 제 일을 한다(제외 건수는 배치 요약에 뜬다).
 
     ⚠️ 매핑 자체를 여기서 **하지 않는다.** 무엇으로 묶을지는 백엔드 소관이고(네이밍·임베딩),
-       우리는 이미 끝난 매핑을 조회할 뿐이다. 못 찾으면 비워서 내보내는 것이 정직하다.
+       우리는 이미 끝난 매핑을 조회할 뿐이다. 못 찾으면 비워 두는 것이 정직하다.
+
+    ⚠️ **여기서 정한 값은 Kafka 로 안 나간다.** `product_group_id` 는 이벤트 dict 에만 있고
+       `build_db_row` 를 거쳐 **raw DB 로만** 간다(비면 그 컬럼이 NULL 이 된다). Kafka 로
+       나가는 것은 `event["payload"]` 뿐이라 그룹 ID 는 payload 계약의 일부가 아니다 —
+       `test_product_group_id_never_reaches_the_payload` 가 그 경계를 못박고 있다.
     """
     if not channel_product_id:
         return ""
@@ -622,9 +627,10 @@ def build_channel_product_map(
 
     if not mapping:
         logger.warning(
-            f"상품 매핑 없음({CHANNEL_PRODUCTS_FILE} + {MAPPED_DATA_FILE}) — product_group_id 를 "
-            f"전부 비워서 내보냅니다. 탐지가 분모에서 제외하므로 채널 간 비교·상세페이지"
-            f"(ChromaDB) 조회 결과가 통째로 비어 버립니다."
+            f"상품 매핑 없음({CHANNEL_PRODUCTS_FILE} + {MAPPED_DATA_FILE}) — raw DB 의 "
+            f"product_group_id 를 전부 NULL 로 적재합니다(Kafka payload 에는 원래 안 실립니다). "
+            f"탐지가 분모에서 제외하므로 채널 간 비교·상세페이지(ChromaDB) 조회 결과가 "
+            f"통째로 비어 버립니다."
         )
     else:
         logger.info(
@@ -708,6 +714,9 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
 
             merged_events.append({
                 "time": event_time,
+                # payload 의 어느 키가 시각인지. `--dry-run` 로그가 **payload 에 실린 표기**를
+                # 그대로 찍으려고 들고 다닌다(정렬용 `time` 은 naive 라 표기가 다르다).
+                "time_column": time_col,
                 "topic": config["topic"],
                 "table": config["table"],
                 "event_id": event_id,
@@ -717,7 +726,8 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
                 # ⚠️ 마스터 상품 그룹(P001…)은 답 노출 방지 설계상 input CSV 에 없다
                 #    (generate_mock_data.py 참고). 그래서 매핑으로 되찾는다 —
                 #    운영에서는 `products ⋈ mapped_data` 가 하는 일이다.
-                #    매핑에 없으면 **비워서** 내보내고 아래에서 건수를 남긴다(대체값 금지).
+                #    매핑에 없으면 **비워 두고**(대체값 금지) 아래에서 건수를 남긴다.
+                #    이 값은 raw DB 로만 가고 Kafka payload 에는 안 실린다.
                 "product_group_id": (
                     sanitized_payload.get("product_group_id")
                     or _resolve_group(channel, channel_product_id, group_of, unmapped)
@@ -740,12 +750,12 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
         sys.exit(1)
 
     if unmapped:
-        # 매핑 파일은 있는데 일부 상품이 빠진 경우. 그 행들은 `product_group_id` 가 비어
-        # 나가고 탐지가 분모에서 제외한다 — 전량 실패보다 찾기 어려우므로 건수를 남긴다.
+        # 매핑 파일은 있는데 일부 상품이 빠진 경우. 그 행들은 raw DB 에 `product_group_id`
+        # 가 NULL 로 적재되고 탐지가 분모에서 제외한다 — 전량 실패보다 찾기 어려워 건수를 남긴다.
         sample = ", ".join(f"{ch}:{cpid}" for ch, cpid in sorted(unmapped)[:3])
         logger.warning(
-            f"[MAP] 매핑에 없는 채널 상품 {len(unmapped)}종 — product_group_id 를 비워서 "
-            f"내보냅니다(대체값을 만들지 않습니다). 예: {sample}"
+            f"[MAP] 매핑에 없는 채널 상품 {len(unmapped)}종 — raw DB 의 product_group_id 를 "
+            f"NULL 로 적재합니다(대체값을 만들지 않습니다). 예: {sample}"
         )
 
     return merged_events
@@ -795,8 +805,12 @@ def publish(event: dict[str, Any], producer: Any | None, sink: RawDbSink | None,
     if dry_run:
         # --dry-run 의 정의가 "콘솔로 재생 타임라인을 검증한다"이므로 INFO 로 찍는다
         # (debug 로 두면 기본 로그 레벨이 INFO 라 아무것도 안 보인다).
+        #
+        # ⚠️ **payload 에 실린 시각을 그대로 찍는다.** `event["time"]` 은 정렬용 naive 라
+        #    그걸 찍으면 오프셋이 안 붙은 것처럼 보인다 — dry-run 으로 이 계약을 확인하려는
+        #    사람이 **정반대 결론**을 가져간다. 콘솔이 발행 내용과 같은 말을 해야 한다.
         logger.info(
-            f"[DRY-RUN] Virtual Time: {event['time'].isoformat()} | Topic: {event['topic']} | "
+            f"[DRY-RUN] Virtual Time: {payload[event['time_column']]} | Topic: {event['topic']} | "
             f"EventType: {payload['event_type']} | PublishedAt: {payload['published_at']}"
         )
         return True

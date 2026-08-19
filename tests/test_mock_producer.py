@@ -156,7 +156,13 @@ _MASTER_ROW = "VR-1,COUPANG,C1,린넨 미디 원피스,색상,BLK,39900,49900"
 
 
 def _write_scripts(data_dir: Path, *, master_rows: list[str]) -> None:
-    """발행 대본 최소 세트. 매핑이 붙는 경로만 남기고 나머지는 비워 둔다."""
+    """발행 대본 세트. **재생 대상 네 종을 다 쓴다.**
+
+    🔴 예전엔 `inquiries` 와 `orders` 만 썼는데, 그러면 `reviews` 경로가 **한 번도 실행되지
+       않아** `time_is_date` 를 뒤집어도 전부 초록이었다(2026-08-19 지적). `reviews.created_at`
+       은 31,639건이 그 표기로 나가는 컬럼이라 조용히 틀리기 딱 좋은 자리다.
+       아래 `test_only_orders_carry_a_date_shaped_time` 이 "빠진 대본이 없는지"까지 본다.
+    """
     data_dir.mkdir(parents=True, exist_ok=True)
     _csv(data_dir / "input_channel_products.csv", [_MASTER_HEADER, *master_rows])
     _csv(data_dir / "input_mapped_data.csv", ["variant_row_id,product_group_id", "VR-1,P001"])
@@ -164,14 +170,24 @@ def _write_scripts(data_dir: Path, *, master_rows: list[str]) -> None:
         "inquiry_id,channel,channel_product_id,content,inquired_at",
         "INQ-1,COUPANG,C1,색이 달라요,2026-05-01T10:00:00",
     ])
+    _csv(data_dir / "input_reviews.csv", [
+        "review_id,channel,channel_product_id,content,rating,created_at",
+        "RVW-1,COUPANG,C1,생각보다 얇아요,3,2026-05-01T11:00:00",
+    ])
     _csv(data_dir / "input_orders.csv", [
         "channel,channel_product_id,order_date,quantity,order_amount",
         "COUPANG,C1,2026-05-01,3,30000",
     ])
+    _csv(data_dir / "input_detail_changes.csv", [
+        "change_id,channel,channel_product_id,changed_field,previous_value,new_value,change_type,changed_at",
+        "CHG-1,COUPANG,C1,소재 표기,린넨 100%,린넨 55% 폴리 45%,소재,2026-05-01T09:00:00",
+    ])
 
 
 def _csv(path: Path, lines: list[str]) -> None:
-    path.write_text(os.linesep.join(lines) + os.linesep, encoding="utf-8")
+    # ⚠️ `os.linesep` 을 쓰지 않는다 — 윈도우에서 `\r\r\n` 이 된다(실측). pandas 가 삼켜
+    #    무해하지만 저장소의 다른 7곳은 전부 `"\n".join(...)` 이라 여기만 다를 이유가 없다.
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _payload_of(events: list[dict], topic: str) -> dict:
@@ -211,6 +227,45 @@ def test_payload_time_carries_the_kst_offset(tmp_path) -> None:
     events = mock_producer.load_and_merge_csvs(tmp_path, None)
 
     assert _payload_of(events, "raw.inquiries")["inquired_at"] == "2026-05-01T10:00:00+09:00"
+
+
+def test_only_orders_carry_a_date_shaped_time(tmp_path) -> None:
+    """🔴 **`STREAMING_FILE_CONFIGS` 에서 유도한다 — 토픽을 손으로 집지 않는다.**
+
+    손으로 집으면 집지 않은 토픽이 조용히 빠진다. 실제로 그렇게 빠졌다: 초안은
+    `inquiries`·`orders` 만 단언해서 **`reviews` 의 `time_is_date` 를 뒤집어도 13 passed** 였다
+    (2026-08-19 지적). 진입점 가드(`force_utf8_output`)도 같은 셋을 두고 네 번째를 못 막은
+    선례가 있어, 여기서는 설정에서 유도해 새 토픽이 늘면 **자동으로 대상이 되게** 한다.
+
+    잠그는 것은 둘이다:
+      ① `time_is_date=True` 인 것은 **`orders` 하나뿐**이다 — §2-9 가 `order_date` 만 DATE 로
+         정의했다. 다른 토픽이 이 플래그를 얻으면 그 컬럼의 오프셋이 통째로 사라진다.
+      ② 그 플래그대로 payload 표기가 갈린다 — 날짜면 `YYYY-MM-DD`, 아니면 `+09:00` 까지.
+    """
+    _write_scripts(tmp_path, master_rows=[_MASTER_ROW])
+    configs = mock_producer.STREAMING_FILE_CONFIGS
+
+    # ① 플래그를 가진 쪽이 orders 하나인지 — 대본 없이 설정만으로 성립하는 단언
+    assert {name for name, c in configs.items() if c["time_is_date"]} == {"orders"}
+
+    events = mock_producer.load_and_merge_csvs(tmp_path, None)
+    by_topic = {e["topic"]: e["payload"] for e in events}
+
+    # 대본이 빠진 토픽이 있으면 아래 루프가 그 토픽을 건너뛰어 ②가 헐거워진다.
+    # `_write_scripts` 가 네 종을 다 쓰는지 여기서 같이 못박는다.
+    assert by_topic.keys() == {c["topic"] for c in configs.values()}, (
+        "재생 대상 토픽 중 대본이 없는 것이 있다 — _write_scripts 를 같이 늘릴 것"
+    )
+
+    # ② 플래그대로 표기가 갈리는지
+    for config in configs.values():
+        printed = by_topic[config["topic"]][config["time_column"]]
+        if config["time_is_date"]:
+            assert printed == "2026-05-01", f"{config['topic']}: 날짜여야 한다 (실제 {printed!r})"
+        else:
+            assert printed.endswith("+09:00"), (
+                f"{config['topic']}: KST 오프셋이 붙어야 한다 (실제 {printed!r})"
+            )
 
 
 def test_order_date_stays_a_pure_date(tmp_path) -> None:
