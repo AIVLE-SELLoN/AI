@@ -1,12 +1,9 @@
-"""담당: 지인 (Agent3) — 개선안 생성.
-
-완료 기준: AnomalyResult → 개선안 JSON.
-           인용검증·재시도 루프·근거없음 경로 작동.
+"""담당: 지인 (Agent3) — 개선안 생성 HTTP 경계.
 
 Agent3는 상태를 저장하지 않는다 — Recommendation을 만들어서 돌려줄 뿐, 승인·반려
-상태의 소유자는 Spring Boot다(graph.py HITL 메모). 그래서 /hitl 엔드포인트는
-"이미 결정된 결과"를 alert·recommendation 통째로 받아서 컬렉션2 학습 자료로만
-쌓는다 — recommendation_id로 다시 조회하는 게 아니다(그런 저장소 자체가 없음).
+상태의 소유자는 Spring Boot다. 그래서 /hitl 엔드포인트는 "이미 결정된 결과"를
+alert·recommendation 통째로 받아서 컬렉션2 학습 자료로만 쌓는다 —
+recommendation_id로 다시 조회하는 게 아니다(그런 저장소 자체가 없음).
 """
 
 from fastapi import APIRouter, HTTPException, status
@@ -33,7 +30,7 @@ router = APIRouter(prefix="/api/v1", tags=["recommendation"])
 
 @router.get("/recommendations/ping")
 async def ping() -> dict[str, str]:
-    """0주차 확인용 — 앱 1개가 4명 코드로 뜨는지 보는 hello world."""
+    """모듈 4개가 한 앱으로 붙어 뜨는지 보는 부팅 확인(tests/test_app_boot.py)."""
     return {"module": "recommendation", "owner": "지인", "status": "ok"}
 
 

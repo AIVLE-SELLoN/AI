@@ -1,9 +1,10 @@
-"""담당: 지인 (Agent3) — 개선안 생성 raw 파이프라인.
+"""담당: 지인 (Agent3) — 개선안 생성 파이프라인.
 
-순수 Python + 타입 힌트, 프레임워크 미사용. 각 단계를 독립 함수로 분리해
-나중에 LangGraph 노드(graph.py의 _route/_retrieve/_generate/_verify/_fallback)로
-그대로 옮길 수 있게 한다. 그 전까지는 service.generate_recommendation()이
-run()을 직접 호출한다.
+순수 Python + 타입 힌트로만 짠다. LangGraph 를 검토했다가 접었다 — HITL 이
+`/generate`·`/hitl` 두 개의 독립 stateless 호출이라 interrupt·checkpointer 가 푸는
+"실행 중 상태를 멈췄다 재개" 문제 자체가 없고, 그래프로 옮길 대상도 선형 파이프라인
++ 재시도 루프 하나뿐이다. 단계를 독립 함수로 쪼갠 실익은 프레임워크 이식이 아니라
+단계별 단위 테스트다.
 
 흐름(docs/agent3_logic.md §1·§4-3):
     retrieve_context → route_proposal_type → generate_proposal
@@ -207,11 +208,9 @@ def retrieve_context(
     - cs_summary: root_cause 통계 한 줄. **근거가 아니라 맥락**이다.
 
     🔴 **cs_quotes 와 cs_summary 를 한 문자열로 합치지 말 것.** cs_summary 는 우리가
-    f-string 으로 만든 문장이라, 그걸 grounding 대조 대상에 넣으면 LLM 이 그 문장을
-    되풀이하는 것만으로 통과한다 — 2026-07-27 에 detail_text 쪽에서 잡았던
-    current_text 자기참조 버그와 같은 모양이다(그때 cs_summary 는 raw_text 경로가
-    없어 플레이스홀더로 남아 있었고, 이 구멍만 살아남았다). **evaluate() 가 대조하는
-    건 cs_quotes 하나뿐이다.**
+    f-string 으로 만든 문장이라, grounding 대조 대상에 넣으면 LLM 이 그 문장을
+    되풀이하는 것만으로 통과한다 — 검증이 자기 자신을 대조하는 꼴이 된다.
+    **evaluate() 가 대조하는 건 cs_quotes 하나뿐이다.**
 
     컬렉션2(과거·반려 사례)는 공통, 0건이면 similar_case=None(§4-2 — 반려 적재
     전엔 항상 0건이라 정상 상태).
@@ -455,10 +454,9 @@ async def generate_proposal(
     (route_proposal_type 결과)·target_field·detailpage_grounded는 alert/context에서
     이미 알고 있어 LLM에 맡기지 않는다.
 
-    previous_failure/temperature는 run()의 재시도 전용 — temperature=0.0 고정에
-    같은 프롬프트를 그대로 재요청하면 거의 같은 답이 나와서 재시도가 사실상 무의미
-    했던 버그를 고친다(2026-07-27). 실패 이유를 프롬프트에 실제로 알려줘야 LLM이
-    진짜 다른 시도를 할 수 있다.
+    previous_failure/temperature는 run()의 재시도 전용이다 — temperature=0.0 에 같은
+    프롬프트를 그대로 재요청하면 거의 같은 답이 돌아와 재시도가 무의미해진다. 실패
+    이유를 프롬프트에 실제로 알려줘야 LLM이 진짜 다른 시도를 할 수 있다.
     """
     root_cause_label = alert.root_cause.label if alert.root_cause else "미상"
     anomaly = f"{alert.channel.value} · {alert.main_aspect.value} 이상 (원인: {root_cause_label})"
@@ -551,11 +549,9 @@ def _is_consistent_with_root_cause(rationale: str, alert: DetectionAlert) -> boo
     있다 — 이 경우를 잡는다. root_cause가 없으면(원칙적으로 게이트에서 걸러지지만
     방어적으로) 검사 대상이 없으니 통과 처리.
 
-    라벨을 "_"로 쪼갠 조각 단위로 확인한다(예: "사진_색감_오차" → 사진/색감/오차) —
-    라벨 문자열을 통째로 has_evidence()에 넣으면 실패한다. LLM은 자연스러운 문장으로
-    풀어쓰지("사진 색감이 다르게 촬영되어") 라벨을 언더스코어째로 그대로 베끼지 않고,
-    그러면 정규화를 거쳐도 "_"가 살아있는 라벨 원문과 안 겹쳐서 항상 False가 나왔다
-    (2026-07-27 버그 발견·수정 — 실제 API 호출 전에 정적으로 재현 확인함). 조각 절반
+    라벨을 "_"로 쪼갠 조각 단위로 확인한다(예: "사진_색감_오차" → 사진/색감/오차).
+    통째로 대조하면 항상 False다 — LLM은 "사진 색감이 다르게 촬영되어"처럼 풀어쓰지
+    언더스코어째 베끼지 않아서, 정규화를 거쳐도 라벨 원문과 안 겹친다. 조각 절반
     이상이 rationale에 있으면 통과로 본다.
     """
     if alert.root_cause is None:
@@ -598,11 +594,10 @@ def evaluate(proposal: Proposal, alert: DetectionAlert, context: dict, attempt: 
 
     if evidence_text == NO_DETAIL_TEXT:
         # 🔴 근거가 없으면 무조건 실패다. 대조할 원문이 없는데 통과시키면 "검증했다"는
-        # 거짓 기록이 남는다. 이 가드가 없으면 프롬프트가 current_text 에 "정보 없음"을
-        # 쓰라고 지시하므로(copy_draft_v1.md·구 image_guide_v2.md) has_evidence 가
-        # "정보 없음" 끼리 대조해 **통과해버린다** — 고객 문의 0건인데 확신도 높음.
-        # run() 이 이 상황을 미리 걸러 여기까지 오지 않는 게 정상이지만, evaluate() 를
-        # 직접 부르는 호출부(테스트·LangGraph 이식 후)까지 막는 최후 방어선이다.
+        # 거짓 기록이 남는다. 프롬프트가 근거 없을 때 current_text 에 "정보 없음" 을
+        # 쓰라고 지시하면 has_evidence 가 "정보 없음" 끼리 대조해 **통과해버린다** —
+        # 고객 문의 0건인데 확신도 높음이 나간다. run() 이 이 상황을 미리 걸러 여기까지
+        # 오지 않는 게 정상이지만, evaluate() 를 직접 부르는 호출부까지 막는 방어선이다.
         grounding_ok = False
         failure_reasons.append("근거 원문 자체가 없음(NO_DETAIL_TEXT) — 대조 대상 없음")
     else:
@@ -818,8 +813,8 @@ class SkipReason(str, Enum):
 class RecommendationOutcome:
     """개선안 + **없을 때의 사유.** `recommendation` 이 None 이면 `reason` 이 항상 있다.
 
-    `run()`·`generate_for_alert()` 의 `Recommendation | None` 계약은 그대로 두고
-    (팀 확정 시그니처, 2026-08-06), 사유가 필요한 배치만 이 객체를 받는다.
+    `run()`·`generate_for_alert()` 의 `Recommendation | None` 계약은 그대로 두고,
+    사유가 필요한 배치만 이 객체를 받는다.
     """
 
     recommendation: Recommendation | None = None
@@ -840,13 +835,11 @@ class RecommendationOutcome:
     def is_routing_miss(self) -> bool:
         """모델이 빈 쪽 도구를 골라서 못 만든 것인가. **배치가 실패로 세지 않는다.**
 
-        🔴 **`is_evidence_gap` 과 따로 두되, 종료코드에서는 똑같이 뺀다.** 처음엔 이걸
-        실패로 뒀는데(2026-08-10) 그러면 `NO_EVIDENCE` 를 뺀 이유가 옆문으로 그대로
-        돌아온다 — 근본 원인이 **같기 때문**이다(상세페이지 미등록). 갈리는 건 모델이
-        그 빈 쪽을 골랐느냐뿐이고, 그 선택을 **코드로 강제하지 않기로 한 것도 우리
-        결정**이다(2026-08-10 서영님과 합의). 우리가 안 고치기로 한 것을 매일 실패로
-        세면 배치가 상시 종료코드 1 로 끝나 진짜 장애가 묻힌다.
-        상세페이지는 mock 504행 중 489행이 "정보 없음" 이라 **운영에서 흔하다.**
+        🔴 **`is_evidence_gap` 과 따로 두되, 종료코드에서는 똑같이 뺀다.** 근본 원인이
+        **같기 때문**이다(상세페이지 미등록). 갈리는 건 모델이 빈 쪽을 골랐느냐뿐이고,
+        그 선택을 코드로 강제하지 않는 것도 의도다. 안 고치기로 한 것을 매일 실패로
+        세면 배치가 상시 종료코드 1 로 끝나 진짜 장애가 묻힌다 — 상세페이지 미등록은
+        mock 504행 중 489행이 "정보 없음" 일 만큼 흔하다.
 
         대신 **요약에는 따로 센다**(`daily.py` 의 `routing_miss`). 여기가 조용해지면
         라우팅 프롬프트 v3 를 손볼 근거가 사라지기 때문이다.
@@ -880,13 +873,13 @@ async def run_with_outcome(
     `app/core/inquiries.py` 로 만들어 넘긴다). image_guide 의 근거이자 citations 의
     출처다.
 
-    🔴 **근거가 없으면 개선안을 만들지 않는다(2026-08-09).** 근거 0건은 입력만 보고
-    결정론적으로 아는 사실이고 모델이 만들어낼 수 있는 게 아니라서, 생성을 태워봐야
-    일반론밖에 안 나온다 — SCOPE_LIMIT 을 LLM 없이 처리하는 것과 같은 이유다. 셀러에겐
-    알림만 나가고 개선안 카드가 안 붙는다(`recommendation: null` 은 조치 6종에서 이미
-    정상값이다). 그때 `reason=NO_EVIDENCE` 가 붙고, **배치는 이걸 실패로 세지 않는다**
-    (2026-08-10) — 상세페이지 미등록은 흔한 데이터 갭이라 실패로 세면 배치가 상시
-    종료코드 1로 끝나 진짜 장애 신호가 무뎌진다. 대신 요약에 건수로 남는다.
+    🔴 **근거가 없으면 개선안을 만들지 않는다.** 근거 0건은 입력만 보고 결정론적으로
+    아는 사실이고 모델이 만들어낼 수 있는 게 아니라서, 생성을 태워봐야 일반론밖에 안
+    나온다 — SCOPE_LIMIT 을 LLM 없이 처리하는 것과 같은 이유다. 셀러에겐 알림만 나가고
+    개선안 카드가 안 붙는다(`recommendation: null` 은 조치 6종에서 이미 정상값이다).
+    그때 `reason=NO_EVIDENCE` 가 붙고, **배치는 이걸 실패로 세지 않는다** — 상세페이지
+    미등록은 흔한 데이터 갭이라 실패로 세면 배치가 상시 종료코드 1로 끝나 진짜 장애
+    신호가 무뎌진다. 대신 요약에 건수로 남는다.
 
     **fallback_guide 는 남는다. 성격이 다르다:**
       - 근거가 아예 없음        → recommendation=None + NO_EVIDENCE (여기)
@@ -974,9 +967,8 @@ async def run_with_outcome(
             attempts=MAX_ATTEMPTS,
             checks=EvaluatorChecks(
                 grounding=False,  # 근거 자체를 안 씀 — 정직한 기록
-                # consistency/actionability는 예전에 evaluate()가 스텁이던 시절 True로
-                # 하드코딩해뒀던 게 evaluate() 실판정 구현 이후에도 안 바뀌고 남아있던
-                # 버그였다(2026-07-27 발견·수정) — LLM 호출 없이 계산 가능해서 실제로 돌린다.
+                # 이 둘은 True 로 하드코딩하지 않는다. 순수 함수라 LLM 호출 없이
+                # 계산되므로, 검증하지 않은 값을 검증한 것처럼 남길 이유가 없다.
                 consistency=_is_consistent_with_root_cause(proposal.rationale, alert),
                 actionability=_is_actionable(proposal.proposed_text),
             ),
@@ -1034,8 +1026,7 @@ async def generate_for_alert(
     alert: DetectionAlert,
     inquiries: list[LinkedCSInquiry],
 ) -> Recommendation | None:
-    """배치 진입점(팀 확정 시그니처, 2026-08-06) — `generate_outcome_for_alert()` 에서
-    개선안만 꺼낸다.
+    """배치 진입점 — `generate_outcome_for_alert()` 에서 개선안만 꺼낸다.
 
     **예외를 던지지 않는다.** 배치가 알림 20건을 도는 중이라, 개선안 1건의 실패가 밖으로
     나가면 그 알림의 **발행까지 막힌다** — 셀러는 개선안이 아니라 이상 알림 자체를 못
@@ -1067,10 +1058,9 @@ def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -
     """승인/반려 결과를 컬렉션2(과거·반려 사례)에 적재(§4-2).
 
     Agent3는 hitl_status를 판단하지도, Recommendation을 저장하지도 않는다 — 그
-    소유자는 Spring Boot다(graph.py HITL 메모 참고, "지금 정하지 말고 5주차 연동
-    때 정하라"고 팀이 이미 합의함). 이 함수는 그 결정이 끝난 뒤 호출되는
-    사이드이펙트 하나뿐이다: 다음 유사 케이스 생성 때 "이런 개선안은 반려/승인
-    됐었다"를 참고할 수 있도록 결과를 인덱싱한다.
+    소유자는 Spring Boot다. 이 함수는 그 결정이 끝난 뒤 호출되는 사이드이펙트
+    하나뿐이다: 다음 유사 케이스 생성 때 "이런 개선안은 반려/승인됐었다"를 참고할
+    수 있도록 결과를 인덱싱한다.
 
     승인·반려 둘 다 적재 대상이다(§4-2: "승인 또는 반려된 개선안 1건 = 문서 1건").
     id는 recommendation_id로 결정적 — 같은 건에 대해 재호출해도 upsert라 중복 없음.
@@ -1110,8 +1100,8 @@ def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -
         if edited_text and recommendation.hitl_status != HitlStatus.REJECTED
         else proposed_text
     )
-    # §4-2 스펙: "원인 라벨 + CS 요약 + 개선안 본문". 예전엔 CS 요약 대신 aspect를 넣는
-    # 실수가 있었다(2026-07-27 발견·수정) — _summarize_cs_evidence()로 실제 CS 요약을 쓴다.
+    # 검색용 본문은 §4-2 스펙대로 "원인 라벨 + CS 요약 + 개선안 본문" 이다. aspect 로
+    # 대신하면 같은 aspect 의 사례가 전부 뭉뚱그려져 유사 검색이 무의미해진다.
     cs_summary = _summarize_cs_evidence(alert)
     document = f"{root_cause_label} {cs_summary} {approved_text}"
 
