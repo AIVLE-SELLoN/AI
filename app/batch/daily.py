@@ -273,6 +273,24 @@ class CountingClient:
 # ── 배치 본체 ───────────────────────────────────────────────────
 
 
+def _failure(target_key: str, stage: str, error: BaseException | str) -> dict[str, str]:
+    """배치 요약에 실을 실패 1건.
+
+    식별자는 `target_key` 하나다 — `print_summary` 가 이 키만 읽으므로 `alert_id` 처럼
+    다른 이름을 섞으면 요약에서 "식별자 없음" 으로 찍힌다.
+
+    예외를 그대로 받아 `repr()` 을 **여기서** 한다. 호출부마다 문자열로 만들면 한 곳만
+    `str()` 로 적어도 요약의 형식이 조용히 갈린다. 이미 사람이 읽을 문장인 경우
+    (`RecommendationOutcome.detail`)는 그대로 통과시킨다.
+    """
+    return {
+        "target_key": target_key,
+        "stage": stage,
+        "error": error if isinstance(error, str) else repr(error),
+    }
+
+
+
 async def run_batch(
     *,
     window_end: date | None = None,
@@ -411,14 +429,12 @@ async def run_batch(
 
     targets = alerts if max_alerts is None else alerts[:max_alerts]
     failures: list[dict] = [
-        {
-            "target_key": (
-                f"{failure['product']}/{failure['aspect']}/"
-                f"{failure['channel']}/{failure['source']}"
-            ),
-            "stage": "원인분류",
-            "error": failure["error"],
-        }
+        _failure(
+            f"{failure['product']}/{failure['aspect']}/"
+            f"{failure['channel']}/{failure['source']}",
+            "원인분류",
+            failure["error"],
+        )
         for failure in detection_diagnostics.cause_failures
     ]
     counts: Counter[str] = Counter()
@@ -515,13 +531,7 @@ async def run_batch(
                 inquiries = build_linked_inquiries(alert, documents)
             except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
                 inquiries = []
-                failures.append(
-                    {
-                        "target_key": alert.alert_id,
-                        "stage": "CS 원문 매핑",
-                        "error": repr(exc),
-                    }
-                )
+                failures.append(_failure(alert.alert_id, "CS 원문 매핑", exc))
 
             # ⚠️ alert 1건이 터져도 배치는 계속한다. 여기서 던지면 **이미 LLM 비용을 쓴
             #    앞쪽 알림들까지 발행되지 않고 날아간다.** 실패는 모아서 끝에 요약한다.
@@ -536,13 +546,7 @@ async def run_batch(
                     rec = outcome.recommendation
                 except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
                     counts["개선안"] += 1
-                    failures.append(
-                        {
-                            "target_key": alert.alert_id,
-                            "stage": "개선안",
-                            "error": repr(exc),
-                        }
-                    )
+                    failures.append(_failure(alert.alert_id, "개선안", exc))
                 else:
                     # ⚠️ `generate_outcome_for_alert` 는 **계약상 예외를 안 던지고** 실패를
                     #    개선안 없는 결과로 돌려준다. 위 except 만 두면 실패가 요약에도
@@ -569,12 +573,12 @@ async def run_batch(
                             routing_misses += 1
                         elif outcome.counts_as_failure:
                             failures.append(
-                                {
-                                    "target_key": alert.alert_id,
-                                    "stage": "개선안",
-                                    "error": outcome.detail
+                                _failure(
+                                    alert.alert_id,
+                                    "개선안",
+                                    outcome.detail
                                     or "생성 실패 — 사유는 app.recommendation.pipeline 로그 참고",
-                                }
+                                )
                             )
 
             try:
@@ -591,13 +595,7 @@ async def run_batch(
                 #    발행이 성공하는 순간 백엔드가 종결 상태를 들은 것이므로 재시도하지
                 #    않는다(재시도하면 FAILED 행을 SUCCESS 로 덮는 계약 변경이 된다).
                 guideline_undelivered = True
-                failures.append(
-                    {
-                        "target_key": alert.alert_id,
-                        "stage": "가이드라인",
-                        "error": repr(exc),
-                    }
-                )
+                failures.append(_failure(alert.alert_id, "가이드라인", exc))
 
             try:
                 await publish_anomaly_analyzed(alert, rec, trace_id, classifier_versions)
@@ -605,13 +603,7 @@ async def run_batch(
                 delivered.append(alert)
                 anomaly_delivered = True
             except Exception as exc:  # noqa: BLE001
-                failures.append(
-                    {
-                        "target_key": alert.alert_id,
-                        "stage": "발행:이상",
-                        "error": repr(exc),
-                    }
-                )
+                failures.append(_failure(alert.alert_id, "발행:이상", exc))
 
             if guideline is not None:
                 try:
@@ -620,13 +612,7 @@ async def run_batch(
                 except Exception as exc:  # noqa: BLE001
                     # §4 본체 — 만들어 놓고 백엔드가 못 들었다 → 대기 후보.
                     guideline_undelivered = True
-                    failures.append(
-                        {
-                            "target_key": alert.alert_id,
-                            "stage": "발행:가이드",
-                            "error": repr(exc),
-                        }
-                    )
+                    failures.append(_failure(alert.alert_id, "발행:가이드", exc))
 
             # §4 — 대기열은 "알림은 **나갔는데** 가이드라인만 못 나간" 건만 받는다.
             # 알림 발행까지 실패한 건은 캐시에 안 들어가 다음 배치가 그 알림을 통째로
@@ -677,13 +663,7 @@ async def run_batch(
                     except Exception as exc:  # noqa: BLE001 - 배치 격리가 목적
                         entry["attempts"] += 1
                         failures.append(
-                            {
-                                # failures 식별자 키는 target_key 하나다 (#80 후속,
-                                # `5adc025`). print_summary 가 이 키만 읽는다.
-                                "target_key": p_alert.alert_id,
-                                "stage": "가이드라인 재시도",
-                                "error": repr(exc),
-                            }
+                            _failure(p_alert.alert_id, "가이드라인 재시도", exc)
                         )
                         if entry["attempts"] >= GUIDELINE_RETRY_MAX_ATTEMPTS:
                             retry_exhausted += 1
@@ -719,13 +699,7 @@ async def run_batch(
         try:
             save_pending_guidelines(pending_after, pending_path)
         except Exception as exc:  # noqa: BLE001 - 저장 실패가 배치를 못 세우게
-            failures.append(
-                {
-                    "target_key": "(가이드라인 대기열)",
-                    "stage": "대기열 저장",
-                    "error": repr(exc),
-                }
-            )
+            failures.append(_failure("(가이드라인 대기열)", "대기열 저장", exc))
             undeliverable = {a.alert_id for a in new_pending}
             delivered = [a for a in delivered if a.alert_id not in undeliverable]
 
