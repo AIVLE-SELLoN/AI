@@ -13,7 +13,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from app.batch import daily
+from app.batch import daily, inputs
 from app.core import exit_codes, logging_setup
 from tests.conftest import bad_log_level_settings, pin_settings, unloadable_settings
 
@@ -169,7 +169,7 @@ def test_classifier_versions_only_when_the_filter_guaranteed_them():
     assert set(versions) == {"prompt_cs", "prompt_review", "model", "pipeline"}
     # 필터가 쓰는 값과 **같은 값**이어야 한다. 따로 조립하면 payload 가 실제로 읽은 것과
     # 다른 버전을 말하게 된다.
-    assert tuple(versions.values()) == daily._active_version_params()
+    assert tuple(versions.values()) == inputs._active_version_params()
 
     assert daily._classifier_versions_for(_stub_inputs) is None
 
@@ -971,7 +971,7 @@ def test_runtime_error_stays_confined_to_preconditions():
         and node.exc.func.id == "RuntimeError"
     }
 
-    assert hits == {"app/batch/daily.py"}, (
+    assert hits == {"app/batch/inputs.py"}, (
         "RuntimeError 를 던지는 곳이 배치 전제검사 밖으로 늘었습니다 — "
         f"daily.main() 의 (FileNotFoundError, RuntimeError) → exit 2 분류를 다시 보세요: {sorted(hits)}"
     )

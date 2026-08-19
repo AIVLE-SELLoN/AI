@@ -36,7 +36,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from app.batch.daily import load_inputs_from_db
+from app.batch.inputs import load_inputs_from_db
 from app.classification.service import PROMPT_ASPECT_VERSION, PROMPT_SENTIMENT_VERSION
 from app.config import get_settings
 from app.core import raw_db, raw_schema

@@ -44,8 +44,9 @@ def _rel(path: Path) -> str:
 CONNECT_FUNCTIONS = frozenset({"connect_readonly", "connect_readwrite"})
 
 RAW_DB_CALLERS: dict[str, str] = {
-    "app/batch/daily.py": (
-        "main() 이 (FileNotFoundError, RuntimeError, *connection_error_types()) 를 잡아 exit 2"
+    "app/batch/inputs.py": (
+        "던지는 쪽이다. 잡는 곳은 app/batch/daily.py 의 main() "
+        "— (FileNotFoundError, RuntimeError, *connection_error_types()) 를 잡아 exit 2"
     ),
     "app/core/inquiries.py": (
         "던지는 쪽이다. 잡는 곳은 app/recommendation/service.py 의 degrade "
