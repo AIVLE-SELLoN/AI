@@ -287,15 +287,36 @@ def test_product_group_id_never_reaches_the_payload(tmp_path) -> None:
     `product_group_id` 는 `golden_mapping` 파생이라 실어 보내면 **백엔드가 할 매핑을
     우리가 대신 답해 주는 것**이 된다. 매핑은 상품 마스터를 선적재·선매핑하는 쪽에서
     끝나고(2026-08-19 백엔드 확인), 이벤트는 `channel_product_id` 로 참조만 한다.
+
+    🔴 **토픽을 손으로 집지 않는다 — 위 `test_only_orders_carry_a_date_shaped_time` 과 같은
+       이유다.** 초안은 `raw.inquiries`·`raw.orders` 둘만 봐서, `raw.reviews` 나
+       `raw.detail_changes` 에만 그룹 ID 를 흘리는 변이가 **14 passed 로 통과**했다
+       (2026-08-19 지적, 재현 확인). 시각 쪽 구멍을 막으면서 **바로 옆 가드는 안 훑은**
+       상태였다.
+
+    ⚠️ 가상 시나리오가 아니다 — 아래 `load_and_merge_csvs` 가
+       `sanitized_payload.get("product_group_id")` 로 **그 컬럼이 대본 CSV 에 있을 수 있다는
+       것을 이미 전제**한다. 생성기가 한 파일에만 그 컬럼을 붙이면 그 토픽만 새고 가드는
+       초록이다(`generate_detail_fields.py` 가 형제 파일에 그 컬럼을 쓴다).
     """
     _write_scripts(tmp_path, master_rows=[_MASTER_ROW])
+    topics = {c["topic"] for c in mock_producer.STREAMING_FILE_CONFIGS.values()}
 
     events = mock_producer.load_and_merge_csvs(tmp_path, None)
+    by_topic = {e["topic"]: e for e in events}
 
-    for topic in ("raw.inquiries", "raw.orders"):
-        assert "product_group_id" not in _payload_of(events, topic)
+    # 대본이 빠진 토픽이 있으면 아래 루프가 그 토픽을 건너뛴다 — 단언이 있어도 헐거워지는
+    # 자리라 커버리지부터 못박는다(1회전에 이 형태로 샜다).
+    assert by_topic.keys() == topics, (
+        "재생 대상 토픽 중 대본이 없는 것이 있다 — _write_scripts 를 같이 늘릴 것"
+    )
+
+    for topic in sorted(topics):
+        assert "product_group_id" not in by_topic[topic]["payload"], (
+            f"{topic}: 그룹 ID 가 Kafka payload 로 샜다 — raw DB 적재 경로에만 써야 한다"
+        )
     # 이벤트 dict(= raw DB 적재 경로)에는 남아 있어야 한다
-    assert next(e for e in events if e["topic"] == "raw.inquiries")["product_group_id"] == "P001"
+    assert by_topic["raw.inquiries"]["product_group_id"] == "P001"
 
 
 def test_writer_and_reader_share_one_kst_definition():
