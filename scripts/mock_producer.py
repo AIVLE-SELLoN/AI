@@ -295,9 +295,9 @@ def seed_product_catalog(
     # main server 자리를 대신하므로 그게 실제로 이 행이 생긴 시각이다.
     #
     # ⚠️ `mapping_method`·`mapping_confidence` 는 채우지 않는다(§2-3). "무엇으로 묶었는지"
-    #    (sim_embedding/rule_naming/manual)와 그 확신도는 **백엔드 매핑의 산물**이라 우리가
-    #    아는 값이 아니다. 그럴듯한 값을 넣으면 나중에 실제 매핑 품질을 볼 때 지어낸 수치가
-    #    섞인다. 모르는 것은 NULL 로 둔다.
+    #    (slm_embedding/rule_naming/manual — `sim` 아니라 `slm`, 소형 언어모델)와 그
+    #    확신도는 **백엔드 매핑의 산물**이라 우리가 아는 값이 아니다. 그럴듯한 값을 넣으면
+    #    나중에 실제 매핑 품질을 볼 때 지어낸 수치가 섞인다. 모르는 것은 NULL 로 둔다.
     now = datetime.now(KST).isoformat()
 
     # ⚠️ `known` 과 INSERT 가 **같은 값**을 봐야 한다. 예전에는 여기서만 strip 하고 INSERT 는

@@ -118,7 +118,8 @@ PRODUCTS_CHANNEL_PRODUCT_INDEX = (
 # ⚠️ 이 테이블이 비면 **채널 간 비교가 통째로 무너진다.** 상품 하나가 채널마다 다른 그룹이
 #    되어 탐지의 편중형/전역형 판정도, 월간 리포트의 채널 격차도 성립하지 않는다.
 #    (2026-08-11 실측: 매핑 없이 돌렸을 때 상세페이지 RAG 조회 적중률 0%)
-# mapping_method      sim_embedding / rule_naming / manual — 무엇으로 묶었는지(§2-3).
+# mapping_method      slm_embedding / rule_naming / manual — 무엇으로 묶었는지(§2-3).
+#                     ⚠️ `sim` 이 아니라 `slm` 이다 — 소형 언어모델(SLM) 임베딩을 뜻한다
 # mapping_confidence  **참고용이다. 판정 기준으로 쓰지 않는다**(§2-3 명시).
 # mapped_at           매핑 시점. §5-3 이 확정한 스냅샷 동기화(주 1회 매핑 재구성)의 근거
 #                     컬럼이다 — `products` 원본이 나중에 바뀌어도 이 값은 따라오지 않는다.
