@@ -94,14 +94,12 @@ __all__ = [
 
 
 # ── 담당자 미완성 함수 — import 폴백 ────────────────────────────
-# 시그니처는 지인님 결선 정리(2026-08-05)의 예시 코드를 그대로 따른다.
 # 실물이 생기면 아래 except 가 안 타므로 이 파일은 손댈 필요가 없다.
 #
 # **모듈이 없을 때만 폴백한다.** `except ImportError` 로 통째로 삼키면, 모듈은
 #    올라왔는데 그 안의 의존성(예: `aio_pika`)이 없어서 나는 ImportError 까지 먹고
 #    조용히 no-op 이 된다 — 요약엔 "미연결"로 찍혀서 보는 사람은 "아직 안 만들었나"
 #    로 읽고, 이벤트가 하나도 안 나가는데 배치는 정상 종료한다.
-#    (지인님 PR 리뷰 §6, 2026-08-06)
 
 
 def _missing(exc: ImportError, module: str) -> bool:
@@ -359,7 +357,7 @@ async def _process_alert(
     #    앞쪽 알림들까지 발행되지 않고 날아간다.** 실패는 모아서 끝에 요약한다.
     rec = guideline = None
     # §4 — 대기열 적재 판정용. 아래 두 예외 지점이 후보만 표시하고, 실제 적재는
-    # 알림 발행 성공 여부까지 보고 이 반복의 끝에서 한다 (PR #90 리뷰 P2).
+    # 알림 발행 성공 여부까지 보고 이 반복의 끝에서 한다.
     anomaly_delivered = False
     guideline_undelivered = False
     if should_generate(alert):
@@ -430,8 +428,7 @@ async def _process_alert(
     # §4 — 대기열은 "알림은 **나갔는데** 가이드라인만 못 나간" 건만 받는다.
     # 알림 발행까지 실패한 건은 캐시에 안 들어가 다음 배치가 그 알림을 통째로
     # 재처리한다(가이드라인도 그 경로에서 다시 만들어진다) — 대기열에도 넣으면
-    # 같은 가이드라인이 두 경로에서 두 번 생성·발행된다 (PR #90 리뷰 P2 실측:
-    # 같은 guideline_id 가 2회 발행 + LLM·S3 이중 지불).
+    # 같은 guideline_id 가 두 번 발행되고 LLM·S3 를 이중 지불한다.
     if guideline_undelivered and anomaly_delivered:
         tally.guideline_pending.append(alert)
 
@@ -489,7 +486,7 @@ async def run_batch(
     #    읽기는 실행 시각(`date.today()`), 쓰기는 데이터 시각(`window_end`)이면, 데이터가
     #    오늘보다 STATE_RETENTION_DAYS 이상 뒤처진 상태(백필·유입 지연)에서 로드가 방금
     #    저장한 캐시를 통째로 버려 **매 배치가 첫 실행처럼 굴러간다.** 억제 모듈이 경과일을
-    #    데이터 시각으로 세는 것과 같은 이유다. (지인님 PR 리뷰 §5, 2026-08-06)
+    #    데이터 시각으로 세는 것과 같은 이유다.
     if window_end is None and documents:
         window_end = max(_as_date(d["created_at"]) for d in documents)
 
@@ -550,7 +547,7 @@ async def run_batch(
         documents=documents,
         window_end=window_end,
         prior_alerts=prior,
-        # 백엔드가 어디서 줄지 미정 — 정해질 때까지 빈 집합 (지인님 결선 §8).
+        # 백엔드가 어디서 줄지 미정 — 정해질 때까지 빈 집합.
         resolved_alert_ids=set(),
         unreliable_denominators=unreliable,
         client=stub,
@@ -584,7 +581,7 @@ async def run_batch(
     retry_exhausted = 0
     # §4 — 재시도도 --max-alerts 예산 안에서 돈다: 신규 target 이 먼저 쓰고 남는 만큼만.
     # 상한을 우회하면 장애 복구 직후 대기열 규모만큼 LLM·S3 비용이 한 번에 나간다
-    # (PR #90 리뷰 P2). 예산 밖 대기 건은 attempts 를 안 쓰고 다음 배치로 넘어간다.
+    # 예산 밖 대기 건은 attempts 를 안 쓰고 다음 배치로 넘어간다.
     retry_budget = (
         len(pending) if max_alerts is None else max(0, max_alerts - len(targets))
     )
@@ -711,7 +708,7 @@ async def run_batch(
         "prior_alerts": len(prior),
         "published": len(alerts),
         # suppressed 도 정상 alert_id 를 갖고 있다. 구분 없이 세면 나중에 "발행된 건가
-        # 억제된 건가"를 알 수 없으므로 따로 센다 (지인님 결선 §6-②).
+        # 억제된 건가"를 알 수 없으므로 따로 센다.
         "suppressed": len(suppressed),
         "processed": len(targets),
         # 발행에 성공해 캐시에 들어간 건수. published(탐지) 와 다를 수 있고,
@@ -830,7 +827,7 @@ def print_summary(summary: dict) -> None:
 def main() -> None:
     # **argparse 를 만들기 전에 부른다.** 예전엔 `parse_args()` 뒤에 있었는데,
     #    아래 `--state-path` 도움말에 `—` 가 들어 있어 **`--help` 나 잘못된 인자만으로
-    #    cp949 콘솔에서 죽었다**(2026-08-14 재현: exit 1, UnicodeEncodeError).
+    #    cp949 콘솔에서 죽었다**(exit 1, UnicodeEncodeError).
     #    argparse 는 우리 코드가 첫 줄을 찍기 한참 전에 자기 출력을 내보낸다.
     force_utf8_output()
 
@@ -907,7 +904,6 @@ def main() -> None:
 
     # 계속 도는 것과 성공으로 보고하는 것은 다르다. 실패가 있으면 비-0 으로 끝내야
     #    cron·k8s Job 이 알아챈다 — 안 그러면 모든 알림이 발행 실패해도 성공한 배치다.
-    #    (지인님 PR 리뷰 §4, 2026-08-06)
     #
     # **값(1)은 그대로다 — 출처만 상수로 바꿨다.** 여기는 "배치가 돌긴 했는데 일부가
     #    실패" 라 `EXIT_RUNTIME_ERROR` 의 정의(*"재시작하면 나을 수 있다"*)에 정확히 맞는다.

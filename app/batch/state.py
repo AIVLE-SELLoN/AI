@@ -85,8 +85,7 @@ def _read_state(path: Path) -> list[dict]:
        영구히 못 뜬다. 사람이 파일을 지워야 다시 도는데 그러면 억제·기준선이 첫 실행으로
        리셋된다 — `STATE_PATH` docstring ①② 가 경고한 그 시나리오다.
        `DetectionAlert` 에 필수 필드가 하나 추가되는 것만으로도 같은 상태가 된다
-       (스키마는 전원 회의 확정 사항이라 실제로 바뀐다).
-       (지인님 PR 리뷰 §3, 2026-08-06)
+       (스키마는 확정 사항이라 실제로 바뀐다).
     """
     if not path.exists():
         return []
@@ -147,7 +146,6 @@ def save_published(
          배치가 그걸 직전 알림으로 보고 `RENOTIFY_BLOCK_DAYS` 만큼 억제해서 **셀러가
          그 알림을 영영 못 본다.** `resolved_alert_ids` 가 빈 집합이라 조기 해제 경로도
          없다. MQ 가 5분 죽으면 그날 알림이 7일간 침묵하는 형태다.
-         (지인님 PR 리뷰 §1, 2026-08-06)
 
     같은 `alert_id` 는 덮어쓴다(같은 날 재실행 시 중복 누적 방지).
     """
