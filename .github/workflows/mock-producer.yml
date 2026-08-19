@@ -1,0 +1,192 @@
+# mock producer 전용 — 이미지가 실제로 대본을 재생하고 raw DB 를 채우는지 본다.
+#
+# 🔴 **AI 노드 이미지(`image.yml`)와 레지스트리부터 갈라져 있다.** producer 는 CSV 를 읽어
+#    Kafka 와 raw DB 로 흘리는 일만 하는데, 예전엔 AI 노드와 같은 1.57GB 이미지로 떴다.
+#    전용 슬림 이미지는 427MB 다 — weasyprint·fonts-noto-cjk·chromadb·scipy·statsmodels·
+#    openai·boto3·fastapi 가 전부 빠진다(`requirements-mock-producer.txt` 머리말 참고).
+#
+# ⚠️ **단위 테스트는 여기서 안 돌린다.** `tests/test_mock_producer.py` 9개는 계층 1(`test.yml`)이
+#    이미 전 PR 에서 돌린다. 여기가 잡는 것은 그쪽이 **원리적으로 못 잡는 것** — 슬림 이미지에
+#    실제로 뭐가 빠져 있는지다. 로컬 전체 의존성에서는 되는데 이 이미지에서만 깨지는 계열.
+#    실제로 이 이미지를 만들면서 하나 나왔다: `mock_producer.py` 가 직접 import 하는 `pandas` 가
+#    `requirements.txt` 에 없었다(statsmodels 를 타고 들어오던 전이 의존성).
+name: mock-producer
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/mock_producer.py'
+      - 'app/core/**'
+      - 'app/config.py'
+      - 'requirements-mock-producer.txt'
+      - 'docker/mock-producer/Dockerfile'
+      - 'tests/fixtures/mock_producer/**'
+      - '.github/workflows/mock-producer.yml'
+  push:
+    branches: [main]
+
+# ⚠️ `image.yml` 과 같은 이유로 **필수 체크로 걸지 않는다.** 위 `paths:` 필터 때문에 그 경로를
+#    안 건드리는 PR 에서는 잡이 아예 생성되지 않아, 필수로 걸면 그런 PR 이 영원히 대기한다.
+permissions:
+  contents: read
+
+concurrency:
+  group: mock-producer-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# 🔴 **AI 노드와 다른 레지스트리 repo 이고, 시크릿도 다르다.**
+#    한 저장소에 같은 이름의 시크릿을 둘 둘 수 없어 토큰만 이름을 나눴다
+#    (`DOCKERHUB_USERNAME` 은 계정 하나라 공용).
+#      sellon-ai-node       ← secrets.DOCKERHUB_TOKEN       (만료 2026-09-15)
+#      sellon-mock-producer ← secrets.DOCKERHUB_TOKEN_MOCK  (만료 2026-11-17)
+#
+# ⚠️ 이 repo 도 **public 이다** — AI 노드와 같은 결정(2026-08-18). 다만 이쪽 이미지에는
+#    프롬프트가 안 들어간다(`app/**/prompts/` 를 COPY 하지 않는다). 들어가는 건
+#    `app/core/` · `app/config.py` · `scripts/mock_producer.py` 뿐이고 대본 CSV 도 없다.
+env:
+  IMAGE: y0njunch0i/sellon-mock-producer
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 짧은 SHA
+        id: meta
+        run: echo "short=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        if: github.event_name == 'push'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN_MOCK }}
+
+      # 🔴 main 에서도 여기서는 push 하지 않는다. 항상 `load: true` 로 로컬 데몬에만 넣고
+      #    스모크를 **통과한 뒤에** 민다(`image.yml` 과 같은 순서·같은 이유).
+      - name: 빌드
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/mock-producer/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: |
+            ${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}
+            ${{ env.IMAGE }}:main
+          cache-from: type=gha,scope=mock-producer
+          cache-to: type=gha,mode=max,scope=mock-producer
+
+      # 🔴 **슬림이라는 것 자체가 계약이다.** 아래가 하나라도 들어오면 이 이미지를 따로 둔
+      #    이유가 사라진다. import 가 없어 스모크가 통과하는 동안에도 무게만 늘 수 있어,
+      #    "실행은 되는데 목적을 잃은" 상태를 여기서 못박는다.
+      #    (빠진 import 를 만나면 무거운 패키지를 추가해 고치고 싶어지는데, 그 유혹을 막는다.)
+      - name: 슬림 계약 확인
+        run: |
+          IMG=${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}
+          installed=$(docker run --rm --entrypoint pip "$IMG" list --format=freeze | cut -d= -f1 | tr 'A-Z' 'a-z')
+          for pkg in chromadb scipy statsmodels weasyprint openai langgraph boto3 aio-pika fastapi uvicorn; do
+            if printf '%s\n' "$installed" | grep -qx "$pkg"; then
+              echo "::error::슬림 이미지에 $pkg 가 들어왔습니다 — 전용 이미지를 둔 이유가 사라집니다"
+              exit 1
+            fi
+          done
+          echo "슬림 계약 확인: 무거운 패키지 10종 부재 · 설치 $(printf '%s\n' "$installed" | wc -l)개"
+
+      # 인자 없이 띄우면 브로커에 붙지 않고 도움말만 찍어야 한다(ENTRYPOINT/CMD 계약).
+      - name: 진입점 확인
+        run: |
+          docker run --rm ${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }} | head -1
+          echo "진입점 확인 완료"
+
+      # 🔴 이 워크플로의 존재 이유. `--dry-run` 은 Kafka 만 건너뛰고 **raw DB 적재는 그대로**
+      #    하므로, 브로커 없이 재생 → 적재 전 경로가 실제로 돈다.
+      #
+      # ⚠️ 대본은 `tests/fixtures/mock_producer/` 의 **손으로 만든 5행짜리**다. `data/` 도
+      #    `data/golden/` 도 쓰지 않는다 — golden 에서 파생시키면 CLAUDE.md 9 를 건드리고,
+      #    생성기를 돌리면 CI 가 느려지는 데다 생성기 고장까지 이 잡에 딸려 온다.
+      #    3채널 1상품이라 **채널 간 비교가 성립하는 최소 형태**다(그룹 하나에 채널 셋).
+      - name: 재생 스모크 (대본 → raw DB)
+        run: |
+          mkdir -p "$RUNNER_TEMP/mpout"
+          docker run --rm \
+            -v "$PWD/tests/fixtures/mock_producer:/fixture:ro" \
+            -v "$RUNNER_TEMP/mpout:/out" \
+            ${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }} \
+            --data-dir /fixture --dry-run --speed 100000 --raw-db /out/smoke.db
+
+          python - "$RUNNER_TEMP/mpout/smoke.db" <<'PY'
+          import sqlite3, sys
+
+          db = sqlite3.connect(sys.argv[1])
+          db.row_factory = sqlite3.Row
+          fail = []
+
+          # ── ① 행 수 — 대본이 통째로 안 실린 경우
+          for table, want in (("channel", 3), ("products", 3), ("mapped_data", 3),
+                              ("cs", 2), ("reviews", 1), ("orders", 2)):
+              got = db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+              if got != want:
+                  fail.append(f"{table} {got}행 (기대 {want})")
+
+          # ── ② 🔴 매핑 조인 — 이게 깨지면 채널 간 비교가 통째로 사라진다
+          #    상품 하나가 채널마다 다른 그룹으로 갈리면(P001 → C1101/N2201/Z3301) 한 그룹에
+          #    채널이 둘 이상 모이는 경우가 하나도 안 남는다. 실측된 회귀다(42종 → 0종).
+          rows = db.execute("""
+              SELECT product_group_id, count(DISTINCT channel_id) AS channels
+              FROM mapped_data JOIN products USING (variant_row_id)
+              GROUP BY product_group_id
+          """).fetchall()
+          spread = {r["product_group_id"]: r["channels"] for r in rows}
+          if spread != {"P001": 3}:
+              fail.append(f"상품그룹 분포가 {spread} (기대 {{'P001': 3}} — 채널 3개가 한 그룹)")
+
+          # ── ③ 🔴 product_group_id 폴백 — 매핑에 있는데도 채널상품 ID 가 실리면 조용히 틀린다
+          bad = db.execute(
+              "SELECT id, product_group_id FROM cs WHERE product_group_id <> 'P001'"
+          ).fetchall()
+          if bad:
+              fail.append("cs 에 폴백 값: " + ", ".join(f"{r['id']}={r['product_group_id']}" for r in bad))
+
+          # ── ④ 🔴 KST 오프셋 — 안 붙으면 날짜 경계가 하루 밀린다
+          for table, col in (("cs", "inquired_at"), ("reviews", "created_at")):
+              for r in db.execute(f"SELECT id, {col} AS t FROM {table}"):
+                  if not str(r["t"]).endswith("+09:00"):
+                      fail.append(f"{table}.{col} 에 KST 오프셋 없음: {r['id']} = {r['t']!r}")
+
+          if fail:
+              print("::error::재생 스모크 실패")
+              for f in fail:
+                  print(f"  - {f}")
+              raise SystemExit(1)
+
+          print("재생 스모크 통과 — 5건 재생 · 매핑 조인(P001 ← 채널 3개) · KST 오프셋 확인")
+          PY
+
+      # 스모크를 통과한 **바로 그 이미지**를 민다(`image.yml` 과 같은 이유).
+      - name: 레지스트리 push
+        if: github.event_name == 'push'
+        run: |
+          docker push "${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}"
+          docker push "${{ env.IMAGE }}:main"
+
+      - name: 태그 요약
+        if: github.event_name == 'push'
+        run: |
+          size=$(docker image inspect "${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}" \
+                   --format '{{.Size}}' | awk '{printf "%.0fMB", $1/1024/1024}')
+          {
+            echo "### mock producer 이미지 push 완료"
+            echo ""
+            echo '```'
+            echo "${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}   ← 배포는 이 태그로"
+            echo "${{ env.IMAGE }}:main                                     ← 움직임. 배포 금지"
+            echo '```'
+            echo ""
+            echo "platform: linux/amd64 · size: $size (AI 노드 이미지 1.57GB 와 별개)"
+          } >> "$GITHUB_STEP_SUMMARY"
