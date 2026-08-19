@@ -143,6 +143,182 @@ def test_timestamps_carry_the_kst_offset(tmp_path) -> None:
     assert occurred == "2026-05-01T10:00:00+09:00"
 
 
+# ── Kafka payload 계약 (2026-08-18 수정 명세 · 2026-08-19 상품명 항목 철회) ──────
+#
+# 아래 테스트들이 잡는 것은 전부 **조용히 틀리는** 종류다 — 값이 채워져 있어 파이프라인은
+# 성공하고 결과만 어긋난다. 그래서 payload 를 직접 뜯어 고정한다.
+
+_MASTER_HEADER = (
+    "variant_row_id,channel,channel_product_id,channel_product_name,"
+    "option_group_names,channel_option_name,sale_price,original_price"
+)
+_MASTER_ROW = "VR-1,COUPANG,C1,린넨 미디 원피스,색상,BLK,39900,49900"
+
+
+def _write_scripts(data_dir: Path, *, master_rows: list[str]) -> None:
+    """발행 대본 세트. **재생 대상 네 종을 다 쓴다.**
+
+    🔴 예전엔 `inquiries` 와 `orders` 만 썼는데, 그러면 `reviews` 경로가 **한 번도 실행되지
+       않아** `time_is_date` 를 뒤집어도 전부 초록이었다(2026-08-19 지적). `reviews.created_at`
+       은 31,639건이 그 표기로 나가는 컬럼이라 조용히 틀리기 딱 좋은 자리다.
+       아래 `test_only_orders_carry_a_date_shaped_time` 이 "빠진 대본이 없는지"까지 본다.
+    """
+    data_dir.mkdir(parents=True, exist_ok=True)
+    _csv(data_dir / "input_channel_products.csv", [_MASTER_HEADER, *master_rows])
+    _csv(data_dir / "input_mapped_data.csv", ["variant_row_id,product_group_id", "VR-1,P001"])
+    _csv(data_dir / "input_cs_inquiries.csv", [
+        "inquiry_id,channel,channel_product_id,content,inquired_at",
+        "INQ-1,COUPANG,C1,색이 달라요,2026-05-01T10:00:00",
+    ])
+    _csv(data_dir / "input_reviews.csv", [
+        "review_id,channel,channel_product_id,content,rating,created_at",
+        "RVW-1,COUPANG,C1,생각보다 얇아요,3,2026-05-01T11:00:00",
+    ])
+    _csv(data_dir / "input_orders.csv", [
+        "channel,channel_product_id,order_date,quantity,order_amount",
+        "COUPANG,C1,2026-05-01,3,30000",
+    ])
+    _csv(data_dir / "input_detail_changes.csv", [
+        "change_id,channel,channel_product_id,changed_field,previous_value,new_value,change_type,changed_at",
+        "CHG-1,COUPANG,C1,소재 표기,린넨 100%,린넨 55% 폴리 45%,소재,2026-05-01T09:00:00",
+    ])
+
+
+def _csv(path: Path, lines: list[str]) -> None:
+    # ⚠️ `os.linesep` 을 쓰지 않는다 — 윈도우에서 `\r\r\n` 이 된다(실측). pandas 가 삼켜
+    #    무해하지만 저장소의 다른 7곳은 전부 `"\n".join(...)` 이라 여기만 다를 이유가 없다.
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _payload_of(events: list[dict], topic: str) -> dict:
+    return next(e["payload"] for e in events if e["topic"] == topic)
+
+
+def test_unmapped_product_group_is_empty_not_the_channel_id(tmp_path, caplog) -> None:
+    """🔴 매핑 미스일 때 `channel_product_id` 를 그룹 자리에 넣지 않는다(2026-08-18 제거).
+
+    ⚠️ 값이 채워져 있으면 탐지 배치의 `dropped["상품매핑 없음"]` 가드가 **발동하지 못한다** —
+       그래서 "조용히" 틀렸다. 비워야 그 가드가 제 일을 하고 제외 건수가 요약에 뜬다.
+    """
+    # 매핑 파일 자체는 살아 있고(다른 상품은 매핑됨) **이 상품만** 빠진 상태 —
+    # 파일 부재와 구분되는, 실제로 제일 찾기 어려운 모양이다.
+    _write_scripts(tmp_path, master_rows=[
+        _MASTER_ROW,
+        "VR-2,COUPANG,C2,다른 상품,색상,BLK,10000,12000",
+    ])
+    _csv(tmp_path / "input_mapped_data.csv", ["variant_row_id,product_group_id", "VR-2,P002"])
+
+    with caplog.at_level("WARNING"):
+        events = mock_producer.load_and_merge_csvs(tmp_path, None)
+
+    inquiry = next(e for e in events if e["topic"] == "raw.inquiries")
+    assert inquiry["product_group_id"] is None, "채널 상품 ID 로 대체하면 안 된다"
+    assert any("[MAP]" in r.getMessage() for r in caplog.records)
+
+
+def test_payload_time_carries_the_kst_offset(tmp_path) -> None:
+    """🔴 payload 시각에도 `+09:00` 을 붙인다(2026-08-18 결정).
+
+    raw DB 적재 경로는 이미 `to_kst_iso()` 로 붙이는데 Kafka payload 만 오프셋이 없어서,
+    받는 쪽이 UTC 로 읽으면 **9시간이 밀린다.** 그 시각이 탐지 윈도우의 날짜 경계를 정한다.
+    """
+    _write_scripts(tmp_path, master_rows=[_MASTER_ROW])
+
+    events = mock_producer.load_and_merge_csvs(tmp_path, None)
+
+    assert _payload_of(events, "raw.inquiries")["inquired_at"] == "2026-05-01T10:00:00+09:00"
+
+
+def test_only_orders_carry_a_date_shaped_time(tmp_path) -> None:
+    """🔴 **`STREAMING_FILE_CONFIGS` 에서 유도한다 — 토픽을 손으로 집지 않는다.**
+
+    손으로 집으면 집지 않은 토픽이 조용히 빠진다. 실제로 그렇게 빠졌다: 초안은
+    `inquiries`·`orders` 만 단언해서 **`reviews` 의 `time_is_date` 를 뒤집어도 13 passed** 였다
+    (2026-08-19 지적). 진입점 가드(`force_utf8_output`)도 같은 셋을 두고 네 번째를 못 막은
+    선례가 있어, 여기서는 설정에서 유도해 새 토픽이 늘면 **자동으로 대상이 되게** 한다.
+
+    잠그는 것은 둘이다:
+      ① `time_is_date=True` 인 것은 **`orders` 하나뿐**이다 — §2-9 가 `order_date` 만 DATE 로
+         정의했다. 다른 토픽이 이 플래그를 얻으면 그 컬럼의 오프셋이 통째로 사라진다.
+      ② 그 플래그대로 payload 표기가 갈린다 — 날짜면 `YYYY-MM-DD`, 아니면 `+09:00` 까지.
+    """
+    _write_scripts(tmp_path, master_rows=[_MASTER_ROW])
+    configs = mock_producer.STREAMING_FILE_CONFIGS
+
+    # ① 플래그를 가진 쪽이 orders 하나인지 — 대본 없이 설정만으로 성립하는 단언
+    assert {name for name, c in configs.items() if c["time_is_date"]} == {"orders"}
+
+    events = mock_producer.load_and_merge_csvs(tmp_path, None)
+    by_topic = {e["topic"]: e["payload"] for e in events}
+
+    # 대본이 빠진 토픽이 있으면 아래 루프가 그 토픽을 건너뛰어 ②가 헐거워진다.
+    # `_write_scripts` 가 네 종을 다 쓰는지 여기서 같이 못박는다.
+    assert by_topic.keys() == {c["topic"] for c in configs.values()}, (
+        "재생 대상 토픽 중 대본이 없는 것이 있다 — _write_scripts 를 같이 늘릴 것"
+    )
+
+    # ② 플래그대로 표기가 갈리는지
+    for config in configs.values():
+        printed = by_topic[config["topic"]][config["time_column"]]
+        if config["time_is_date"]:
+            assert printed == "2026-05-01", f"{config['topic']}: 날짜여야 한다 (실제 {printed!r})"
+        else:
+            assert printed.endswith("+09:00"), (
+                f"{config['topic']}: KST 오프셋이 붙어야 한다 (실제 {printed!r})"
+            )
+
+
+def test_order_date_stays_a_pure_date(tmp_path) -> None:
+    """⚠️ 주문만 예외다 — `order_date` 는 §2-9 가 정한 **DATE**(하루 합산 키)다.
+
+    날짜에 오프셋을 붙이면 "그 날 09시"라는 없는 뜻이 생기고, `build_db_row` 가 순수
+    날짜로 넣는 것과도 어긋난다. 스키마·DB 싱크·payload 셋이 같은 말을 해야 한다.
+    """
+    _write_scripts(tmp_path, master_rows=[_MASTER_ROW])
+
+    events = mock_producer.load_and_merge_csvs(tmp_path, None)
+
+    assert _payload_of(events, "raw.orders")["order_date"] == "2026-05-01"
+
+
+def test_product_group_id_never_reaches_the_payload(tmp_path) -> None:
+    """🔴 그룹 ID 는 payload 에 **안 실린다** — raw DB 적재 경로에만 쓴다.
+
+    `product_group_id` 는 `golden_mapping` 파생이라 실어 보내면 **백엔드가 할 매핑을
+    우리가 대신 답해 주는 것**이 된다. 매핑은 상품 마스터를 선적재·선매핑하는 쪽에서
+    끝나고(2026-08-19 백엔드 확인), 이벤트는 `channel_product_id` 로 참조만 한다.
+
+    🔴 **토픽을 손으로 집지 않는다 — 위 `test_only_orders_carry_a_date_shaped_time` 과 같은
+       이유다.** 초안은 `raw.inquiries`·`raw.orders` 둘만 봐서, `raw.reviews` 나
+       `raw.detail_changes` 에만 그룹 ID 를 흘리는 변이가 **14 passed 로 통과**했다
+       (2026-08-19 지적, 재현 확인). 시각 쪽 구멍을 막으면서 **바로 옆 가드는 안 훑은**
+       상태였다.
+
+    ⚠️ 가상 시나리오가 아니다 — 아래 `load_and_merge_csvs` 가
+       `sanitized_payload.get("product_group_id")` 로 **그 컬럼이 대본 CSV 에 있을 수 있다는
+       것을 이미 전제**한다. 생성기가 한 파일에만 그 컬럼을 붙이면 그 토픽만 새고 가드는
+       초록이다(`generate_detail_fields.py` 가 형제 파일에 그 컬럼을 쓴다).
+    """
+    _write_scripts(tmp_path, master_rows=[_MASTER_ROW])
+    topics = {c["topic"] for c in mock_producer.STREAMING_FILE_CONFIGS.values()}
+
+    events = mock_producer.load_and_merge_csvs(tmp_path, None)
+    by_topic = {e["topic"]: e for e in events}
+
+    # 대본이 빠진 토픽이 있으면 아래 루프가 그 토픽을 건너뛴다 — 단언이 있어도 헐거워지는
+    # 자리라 커버리지부터 못박는다(1회전에 이 형태로 샜다).
+    assert by_topic.keys() == topics, (
+        "재생 대상 토픽 중 대본이 없는 것이 있다 — _write_scripts 를 같이 늘릴 것"
+    )
+
+    for topic in sorted(topics):
+        assert "product_group_id" not in by_topic[topic]["payload"], (
+            f"{topic}: 그룹 ID 가 Kafka payload 로 샜다 — raw DB 적재 경로에만 써야 한다"
+        )
+    # 이벤트 dict(= raw DB 적재 경로)에는 남아 있어야 한다
+    assert by_topic["raw.inquiries"]["product_group_id"] == "P001"
+
+
 def test_writer_and_reader_share_one_kst_definition():
     """🔴 오프셋을 **쓰는** 쪽과 날짜를 **자르는** 쪽이 같은 KST 객체를 봐야 한다.
 

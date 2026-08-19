@@ -79,6 +79,11 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
     "orders": {
         "file_name": "input_orders.csv",
         "time_column": "order_date",
+        # 🔴 **주문의 시각 컬럼은 날짜다 — 오프셋을 붙이지 않는다.** §2-9 가 `order_date` 를
+        #    DATE(하루 합산 키)로 정의했고 `build_db_row` 도 순수 날짜로 넣는다. payload 만
+        #    `2026-06-30T00:00:00` 처럼 시각을 달고 나가던 것을 여기서 맞춘다 —
+        #    날짜에 `+09:00` 을 붙이면 "그 날 09시"라는 없는 뜻이 생긴다.
+        "time_is_date": True,
         "topic": "raw.orders",
         "event_type": "ORDER",
         "id_column": None,          # 주문 CSV 에는 고유 ID 컬럼이 없어 행 순번으로 생성
@@ -90,6 +95,7 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
     "inquiries": {
         "file_name": "input_cs_inquiries.csv",
         "time_column": "inquired_at",
+        "time_is_date": False,
         "topic": "raw.inquiries",
         "event_type": "INQUIRY",
         "id_column": "inquiry_id",
@@ -101,6 +107,7 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
     "reviews": {
         "file_name": "input_reviews.csv",
         "time_column": "created_at",
+        "time_is_date": False,
         "topic": "raw.reviews",
         "event_type": "REVIEW",
         "id_column": "review_id",
@@ -115,6 +122,7 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
         #    변경 이벤트 대본(input_detail_changes.csv)이 생성되면 그때부터 자동으로 잡힌다.
         "file_name": "input_detail_changes.csv",
         "time_column": "changed_at",
+        "time_is_date": False,
         "topic": "raw.detail_changes",
         "event_type": "DETAIL_CHANGE",
         "id_column": "change_id",
@@ -295,9 +303,9 @@ def seed_product_catalog(
     # main server 자리를 대신하므로 그게 실제로 이 행이 생긴 시각이다.
     #
     # ⚠️ `mapping_method`·`mapping_confidence` 는 채우지 않는다(§2-3). "무엇으로 묶었는지"
-    #    (sim_embedding/rule_naming/manual)와 그 확신도는 **백엔드 매핑의 산물**이라 우리가
-    #    아는 값이 아니다. 그럴듯한 값을 넣으면 나중에 실제 매핑 품질을 볼 때 지어낸 수치가
-    #    섞인다. 모르는 것은 NULL 로 둔다.
+    #    (slm_embedding/rule_naming/manual — `sim` 이 아니라 `slm`, 소형 언어모델)와 그
+    #    확신도는 **백엔드 매핑의 산물**이라 우리가 아는 값이 아니다. 그럴듯한 값을 넣으면
+    #    나중에 실제 매핑 품질을 볼 때 지어낸 수치가 섞인다. 모르는 것은 NULL 로 둔다.
     now = datetime.now(KST).isoformat()
 
     # ⚠️ `known` 과 INSERT 가 **같은 값**을 봐야 한다. 예전에는 여기서만 strip 하고 INSERT 는
@@ -536,10 +544,22 @@ def _resolve_group(
     group_of: dict[tuple[str, str], str],
     unmapped: set[tuple[str, str]],
 ) -> str:
-    """채널 상품 → 상품 그룹. 매핑에 없으면 채널 상품 ID 를 그대로 쓰고 기록해 둔다.
+    """채널 상품 → 상품 그룹. **매핑에 없으면 빈 문자열이다 — 대체값을 만들지 않는다.**
 
-    빈 문자열을 돌려주지 않는다 — 호출부의 `or None` 이 빈 값을 None 으로 접기 때문에
-    여기서 넘긴 대체값이 그대로 살아야 한다.
+    🔴 **예전에는 매핑 미스일 때 `channel_product_id` 를 그룹 자리에 넣었다(2026-08-18 제거).**
+       값이 채워져 있으니 조회는 성공하는데, 채널마다 다른 그룹이 되어(P001 →
+       C1057/N1024/Z1108) 한 그룹에 채널이 둘 이상 모이는 경우가 하나도 안 남았다
+       (실측: 채널 간 비교 42종 → 0종). 게다가 값이 있으니 탐지 배치의
+       `dropped["상품매핑 없음"]` 가드가 **발동하지 못해** 조용히 틀렸다. 비우면 호출부의
+       `or None` 이 `None` 으로 접고 그 가드가 제 일을 한다(제외 건수는 배치 요약에 뜬다).
+
+    ⚠️ 매핑 자체를 여기서 **하지 않는다.** 무엇으로 묶을지는 백엔드 소관이고(네이밍·임베딩),
+       우리는 이미 끝난 매핑을 조회할 뿐이다. 못 찾으면 비워 두는 것이 정직하다.
+
+    ⚠️ **여기서 정한 값은 Kafka 로 안 나간다.** `product_group_id` 는 이벤트 dict 에만 있고
+       `build_db_row` 를 거쳐 **raw DB 로만** 간다(비면 그 컬럼이 NULL 이 된다). Kafka 로
+       나가는 것은 `event["payload"]` 뿐이라 그룹 ID 는 payload 계약의 일부가 아니다 —
+       `test_product_group_id_never_reaches_the_payload` 가 그 경계를 못박고 있다.
     """
     if not channel_product_id:
         return ""
@@ -549,7 +569,7 @@ def _resolve_group(
         return resolved
     if group_of:  # 매핑은 있는데 이 상품만 빠진 경우 — 파일 부재와 구분해서 센다
         unmapped.add(key)
-    return channel_product_id
+    return ""
 
 
 def load_product_catalog(data_dir: Path) -> tuple[list[dict[str, str]], dict[str, str]]:
@@ -607,8 +627,10 @@ def build_channel_product_map(
 
     if not mapping:
         logger.warning(
-            f"상품 매핑 없음({CHANNEL_PRODUCTS_FILE} + {MAPPED_DATA_FILE}) — 채널 상품 ID 를 "
-            f"그룹 키로 대체합니다. 채널 간 비교와 상세페이지(ChromaDB) 조회가 빗나갑니다."
+            f"상품 매핑 없음({CHANNEL_PRODUCTS_FILE} + {MAPPED_DATA_FILE}) — raw DB 의 "
+            f"product_group_id 를 전부 NULL 로 적재합니다(Kafka payload 에는 원래 안 실립니다). "
+            f"탐지가 분모에서 제외하므로 채널 간 비교·상세페이지(ChromaDB) 조회 결과가 "
+            f"통째로 비어 버립니다."
         )
     else:
         logger.info(
@@ -662,7 +684,17 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
             raw_dict = row.to_dict()
 
             sanitized_payload: dict[str, Any] = {k: _to_jsonable(v) for k, v in raw_dict.items()}
-            sanitized_payload[time_col] = event_time.isoformat()
+            # 🔴 **KST 오프셋을 붙여 내보낸다(2026-08-18 결정).** 대본 CSV 의 시각은 오프셋
+            #    없는 한국 벽시계인데 그대로 실어 보내면 받는 쪽이 UTC 로 읽어 9시간이 밀린다 —
+            #    그 시각이 탐지 윈도우의 날짜 경계를 정한다(§3). raw DB 적재 경로
+            #    (`build_db_row` 의 `to_kst_iso`)와 같은 표기로 맞춘 것이고, **값이 바뀌는 게
+            #    아니라 표기가 완성되는 것**이다.
+            #    ⚠️ 주문은 예외 — `order_date` 는 DATE 라 오프셋 대상이 아니다(§2-9).
+            sanitized_payload[time_col] = (
+                event_time.date().isoformat()
+                if config["time_is_date"]
+                else to_kst_iso(event_time)
+            )
             sanitized_payload["event_type"] = config["event_type"]
 
             channel = str(sanitized_payload.get("channel") or "")
@@ -682,6 +714,9 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
 
             merged_events.append({
                 "time": event_time,
+                # payload 의 어느 키가 시각인지. `--dry-run` 로그가 **payload 에 실린 표기**를
+                # 그대로 찍으려고 들고 다닌다(정렬용 `time` 은 naive 라 표기가 다르다).
+                "time_column": time_col,
                 "topic": config["topic"],
                 "table": config["table"],
                 "event_id": event_id,
@@ -691,7 +726,8 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
                 # ⚠️ 마스터 상품 그룹(P001…)은 답 노출 방지 설계상 input CSV 에 없다
                 #    (generate_mock_data.py 참고). 그래서 매핑으로 되찾는다 —
                 #    운영에서는 `products ⋈ mapped_data` 가 하는 일이다.
-                #    매핑에 없으면 채널 상품 ID 를 그대로 쓰되 아래에서 건수를 남긴다.
+                #    매핑에 없으면 **비워 두고**(대체값 금지) 아래에서 건수를 남긴다.
+                #    이 값은 raw DB 로만 가고 Kafka payload 에는 안 실린다.
                 "product_group_id": (
                     sanitized_payload.get("product_group_id")
                     or _resolve_group(channel, channel_product_id, group_of, unmapped)
@@ -714,12 +750,12 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
         sys.exit(1)
 
     if unmapped:
-        # 매핑 파일은 있는데 일부 상품이 빠진 경우. 그 상품만 채널별로 갈리므로
-        # "일부만 조용히 틀리는" 상태가 된다 — 전량 실패보다 찾기 어렵다.
+        # 매핑 파일은 있는데 일부 상품이 빠진 경우. 그 행들은 raw DB 에 `product_group_id`
+        # 가 NULL 로 적재되고 탐지가 분모에서 제외한다 — 전량 실패보다 찾기 어려워 건수를 남긴다.
         sample = ", ".join(f"{ch}:{cpid}" for ch, cpid in sorted(unmapped)[:3])
         logger.warning(
-            f"[MAP] 매핑에 없는 채널 상품 {len(unmapped)}종 — 채널 상품 ID 를 그룹 키로 대체합니다. "
-            f"예: {sample}"
+            f"[MAP] 매핑에 없는 채널 상품 {len(unmapped)}종 — raw DB 의 product_group_id 를 "
+            f"NULL 로 적재합니다(대체값을 만들지 않습니다). 예: {sample}"
         )
 
     return merged_events
@@ -769,8 +805,12 @@ def publish(event: dict[str, Any], producer: Any | None, sink: RawDbSink | None,
     if dry_run:
         # --dry-run 의 정의가 "콘솔로 재생 타임라인을 검증한다"이므로 INFO 로 찍는다
         # (debug 로 두면 기본 로그 레벨이 INFO 라 아무것도 안 보인다).
+        #
+        # ⚠️ **payload 에 실린 시각을 그대로 찍는다.** `event["time"]` 은 정렬용 naive 라
+        #    그걸 찍으면 오프셋이 안 붙은 것처럼 보인다 — dry-run 으로 이 계약을 확인하려는
+        #    사람이 **정반대 결론**을 가져간다. 콘솔이 발행 내용과 같은 말을 해야 한다.
         logger.info(
-            f"[DRY-RUN] Virtual Time: {event['time'].isoformat()} | Topic: {event['topic']} | "
+            f"[DRY-RUN] Virtual Time: {payload[event['time_column']]} | Topic: {event['topic']} | "
             f"EventType: {payload['event_type']} | PublishedAt: {payload['published_at']}"
         )
         return True
