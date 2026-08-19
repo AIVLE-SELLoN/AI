@@ -281,33 +281,23 @@ def _log_detail_page_miss(alert: DetectionAlert, collection: Any, tenant: str) -
     | 이 회사(`company_id`) 문서가 0건이다 | **시딩 실행** | WARNING |
     | 이 상품만 없다 | 상품 등록 | INFO |
 
-    `.chroma/` 가 gitignore 라 각자 로컬은 시딩(`scripts/seed_vectordb.py`) 전까지
-    비어 있는데, 그 상태가 "상세페이지 미등록" 과 **같은 모양(조회 0건)** 으로 나와
-    구분이 안 됐다.
+    `.chroma/` 가 gitignore 라 시딩(`scripts/seed_vectordb.py`) 전 로컬은 비어 있는데,
+    그 상태가 "상세페이지 미등록" 과 **같은 모양(조회 0건)** 이라 구분이 안 됐다.
+    가운데 줄은 회사 축이 만든 사유다 — 축 없이 시딩한 컬렉션은 조회 필터가 전건을
+    걸러내는데 `count()` 는 504 라 첫 줄에 안 걸린다. 조치는 시딩인데 INFO 로 떨어지면
+    상품 등록 쪽을 파게 된다.
 
-    **가운데 줄이 회사 축 도입이 만든 새 사유다.** 축을 넣기 전에 시딩한 컬렉션은
-       문서에 `company_id` metadata 가 없어서, 조회 필터가 **전건을 걸러낸다** —
-       504건이 멀쩡히 들어 있는데 조회는 0건이다. 이때 `collection.count()` 는 504 라
-       첫 줄에 안 걸리고, 옛 코드였다면 **"상세페이지 미등록"(INFO)** 으로 조용히
-       오진했다. 그러면 상품 등록 쪽을 파게 되는데 실제 조치는 시딩이다.
+    **`--reset` 은 안내하지 않는다.** 가운데 줄에는 런타임에서 구분할 수 없는 두 상태가
+    겹쳐 있다 — 구형 문서만 있는 경우와, 다른 회사는 정상인데 이 회사만 아직 없는 경우.
+    후자에서 실행하면 **다른 회사 문서와 HITL 반려 이력까지 지운다.** 일반 시딩으로
+    복구되므로 파괴적 명령을 안내할 이유가 없다.
 
-    **`--reset` 을 안내하지 말 것.** 가운데 줄은 두 상태가 **같은
-       모양**이다 — ① 구형 문서만 있음 ② A사 문서는 정상이고 **새로 붙은 B사만** 아직
-       없음. 둘 다 `count() > 0` + 현재 회사 조회 0건이라 런타임에선 구분이 안 되는데,
-       `--reset` 은 `detail_pages` 와 **`rejection_reasons` 를 통째로** 지운다. ②에서
-       안내대로 실행하면 **다른 회사 문서와 HITL 반려 이력까지 날아간다.**
-       이번 변경은 임베딩 모델 변경이 아니라 **일반 시딩이면 복구된다** — 신규 scoped
-       문서가 추가되고 조회가 즉시 정상화되며, 구형 문서는 필터에 걸려 안 쓰인다
-       (실측 확인). 구형 정리는 **별도 migration** 이지 이 로그가 시킬 일이 아니다.
+    **그 두 상태를 여기서 가르려 하지 말 것.** 알림별이 아니라 컬렉션 전체의 성질이라
+    미스마다 재계산하는 게 틀렸고, 핫 패스라 전수를 못 봐 표본으로 어림잡게 된다.
+    정확한 판별은 `scripts/seed_vectordb.py` 가 시딩 직후 전수로 한다.
 
-    **①·②를 여기서 가르려 하지 말 것.** 한 번 시도했다가 되돌렸다 — 그건 알림별이
-       아니라 **컬렉션 전체의 성질**이라 미스마다 다시 계산하는 게 구조적으로 틀렸고,
-       핫 패스에서 전수를 못 보니 표본으로 어림잡게 된다(못 믿을 값). 정확한 판별은
-       **`scripts/seed_vectordb.py` 가 시딩 직후 전수로** 한다 — 한 번만 돌고, 무엇보다
-       사람이 그 콘솔 앞에 서 있는 시점이다. 이 로그는 "시딩하라" 까지만 말한다.
-
-    로그만 남기고 예외는 안 던진다 — 근거 0건의 처리는 `run()` 이 이미 한다
-    (개선안 미생성 + 경고). 여기서 막으면 그 경로가 두 벌이 된다.
+    로그만 남기고 예외는 안 던진다 — 근거 0건 처리는 `run()` 이 이미 한다. 여기서 막으면
+    그 경로가 두 벌이 된다.
     """
     if collection.count() == 0:
         logger.warning(
@@ -344,12 +334,10 @@ def quotable_inquiries(inquiries: Sequence[LinkedCSInquiry]) -> list[LinkedCSInq
     """프롬프트에 실을 문의 = 인용 후보. **두 곳이 반드시 같은 목록을 봐야 한다.**
 
     `_collect_cs_quotes`(모델에게 보여줄 것)와 `_build_citations`(인용을 역추적할 것)가
-    서로 다르게 고르면 "프롬프트엔 실렸는데 인용 대상엔 없는" 문의가 생긴다. 원래는
-    양쪽에 같은 슬라이스를 복붙해 뒀을 뿐이라 한쪽만 고치면 조용히 갈라졌다 —
-    한 곳으로 묶어서 갈라질 수 없게 한다.
+    다르게 고르면 "프롬프트엔 실렸는데 인용 대상엔 없는" 문의가 생긴다. 한 곳으로 묶어
+    갈라질 수 없게 한다.
 
-    원문이 빈 항목은 버린다 — 빈 문자열은 근거로도 인용으로도 쓸 수 없다.
-    자르는 건 거른 **뒤**다. 순서를 바꾸면 앞 5건에 빈 게 섞였을 때 근거가 그만큼 준다.
+    빈 원문을 거른 **뒤** 자른다. 순서를 바꾸면 앞쪽에 빈 게 섞였을 때 근거가 그만큼 준다.
     """
     return [inquiry for inquiry in inquiries if inquiry.raw_text.strip()][:CS_QUOTE_TOP_N]
 
@@ -719,28 +707,17 @@ def _build_citations(
 ) -> list[Citation]:
     """`current_text` 가 실제로 인용한 CS 문의를 역추적한다(§4-3).
 
-    `evidence.inquiry_ids` 전체를 싣지 않는 이유는 `citations` 의 정의가 "근거가 된
-    문의 목록"이 아니라 **"실제로 인용한 문의"** 이기 때문이다. 전부 실으면 인용하지도
-    않은 문의가 인용된 것처럼 보인다 — 예전에 `quote=""` 로 채워두던 것과 같은
-    종류의 거짓이다.
+    `evidence.inquiry_ids` 를 통째로 싣지 않는다 — `citations` 의 정의가 "근거가 된
+    문의" 가 아니라 **"실제로 인용한 문의"** 라서다. 전부 실으면 인용하지 않은 문의까지
+    인용된 것처럼 보인다.
 
-    그래서 grounding 판정에 쓴 것과 **같은 함수**(`has_evidence`)로 문의 하나하나와
-    대조해, 맞는 것만 담는다. 판정 기준이 갈리면 "grounding 은 통과했는데 citations
-    는 비어 있다"가 생긴다.
+    판정은 grounding 과 **같은 함수**(`has_evidence`)로 한다. 기준이 갈리면 "grounding
+    은 통과인데 citations 는 비어 있다" 가 생긴다. copy_draft 는 상세페이지를 인용하므로
+    빈 리스트가 정직한 값이고, fallback_guide·scope_limit 는 `grounding=False` 라 같이
+    걸러진다.
 
-    담기는 조건은 셋 다다:
-      - proposal.type == image_guide — copy_draft 는 상세페이지를 인용하므로 CS
-        인용이 없는 게 정상이다(빈 리스트가 정직한 값).
-      - evaluator.checks.grounding — 검증에 실패한 인용을 기록하면 안 된다.
-        fallback_guide·scope_limit 경로가 여기서 걸러진다(둘 다 grounding=False).
-      - has_evidence(current_text, inquiry.raw_text) — 그 문의에 실제로 있는가.
-
-    `quote` 에는 **LLM 이 인용한 문구(current_text)** 를 넣는다. 원문 전체가 아니라
-    인용한 부분이 인용문이다.
-
-    그래서 같은 문구가 여러 문의에 있으면 **quote 가 동일한 Citation 이 N 개** 나온다
-    (mock CS 는 템플릿 생성이라 흔하다). 의도된 동작이지만, 집계에서 "인용 N 건"을
-    **"고객 N 명이 그렇게 말했다"로 읽으면 안 된다** — 문구는 하나고 그 문구가 등장한
+    같은 문구가 여러 문의에 있으면 **quote 가 동일한 Citation 이 N 개** 나온다. 집계에서
+    "고객 N 명이 그렇게 말했다" 로 읽으면 안 된다 — 문구는 하나고, 그 문구가 등장한
     문의가 N 건이라는 뜻이다.
     """
     if proposal.type != ProposalType.IMAGE_GUIDE or not evaluator.checks.grounding:
@@ -835,14 +812,13 @@ class RecommendationOutcome:
     def is_routing_miss(self) -> bool:
         """모델이 빈 쪽 도구를 골라서 못 만든 것인가. **배치가 실패로 세지 않는다.**
 
-        **`is_evidence_gap` 과 따로 두되, 종료코드에서는 똑같이 뺀다.** 근본 원인이
-        **같기 때문**이다(상세페이지 미등록). 갈리는 건 모델이 빈 쪽을 골랐느냐뿐이고,
-        그 선택을 코드로 강제하지 않는 것도 의도다. 안 고치기로 한 것을 매일 실패로
-        세면 배치가 상시 종료코드 1 로 끝나 진짜 장애가 묻힌다 — 상세페이지 미등록은
-        mock 504행 중 489행이 "정보 없음" 일 만큼 흔하다.
+        `is_evidence_gap` 과 사유는 다르지만 **종료코드에서는 똑같이 뺀다** — 근본 원인이
+        상세페이지 미등록으로 같고(mock 504행 중 489행이 "정보 없음"), 모델의 선택을
+        코드로 강제하지 않는 것도 의도다. 안 고치기로 한 것을 매일 실패로 세면 배치가
+        상시 종료코드 1 로 끝나 진짜 장애가 묻힌다.
 
-        대신 **요약에는 따로 센다**(`daily.py` 의 `routing_miss`). 여기가 조용해지면
-        라우팅 프롬프트 v3 를 손볼 근거가 사라지기 때문이다.
+        대신 요약에는 따로 센다(`daily.py` 의 `routing_miss`) — 여기가 조용해지면 라우팅
+        프롬프트를 손볼 근거가 사라진다.
         """
         return self.reason is SkipReason.ROUTED_WITHOUT_EVIDENCE
 
@@ -1028,28 +1004,20 @@ async def generate_for_alert(
 ) -> Recommendation | None:
     """배치 진입점 — `generate_outcome_for_alert()` 에서 개선안만 꺼낸다.
 
-    **예외를 던지지 않는다.** 배치가 알림 20건을 도는 중이라, 개선안 1건의 실패가 밖으로
-    나가면 그 알림의 **발행까지 막힌다** — 셀러는 개선안이 아니라 이상 알림 자체를 못
-    받게 된다. 실패하면 None 을 돌려주고 payload 의 `recommendation` 이 null 로 나간다
-    (조치 6종에서 이미 정상인 값이다).
+    **예외를 던지지 않는다.** 배치가 알림 여러 건을 도는 중이라, 개선안 1건의 실패가
+    밖으로 나가면 그 알림의 **발행까지 막힌다** — 셀러가 이상 알림 자체를 못 받는다.
+    실패도 게이트 미충족도 None 이고, payload 의 `recommendation` 은 null 이다
+    (조치 6종에서 이미 정상인 값). 단 `asyncio.CancelledError` 는 BaseException 이라
+    그대로 나간다 — 배치 중단이 "개선안 실패" 로 둔갑하면 안 된다.
 
-    게이트(`recommended_action != "개선안 생성"`)면 LLM 을 부르지 않고 None 이다.
-    호출부가 `should_generate()`로 미리 걸러도 되고(배치 dry-run 이 그렇게 센다),
-    안 걸러도 결과는 같다.
-
-    **`asyncio.CancelledError` 는 삼키지 않는다.** BaseException 이라
-    `generate_outcome_for_alert()` 의 `except Exception` 에 안 걸리는데, 이게 의도다 —
-    배치를 중단시켰는데 취소가 "개선안 실패"로 둔갑해 루프가 계속 돌면 안 된다.
-
-    **None 의 사유 4가지가 여기선 구분이 안 된다.** 근거 0건(데이터 갭)과 고장을
-    가르려면 `generate_outcome_for_alert()` 를 쓸 것 — `daily.py` 가 그렇게 한다.
+    **None 의 사유는 여기서 구분되지 않는다.** 데이터 갭과 고장을 갈라야 하면
+    `generate_outcome_for_alert()` 를 쓸 것(`daily.py` 가 그렇게 한다).
 
     Args:
         alert: 탐지 알림.
-        inquiries: `alert.evidence.inquiry_ids` 에 해당하는 CS 원문
-            (`app/core/inquiries.py` 가 만든다). 배치가 가이드라인과 **같은 리스트**를
-            넘긴다. image_guide 의 근거 원문이자 `citations` 의 출처다 —
-            **빈 리스트로 넘기면 image_guide 근거가 0건이라 개선안이 안 만들어진다.**
+        inquiries: `alert.evidence.inquiry_ids` 의 CS 원문(`app/core/inquiries.py`).
+            image_guide 의 근거이자 `citations` 의 출처라, **비면 image_guide 가
+            근거 0건으로 떨어진다.**
     """
     return (await generate_outcome_for_alert(alert, inquiries)).recommendation
 
