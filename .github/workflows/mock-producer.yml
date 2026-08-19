@@ -86,10 +86,21 @@ jobs:
       #    이유가 사라진다. import 가 없어 스모크가 통과하는 동안에도 무게만 늘 수 있어,
       #    "실행은 되는데 목적을 잃은" 상태를 여기서 못박는다.
       #    (빠진 import 를 만나면 무거운 패키지를 추가해 고치고 싶어지는데, 그 유혹을 막는다.)
+      #
+      # ⚠️ **실행과 가공을 한 파이프에 담지 말 것.** `$(docker ... | cut | tr)` 는 종료코드가
+      #    파이프 마지막(`tr`) 것이라 docker 가 죽어도 **빈 문자열로 통과**하고, 아래 루프가
+      #    "하나도 없다"며 전부 초록이 된다. 그때 마지막 줄은 **"설치 1개"** 로 찍힌다
+      #    (빈 문자열도 `wc -l` 이 한 줄로 세므로) — 로그만 보면 *"더 슬림해졌네"* 다.
+      #    `test.yml` 의 ruff 스텝이 `|| true` 를 금지하는 사유와 같은 방향이다 — 조용히
+      #    실패하는 게 아니라 **성공으로 보이는** 쪽이라 더 안 잡힌다(2026-08-19 실측).
       - name: 슬림 계약 확인
         run: |
           IMG=${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}
-          installed=$(docker run --rm --entrypoint pip "$IMG" list --format=freeze | cut -d= -f1 | tr 'A-Z' 'a-z')
+          installed=$(docker run --rm --entrypoint pip "$IMG" list --format=freeze) || {
+            echo "::error::pip list 실패 — 슬림 계약을 재지 못했습니다"
+            exit 1
+          }
+          installed=$(printf '%s\n' "$installed" | cut -d= -f1 | tr 'A-Z' 'a-z')
           for pkg in chromadb scipy statsmodels weasyprint openai langgraph boto3 aio-pika fastapi uvicorn; do
             if printf '%s\n' "$installed" | grep -qx "$pkg"; then
               echo "::error::슬림 이미지에 $pkg 가 들어왔습니다 — 전용 이미지를 둔 이유가 사라집니다"
@@ -99,10 +110,26 @@ jobs:
           echo "슬림 계약 확인: 무거운 패키지 10종 부재 · 설치 $(printf '%s\n' "$installed" | wc -l)개"
 
       # 인자 없이 띄우면 브로커에 붙지 않고 도움말만 찍어야 한다(ENTRYPOINT/CMD 계약).
+      #
+      # 🔴 **`| head -1` 로는 이 계약을 못 잡는다.** 기본 셸이 `bash -e` 인데 pipefail 이 없어
+      #    스텝의 종료코드가 `head` 것(항상 0)이 된다 — 이미지가 ModuleNotFoundError 로 죽어도
+      #    초록이었다(2026-08-19 실측. `pandas` 를 뺀 이미지로 확인). 게다가 CMD 를 지운
+      #    이미지는 **재생 스모크도 통과한다**(그쪽은 인자를 명시하니까) — 이 스텝이 그 계약의
+      #    유일한 그물이라 여기서 새면 백스톱이 없다. 그래서 출력을 먼저 받고 판정은 파이프
+      #    밖에서 한다.
       - name: 진입점 확인
         run: |
-          docker run --rm ${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }} | head -1
-          echo "진입점 확인 완료"
+          IMG=${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}
+          out=$(docker run --rm "$IMG") || {
+            echo "::error::인자 없이 띄웠는데 컨테이너가 실패했습니다(위 stderr 참고)"
+            exit 1
+          }
+          printf '%s\n' "$out" | head -1
+          printf '%s\n' "$out" | grep -q '^usage:' || {
+            echo "::error::도움말이 아닙니다 — ENTRYPOINT/CMD 계약이 깨졌습니다"
+            exit 1
+          }
+          echo "진입점 확인 완료 — 인자 없이 도움말만 출력"
 
       # 🔴 이 워크플로의 존재 이유. `--dry-run` 은 Kafka 만 건너뛰고 **raw DB 적재는 그대로**
       #    하므로, 브로커 없이 재생 → 적재 전 경로가 실제로 돈다.
@@ -146,12 +173,24 @@ jobs:
           if spread != {"P001": 3}:
               fail.append(f"상품그룹 분포가 {spread} (기대 {{'P001': 3}} — 채널 3개가 한 그룹)")
 
-          # ── ③ 🔴 product_group_id 폴백 — 매핑에 있는데도 채널상품 ID 가 실리면 조용히 틀린다
-          bad = db.execute(
-              "SELECT id, product_group_id FROM cs WHERE product_group_id <> 'P001'"
-          ).fetchall()
-          if bad:
-              fail.append("cs 에 폴백 값: " + ", ".join(f"{r['id']}={r['product_group_id']}" for r in bad))
+          # ── ③ 🔴 product_group_id — 매핑에 있는데도 다른 값이 실리면 조용히 틀린다
+          #
+          #    ⚠️ **`<>` 를 쓰면 안 된다.** `NULL <> 'P001'` 은 거짓이 아니라 **NULL** 이라 한 행도
+          #       안 잡힌다. 매핑 조회가 빗나간 자리는 (#109 가 폴백을 없앤 뒤로는) NULL 이라
+          #       하필 **제일 잡아야 할 경우**를 정확히 놓친다. `IS NOT` 은 NULL 안전 비교다.
+          #
+          #    실측(2026-08-19): 대본의 채널상품 ID 뒤 공백 하나면 매핑이 빗나간다 — 매핑을
+          #    만드는 쪽은 strip 하고 조회하는 쪽은 안 하기 때문이다. 그런데 마스터는 멀쩡해서
+          #    검사 ①(3·3행) 도 ②({'P001': 3}) 도 그대로 통과한다. **여기가 유일한 그물이다.**
+          for table in ("cs", "reviews"):
+              bad = db.execute(
+                  f"SELECT id, product_group_id FROM {table} WHERE product_group_id IS NOT 'P001'"
+              ).fetchall()
+              if bad:
+                  fail.append(
+                      f"{table} 그룹 이상: "
+                      + ", ".join(f"{r['id']}={r['product_group_id']!r}" for r in bad)
+                  )
 
           # ── ④ 🔴 KST 오프셋 — 안 붙으면 날짜 경계가 하루 밀린다
           for table, col in (("cs", "inquired_at"), ("reviews", "created_at")):
