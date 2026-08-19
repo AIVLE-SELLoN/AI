@@ -147,7 +147,16 @@ jobs:
             ${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }} \
             --data-dir /fixture --dry-run --speed 100000 --raw-db /out/smoke.db
 
-          python - "$RUNNER_TEMP/mpout/smoke.db" <<'PY'
+          # 검증도 **이미지 안 python** 으로 돈다. 러너 기본 python 에 기대면 이 워크플로만
+          # `setup-python` 없이 러너 이미지에 의존하고(test.yml 은 setup-python, image.yml 은
+          # 컨테이너 python 이다), 검증 환경이 검증 대상과 달라진다.
+          #
+          # ⚠️ **`-i` 를 빼지 말 것.** stdin 이 안 붙으면 `python -` 이 빈 스크립트를 읽고
+          #    **exit 0** 한다 — 아래 검사 전체가 조용히 사라진다(image.yml 도 같은 이유로 쓴다).
+          docker run --rm -i \
+            -v "$RUNNER_TEMP/mpout:/out" \
+            --entrypoint python \
+            ${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }} - /out/smoke.db <<'PY'
           import sqlite3, sys
 
           db = sqlite3.connect(sys.argv[1])
@@ -155,11 +164,19 @@ jobs:
           fail = []
 
           # ── ① 행 수 — 대본이 통째로 안 실린 경우
-          for table, want in (("channel", 3), ("products", 3), ("mapped_data", 3),
+          for table, want in (("products", 3), ("mapped_data", 3),
                               ("cs", 2), ("reviews", 1), ("orders", 2)):
               got = db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
               if got != want:
                   fail.append(f"{table} {got}행 (기대 {want})")
+
+          # ── ①' channel 만 성격이 다르다 — **대본이 아니라 `Channel` enum 을 잰다.**
+          #    seed_product_catalog 가 MASTER_CHANNELS(= Channel enum)로 시드하므로 대본과
+          #    무관하다. 위 라벨("대본이 통째로 안 실린 경우") 아래 두면 채널이 하나 늘었을 때
+          #    원인을 잘못 가리킨다.
+          got = db.execute("SELECT count(*) FROM channel").fetchone()[0]
+          if got != 3:
+              fail.append(f"channel {got}행 (기대 3 — Channel enum 이 늘었으면 이 숫자도 같이 고칠 것)")
 
           # ── ② 🔴 매핑 조인 — 이게 깨지면 채널 간 비교가 통째로 사라진다
           #    상품 하나가 채널마다 다른 그룹으로 갈리면(P001 → C1101/N2201/Z3301) 한 그룹에
@@ -217,6 +234,10 @@ jobs:
       - name: 태그 요약
         if: github.event_name == 'push'
         run: |
+          # ⚠️ `{{.Size}}` 는 **이미지 스토어에 따라 다른 값이 나온다.** 러너는 overlay2 라
+          #    `docker images` 와 같지만, containerd 스냅샷터를 쓰는 로컬에서는 같은 이미지가
+          #    훨씬 작게 나온다(427MB / 93MB 실측). 로컬에서 숫자가 안 맞으면 이미지가 깨진
+          #    게 아니라 스토어 차이다.
           size=$(docker image inspect "${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}" \
                    --format '{{.Size}}' | awk '{printf "%.0fMB", $1/1024/1024}')
           {
