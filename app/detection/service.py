@@ -8,30 +8,28 @@
     suppression.py 재알림 억제·갱신
 그래서 이 파일에는 임계값도 판정 분기도 없다 — 있으면 그건 모듈로 내려가야 하는 것이다.
 
-입력 의존성 — 백엔드와의 계약(미확정): 상품 매핑은 백엔드(Spring Boot) 담당이고
-detection 은 그 산출물인 상품 식별자를 받는다. 이 식별자는 옵션(SKU) 이 아니라 '상품
-그룹' 레벨이어야 한다 — 문의·리뷰 원본에 옵션 정보가 없어서 옵션 레벨 ID 를 받으면
-집계가 성립하지 않는다. 여기서는 ClassifiedItem.product_group_id 를 그룹 레벨로 가정한다.
+입력 의존성(백엔드와의 계약, 미확정): 상품 매핑은 백엔드 담당이고 detection 은 그 산출물인
+상품 식별자를 받는다. 이 식별자는 옵션(SKU) 이 아니라 '상품 그룹' 레벨이어야 한다 — 문의·리뷰
+원본에 옵션 정보가 없어 옵션 레벨 ID 를 받으면 집계가 성립하지 않는다.
 
 BH 배치 범위 — 두 소스를 한 family 로 묶는다. build_combinations 가 cs·review 조합을 한
 리스트로 내므로 BH-FDR 이 두 소스에 걸쳐 한 번에 적용된다. 스펙의 "source별 독립 수행"은
-[0][1] 집계와 [3]~[7] 판정을 가리키며 BH family 는 그 예외다 — family 표가 상품당 검정
-수를 36검정(6 aspect x 3 채널 x 2 source)으로 세어 2 source 를 family 안에 넣고 있기
-때문이다. eval/run_detection_eval.py 가 그 합계를 회귀로 감시한다.
+[0][1] 집계와 [3]~[7] 판정을 가리키며 BH family 는 그 예외다 — family 표가 상품당 검정 수를
+36검정(6 aspect x 3 채널 x 2 source)으로 세기 때문이고, eval/run_detection_eval.py 가 그
+합계를 회귀로 감시한다.
 
 원인 분류(프롬프트3) 결정 둘:
   - confidence 는 쓰지 않고 aspect_match 만 본다. few-shot 의 confidence 가 두 덩어리
     (구체 후보 0.82~0.94 / 기타 0.3~0.4)로 갈려 사실상 `cause == 기타` 의 재표현이라
-    판정에 못 쓴다. cause.diagnose_cause 가 이미 그렇게 동작한다 — 프롬프트 출력에는
-    남아 있으나 코드는 읽지 않는다. 다만 `CauseResult.confidence` 필드 자체는 지우면
-    안 된다. `extra="forbid"` 라 응답 전건이 검증 실패로 떨어진다.
-  - evidence 는 유지한다. 원인 라벨 채점에도 안 쓰이고 알림 계약에도 안 실리지만,
-    프롬프트 규칙 5 가 원문 인용을 요구하는 grounding 제약이고 `_validate_response` 의
-    검증 입력이기도 하다. 토큰 절약 목적의 제거는 v2 를 만들어 A/B 로 비교한 뒤에만
-    판단한다. (알림의 `evidence.inquiry_ids` 는 다른 것이다 — 알림 레벨 인용 경계.)
+    판정에 못 쓴다. 다만 `CauseResult.confidence` 필드 자체는 지우면 안 된다 —
+    `extra="forbid"` 라 응답 전건이 검증 실패로 떨어진다.
+  - evidence 는 유지한다. 원인 라벨 채점에도 알림 계약에도 안 쓰이지만 프롬프트 규칙 5 가
+    원문 인용을 요구하는 grounding 제약이고 `_validate_response` 의 검증 입력이다. 토큰
+    절약 목적의 제거는 v2 A/B 이후에만 판단한다. (알림의 `evidence.inquiry_ids` 는 다른
+    것이다 — 알림 레벨 인용 경계.)
 
-root_cause.label 이 Agent3 의 도구를 정하므로, 구체 후보와 스코프 한계 라벨
-(실물_염색_편차·실제_원단_문제)의 혼동은 처방을 정반대로 뒤집는다.
+root_cause.label 이 Agent3 의 도구를 정하므로, 구체 후보와 스코프 한계 라벨의 혼동은 처방을
+정반대로 뒤집는다.
 """
 
 from __future__ import annotations
@@ -498,36 +496,28 @@ async def detect_anomaly(
     """[0]~[8] 전체 파이프라인. ClassifiedItem 집합 → 발행할 DetectionAlert.
 
     Args:
-        items: 분류(Agent1) 산출물. **분자의 출처.**
-        documents: 원본 문서(문의·리뷰). **분모의 출처.** 주면 loader.build_rows() 로
-            조인하고, 안 주면 items 에서 분모를 센다(normalize).
-
-            운영에서는 반드시 줘야 한다. 정상 분류된 빈 aspect 리뷰는
-            `classified_item` 부모 행으로 남아 items 에도 들어오지만, 분류 자체가 실패한
-            원문은 items 에 없다. documents 가 있어야 원문 대비 부모 레코드 coverage를
-            계산하고 누락 슬롯을 탐지에서 제외할 수 있다(loader 모듈 docstring).
+        items: 분류(Agent1) 산출물. 분자의 출처.
+        documents: 원본 문서(문의·리뷰). 분모의 출처 — 주면 loader.build_rows() 로 조인하고
+            안 주면 items 에서 분모를 센다. 운영에서는 반드시 줘야 한다: 분류 자체가 실패한
+            원문은 items 에 없어서, documents 가 있어야 커버리지를 계산하고 누락 슬롯을
+            탐지에서 제외할 수 있다(loader 모듈 docstring).
         detected_at: 탐지 시각. 없으면 현재 시각.
         window_end: 현재 윈도우 마지막 날. 없으면 items 의 최신 날짜.
         prior_alerts: 과거 알림. 재알림 억제 + 기준선 오염 방지에 쓴다.
         resolved_alert_ids: 승인/반려 처리가 끝난 alert_id — 억제가 풀린다.
-        past_rate_fallback: {(channel, aspect): 과거 부정률} 설정값 테이블.
-            과거 표본이 알림 구간 제외로 절반 이하로 줄었을 때 baseline 으로 쓴다.
-            **값을 코드에 박지 않고 주입받는다** — aggregate._apply_baseline_fallback 참고.
+        past_rate_fallback: {(channel, aspect): 과거 부정률} 설정값 테이블. 과거 표본이 알림
+            구간 제외로 절반 이하로 줄었을 때 baseline 으로 쓴다. 값을 코드에 박지 않고
+            주입받는 이유는 aggregate._apply_baseline_fallback 참고.
         change_log: {(product, aspect): change_id} — 상세페이지 수정 이력이 이상 시점과
-            일치하는 건. 확신도 보강용이지 판정 권한이 없다. 없으면
-            timestamp_matched=False 로 두고 확신도가 '높음'까지 못 갈 뿐, 기각하지 않는다.
-        unreliable_denominators: 분류 커버리지 미달로 **분모를 믿을 수 없는**
-            (product, channel, source) 집합. 검정 전에 family 에서 빠진다 — 분모가
-            깎인 슬롯은 p값이 실제보다 작게 나오고, BH 는 step-up 이라 그 하나가 기각
-            개수를 늘려 **같은 상품 family의 임계까지 완화**시키기 때문이다.
-
-            **documents 를 줬는데 이 값을 안 주면 여기서 직접 계산한다**
-            (`check_coverage` → `unreliable_slots`). 분모의 출처를 넘겨놓고 커버리지를
-            안 보면 로더를 쓰는 의미가 절반이라, 안전한 쪽을 기본값으로 둔다.
-            직접 넘기면 그 값을 그대로 쓴다(평가 스크립트가 자기 방식으로 계산할 때).
+            일치하는 건. 확신도 보강용이지 판정 권한이 없어, 없으면 확신도가 '높음'까지 못
+            갈 뿐 기각하지 않는다.
+        unreliable_denominators: 분류 커버리지 미달로 분모를 믿을 수 없는 (product, channel,
+            source) 집합. 검정 전에 family 에서 빠진다(사유는 loader.unreliable_slots).
+            documents 를 줬는데 이 값을 안 주면 여기서 직접 계산한다 — 분모의 출처를 넘겨놓고
+            커버리지를 안 보면 로더를 쓰는 의미가 절반이라 안전한 쪽을 기본값으로 둔다.
         client: LlmClient (테스트 목킹용 주입).
-        diagnostics: 운영 배치가 원인 분류 실패를 수집할 선택적 진단 객체. 알림 반환
-            계약에는 영향을 주지 않는다.
+        diagnostics: 운영 배치가 원인 분류 실패를 수집할 선택적 진단 객체. 알림 반환 계약에는
+            영향을 주지 않는다.
 
     Returns:
         (발행할 알림, 억제된 알림)
