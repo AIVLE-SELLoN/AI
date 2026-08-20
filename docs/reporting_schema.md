@@ -165,7 +165,7 @@
 
 | JSON Key | 데이터 타입 | UI/UX 표시 영역 | 설명 |
 | --- | --- | --- | --- |
-| `worst_pair` | String | 구간3 · 게이지 상단 라벨 | `jsd_score` 최대 쌍. 기존 `comparison_pair` 대체 |
+| `worst_pair` | String | 구간3 · 게이지 상단 라벨 | **가장 위험한 쌍** — `(severity 등급, excess)` 사전식 최댓값(`CRISIS(3) > CAUTION(2) > SAFE(1)`, `excess = jsd_score − jsd_baseline`). 기존 `comparison_pair` 대체<br>⚠️ 구 정의 "`jsd_score` **최댓값** 쌍"은 폐기다 — `jsd_baseline`이 쌍마다 달라(표본이 작을수록 크다) `jsd_score`가 최대인 쌍이 `SAFE`인데 다른 쌍이 `CRISIS`인 상태가 재현됐고, 그때 제목엔 "안정 단계"가 박힌 채 `is_crisis=true`로 나갔다 (2026-08-04 정정, `app/reporting/metrics_calculator.py`) |
 | `is_crisis` | Boolean **\| null** | 구간3 · 하이라이트 마킹 | **3쌍 중 하나라도 true면 true.** 전 쌍 보류면 null |
 | `aspect_scope` | Array\<String\> | 구간3 · 각주 "색상·사이즈·소재 기준" | JSD 계산에 쓴 aspect. **`scope_in=true` 3종 고정** |
 | `pairs[]` | Array\<Object\> | 구간3 · 게이지 3개 (탭 or 스택) | 채널쌍 전수 |
@@ -267,18 +267,30 @@ E[JSD] = (2/3) × 0.6931 = 0.4621 nats
 
 | JSON Key | 데이터 타입 | UI/UX 표시 영역 | 설명 |
 | --- | --- | --- | --- |
-| `report_id` | String | — (내부 키) | 예 `REP-202607-P001` |
+| `report_id` | String | — (내부 키) | 예 `RPT-202607-P001` — **상품별 추적용**이고 로그·배치 결과에서만 쓴다(`build_report_id`)<br>⚠️ MQ `ai.report.generated`의 멱등 키는 이 값이 아니라 **월 1건 `RPT-202607`**(`build_book_report_id`)이고 payload에 `product_group_id`는 없다 — `docs/mq_events.md` §5 |
 | `product_group_id` | String | — | 마스터 상품 그룹 ID |
 | `report_month` | String | 구간0 · 타이틀 | `YYYY-MM` |
 | `aspect_summaries` | Array\<Object\> | 구간2 · 각 바 하단 요약 문구 | LLM 생성 |
 | `aspect_summaries[].aspect` | String (enum) | — (조인 키) | `aspect_stats[].aspect` 와 1:1 |
-| `aspect_summaries[].summary_text` | String | 구간2 · 속성별 한 줄 요약 | LLM 생성 |
+| `aspect_summaries[].summary_text` | String | **미렌더** (아래 경고) | LLM 생성 |
 | `channel_divergence_cause` | Object | 구간3 · [진단 결과] 박스 | LLM 생성 |
 | `channel_divergence_cause.cause_title` | String | 진단 박스 제목 | |
 | `channel_divergence_cause.cause_description` | String | 진단 박스 본문 | |
-| `cause_analysis_results` | Array\<String\> | PDF · 핵심 원인 분석 절 | 단문 리스트 |
-| `recommended_actions` | Array\<String\> | PDF · 권장 조치 절 | 단문 리스트 |
+| `cause_analysis_results` | Array\<String\> | **미렌더** (아래 경고) | 단문 리스트 |
+| `recommended_actions` | Array\<String\> | **미렌더** (아래 경고) | 단문 리스트 |
+| `channel_pair_analyses` | Array\<Object\> | 구간3 · 게이지 아래 카드 | **채널쌍별** 원인·조치. 길이 0–3, `comparison_pair` 중복 불가, **입력 `channel_divergence.pairs[]`와 1:1**(§4-4 검증기가 1:1이 아니면 반려하므로 실질 필수). 보고서 전체 단위인 `cause_analysis_results`/`recommended_actions`와 **다른 필드**다 — 전자는 "이 상품 전체", 이쪽은 "이 채널쌍" 한정. 보류된 쌍(`hold_reason`)도 1건이 필요하고 이때는 판정 수치를 쓰지 않는다 (2026-08-04 신설, 프롬프트 `monthly_report_v5`+) |
+| `channel_pair_analyses[].comparison_pair` | String | 카드 제목 | Pattern `^[A-Z]+_VS_[A-Z]+$` · 입력 `pairs`에 있는 값만 |
+| `channel_pair_analyses[].cause_analysis` | Array\<String\> | 카드 본문 | 길이 1–2 · **수치 그라운딩 대상** |
+| `channel_pair_analyses[].recommended_actions` | Array\<String\> | 카드 본문 | 길이 1–2 · **금지표현 검사 대상** |
 | 🟡 `pdf_s3_meta` | Object **\| null** | 다운로드 버튼 | §5. **CS 가이드라인에만 있던 필드를 월간에도 추가** |
+
+> 🔴 **미렌더 3필드 — 결정이 아직 열려 있다.**
+> `aspect_summaries[].summary_text` · `cause_analysis_results[]` · `recommended_actions[]`은
+> 2026-08-04 화면 확정으로 PDF에서 빠졌고(`app/reporting/pdf_compiler.py`가 이 셋을 참조하지
+> 않는다) MQ payload에도 안 실린다. 월간 리포트는 **PDF가 유일한 산출물이고 DB에 적재하지
+> 않으므로 이 셋은 어디에도 남지 않는다** — 지금은 LLM 생성 비용만 쓰고 버려진다.
+> 선택지는 ① 스키마에서 제거 ② PDF 부록으로 되살리기 ③ 현행 유지 셋이고, 스키마·검증 규칙을
+> 그대로 둔 지금은 사실상 ③이지만 **합의로 닫힌 적은 없다**(제거는 계약 변경이라 팀 합의 대상).
 
 > 🟡 `pdf_s3_meta` 추가 근거 — 아키텍처 설명 원문:
 > *"해당 가이드라인과 원간 리포트는 pdf로 생성하여 s3 버킷에 적재하여
@@ -356,7 +368,7 @@ E[JSD] = (2/3) × 0.6931 = 0.4621 nats
 
 | JSON Key | 데이터 타입 | UI/UX 표시 영역 | 설명 |
 | --- | --- | --- | --- |
-| `guideline_id` | String | — (내부 키) | 예 `GD-20260528-P001` |
+| `guideline_id` | String | — (내부 키) | **`alert_id`의 `ALT-` 접두어만 `GD-`로 치환**한 값(alert_id와 **1:1**) — 예 `ALT-20260828-P001-COLOR-COUPANG` → `GD-20260828-P001-COLOR-COUPANG`. `ALT-`로 시작하지 않으면 `GD-` + alert_id 전체<br>⚠️ 구 규칙 `GD-{탐지일}-{상품ID}`(`GD-20260528-P001`)는 폐기다 — 탐지가 (상품, 속성, 채널) 단위로 발화하므로 같은 날 같은 상품의 다른 알림이 전부 같은 ID가 됐고, 백엔드 멱등 upsert 때문에 나중 가이드라인이 앞의 것을 조용히 덮어썼다 (PR #22에서 수정, 구현은 `app/core/ids.py::build_guideline_id()` 한 곳) |
 | `alert_id` | String | PDF 헤더 · 발행 ID | 원본 알림 ID |
 | `summary.issue_title` | String | PDF 최상단 메인 타이틀 | LLM 생성 |
 | `summary.risk_level` | String (enum) | 헤더 배지 색상 | `CRITICAL`·`WARNING`·`NORMAL` |

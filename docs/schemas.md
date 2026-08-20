@@ -58,11 +58,11 @@
 
 ## 5. DetectionAlert
 
-[탐지 결과 스키마 [확정]](https://app.notion.com/p/39fe39c614978038bb10d19a6a487517?pvs=21) (이상탐지 → Agent3·인사이트 입력 계약)
+[탐지 결과 스키마 [확정]](https://app.notion.com/p/39fe39c614978038bb10d19a6a487517?pvs=21) (이상탐지 → Agent3·인사이트 입력 계약) — 저장소 사본 [`detection_schema.md`](detection_schema.md)
 
 ## 6. Recommendation
 
-[개선안 출력 스키마 [확정]](https://app.notion.com/p/39fe39c614978017b36befb4730e520c?pvs=21) (Agent3 → HITL·피드백·대시보드)
+[개선안 출력 스키마 [확정]](https://app.notion.com/p/39fe39c614978017b36befb4730e520c?pvs=21) (Agent3 → HITL·피드백·대시보드) — 저장소 사본 [`recommenation_schema.md`](recommenation_schema.md)
 
 ## 7. 검증 규칙 (validator)
 
