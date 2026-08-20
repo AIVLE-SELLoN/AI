@@ -1,10 +1,8 @@
 """산출물 식별자 생성 — 서비스·검증기·발행기가 **같은 규칙**을 쓰도록 한 곳에 모은다.
 
-ID 규칙이 갈라지면 백엔드 upsert 가 엉뚱한 문서를 덮어쓰기 때문에, 쓰는 곳이 반드시
-같은 함수를 봐야 한다. 원래 `app/reporting/` 안에 있었는데(검증기가 서비스를 import 하면
-순환이라 거기로 뺐던 것), 2026-08-06 에 `app/core/mq.py` 가 발행 payload 를 만들면서
-두 번째 컴포넌트가 생겨 core 로 올렸다 — core 가 컴포넌트를 import 하는 역방향 의존을
-만들지 않기 위해서다.
+ID 규칙이 갈라지면 백엔드 upsert 가 엉뚱한 문서를 덮어쓰므로 쓰는 곳이 반드시 같은 함수를
+봐야 한다. core 에 있는 이유는 소비자가 `app/reporting/` 과 `app/core/mq.py` 로 갈려서다 —
+어느 한쪽에 두면 core 가 컴포넌트를 import 하는 역방향 의존이 생긴다.
 """
 
 from __future__ import annotations
@@ -28,32 +26,26 @@ def _swap_alert_prefix(prefix: str, alert_id: str) -> str:
 
 
 def build_guideline_id(alert_id: str) -> str:
-    """alert_id → guideline_id.
+    """alert_id → guideline_id. 가이드라인은 알림 1건과 1:1 이다.
 
     예: ALT-20260828-P001-COLOR-COUPANG → GD-20260828-P001-COLOR-COUPANG
 
-    가이드라인은 알림 1건과 1:1 이므로 ID 도 alert_id 와 **1:1** 이어야 한다.
-
-    ⚠️ 예전 규칙(`GD-{탐지일}-{상품}`)은 틀렸다. 탐지가 (상품, aspect, 채널) 단위로
-       발화하므로 같은 날 같은 상품의 다른 알림이 전부 같은 ID 가 됐고, 백엔드가 멱등
-       upsert 를 하므로 나중에 도착한 가이드라인이 앞의 것을 조용히 덮어썼다
-       (쿠팡 색상 가이드가 네이버 사이즈 가이드로 바뀌는 식).
+    예전 규칙(`GD-{탐지일}-{상품}`)으로 되돌리지 말 것 — 탐지가 (상품, aspect, 채널)
+    단위로 발화하므로 같은 날 같은 상품의 다른 알림이 전부 같은 ID 가 됐고, 백엔드 멱등
+    upsert 때문에 나중에 도착한 가이드라인이 앞의 것을 조용히 덮어썼다(쿠팡 색상 가이드가
+    네이버 사이즈 가이드로 바뀌는 식).
     """
     return _swap_alert_prefix(GUIDELINE_ID_PREFIX, alert_id)
 
 
 def build_recommendation_id(alert_id: str) -> str:
-    """alert_id → recommendation_id.
+    """alert_id → recommendation_id. 개선안도 알림 1건과 1:1 이다(선생성).
 
     예: ALT-20260828-P001-COLOR-COUPANG → REC-20260828-P001-COLOR-COUPANG
 
-    개선안은 알림 1건과 1:1 이다(선생성 — 알림을 만든 배치가 이어서 만든다). 그래서
-    `guideline_id` 와 **같은 규칙**으로 alert_id 에서 파생한다.
-
-    ⚠️ 예전 규칙(`REC-{uuid4[:12]}`)은 같은 알림을 재처리할 때마다 다른 ID 를 냈다.
-       백엔드 중복 판정에는 영향이 없다 — `Proposal` 한 행에 `alert_id` 와 개선안
-       필드가 같이 들어가고 그 컬럼에 유니크 제약이 걸려 있어 **중복 INSERT 가
-       구조적으로 불가능**하다. 바꾸는 이유는 **재발행 시 payload 가 완전히 같아져서**
-       우리 쪽 재현·테스트가 쉬워지는 것이다.
+    예전 규칙(`REC-{uuid4[:12]}`)은 같은 알림을 재처리할 때마다 다른 ID 를 냈다. 백엔드
+    중복 판정에는 영향이 없다 — `Proposal` 한 행에 `alert_id` 와 개선안 필드가 같이 들어가고
+    그 컬럼에 유니크 제약이 있어 **중복 INSERT 가 구조적으로 불가능**하다. 바꾼 이유는
+    재발행 시 payload 가 완전히 같아져 우리 쪽 재현·테스트가 쉬워지는 것이다.
     """
     return _swap_alert_prefix(RECOMMENDATION_ID_PREFIX, alert_id)

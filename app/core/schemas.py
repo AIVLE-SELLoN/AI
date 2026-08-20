@@ -19,7 +19,7 @@ from app.core.constants import (
     RATIO_SUM_TOLERANCE,
 )
 
-# ── 공통 Enum (schemas.md §3) ────────────────────────────────────
+# ── 공통 Enum (docs/schemas.md) ──────────────────────────────────
 
 
 class Channel(str, Enum):
@@ -60,7 +60,7 @@ class Source(str, Enum):
 REVIEW_ALLOWED_ASPECTS = frozenset({Aspect.COLOR, Aspect.SIZE, Aspect.MATERIAL})
 
 
-# ── ClassifiedItem (schemas.md §4) ───────────────────────────────
+# ── ClassifiedItem (docs/schemas.md) ─────────────────────────────
 
 
 class AspectSentiment(BaseModel):
@@ -89,7 +89,7 @@ class ClassifiedItem(BaseModel):
         return self
 
 
-# ── DetectionAlert 전용 Enum (detection_schema.md §3) ────────────
+# ── DetectionAlert 전용 Enum (docs/detection_schema.md) ──────────
 
 
 class RecommendedAction(str, Enum):
@@ -109,7 +109,7 @@ class DetectionConfidence(str, Enum):
     NOT_APPLICABLE = "해당없음"
 
 
-# ── DetectionAlert (detection_schema.md §3) ──────────────────────
+# ── DetectionAlert (docs/detection_schema.md) ────────────────────
 
 
 class SubAspectAction(BaseModel):
@@ -134,12 +134,12 @@ class ChannelRate(BaseModel):
     ``total`` 은 그 비율의 분모(= 그 채널의 현재 윈도우 총문의, aspect 무관)다.
     ``stats.cur_total`` 은 **대표 채널 1개분**이라 채널별 분모를 대체하지 못한다.
 
-    ⚠️ **``None`` 과 ``0`` 은 뜻이 다르다.** ``None`` 은 이 필드가 생기기 전(2026-08-11)
-    발행돼 백엔드에 저장된 구버전 알림뿐이고, ``0`` 은 그 채널에 문서가 아예 없었다는
-    관측 결과다(``rate=None``·``excluded=True`` 와 세트). **신규 발행은 관측이 없어도
-    ``0`` 을 싣는다** — 기본값 ``None`` 이 그대로 나가면 백엔드가 둘을 못 가린다.
+    **``None`` 과 ``0`` 은 뜻이 다르다.** ``None`` 은 이 필드가 생기기 전에 발행돼
+    백엔드에 저장된 구버전 알림뿐이고, ``0`` 은 그 채널에 문서가 아예 없었다는 관측
+    결과다(``rate=None``·``excluded=True`` 와 세트). **신규 발행은 관측이 없어도 ``0`` 을
+    싣는다** — 기본값 ``None`` 이 그대로 나가면 백엔드가 둘을 못 가린다.
 
-    🔴 **선택 필드인 이유는 백엔드 사정만이 아니다 — 필수로 만들면 우리 엔드포인트가
+    **선택 필드인 이유는 백엔드 사정만이 아니다 — 필수로 만들면 우리 엔드포인트가
     깨진다.** ``POST /recommendations/hitl`` 의 ``ProcessHitlRequest.alert`` 가
     ``DetectionAlert`` 라, Spring Boot 가 저장해둔 알림이 그대로 되돌아온다. 필수 필드면
     구버전 알림에 대한 HITL 요청이 전부 422 가 되고, 그건 **컬렉션2 축적 경로가 막히는
@@ -200,7 +200,7 @@ class DetectionAlert(BaseModel):
     evidence: Evidence
 
 
-# ── Recommendation 전용 Enum (recommenation_schema.md §3) ────────
+# ── Recommendation 전용 Enum (docs/recommenation_schema.md) ──────
 
 
 class ProposalType(str, Enum):
@@ -228,7 +228,7 @@ class RejectionReasonCode(str, Enum):
     OTHER = "기타"
 
 
-# ── Recommendation (recommenation_schema.md §3) ──────────────────
+# ── Recommendation (docs/recommenation_schema.md) ────────────────
 
 
 class Proposal(BaseModel):
@@ -291,7 +291,7 @@ class Recommendation(BaseModel):
     hitl_feedback: HitlFeedback | None = None
 
 
-# ── 모델 간 교차검증 함수 (schemas.md §7) ─────────────────────────
+# ── 모델 간 교차검증 함수 (docs/schemas.md) ───────────────────────
 
 
 def validate_citations_grounded(recommendation: Recommendation, alert: DetectionAlert) -> None:
@@ -323,15 +323,15 @@ def validate_citations_grounded(recommendation: Recommendation, alert: Detection
 # 아래 두 집합은 이 파일의 Enum 에서 파생되는 값이라 여기 남긴다 —
 # constants.py 로 옮기면 constants → schemas 역방향 import 가 생겨 순환한다.
 
-# 월간 리포트가 다루는 aspect (§4-1 "Aspect (월간 연산)").
+# 월간 리포트가 다루는 aspect.
 # CS 탐지용 6종(Aspect enum 전체)과 달리 3종으로 제한된다.
 MONTHLY_ASPECTS = frozenset({Aspect.COLOR, Aspect.SIZE, Aspect.MATERIAL})
 
-# 생성 대상이 아닌 판정 (§2-1 verdict: "정상 은 생성 대상 아님").
+# 생성 대상이 아닌 판정 — verdict 가 "정상" 이면 생성 대상이 아니다.
 GUIDELINE_EXCLUDED_VERDICTS = frozenset({Verdict.NORMAL})
 
 
-# ── 부록 §4-1 Enum 목록 ──────────────────────────────────────────────────
+# ── 부록 Enum 목록 ──────────────────────────────────────────────────────
 #
 # Aspect / Channel / Verdict / DetectionConfidence / RecommendedAction 은
 # 이 파일 상단(탐지 계약)에 이미 정의돼 있으므로 재정의하지 않고 그대로 쓴다.
@@ -345,7 +345,7 @@ class DriftStatus(str, Enum):
 
 
 class Severity(str, Enum):
-    """채널 분열 게이지 문구 단계 (§4-2 판정식 산출값)."""
+    """채널 분열 게이지 문구 단계. 판정식 산출값이다."""
 
     SAFE = "SAFE"
     CAUTION = "CAUTION"
@@ -368,7 +368,7 @@ class HoldReason(str, Enum):
 
 
 class CallbackStatus(str, Enum):
-    """생성 완료 콜백 상태 코드 (§4-3)."""
+    """생성 완료 콜백 상태 코드."""
 
     SUCCESS = "SUCCESS"
     HOLD_INSUFFICIENT_DATA = "HOLD_INSUFFICIENT_DATA"
@@ -377,38 +377,34 @@ class CallbackStatus(str, Enum):
     FAILED_ERROR = "FAILED_ERROR"
 
 
-# ── §3-1. S3 PDF 메타데이터 (PdfS3Meta) ──────────────────────────────────
+# ── S3 PDF 메타데이터 (PdfS3Meta) ────────────────────────────────────────
 
 
 class PdfS3Meta(BaseModel):
     """생성된 파일의 S3 적재 메타데이터. 월간 리포트·CS 가이드라인이 공유한다.
 
-    📌 **파일 산출물은 종류를 불문하고 아래 4종을 반드시 실어 보낸다** (2026-08-03 확정):
-       `original_file_name`(원본 파일명) · `new_file_name`(버킷 저장 파일명) ·
-       `created_at`(생성 일자) · `file_size_bytes`(파일 크기).
-       메인이 파일을 다시 찾거나 목록에 표시할 때 필요한 최소 집합이라 optional 로 두지
-       않는다. 앞으로 PDF 외 형식(엑셀·CSV 등)이 늘어도 같은 4종을 유지한다.
+    **파일 산출물은 종류를 불문하고 아래 4종을 반드시 실어 보낸다:**
+    `original_file_name`(원본 파일명) · `new_file_name`(버킷 저장 파일명) ·
+    `created_at`(생성 일자) · `file_size_bytes`(파일 크기). 메인이 파일을 다시 찾거나
+    목록에 표시할 때 필요한 최소 집합이라 optional 로 두지 않는다. PDF 외 형식(엑셀·CSV
+    등)이 늘어도 같은 4종을 유지한다.
 
-    📌 **확장자는 별도 컬럼으로 두지 않는다** (인프라 §4, 2026-08-06).
-       "확장자는 파일명에 `.pdf` 로 고정 포함(이미지와 다르게 DB 별도 컬럼에 저장하지
-       않음)"이 규칙이다. 예전에는 `file_extension="pdf"` 필드가 있었는데, 파일명에
-       이미 들어 있는 값을 한 번 더 들고 다니면 둘이 어긋날 수 있다.
+    **확장자는 별도 컬럼으로 두지 않는다** — 파일명에 `.pdf` 로 고정 포함하는 것이
+    인프라 규칙이다. 파일명에 이미 들어 있는 값을 한 번 더 들고 다니면 둘이 어긋날 수 있다.
 
-    📌 **회사 구분은 메타데이터로 실어 보낸다** (2026-08-06 확정).
-       S3 경로가 `reports/{report_type}/{company_id}/…` 로 회사 단위로 갈리는데, 그 값이
-       어느 입력 스키마에도 없어 산출물만 보고는 어느 회사 것인지 알 수 없었다.
-       `company_id` 를 필수로 실어 메인이 **S3 키를 파싱하지 않고** 바로 알 수 있게 한다.
+    **회사 구분은 메타데이터로 실어 보낸다.** S3 경로가
+    `reports/{report_type}/{company_id}/…` 로 회사 단위로 갈리는데 그 값이 어느 입력
+    스키마에도 없어 산출물만 보고는 어느 회사 것인지 알 수 없었다. `company_id` 를 필수로
+    실어 메인이 **S3 키를 파싱하지 않고** 바로 알 수 있게 한다. 경로에는
+    `company_id`(불변 식별자)만 쓴다 — `company_name` 은 표시용이고, 회사명이 바뀌면
+    경로가 갈라져 이전 산출물을 못 찾게 된다.
 
-       ⚠️ 경로에는 `company_id`(불변 식별자)만 쓴다. `company_name` 은 표시용이다 —
-          회사명이 바뀌면 경로가 갈라져 이전 산출물을 못 찾게 된다.
-
-    ⚠️ 보존 정책은 문서 종류별로 다르다 (2026-08-03 확정). 삭제는 S3 Lifecycle 이 한다:
+    보존 정책은 문서 종류별로 다르고 삭제는 S3 Lifecycle 이 한다:
       - **월간 리포트**: PDF 가 **유일한 산출물**이다(DB 에 데이터를 적재하지 않는다).
         생성 후 **6개월** 뒤 자동 삭제되며, 원본이 없으므로 **만료 = 영구 소실**이다.
-      - **CS 가이드라인**: 출력 데이터가 DB 에 적재되어 재컴파일이 가능하다 →
-        업로드 후 **7일** 뒤 자동 삭제 (2026-08-06 확정, 기존 24시간에서 연장).
-        메일 발송이 **운영 MD 승인 뒤에** 일어나므로, 승인 대기 중에 객체가 사라지면
-        발송할 것이 없어진다.
+      - **CS 가이드라인**: 출력 데이터가 DB 에 적재되어 재컴파일이 가능하다 → 업로드 후
+        **7일** 뒤 자동 삭제. 메일 발송이 **운영 MD 승인 뒤에** 일어나므로, 승인 대기 중에
+        객체가 사라지면 발송할 것이 없어진다.
 
     두 시각은 의미가 다르다:
       - `object_expires_at`   S3 가 객체를 지우는 시각 = **다운로드 가능 기한**
@@ -452,9 +448,9 @@ class PdfS3Meta(BaseModel):
     @model_validator(mode="after")
     def _validate_full_key(self) -> PdfS3Meta:
         # 경로에 박힌 회사 구간과 company_id 가 다르면, 메인이 둘 중 뭘 믿어야 할지 모른다.
-        # 경로는 reports/{report_type}/{company_id}/{yyyy}/{mm}/ 순이다(2026-08-06).
+        # 경로는 reports/{report_type}/{company_id}/{yyyy}/{mm}/ 순이다.
         #
-        # ⚠️ **자리를 지정해서 본다**(3번째 구간). 부분 문자열로 찾으면 company_id 가 "07"
+        # **자리를 지정해서 본다**(3번째 구간). 부분 문자열로 찾으면 company_id 가 "07"
         #    같은 짧은 값일 때 연월 구간("/2026/07/")과 우연히 맞아 통과한다. 지금 실제
         #    값은 UUID 라 안 걸리지만, 검사가 우연에 기대고 있으면 검사가 아니다.
         segments = self.s3_file_path.strip("/").split("/")
@@ -486,7 +482,7 @@ class PdfS3Meta(BaseModel):
         return self
 
 
-# ── §1-1. 월간 보고서 입력 (MonthlyReportInput) ──────────────────────────
+# ── 월간 보고서 입력 (MonthlyReportInput) ────────────────────────────────
 #
 # 생성 주체는 FastAPI(reporting 노드)다. DB 조회·계산 후 자체 구성한다.
 
@@ -508,7 +504,7 @@ class MonthlyAspectDistribution(BaseModel):
 
         # 관측이 0건이면 비율도 전부 0 이다. 합을 1.00 으로 맞추려고 중립 100% 로
         # 채우면 "관측이 없다"가 "전부 중립이다"로 바뀌어, LLM 이 없는 관측을 있는 것처럼
-        # 서술하게 된다(§4-4 수치 팩트체크로도 못 걸러낸다).
+        # 서술하게 된다(수치 팩트체크로도 못 걸러낸다).
         if self.total_count == 0:
             if total > RATIO_SUM_TOLERANCE:
                 raise ValueError(
@@ -617,7 +613,7 @@ class MonthlyChannelDivergenceInput(BaseModel):
             raise ValueError(f"comparison_pair 는 중복될 수 없습니다: {labels}")
 
         # worst_pair 는 **가장 위험한 쌍**(severity 등급 → excess 순)이다.
-        # ⚠️ jsd_score 최댓값으로 고르면 안 된다. severity 는 excess(= jsd − baseline)와
+        # jsd_score 최댓값으로 고르면 안 된다. severity 는 excess(= jsd − baseline)와
         #    유의성으로 정해지고 baseline 은 쌍마다 다르므로(표본이 작을수록 크다),
         #    jsd 가 가장 큰 쌍이 SAFE 인데 다른 쌍이 CRISIS 인 상황이 생긴다. 그때
         #    리포트 제목에는 "안정 단계"가 박히고 is_crisis=true 로 나간다.
@@ -711,7 +707,7 @@ class MonthlyReportInput(BaseModel):
         return self
 
 
-# ── §1-2. 월간 보고서 출력 (MonthlyReportOutput) ─────────────────────────
+# ── 월간 보고서 출력 (MonthlyReportOutput) ───────────────────────────────
 #
 # LLM 생성 구간이다. 백엔드는 이 JSON 을 콜백으로 수신해 JSONB 로 영구 저장한다.
 
@@ -738,7 +734,7 @@ class MonthlyChannelDivergenceCause(BaseModel):
 
 
 class ChannelPairAnalysis(BaseModel):
-    """채널쌍 1개에 대한 원인·조치. 리포트가 쌍마다 따로 보여준다(2026-08-04 화면 확정).
+    """채널쌍 1개에 대한 원인·조치. 리포트가 쌍마다 따로 보여준다.
 
     보고서 전체 단위(`cause_analysis_results`/`recommended_actions`)와 별개다 —
     전자는 "이 상품 전체"의 결론이고, 이건 "이 채널쌍" 한정이다. 화면에서 게이지 바로
@@ -805,10 +801,10 @@ class MonthlyReportOutput(BaseModel):
         return self
 
 
-# ── §1-3. 대시보드 요약 (DashboardMonthlySummary) ────────────────────────
+# ── 대시보드 요약 (DashboardMonthlySummary) ──────────────────────────────
 #
 # GET /api/v1/dashboard/monthly-summary?month=YYYY-MM
-# ⚠️ 백엔드가 직접 집계하는 응답 형태로, AI 계약 밖이다. 계약 참조용으로만 둔다.
+# 백엔드가 직접 집계하는 응답 형태로, AI 계약 밖이다. 계약 참조용으로만 둔다.
 
 
 class DashboardMonthlySummary(BaseModel):
@@ -819,7 +815,7 @@ class DashboardMonthlySummary(BaseModel):
     brand_sentiment_rank_3m: int = Field(..., ge=1, le=3, description="카드② 최근 3개월 내 순위")
 
 
-# ── §2-1. CS 가이드라인 입력 (CSGuidelineInput) ──────────────────────────
+# ── CS 가이드라인 입력 (CSGuidelineInput) ────────────────────────────────
 
 
 class CSGuidelineStatsInput(BaseModel):
@@ -912,7 +908,7 @@ class CSGuidelineInput(BaseModel):
         return self
 
 
-# ── §2-2. CS 가이드라인 출력 (CSGuidelineOutput) ─────────────────────────
+# ── CS 가이드라인 출력 (CSGuidelineOutput) ───────────────────────────────
 
 
 class CSGuidelineSummary(BaseModel):
@@ -966,11 +962,11 @@ class CSGuidelineOutput(BaseModel):
         return self
 
 
-# ── §3-2. 생성 완료 콜백 (GenerationCallback) ────────────────────────────
+# ── 생성 완료 콜백 (GenerationCallback) ──────────────────────────────────
 #
 # POST /api/v1/internal/reports/complete · FastAPI → Spring Boot
 #
-# ⚠️ 산출물 적재 방식이 문서 종류별로 다르다 (2026-08-03 확정):
+# 산출물 적재 방식이 문서 종류별로 다르다:
 #
 #   월간 리포트  — **PDF 만** S3(영구 버킷)에 적재하고 링크만 보낸다. UI 는 그 링크를
 #                 PDF 뷰어로 띄운다. 데이터를 DB 에 적재하지 않으므로 source_payload 는
@@ -1021,7 +1017,7 @@ class GenerationCallback(BaseModel):
         return self
 
 
-# ── §4-4. 교차검증 ──────────────────────────────────────────────────────
+# ── 교차검증 ────────────────────────────────────────────────────────────
 #
 # 입력↔출력을 맞대보는 그라운딩 검증(식별자 일치·단계 라벨 대조·cs_id 포함관계)은
 # `app/reporting/{monthly_report_validator,cs_reply_validator}.py` 가 **유일한 구현**이다.
