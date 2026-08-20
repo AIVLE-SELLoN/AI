@@ -21,6 +21,22 @@ RAW_DB_SSLMODES = frozenset(
 )
 """libpq 가 받는 `sslmode` 값 전부. 오타를 **부팅에서** 걸러 접속 시점으로 미루지 않는다."""
 
+LOCAL_CHROMA_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "host.docker.internal"})
+"""로컬로 인정하는 Chroma 호스트. `_check_chroma_tenant` 가 회사 축 검사를 면제할 기준이다.
+
+**허용 목록이지 차단 목록이 아니다** — 운영 호스트명을 미리 알 수 없으니 반대로는 못 막는다.
+`mq.LOCAL_BROKER_HOSTS` 와 같은 형태이고 사유도 같다.
+
+⚠️ **`chromadb` 를 넣지 말 것.** 브로커 쪽 목록에 `rabbitmq` 가 있는 건 그게 compose
+   서비스명이기 때문인데, Chroma 는 compose 에 서비스가 없다(로컬은 `CHROMA_PERSIST_DIR`
+   파일 모드를 쓴다). 반대로 `chromadb` 는 **운영 k8s Service 이름**이라, 넣으면
+   `default` 네임스페이스 파드가 짧은 이름으로 붙을 때 운영을 로컬로 오인한다.
+
+⚠️ **포트포워딩은 이 판정을 무력화한다.** `kubectl port-forward` 로 운영 Chroma 를
+   `localhost` 에 물리면 여기를 통과한다 — 호스트 이름만으로는 구분할 수 없다. 그 상태로
+   작업할 때는 `MQ_COMPANY_ID` 를 직접 맞춰야 한다(같은 한계가 브로커 쪽에도 있다).
+"""
+
 RAW_DB_MIN_CONNECT_TIMEOUT = 2
 """libpq 가 실제로 존중하는 `connect_timeout` 최솟값. **그 아래는 다른 뜻이 된다.**
 
@@ -72,7 +88,15 @@ class Settings(BaseSettings):
     mq_vhost: str = "app"
     # Envelope 의 companyId. 백엔드가 회사 구분용으로 추가했고 "하드코딩으로 박아두라"고
     # 했다(MQ 컨벤션 §3). 빈 값으로 발행하면 백엔드 DB 에 회사 미상 행이 쌓이고
-    # 나중에 되돌리기 어려우므로, 비어 있으면 발행을 막는다.
+    # 나중에 되돌리기 어려우므로, 비어 있으면 발행을 막는다(`mq._publish`).
+    #
+    # 🔴 **이름과 달리 MQ 전용이 아니다 — 벡터DB 의 회사 축이기도 하다.**
+    #    `vectordb.current_tenant()` 가 이 값을 그대로 쓴다. 그래서 **MQ 를 발행하지 않는
+    #    워크로드(웹)도 이 값이 필요하다.** 이름만 보고 "MQ 안 쓰니 불필요" 로 판단하면
+    #    조회가 조용히 0 건이 되고, 컨슈머 쪽은 HITL 이력이 읽을 수 없는 테넌트에 쌓인다.
+    #    실제로 매니페스트에서 웹·컨슈머 두 곳이 그렇게 빠졌다(2026-08 인프라 문의).
+    #    ⚠️ 이름을 바꾸는 대신 아래 `_check_chroma_tenant` 로 막는다 — 매니페스트 7곳이
+    #       이 키를 쓰고 있어 개명은 그 전부와 함께 움직여야 한다.
     mq_company_id: str = ""
     mq_exchange: str = "app.events"
     mq_publish_timeout_seconds: int = 10
@@ -236,6 +260,52 @@ class Settings(BaseSettings):
             )
 
         return self
+
+    @model_validator(mode="after")
+    def _check_chroma_tenant(self) -> Self:
+        """운영 Chroma 를 보는데 회사 축이 비어 있으면 부팅에서 막는다.
+
+        🔴 **같은 값을 MQ 는 막고 벡터DB 는 조용히 넘기던 비대칭을 없앤다.**
+           `mq._publish` 는 `mq_company_id` 가 비면 발행을 거부한다 — *"빈 값으로 내보내면
+           백엔드 DB 에 회사 미상 행이 쌓이는데 나중에 복구할 방법이 없다"* 가 사유다.
+           그 사유는 벡터DB 에 **그대로, 더 세게** 적용된다:
+
+               조회(웹·배치)  `_local` 로 조회 → 0 건 → 근거없음 경로로 조용히 품질 저하
+               쓰기(컨슈머)   `_local` 에 적재 → 아무도 못 읽는다. `rejection_reasons` 는
+                              셀러 HITL 이력이라 **원본이 없어 유실 시 복구 불가**다.
+
+           둘 다 예외도 경고도 없이 지나가서, 파드가 뜬 뒤에도 한동안 아무도 모른다.
+
+        ⚠️ **`LOCAL_TENANT`(`_local`) 자체는 정상 기능이다** — 로컬 개발·테스트가 회사 축
+           없이 돌게 해준다. 여기서 막는 것은 *"로컬 대체값인데 운영 서버를 보고 있는"*
+           조합뿐이다. 그래서 면제 조건이 둘이다:
+             · `CHROMA_PERSIST_DIR` 가 있으면 파일 모드 = 로컬이다.
+             · `CHROMA_HOST` 가 `LOCAL_CHROMA_HOSTS` 면 로컬이다.
+
+        ⚠️ **Chroma 를 안 쓰는 워크로드는 안 걸린다.** 분류 워커·월간 리포트는 매니페스트가
+           `CHROMA_HOST` 를 넣지 않아 기본값 `localhost` 로 남고, 그래서 면제된다. 반대로
+           **쓰는 쪽(웹·컨슈머·일 배치)은 클러스터 DNS 를 넣으므로 반드시 걸린다** — 이
+           가드가 노리는 지점이 정확히 그 셋이다.
+
+        ⚠️ 접속 시점이 아니라 여기인 이유는 `_check_raw_db` 와 같다 — 재시작해도 안 낫는
+           설정 오류라, 진입점의 `configure_logging_or_exit()` 이 사유 한 줄 + **exit 2** 로
+           끝내는 편이 낫다. 런타임까지 미루면 컨슈머에서는 메시지가 DLQ 로 빠진다.
+        """
+        if self.mq_company_id:
+            return self
+        if self.chroma_persist_dir:
+            return self
+        if self.chroma_host.strip().lower() in LOCAL_CHROMA_HOSTS:
+            return self
+
+        raise ValueError(
+            f"MQ_COMPANY_ID 가 비어 있는데 CHROMA_HOST={self.chroma_host!r} 는 로컬이"
+            " 아닙니다. 이 값은 이름과 달리 MQ 전용이 아니라 **벡터DB 의 회사 축**이라,"
+            " 비어 있으면 조회가 '_local' 테넌트로 떨어져 0 건이 되고 HITL 이력은 아무도"
+            " 읽을 수 없는 곳에 쌓입니다(둘 다 조용히 일어납니다)."
+            " 운영이면 MQ_COMPANY_ID 를 채우고, 로컬이면 CHROMA_PERSIST_DIR 로 파일 모드를"
+            f" 쓰거나 CHROMA_HOST 를 {', '.join(sorted(LOCAL_CHROMA_HOSTS))} 중 하나로 두세요"
+        )
 
 
 @lru_cache
