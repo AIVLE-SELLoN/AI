@@ -57,7 +57,10 @@ AI 는 선언하지 않는다** (2026-08-06 §2.1 확인). 우리가 다른 인�
 (passive)이고, `MQ_DECLARE_TOPOLOGY=true` 일 때만 우리가 만든다 — 로컬 브로커 전용이다.
 바인딩(`queue.bind`)도 같은 이유로 로컬에서만 건다.
 
-⚠️ **vhost 는 `/app` 이다** (CRD 세 군데 모두). 로컬 docker-compose 는 `/` 를 쓴다.
+⚠️ **vhost 는 `app` 이다 — 앞에 슬래시가 없다**(2026-08-21 브로커에서 확인). `/app` 으로
+적으면 이름이 다른 vhost 라 접속이 `Connection.Close` 로 끊긴다. AMQP URI 는 경로가 곧
+vhost 이름이라 `amqp://host/app` 을 옮겨 적을 때 슬래시가 딸려오기 쉽다.
+로컬 docker-compose 는 기본이 `/` 다.
 
 ---
 

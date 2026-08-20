@@ -65,7 +65,11 @@ class Settings(BaseSettings):
     mq_port: int = 5672
     mq_user: str = ""
     mq_password: str = ""
-    mq_vhost: str = "/app"
+    # 운영 vhost 는 `app` 이다 — **앞에 슬래시가 없다**(2026-08-21 브로커에서 확인).
+    # ⚠️ AMQP URI 는 경로가 곧 vhost 이름이라, `amqp://host/app` 을 보고 옮겨 적으면 `/app`
+    #    이 되기 쉽다. 그건 같은 것의 다른 표기가 아니라 **이름이 `/app` 인 다른 vhost** 이고,
+    #    실제로 붙으면 Connection.Close 로 끊긴다(실측). URI 에서 vhost `/` 만 `%2F` 로 적는다.
+    mq_vhost: str = "app"
     # Envelope 의 companyId. 백엔드가 회사 구분용으로 추가했고 "하드코딩으로 박아두라"고
     # 했다(MQ 컨벤션 §3). 빈 값으로 발행하면 백엔드 DB 에 회사 미상 행이 쌓이고
     # 나중에 되돌리기 어려우므로, 비어 있으면 발행을 막는다.

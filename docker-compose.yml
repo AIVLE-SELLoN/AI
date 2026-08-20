@@ -233,7 +233,7 @@ services:
   # 접속 정보가 오면 .env 의 접속 4개(HOST/PORT/USER/PASSWORD)를 그쪽으로 돌리고
   # 이 서비스는 안 띄우면 된다.
   #
-  # 🔴 **그때 MQ_DECLARE_TOPOLOGY=false · MQ_VHOST=/app 도 같이 내릴 것.** 접속만 바꾸면
+  # 🔴 **그때 MQ_DECLARE_TOPOLOGY=false · MQ_VHOST=app 도 같이 내릴 것.** 접속만 바꾸면
   #    발행·수신이 MqConfigError 로 멈춘다 — resolve_exchange()·resolve_queue() 가
   #    플래그와 함께 MQ_HOST 도 보고, 로컬이 아니면 브로커에 가기 전에 세운다
   #    (require_local_topology_target). setup_local_mq.py 도 같은 판정을 쓴다.

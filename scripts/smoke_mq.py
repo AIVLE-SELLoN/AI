@@ -385,7 +385,7 @@ def main() -> None:
     # 확인만)으로 돌려보려면 MQ_DECLARE_TOPOLOGY=false 를 주면 된다 — setdefault 라
     # 밖에서 준 값이 이긴다.
     os.environ.setdefault("MQ_DECLARE_TOPOLOGY", "true")
-    # 로컬 브로커는 기본 vhost 가 "/" 다. 운영은 "/app" (MQ 컨벤션 §2.1 CRD).
+    # 로컬 브로커는 기본 vhost 가 "/" 다. 운영은 "app" — 앞에 슬래시가 없다.
     os.environ.setdefault("MQ_VHOST", "/")
     # 발행기가 companyId 없이는 안 보낸다 — 검증용 더미. 실제 값은 백엔드 대기 중.
     os.environ.setdefault("MQ_COMPANY_ID", "SLN-smoketest")
