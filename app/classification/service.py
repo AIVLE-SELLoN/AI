@@ -45,7 +45,7 @@ def load_llm_prompt(module: str, name: str) -> str:
     return m.group(1).strip() if m else raw
 
 
-# 하위호환 별칭 — eval 스크립트 등에서 쓰도록 공개 API로 승격(PR 리뷰 반영).
+# 공개 이름은 load_llm_prompt 다 — eval·테스트가 그쪽을 쓴다. 이 별칭은 하위호환용.
 _load_llm_prompt = load_llm_prompt
 
 # ── 입력 타입 (router.py에서 옮겨옴 — REST뿐 아니라 Kafka 워커도 재사용) ────────
@@ -258,9 +258,8 @@ def _cs_empty_fallback(trace_key: str) -> list[AspectSentiment]:
 def explode_to_rows(item: ClassifiedItem) -> list[dict]:
     """ClassifiedItem → DB 저장용 행 리스트로 explode.
 
-    반환된 dict는 그대로 DB INSERT에 쓸 수 있는 평평한(flat) 구조.
-    실제 DB 스키마(테이블·컬럼)는 아직 미확정이라 dict로만 반환 — DB 레이어
-    확정되면 이 함수 반환 타입을 ORM 모델로 바꾸면 됨(호출부 영향 최소화 목적).
+    반환 dict 는 그대로 INSERT 에 쓸 수 있는 평평한 구조다 —
+    scripts/classification_worker.py 가 classified_item_aspect 에 적재한다.
     """
     rows = []
     for a in item.aspects:
