@@ -3,23 +3,22 @@
 배치 스케줄상 **가장 무거운 단계**다(순열검정 B=10,000). 그래서 생성과 분리해
 전월 말일 자정부터 돌려 오전 8시까지 끝내고, 생성은 그 결과 파일만 읽어 10시까지 끝낸다.
 
-⚠️ 분모는 **원본 테이블에서 센다**(탐지 분모 산출 방식, 2026-08-03 합의).
-   `classified_item` 은 "aspect 언급 목록"이라 aspect 가 0개인 리뷰가 빠져 있어
-   총 문서 수를 셀 수 없다. 여기서는 원문(cs ∪ reviews)을 분모로 쓰고 classified_item 을
-   LEFT JOIN 해 분자만 가져온다.
+분모는 원본 테이블에서 센다(탐지 분모 산출 방식과 같다). `classified_item` 은
+"aspect 언급 목록"이라 aspect 가 0개인 리뷰가 빠져 총 문서 수를 셀 수 없다. 원문
+(cs ∪ reviews)을 분모로 쓰고 classified_item 을 LEFT JOIN 해 분자만 가져온다.
 
-⚠️ BH-FDR 은 **배치 전체(전 상품 × 전 채널쌍)** 를 한 family 로 묶어야 한다(§4-2 ②).
-   상품별로 따로 보정하면 다중검정 방어가 깨진다. 그래서 이 모듈은 상품 하나가 아니라
-   **상품 목록을 한 번에** 집계한다.
+BH-FDR 은 배치 전체(전 상품 × 전 채널쌍)를 한 family 로 묶어야 한다. 상품별로 따로
+보정하면 다중검정 방어가 깨진다. 그래서 이 모듈은 상품 하나가 아니라 상품 목록을
+한 번에 집계한다.
 
-백엔드 2종 (Postgres 이식, 2026-08-18)
-  연결은 호출부(`scripts/generate_monthly_reports.py`)가 `raw_db.connect_readonly()` 로
-  열어 넘긴다 — 여기서 `sqlite3.connect` 를 직접 부르면 운영에서 못 붙는다. SQL 은 한
-  벌뿐이고, `?` 바인딩은 `raw_db` 가 `%s` 로 옮긴다.
+백엔드는 sqlite·Postgres 2종이다. 연결은 호출부
+(`scripts/generate_monthly_reports.py`)가 `raw_db.connect_readonly()` 로 열어 넘긴다 —
+여기서 `sqlite3.connect` 를 직접 부르면 운영에서 못 붙는다. SQL 은 한 벌뿐이고 `?`
+바인딩은 `raw_db` 가 `%s` 로 옮긴다.
 
-  ⚠️ **집계 결과를 컬럼 이름으로 읽는다.** 예전에는 `for aspect, sentiment, count in rows`
-     처럼 위치로 풀었는데, `COUNT(*)` 나 `UPPER(...)` 처럼 **이름 없는 식**이 섞여 있으면
-     백엔드에 따라 컬럼명이 달라진다. 별칭을 붙여 두면 두 백엔드에서 같은 코드가 선다.
+집계 결과는 컬럼 이름으로 읽는다. 위치로 풀면 `COUNT(*)` 나 `UPPER(...)` 처럼 이름
+없는 식이 섞였을 때 백엔드에 따라 컬럼명이 달라진다. 별칭을 붙이면 양쪽에서 같은
+코드가 선다.
 """
 
 from __future__ import annotations
@@ -67,13 +66,12 @@ assert {Aspect(a) for a in JSD_ASPECT_ORDER} == set(SCHEMA_MONTHLY_ASPECTS), (
 # `occurred_at` 하나로 맞춘 뷰가 `voc_document` 이고, 정의는 `app/core/raw_schema.py` 다.
 # 이름을 여기 다시 적지 않고 상수를 가져다 쓴다 — 뷰 이름이 바뀌면 한 곳만 고치면 된다.
 #
-# ⚠️ 분모와 분자를 **한 쿼리로 묶지 않는다**(§4 예시 쿼리와 같은 이유). 분모는 이 뷰만
-#    보고 세고(`_fetch_total_voc`), 분자는 분류 결과를 INNER JOIN 해서 따로 센다. 한
-#    쿼리에서 GROUP BY 에 aspect 를 넣은 채로 분모까지 세면, 분류 안 된 문의가 빠져
-#    분모가 조용히 줄어든다(§2-4 가 금지한 상황).
+# 분모와 분자를 한 쿼리로 묶지 않는다. 분모는 이 뷰만 보고 세고(`_fetch_total_voc`),
+# 분자는 분류 결과를 INNER JOIN 해 따로 센다. 한 쿼리에서 GROUP BY 에 aspect 를 넣은
+# 채 분모까지 세면 분류 안 된 문의가 빠져 분모가 조용히 줄어든다.
 SOURCE_TABLE = raw_schema.VOC_DOCUMENT
 
-# 상품그룹 대표 상품명을 고르는 규칙 (2026-08-05 확정).
+# 상품그룹 대표 상품명을 고르는 규칙.
 #   1순위: 채널별 표기명 중 **최빈값**
 #   2순위: 동점이면 아래 채널 우선순위로 깬다
 # 채널마다 표기가 달라 어느 하나를 골라야 하는데, 실행마다 이름이 흔들리면 같은 상품의
@@ -114,26 +112,23 @@ def resolve_product_name(candidates: dict[str, str]) -> str | None:
 def has_product_name_tables(conn: raw_db.RawDbConnection) -> bool:
     """products·mapped_data 가 둘 다 있는가.
 
-    ⚠️ 목 파이프라인도 이제 두 테이블을 만든다(2026-08-11) — `mock_producer` 가
-       `seed_product_catalog()` 로 채운다. 다만 **비어 있을 수 있다**: 매핑 대본
-       (`input_mapped_data.csv`)이 없으면 `mapped_data` 가 0행이고, 그때 이 함수는
-       True 를 돌려주지만 아래 조회가 빈 결과를 낸다. 그래서 "테이블 유무" 와
-       "매핑 유무" 는 다르다 — 호출부는 이름을 못 찾으면 product_group_id 를 그대로 쓴다.
+    목 파이프라인도 `mock_producer.seed_product_catalog()` 로 두 테이블을 만든다. 다만
+    비어 있을 수 있다 — 매핑 대본(`input_mapped_data.csv`)이 없으면 `mapped_data` 가
+    0행이고, 그때 이 함수는 True 를 돌려주지만 아래 조회가 빈 결과를 낸다. "테이블
+    유무" 와 "매핑 유무" 는 다르다. 호출부는 이름을 못 찾으면 product_group_id 를
+    그대로 쓴다. 대본은 백엔드가 주는 파일이 아니라 저장소가 직접 만들어야 하는 것이다
+    (백엔드는 CSV 없이 매핑 결과를 raw DB 에 직접 적재한다). 만드는 법은
+    `mock_producer.MAPPED_DATA_FILE` 주석 참고.
 
-       ⚠️ 예전에는 이 대본을 "백엔드가 주는 것이라 받기 전에는 비어 있다"고 적어 뒀는데
-          **틀렸다**(2026-08-13 백엔드 확인). 백엔드는 CSV 를 만들지 않고 매핑 결과를
-          raw DB 에 직접 적재한다 — 기다린다고 오는 파일이 아니라 저장소가 직접 만들어야
-          하는 대본이다. 만드는 법은 `mock_producer.MAPPED_DATA_FILE` 주석 참고.
-
-       매핑이 비면 상품명만 빠지는 게 아니다. 채널상품 하나가 곧 상품 그룹 하나가 되어
-       채널 간 비교 짝이 사라지고, 이 모듈이 내는 **채널 격차(JSD) 산출물 자체가 빈다**
-       (2026-08-13 실측: 채널 2개 이상 걸친 그룹 42종 → 0종).
+    매핑이 비면 상품명만 빠지는 게 아니다. 채널상품 하나가 곧 상품 그룹 하나가 되어
+    채널 간 비교 짝이 사라지고, 이 모듈이 내는 채널 격차(JSD) 산출물 자체가 빈다
+    (실측: 채널 2개 이상 걸친 그룹 42종 -> 0종).
 
     상품 목록을 도는 루프 **바깥**에서 한 번만 부르라고 따로 뺐다. 상품이 126개면 안에서
     부를 때 같은 카탈로그 조회를 126번 한다 — 답이 실행 중에 바뀌지 않는 값이다.
     """
-    # ⚠️ `sqlite_master` 를 직접 조회하지 않는다 — Postgres 에는 없는 테이블이라 이
-    #    확인 자체가 구문 오류로 죽는다(상품명이 빠지는 게 아니라 집계가 통째로 실패한다).
+    # `sqlite_master` 를 직접 조회하지 않는다 — Postgres 에는 없는 테이블이라 이 확인
+    # 자체가 구문 오류로 죽는다(상품명이 빠지는 게 아니라 집계가 통째로 실패한다).
     return raw_db.existing_tables(conn, ("products", "mapped_data")) == {
         "products",
         "mapped_data",
@@ -234,10 +229,10 @@ def _fetch_aspect_sentiments(
 ) -> dict[str, dict[int, int]]:
     """{aspect: {sentiment: 건수}}. 분자 집계다.
 
-    ⚠️ 기준 시각·상품그룹은 **원문 테이블**에서 온다. 분류 결과 테이블(§2-6)에는
-       발생 시각도 상품그룹도 없다 — 원문 사본을 만들지 않기로 했기 때문이다(§6).
-       분류 시각(classified_at)으로 기간을 자르면 말일 문의를 1일 새벽에 분류했을 때
-       그 건이 다음 달로 넘어간다.
+    기준 시각·상품그룹은 원문 테이블에서 온다. 분류 결과 테이블에는 발생 시각도
+    상품그룹도 없다 — 원문 사본을 만들지 않기로 했기 때문이다. 분류 시각
+    (classified_at)으로 기간을 자르면 말일 문의를 1일 새벽에 분류했을 때 다음 달로
+    넘어간다.
     """
     start, end = _window(report_month)
     rows = conn.execute(
@@ -264,15 +259,14 @@ def _fetch_negative_aspect_counts_by_channel(
     "두 채널의 여론이 얼마나 다른가"를 **부정 의견이 어느 속성에 쏠렸는지**로 본다.
     전체 문서로 재면 채널별 판매량 차이가 그대로 신호로 잡힌다.
 
-    ⚠️ 채널값을 **여기서 대문자로 맞춘다.** 예전에는 `classified_item.channel` 을 읽었고
-       그 값은 `ClassifiedItem` 을 거치면서 `Channel` enum 이 표기를 보장해 줬다. 지금은
-       원문 테이블(§2-4·§2-5)의 `channel_id` 가 그대로 나오는데, 그 표기는 메인 서버가
-       채우는 값이라 우리가 보장할 수 없다.
+    채널값을 여기서 대문자로 맞춘다. 원문 테이블의 `channel_id` 표기는 메인 서버가
+    채우는 값이라 우리가 보장할 수 없다(`classified_item.channel` 을 읽던 시절에는
+    `Channel` enum 이 보장해 줬다).
 
-       맞추지 않으면 **에러 없이 결과만 조용히 틀어진다**: 호출부가
-       `channel_counts.get(left, [0,0,0])` 로 꺼내므로, 'coupang' 이 들어오면 'COUPANG'
-       조회가 빗나가 그 채널이 **빈 분포로 취급**되고 그 쌍의 판정이 통째로 어긋난다.
-       대소문자만 다른 경우는 UPPER 로 흡수하고, 아예 모르는 채널은 아래에서 경고한다.
+    맞추지 않으면 에러 없이 결과만 조용히 틀어진다: 호출부가
+    `channel_counts.get(left, [0,0,0])` 로 꺼내므로 'coupang' 이 들어오면 'COUPANG'
+    조회가 빗나가 그 채널이 빈 분포로 취급되고 그 쌍의 판정이 통째로 어긋난다.
+    대소문자만 다른 경우는 UPPER 로 흡수하고, 모르는 채널은 아래에서 경고한다.
     """
     start, end = _window(report_month)
     rows = conn.execute(
@@ -425,11 +419,11 @@ def aggregate_monthly_inputs(
         f"(BH-FDR, family=배치 전체)"
     )
 
-    # 🔴 **KST 로 찍는다 — 호스트 시간대를 보지 않는다.** 이 값은 합본 PDF 지면에 그대로
-    #    인쇄되는데(`pdf_compiler` 의 "마지막 업데이트"), 렌더링이 `calculated_at[:16]` 으로
-    #    **오프셋을 잘라내고 벽시계만** 보여준다. `datetime.now().astimezone()` 이면 UTC
-    #    컨테이너에서 셀러가 보는 시각이 9시간 이르게 찍히고 tz 표기가 없어 구분할 방법이
-    #    없다. 개발 머신이 KST 라 로컬 테스트로는 영원히 안 잡힌다. (2026-08-13)
+    # KST 로 찍는다 — 호스트 시간대를 보지 않는다. 이 값은 합본 PDF 지면에 그대로
+    # 인쇄되는데(`pdf_compiler` 의 "마지막 업데이트") 렌더링이 `calculated_at[:16]` 으로
+    # 오프셋을 잘라내고 벽시계만 보여준다. `datetime.now().astimezone()` 이면 UTC
+    # 컨테이너에서 셀러가 보는 시각이 9시간 이르게 찍히고 tz 표기가 없어 구분할 방법이
+    # 없다. 개발 머신이 KST 라 로컬 테스트로는 영원히 안 잡힌다.
     calculated_at = datetime.now(KST)
     # 카탈로그 존재 여부는 실행 중에 바뀌지 않는다 — 상품마다 다시 묻지 않는다.
     catalog_ready = has_product_name_tables(conn)

@@ -14,8 +14,8 @@ from app.reporting.charts import (
 )
 
 # Windows 환경일 경우 GTK3 DLL 경로 강제 추가.
-# ⚠️ weasyprint import 보다 **먼저** 실행돼야 한다. weasyprint 는 import 시점에
-#    libgobject 등 GTK DLL 을 찾으므로, PATH 를 나중에 넣으면 이미 늦다.
+# weasyprint import 보다 먼저 실행돼야 한다. weasyprint 는 import 시점에 libgobject
+# 등 GTK DLL 을 찾으므로 PATH 를 나중에 넣으면 이미 늦다.
 if sys.platform == "win32":
     gtk_path = r"C:\Program Files\GTK3-Runtime Win64\bin"
     if os.path.exists(gtk_path) and gtk_path not in os.environ.get("PATH", ""):
@@ -138,8 +138,8 @@ _BASE_CSS = """
     .product-page.first { page-break-before: auto; }  /* 첫 상품 앞의 빈 페이지 방지 */
 """
 
-# ⚠️ 통계 수치(p_value 등)는 §4-4 금지 표현이라 템플릿에 넣지 않는다.
-#    입력 모델에는 있지만 문서에 렌더링하면 그대로 셀러에게 노출된다.
+# 통계 수치(p_value 등)는 금지 표현이라 템플릿에 넣지 않는다. 입력 모델에는 있지만
+# 문서에 렌더링하면 그대로 셀러에게 노출된다.
 CS_TEMPLATE_HTML = (
     """<!DOCTYPE html><html><head><meta charset="utf-8"><title>CS 대응 가이드라인</title>
 <style>"""
@@ -184,7 +184,7 @@ CS_TEMPLATE_HTML = (
 # 상품 1개분 본문. 단건 PDF 와 월간 합본이 **같은 마크업을 공유**한다 —
 # 합본만 고치고 단건을 놓치면 두 문서의 수치 표기가 갈라진다.
 #
-# 레이아웃(2026-08-04 화면 확정):
+# 레이아웃(화면 확정본):
 #   좌 — TOTAL VOC · BRAND SENTIMENT · 항목별 고객 감성 분포
 #   우 — 채널쌍 3종 평판 격차 게이지(한 화면에 전부)
 #   하 — 원인 분석 결과 · 권장 조치 사항
@@ -290,14 +290,12 @@ _HTML_HEAD = (
 # 단건(디버그·REST 확인용). 운영 산출물은 아래 합본이다.
 MONTHLY_TEMPLATE_HTML = _HTML_HEAD + _MONTHLY_SECTION_HTML + "</body></html>"
 
-# 월간 합본 — **운영 산출물**. 표지 없이 상품 페이지로 바로 시작하며(2026-08-04 확정),
-# 화면에는 **첫 상품 페이지**만 미리보기로 띄우고 전체는 presigned URL 로 내려받는다.
+# 월간 합본 — 운영 산출물. 표지 없이 상품 페이지로 바로 시작하며, 화면에는 첫 상품
+# 페이지만 미리보기로 띄우고 전체는 presigned URL 로 내려받는다.
 # 상품마다 페이지를 나눠 목차 없이도 넘겨볼 수 있게 한다.
 MONTHLY_BOOK_HTML = (
     _HTML_HEAD
-    # ⚠️ 총합 요약(표지) 페이지는 만들지 않는다 (2026-08-04 확정). 화면에 띄우는 첫
-    #    페이지가 곧 첫 상품의 리포트다. 보류·실패 상품 안내는 PDF 대신 콜백의
-    #    notice_message 로 전달한다 — 표지를 지우면서 그 정보가 사라지면 안 된다.
+    # 표지 페이지는 만들지 않는다. 화면에 띄우는 첫 페이지가 곧 첫 상품의 리포트다.
     + """
 {% for item in items %}<section class="product-page{% if loop.first %} first{% endif %}">"""
     + """{% with report=item.report, input=item.input,
@@ -306,9 +304,7 @@ MONTHLY_BOOK_HTML = (
             brand_sentiment=item.brand_sentiment %}"""
     + _MONTHLY_SECTION_HTML
     + """{% endwith %}</section>{% endfor %}"""
-    # 보류 상품 — 사유만 적은 페이지. 수록 상품 뒤에 이어 붙인다(2026-08-09).
-    # ⚠️ 이 페이지가 없으면 PDF 만 받아보는 사람은 자기 상품이 왜 빠졌는지 알 수 없다.
-    #    표지도 목차도 없는 구조라 "빠졌다"는 사실 자체가 안 보인다.
+    # 보류 상품 — 사유만 적은 페이지. 수록 상품 뒤에 이어 붙인다.
     + """
 {% for input in held %}<section class="product-page{% if loop.first and not items %} first{% endif %}">
     <h1>{{ input.product_name }} <span style="color:#868e96">({{ input.product_group_id }})</span></h1>
@@ -332,10 +328,10 @@ def _build_monthly_chart_context(context: dict[str, Any]) -> dict[str, Any]:
     KPI 카드 값(브랜드 감성)은 **입력 수치에서 그대로 계산**한다 — LLM 이 만든 값을
     쓰면 팩트체크를 통과한 문장과 카드 숫자가 어긋날 수 있다.
 
-    ⚠️ 여기서 만드는 값은 **템플릿이 실제로 읽는 것만** 둔다. 화면 개편으로 참조가
-       사라진 값(전월 대비 변동 막대·RISK 배지·CRITICAL RISKS·최다 부정 속성 KPI)은
-       계산까지 함께 지웠다. 남겨두면 매 상품마다 쓰지도 않을 SVG 를 만들어 버리고,
-       나중에 본문과 어긋난 채로 되살아난다.
+    여기서 만드는 값은 템플릿이 실제로 읽는 것만 둔다. 화면 개편으로 참조가 사라진 값
+    (전월 대비 변동 막대·RISK 배지·CRITICAL RISKS·최다 부정 속성 KPI)은 계산까지 함께
+    지웠다. 남겨두면 매 상품마다 쓰지도 않을 SVG 를 만들고, 나중에 본문과 어긋난 채로
+    되살아난다.
     """
     input_data = context.get("input", {})
 
@@ -350,15 +346,14 @@ def _build_monthly_chart_context(context: dict[str, Any]) -> dict[str, Any]:
         )
         for d in distributions
     }
-    # ⚠️ `jsd_baseline` 을 **반드시 같이 넘긴다.** 마커는 `jsd_score` 절대 위치인데
-    #    severity 판정은 `excess = jsd_score - jsd_baseline` 기준이라, 기준선이 없으면
-    #    두 마커 사이 간격(= excess)이 사라져 판정 이유가 그림에서 없어진다.
+    # `jsd_baseline` 을 반드시 같이 넘긴다. 마커는 `jsd_score` 절대 위치인데 severity
+    # 판정은 `excess = jsd_score - jsd_baseline` 기준이라, 기준선이 없으면 두 마커 사이
+    # 간격(= excess)이 사라져 판정 이유가 그림에서 없어진다.
     #
-    #    ⚠️ 게이지는 **판정을 말하지 않는다.** 절대 축이라 CRISIS 인 쌍의 마커가 막대
-    #       왼쪽에 찍힐 수 있어서, 구간 이름에서 판정어를 걷어냈다(2026-08-13).
-    #       판정은 상단 `cause_title` 문장이 한다 — `_validate_stage_label` 이 "위험
-    #       단계" 같은 라벨을 강제하는 그 자리다. 근거는
-    #       `charts.render_divergence_gauge` docstring.
+    # 게이지는 판정을 말하지 않는다. 절대 축이라 CRISIS 인 쌍의 마커가 막대 왼쪽에
+    # 찍힐 수 있어서 구간 이름에서 판정어를 걷어냈다. 판정은 상단 `cause_title` 문장이
+    # 한다 — `_validate_stage_label` 이 "위험 단계" 같은 라벨을 강제하는 그 자리다.
+    # 근거는 `charts.render_divergence_gauge` docstring.
     gauge_by_pair = {
         p["comparison_pair"]: render_divergence_gauge(
             jsd_score=p.get("jsd_score"),
@@ -373,10 +368,10 @@ def _build_monthly_chart_context(context: dict[str, Any]) -> dict[str, Any]:
     total_count = sum(d.get("total_count", 0) for d in distributions) or 1
     # 비부정 의견 비율 = 전 속성 (긍정+중립) 가중평균. 건수로 가중해야 표본이 큰 속성이
     # 제대로 반영된다(단순 평균은 피드백 10건짜리 속성이 200건짜리와 같은 무게가 된다).
-    # ⚠️ 변수명은 `brand_sentiment` 로 남겨 둔다 — 템플릿·테스트가 이 키를 쓰고, 대시보드
-    #    카드②(`DashboardMonthlySummary.brand_sentiment_ratio`)와 이름을 맞춰 둔 것이다.
-    #    **지면 라벨만** "비부정 의견 비율"로 고쳤다(2026-08-13). 이름이 값을 설명하지
-    #    못하는 상태라, 이 계산식을 인용할 때는 반드시 (긍정+중립)임을 같이 적을 것.
+    # 변수명은 `brand_sentiment` 로 남겨 둔다 — 템플릿·테스트가 이 키를 쓰고, 대시보드
+    # 카드(`DashboardMonthlySummary.brand_sentiment_ratio`)와 이름을 맞춰 둔 것이다.
+    # 지면 라벨만 "비부정 의견 비율"이다. 이름이 값을 설명하지 못하는 상태라, 이
+    # 계산식을 인용할 때는 반드시 (긍정+중립)임을 같이 적을 것.
     brand_sentiment = (
         sum(
             (d.get("positive_ratio", 0.0) + d.get("neutral_ratio", 0.0)) * d.get("total_count", 0)
@@ -414,20 +409,16 @@ def build_book_context(
                    "report": MonthlyReportOutput.model_dump(mode="json")}`.
     held  원소는 `MonthlyReportInput.model_dump(mode="json")` — 표본 부족으로 보류된 상품.
 
-    ⚠️ 총합 요약(표지) 페이지는 만들지 않는다 (2026-08-04 확정). 표지가 쓰던 값
-       (전사 합계·상품 목록·기간·생성 시각)은 **계산까지 함께 지웠다** — 렌더링하지 않는
-       값을 컨텍스트에 남겨두면 나중에 본문과 어긋난 채로 되살아난다.
-
-    ⚠️ 보류 상품은 **지면에도 남긴다**(2026-08-09). 예전에는 합본에서 통째로 빼고 콜백
-       `notice_message` 로만 알렸는데, 표지도 목차도 없는 구조라 **PDF 만 받아보는 사람은
-       자기 상품이 왜 없는지 알 방법이 없었다.** 콜백 안내는 그대로 두고(메인 화면용),
-       지면에도 사유를 적어 문서 자체로 설명이 되게 한다.
+    표지가 없는 구조라(`MONTHLY_BOOK_HTML` 참고) 두 가지가 따라온다. 표지가 쓰던 값
+    (전사 합계·상품 목록·기간·생성 시각)은 계산까지 함께 지웠다 — 렌더링하지 않는 값을
+    컨텍스트에 남겨두면 나중에 본문과 어긋난 채로 되살아난다. 그리고 보류 상품을 지면
+    에도 남긴다 — 목차도 없어서 통째로 빼면 PDF 만 받아보는 사람은 자기 상품이 왜 없는지
+    알 방법이 없다. 콜백 안내는 메인 화면용으로 그대로 둔다.
     """
-    # ⚠️ `report_month` 는 **보류 페이지 전용**이다(2026-08-09). 수록 상품 페이지의
-    #    `{{ report.report_month }}` 는 item.report 에서 오는 **별개 값**이라 이것과
-    #    무관하다 — 보류 상품은 report(LLM 산출물)가 없어서 머리글에 쓸 연월을 따로
-    #    받아야 한다. 지우면 보류 페이지의 meta 줄이 빈칸이 된다.
-    #    (예전 주석은 "여기 담지 않는다"였는데, 보류 페이지가 생기면서 담게 됐다.)
+    # `report_month` 는 보류 페이지 전용이다. 수록 상품 페이지의
+    # `{{ report.report_month }}` 는 item.report 에서 오는 별개 값이라 무관하다 —
+    # 보류 상품은 report(LLM 산출물)가 없어서 머리글에 쓸 연월을 따로 받아야 한다.
+    # 지우면 보류 페이지의 meta 줄이 빈칸이 된다.
     return {
         "items": [
             {

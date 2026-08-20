@@ -1,13 +1,12 @@
-"""생성 완료 콜백 조립 — 문서 생성 스키마 §3-2.
+"""생성 완료 콜백 조립.
 
 FastAPI 가 문서를 만든 뒤 Spring Boot(`POST /api/v1/internal/reports/complete`)로
 결과를 알리는 계약이다. 두 파이프라인(월간 리포트·CS 가이드라인)이 같은 형태를 쓰므로
 여기서 조립만 담당한다.
 
-⚠️ 아직 **아웃바운드 HTTP 푸시는 하지 않는다.** Spring Boot 콜백 URL 은 환경변수
-   (`app/config.py`)로 들어가야 하는데 그건 공유 영역이라 팀 합의가 필요하다.
-   지금은 라우터가 이 객체를 응답 본문으로 그대로 돌려주고, 연동 시점에 여기에
-   전송 함수를 붙이면 된다.
+아웃바운드 HTTP 푸시는 아직 하지 않는다. 콜백 URL 이 환경변수(`app/config.py`, 공유
+영역)로 들어가야 해서 팀 합의가 필요하다. 지금은 라우터가 이 객체를 응답 본문으로
+돌려주고, 연동 시점에 여기 전송 함수를 붙이면 된다.
 """
 
 from __future__ import annotations
@@ -58,7 +57,7 @@ def build_monthly_callback(
         status=status,
         pdf_s3_meta=pdf_s3_meta if status == CallbackStatus.SUCCESS else None,
         notice_message=notice_message,
-        # ⚠️ 월간은 source_payload 를 보내지 않는다 (2026-08-03 확정).
+        # 월간은 source_payload 를 보내지 않는다.
         #    PDF 만 S3 영구 버킷에 올리고 링크로 열람하는 구조라 DB 에 데이터를 쌓지
         #    않기로 했다. 원본을 실어 보내면 저장하지도 않을 데이터가 큐에 흐른다.
         source_payload=None,
