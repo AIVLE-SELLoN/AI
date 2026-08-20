@@ -10,13 +10,13 @@ Chroma 기본 임베딩 함수(all-MiniLM-L6-v2, 영어 전용)와 `EMBEDDING_MO
     python eval/run_embedding_eval.py          # 두 모델 비교, 실비용(임베딩 ~1천 토큰)
     python eval/run_embedding_eval.py --dry-run  # 표본만 출력, $0
 
-⚠️ 컬렉션2 는 운영 데이터가 0건이라(HITL 미사용) **여기 표본은 우리가 만든 것**이다.
+컬렉션2 는 운영 데이터가 0건이라(HITL 미사용) **여기 표본은 우리가 만든 것**이다.
    `record_hitl_outcome()` 이 쓰는 문서 형식
    (`f"{root_cause_label} {cs_summary} {proposed_text}"`)과 `retrieve_context()` 의
    쿼리 형식(`alert.root_cause.label` + aspect 필터)을 그대로 따랐지만, 실제 반려
    사유의 문체와는 다를 수 있다. 숫자를 운영 성능으로 읽지 말 것.
 
-⚠️ `label` 모드는 쿼리가 문서 안에 그대로 들어 있어 **어휘 일치만으로도 맞을 수 있다.**
+ `label` 모드는 쿼리가 문서 안에 그대로 들어 있어 **어휘 일치만으로도 맞을 수 있다.**
    의미 이해를 보려면 `paraphrase` 모드를 볼 것 — 라벨 문자열을 뺀 고객 말투 쿼리다.
 """
 
@@ -175,7 +175,7 @@ def main(dry_run: bool = False) -> None:
 
 
 if __name__ == "__main__":
-    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍는다.
+    # 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍는다.
     #    예전엔 모듈 최상단에서 불렀는데, 그러면 **import 만 해도** 남의 스트림을 바꾼다.
     force_utf8_output()
 

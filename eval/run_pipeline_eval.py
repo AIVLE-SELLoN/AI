@@ -18,7 +18,7 @@
 분모는 원본에서 센다
 --------------------
 `loader.build_rows()` 경유. aspect 결과 자식 행에서 분모를 세면 aspect 가 0개로 나온
-문서가 통째로 빠져 부정률이 부풀려진다(탐지 분모 산출 방식 §1). 실제 분류 캐시에 키가
+문서가 통째로 빠져 부정률이 부풀려진다(탐지 분모 산출 방식). 실제 분류 캐시에 키가
 없는 문서는 미분류로 남기고, 정상 빈 배열은 캐시 키가 있는 부모 완료 건으로 구분한다.
 
 비용 — `--mode` 로 호출 방식을 고른다
@@ -134,10 +134,10 @@ CONCURRENCY = 4
 RETRY_WITHIN_RUN = 2
 """무응답 건을 **그 회차 안에서** 다시 부르는 횟수.
 
-⚠️ 회차는 LLM 흔들림을 평균 내려고 나눈 것이라 **서로 독립이어야 한다.** 무응답을
+회차는 LLM 흔들림을 평균 내려고 나눈 것이라 **서로 독립이어야 한다.** 무응답을
    다음 회차로 미루면 앞 회차가 뒤 회차 실행 때 채워져서, 앞 회차일수록 커버리지가
    좋아진다. 그러면 ± 가 흔들림이 아니라 커버리지 비대칭을 잰다.
-   (2026-08-04 내가 넣은 구조인데 before 가 편차 0 이라 안 보였고, 프롬프트 개선으로
+   (before 가 편차 0 이라 안 보였고, 프롬프트 개선으로
     케이스가 컷오프 근처로 올라오면서 드러났다 — 회차 1 이 60% → 84%)"""
 
 MODE_BATCH = "batch"
@@ -147,7 +147,7 @@ MODE_PER_ITEM = "per_item"
 def prompt_fingerprint() -> str:
     """캐시 키에 넣을 프롬프트 지문 — 프롬프트1·2 각각 이름(버전) + **내용 해시**.
 
-    ⚠️ 리뷰가 대상에 들어오면서 프롬프트2 도 결과를 좌우한다(2026-08-09). 프롬프트1 만
+    리뷰가 대상에 들어오면서 프롬프트2 도 결과를 좌우한다. 프롬프트1 만
        해싱하면 프롬프트2 를 고쳐도 캐시가 안 갈려 옛 리뷰 라벨을 조용히 재사용한다.
 
     버전 문자열만으로는 부족하다. Agent1 이 예시를 classify_aspect_v5.md 에 **그대로
@@ -171,9 +171,8 @@ def data_fingerprint(documents: list[dict]) -> str:
     **옛 라벨로 새 문서를 채점한다.** 비용이 안 드는 것처럼 보이면서 결과만 틀리는,
     제일 나쁜 형태의 실패다.
 
-    ⚠️ 수동 규칙("재생성하면 캐시 지우기")으로 막지 않는 이유: `data/` 가 gitignore 라
+    수동 규칙("재생성하면 캐시 지우기")으로 막지 않는 이유: `data/` 가 gitignore 라
        팀원마다 캐시가 따로 놀고, 한 명만 잊으면 틀린 숫자가 나온다. 기계가 막아야 한다.
-       (지인님 리뷰 조건 1, 2026-08-09 — 배경 baseline 재생성 직전에 지적됨)
     """
     h = hashlib.sha256()
     for d in documents:  # 생성이 결정론이라 순서가 안정적이다
@@ -209,14 +208,14 @@ def collect_documents(config_rows: list[dict]) -> tuple[list[dict], dict[tuple, 
     Returns:
         (documents, windows)  — windows 는 (product, source) → (cur_start, cur_end)
 
-    ⚠️ **리뷰를 빼면 안 된다** (2026-08-09). 채점 단위 33건 중 리뷰가 2건이고
+    **리뷰를 빼면 안 된다**. 채점 단위 33건 중 리뷰가 2건이고
        (SC-034/review FALSE, SC-035/review TRUE), 리뷰를 안 태우면 그 2건이 oracle
        인 채로 점수에 들어가 (①−②)가 'CS 분류 오차'만 뜻하게 된다. 설계도 데모도
-       두 소스를 다 쓰는데(로직 §[8] combine_sources) 실험②만 CS 전용이던 것은
+       두 소스를 다 쓰는데(로직 [8] combine_sources) 실험②만 CS 전용이던 것은
        근거가 문서 어디에도 없었고, 실험③(프롬프트1·CS 배치) 경로를 재사용하면서
        따라온 공백으로 보인다.
 
-    ⚠️ 윈도우 키가 (product, source) 다. 같은 상품이 CS·리뷰에서 다른 창을 가질 수
+    윈도우 키가 (product, source) 다. 같은 상품이 CS·리뷰에서 다른 창을 가질 수
        있으므로 product 단독 키로 두면 한쪽이 다른 쪽 창을 덮어쓴다. 현재 config 는
        P034·P035 가 양쪽 같은 창이라 결과가 같지만, 키를 좁혀두면 config 가 바뀔 때
        조용히 어긋나는 걸 막는다.
@@ -382,7 +381,7 @@ async def _run_batch(
     # 재시도를 다 쓰고도 남은 건은 캐시에 안 넣는다 — 커버리지 검사가 그 슬롯을 검정에서
     # 뺀다(조용한 왜곡 방지). **다음 회차로 미루지 않는 것이 핵심이다** — 미루면 앞 회차가
     # 뒤 회차 실행에서 채워져 커버리지가 회차마다 달라지고, ± 가 LLM 흔들림이 아니라
-    # 커버리지 비대칭을 재게 된다. (2026-08-10 실측에서 회차 1 이 60% → 84% 로 움직였다)
+    # 커버리지 비대칭을 재게 된다. (실측에서 회차 1 이 60% → 84% 로 움직였다)
     return done, len(pending)
 
 
@@ -391,7 +390,7 @@ async def _run_per_item(
 ) -> tuple[int, int]:
     """문의 1건 = LLM 호출 1회. 운영(워커)과 같은 호출 방식.
 
-    ⚠️ 전량을 classify_aspect() 에 한 번에 넘기지 말 것. 내부가 asyncio.gather() 라
+    전량을 classify_aspect() 에 한 번에 넘기지 말 것. 내부가 asyncio.gather() 라
        넘긴 만큼 동시 호출이 뜬다(11,990건이면 11,990개). 속도 제한에 걸리고, gather 가
        통째로 raise 하면 그때까지의 결과가 다 날아간다.
     """
@@ -497,7 +496,7 @@ async def classify_cached(
         counter = _FallbackCounter()
         logging.getLogger("app.classification.service").addHandler(counter)
         try:
-            # ⚠️ 리뷰는 항상 per_item 이다. 배치 프롬프트 조립기
+            # 리뷰는 항상 per_item 이다. 배치 프롬프트 조립기
             #    (run_classify_eval._build_batch_prompt)가 프롬프트1 전용이라
             #    "## 분류 대상 CS 문의" 로 잘라 쓰는데, 프롬프트2 에는 그 구분자가
             #    없어서 넣으면 프롬프트가 통째로 깨진다. per_item 은 source 를
@@ -556,10 +555,10 @@ def measure(rows: list[dict], config_rows: list[dict]) -> dict:
 
     케이스가 정의된 슬롯만 낸다 — 배경을 건드리면 (①−②)가 분류 오차만 뜻하지 않게 된다.
 
-    ⚠️ 분모는 (상품, 채널, source) 에서 가져온다 — aspect 무관(aggregate §129). 케이스
+    분모는 (상품, 채널, source) 에서 가져온다 — aspect 무관(aggregate). 케이스
        슬롯만 실측으로 교체하므로, config 의 cur_total 과 실제 문서 수가 다르면 같은
        (상품, 채널) 안에서 aspect 마다 분모가 갈린다. 지금은 전 슬롯이 일치하지만
-       (지인 리뷰 2026-08-04 확인: 117/117), 목 데이터를 재생성하면 조용히 깨지는
+       (실측 확인: 117/117), 목 데이터를 재생성하면 조용히 깨지는
        종류라 아래에서 대조한다.
     """
     slots = {
@@ -650,9 +649,8 @@ def predict_with_counts(
 def _golden_labels(negatives_only: bool = True) -> dict[str, tuple[str, str]]:
     """{문서 id: (true_aspect, true_sentiment)} — **CS·리뷰 둘 다.**
 
-    ⚠️ 리뷰가 빠져 있었다(2026-08-09). 오차 분해가 CS 만 돌아서, 리뷰 config 슬롯
+    리뷰가 빠져 있었다. 오차 분해가 CS 만 돌아서, 리뷰 config 슬롯
        35건이 분해에 안 들어갔다. 역방향 오판이 CS 의 50배인 곳이 정확히 거기다.
-       (현진님 리뷰 §3)
     """
     out: dict[str, tuple[str, str]] = {}
     for spec in SOURCE_SPEC.values():
@@ -679,10 +677,10 @@ def config_slots(config_rows: list[dict]) -> set:
     build_combinations 의 합성값을 그대로 쓴다. 즉 슬롯 밖 문서의 분류 결과는
     분자에도 분모에도 안 들어간다(분모는 build_rows 경유라 분류와 무관).
 
-    ⚠️ 이 구분이 없으면 --diagnose 숫자를 못 읽는다. 2026-08-09 배경 baseline
+    이 구분이 없으면 --diagnose 숫자를 못 읽는다. 배경 baseline
        재생성으로 케이스 윈도우의 골든 부정이 1,618 → 3,367 로 늘었는데 config
        슬롯 몫은 1,278 로 그대로다. 슬롯 내 비율이 79% → 38% 로 떨어져서, 필터
-       없이 세면 분모의 62% 가 채점과 무관한 문서다. (현진님 리뷰 §1)
+       없이 세면 분모의 62% 가 채점과 무관한 문서다.
     """
     return {
         (r["golden_group_id"], r["aspect"], r["channel"], r["source"])
@@ -737,7 +735,7 @@ def restore_sentiment(
 ) -> tuple[dict, int]:
     """감성만 골든으로 되돌린 캐시 사본을 만든다. **민감도 분석 전용.**
 
-    ⚠️ 성능 주장이 아니다. 골든을 예측에 주입하므로 이 숫자는 '달성 가능한 성능'이
+    성능 주장이 아니다. 골든을 예측에 주입하므로 이 숫자는 '달성 가능한 성능'이
        아니라 **"손실이 이 오차 하나에 얼마나 귀속되는가"** 를 재는 상한이다.
        aspect 오류(다른 aspect 로 간 건)는 손대지 않는다 — 감성 축만 분리해서 본다.
 
@@ -774,7 +772,7 @@ def diagnose(documents, config_rows, products, golden, tag, mode, runs,
              sources: str = "all") -> None:
     """캐시된 분류 결과로 ②의 하락 원인을 분해한다. LLM 호출 0회.
 
-    ⚠️ `sources` 로 좁혀도 **캐시 조회는 전체 문서 집합의 지문으로 한다.** 캐시가
+     `sources` 로 좁혀도 **캐시 조회는 전체 문서 집합의 지문으로 한다.** 캐시가
        그 집합으로 만들어졌기 때문이다. 문서를 먼저 거르면 data_fingerprint 가 바뀌어
        "캐시 없음 → 과거 실행 폴백" 으로 떨어진다(실제로 밟았다). 좁히기는 채점
        단계에서만 한다 — 범위 몫과 프롬프트 몫을 분리해 보려는 것이 목적이므로,
@@ -787,7 +785,7 @@ def diagnose(documents, config_rows, products, golden, tag, mode, runs,
         # 지금 프롬프트·데이터로 돌린 캐시가 없다. 과거 실행을 진단하는 건 정당한 용도지만
         # (개선 전 대조군을 다시 뽑는 등), **어느 실행 결과인지 반드시 밝힌다** —
         # 조용히 옛 캐시를 쓰면 캐시 키에 지문을 넣은 의미가 없어진다.
-        # ⚠️ mock 재생성 후에는 데이터 지문이 갈리므로 여기로 떨어진다. 그때 나오는
+        # mock 재생성 후에는 데이터 지문이 갈리므로 여기로 떨어진다. 그때 나오는
         #    숫자는 **옛 데이터로 낸 것**이라 새 데이터의 성능이 아니다.
         stale = sorted(CACHE_DIR.glob(f"pipeline_{tag}_{mode}_*_run1.json"))
         if not stale:
@@ -808,11 +806,11 @@ def diagnose(documents, config_rows, products, golden, tag, mode, runs,
     print(f"{'=' * 72}")
 
     if sources != "all":
-        # ⚠️ config_rows 를 거르면 안 된다. build_combinations 는 격자를 항상 두 source
+        # config_rows 를 거르면 안 된다. build_combinations 는 격자를 항상 두 source
         #    로 도는데, config 에서 빠진 슬롯은 BASELINE_RATE x BG_VOLUME 합성값이 되고
         #    cur rate == past rate 라 **구조적으로 100% 미탐**이 된다. 실제로 그렇게 짰다가
         #    SC-035/review(TRUE, 14/70)가 통째로 미탐 처리돼 4.0%p 가 그 한 건이었다.
-        #    (현진님 리뷰 §1, 2026-08-09. m 은 1,464 로 불변이고 바뀌는 건 BH 의 기각 수 k 다)
+        #    (m 은 1,464 로 불변이고 바뀌는 건 BH 의 기각 수 k 다)
         #    measured 키만 걸러야 그 슬롯이 config(oracle) 값으로 떨어져,
         #    de6600c 이전(=리뷰 oracle) 동작을 정확히 재현한다.
         n0 = len(documents)
@@ -871,9 +869,9 @@ def reverse_flips(documents: list[dict], caches: list, slots: set) -> None:
 
     classify_errors 는 골든 부정만 순회하므로 이 방향을 아예 안 센다. 그 상태로
     "분류 오차는 탐지율만 깎고 오탐은 안 만든다"고 말하면, **측정하지 않은 것을
-    없다고 주장**하는 게 된다. (현진님 리뷰 §4, 2026-08-09)
+    없다고 주장**하는 게 된다.
 
-    ⚠️ 이 숫자가 0 이 아니어도 ②의 FPR 은 0 일 수 있다. ②는 현재 윈도우만 실제
+    이 숫자가 0 이 아니어도 ②의 FPR 은 0 일 수 있다. ②는 현재 윈도우만 실제
        분류로 갈고 과거 윈도우·배경은 oracle 이라(docstring 11~16행), 기준선이
        깨끗한 채 분자만 움직인다. 즉 ②의 FPR 0% 는 설계의 산물이지 분류 오차의
        성질이 아니다. 운영은 과거 윈도우도 LLM 분류라 양쪽이 같이 움직인다.
@@ -895,10 +893,10 @@ def reverse_flips(documents: list[dict], caches: list, slots: set) -> None:
                 continue
             base[doc["source"]] += 1
             pop[doc["source"]].add(doc["text"])
-            # ⚠️ **어느 aspect 로 뒤집혔는지가 중요하다.** config 슬롯 밖 aspect 로
+            # **어느 aspect 로 뒤집혔는지가 중요하다.** config 슬롯 밖 aspect 로
             #    뒤집힌 건(예: 기타/-1) 채점 격자에 안 닿아 오탐을 만들 수 없다.
             #    필터 없이 세면 '역방향 21건' 과 'FALSE 표 증가 1건' 이 따로 놀아
-            #    읽는 사람이 둘을 연결할 수 없다. (현진님 리뷰 5차)
+            #    읽는 사람이 둘을 연결할 수 없다.
             hit = [p["aspect"] for p in cache.get(doc["id"], []) if p["sentiment"] == -1]
             if hit:
                 flips[doc["source"]] += 1
@@ -939,17 +937,17 @@ def extra_aspect(documents, config_rows, caches, slots) -> None:
         추가  골든 aspect 를 -1 로 유지 → 골든 슬롯 그대로 + 다른 슬롯 +1   (순증)
         대체  골든 aspect 를 -1 로 못 냄 → 골든 슬롯 -1 + 다른 슬롯 +1      (재분배)
 
-    ⚠️ **양쪽 다 다른 슬롯을 +1 한다.** 그 이득 쪽을 세는 건 여기뿐이다 —
+    **양쪽 다 다른 슬롯을 +1 한다.** 그 이득 쪽을 세는 건 여기뿐이다 —
        classify_errors 는 골든 aspect 만 보고 reverse_flips 는 골든 비부정만 본다.
        '대체' 의 **손실 쪽**(골든 슬롯 -1)만 기존 버킷에 잡힌다.
 
-    ⚠️ '대체' 는 "다른 aspect 로" 의 부분집합이 **아니다**. keeps_gold 는 aspect + 감성
+    '대체' 는 "다른 aspect 로" 의 부분집합이 **아니다**. keeps_gold 는 aspect + 감성
        -1 을 요구하는데 classify_errors 의 same_aspect 는 aspect 존재만 보므로 한 칸
        어긋난다 — 골든 aspect 를 중립으로 낸 건은 그쪽에서 "감성만 뒤집힘" 인데 여기선
        대체다. 즉 대체 = "감성만 뒤집힘" ∪ "다른 aspect 로" 의 일부다.
-       (2026-08-10 이 데이터에서는 전자가 0건이라 우연히 겹쳐 보였다. 현진님 리뷰 8차)
+       (이 데이터에서는 전자가 0건이라 우연히 겹쳐 보였다)
 
-    2026-08-09 실측 — 역방향은 격자 안 0건인데 FALSE 슬롯 P024/색상/COUPANG 이
+    실측 — 역방향은 격자 안 0건인데 FALSE 슬롯 P024/색상/COUPANG 이
     12 → 13 이었다. 원인이 INQ-033753 이고, 골든은 오배송:-1 인데 모델이 색상:-1 을
     같이 냈다. 위 '추가' 경로다.
     """
@@ -1007,13 +1005,12 @@ def missed_slot_table(documents, config_rows, products, golden, caches) -> None:
 
     "오차가 케이스 슬롯에 몰린다"와 "오차는 균일한데 케이스 창이 작아 몇 건만 빠져도
     Fisher 가 못 낸다"는 처방이 다르다(문장 유형 고치기 vs 구조적 민감도). 캐시만으로
-    갈린다 — 미탐 슬롯의 cur_neg 가 얼마나 깎였는지 보면 된다. (현진님 리뷰 §5)
+    갈린다 — 미탐 슬롯의 cur_neg 가 얼마나 깎였는지 보면 된다.
     """
     oracle_m = measure(build_rows(documents, oracle_classified(documents)), config_rows)
 
     # TRUE 는 미탐 원인 진단이라 1회차로 충분하다. FALSE 는 FPR 근거라 전 회차를 본다 —
     # 회차별 역방향이 29/34/29 로 달라서, 증가가 특정 회차에만 나오는지가 결론을 바꾼다.
-    # (현진님 리뷰 5차)
     first = caches[0]
     _slot_table(
         config_rows,
@@ -1035,7 +1032,7 @@ def _slot_table(config_rows, oracle_m, real_m, want, title, run, verbose=True) -
 
     FALSE 쪽을 같이 찍는 이유: ②의 FPR 0% 가 "분류 오차가 오탐을 안 만든다" 인지
     "정상 슬롯의 n 이 작아 아직 안 터졌다" 인지 가른다. 역방향 오판률이 높은 소스가
-    이 표에 있으면 후자 쪽이다. (현진님 리뷰 §2)
+    이 표에 있으면 후자 쪽이다.
     """
     truth = intended_slots(config_rows, want)
     print(f"\n■ {title}의 현재 윈도우 부정 수 — oracle vs 실측 (회차 {run})"
@@ -1206,9 +1203,9 @@ async def main_async(args) -> None:
 
 
 def main() -> None:
-    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    # 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
     #    (`description=__doc__` · `--limit` · `--sources` · `--mode`)에 `—`·`−`·`≈` 가 있다.
-    #    ⚠️ 예전 모듈 최상단 `sys.stdout.reconfigure()` 가 경고하던 것 — *"이게 없으면
+    #    예전 모듈 최상단 `sys.stdout.reconfigure()` 가 경고하던 것 — *"이게 없으면
     #    LLM 을 다 태운 뒤 리포트 출력에서 죽는다"* — 은 그대로 유효하다. 다만 그 사본은
     #    stderr 를 안 바꿔 로깅·traceback 이 계속 깨졌다. `app/core/console.py`.
     force_utf8_output()

@@ -8,11 +8,11 @@
             재사용, app/는 golden을 안 읽으므로 컨닝 아님) → golden과 대조
 비용:       배치(청크) 단위 동시호출. --limit 300이면 청크 15회 수준(청크당 20건).
 
-⚠️ 이 실험은 브라우저 Artifact로 했던 42/48건 파일럿 평가와 다르다 — 그건 손으로
+이 실험은 브라우저 Artifact로 했던 42/48건 파일럿 평가와 다르다 — 그건 손으로
    만든 소량 케이스 검증(정성적 오류분석용), 이건 우리가 실제로 생성한 96,514건
    규모 데이터로 돌리는 정량 실험.
 
-⚠️ 프롬프트 버전은 기본적으로 service.py의 PROMPT_ASPECT_VERSION을 그대로 쓴다.
+프롬프트 버전은 기본적으로 service.py의 PROMPT_ASPECT_VERSION을 그대로 쓴다.
    다른 버전과 비교하고 싶으면 --prompt-version으로 override(모듈 상수를 일시적으로
    바꿔서 호출 — service.py 자체는 안 건드림).
 
@@ -21,7 +21,7 @@
     python eval/run_classify_eval.py --limit 300       # 미니 (기본)
     python eval/run_classify_eval.py --limit 0         # 전량(96,514건 — 매우 비쌈, 권장 안 함)
     python eval/run_classify_eval.py --prompt-version classify_aspect_v3   # 버전 비교
-    python eval/run_classify_eval.py --only-negative --limit 300 --mode batch  # 🆕 대표지표①②
+    python eval/run_classify_eval.py --only-negative --limit 300 --mode batch  # 대표지표①②
         # 용(부정N+비부정N 균형표본 — PR 리뷰 반영 후 FPR도 같이 나옴)
 
 재현성: --seed로 표본이 고정된다. 결과 JSON에 프롬프트 버전·해시·모델·시드·모드·
@@ -102,11 +102,11 @@ def load_dataset(golden_path: Path) -> list[dict]:
 def operational_negative_rate(all_rows: list[dict]) -> float | None:
     """운영 부정비율 p — **표본이 아니라 골든 전량**에서 센다.
 
-    ⚠️ 반드시 `sample_rows()` **이전**의 전체 행을 넘길 것. 표본은 aspect 층화(또는
+    반드시 `sample_rows()` **이전**의 전체 행을 넘길 것. 표본은 aspect 층화(또는
        `--only-negative`)라 부정비율이 설계상 왜곡돼 있고, 그 값으로 환산하면
        precision_operational 이 표본 precision 과 같아져 지표 자체가 무의미해진다.
 
-    ⚠️ 하드코딩 금지 (2026-08-10). 원래 `P_OPERATIONAL = 0.074` 상수였는데,
+    하드코딩 금지. 원래 `P_OPERATIONAL = 0.074` 상수였는데,
        golden_cs_labels.csv 가 재생성되면(배경 baseline 분모 수정 등) 골든 부정비율이
        움직이는데 상수는 안 움직여서 환산값이 조용히 틀린다. 실제로 7,117/96,531
        (7.4%) 기준으로 박아둔 값이 재생성 후 3배 넘게 어긋났다. 골든에서 직접 세면
@@ -119,7 +119,7 @@ def operational_negative_rate(all_rows: list[dict]) -> float | None:
 
 # ── 분류 캐시 ────────────────────────────────────────────────────
 #
-# 왜 필요한가 (2026-08-11): 전량 실행(96,524건 · 4,827청크 · 약 1시간)이 중간에
+# 왜 필요한가: 전량 실행(96,524건 · 4,827청크 · 약 1시간)이 중간에
 # 죽으면 **그때까지 쓴 돈이 통째로 날아간다.** 실제로 API 크레딧이 3,248청크째에
 # 소진돼 70%만 채점된 결과가 나왔고, 재개할 방법이 없어 전부 다시 사야 했다.
 # 실험②(run_pipeline_eval)는 같은 이유로 이미 캐시를 쓰고 있다 — 그 설계를 따른다.
@@ -194,7 +194,7 @@ async def run_with_cache(
     run_batch_chunks 를 import 해서 쓰므로 시그니처가 바뀌면 실험②가 깨진다.
     여기서는 그 함수들을 묶음 단위로 여러 번 부르고 사이사이 저장만 한다.
 
-    ⚠️ **무응답은 캐시에 안 넣는다.** 다음 실행이 그것만 다시 부르게 하려는 것이다.
+    **무응답은 캐시에 안 넣는다.** 다음 실행이 그것만 다시 부르게 하려는 것이다.
        넣어버리면 실패가 영구히 굳는다.
     """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -222,8 +222,8 @@ async def run_with_cache(
 
 
 def parse_few_shot_examples(prompt_version: str) -> list[str]:
-    """프롬프트 파일에서 few-shot '입력:' 문장을 전부 파싱한다(§6 B안 1번, 지인님 리뷰
-    2026-08-06). 하드코딩 목록 대신 파일을 직접 읽어서, 예시가 늘어나도 자동 반영된다
+    """프롬프트 파일에서 few-shot '입력:' 문장을 전부 파싱한다. 하드코딩 목록 대신
+    파일을 직접 읽어서, 예시가 늘어나도 자동 반영된다
     (`USED_PREFIXES` 방식의 반대 — 그쪽은 71630 재라벨링 스크립트 전용이고, 이건 우리
     자체 코퍼스 채점용이라 목적이 다름).
     """
@@ -237,10 +237,10 @@ def parse_few_shot_examples(prompt_version: str) -> list[str]:
 
 def compute_leak_map(rows: list[dict], few_shot_texts: list[str], threshold: float) -> dict[str, dict]:
     """골든의 고유 raw_text마다, few-shot 예시들과의 최대 유사도를 계산해 유출 여부를
-    판정한다(§6 B안 — "완전일치 + 유사도 임계", 실험④의 prefix 부분일치와 다름 — 실험③은
+    판정한다(B안 — "완전일치 + 유사도 임계", 실험④의 prefix 부분일치와 다름 — 실험③은
     문장 전체가 템플릿이라 전체 유사도가 더 맞음). SequenceMatcher는 difflib.SequenceMatcher.
     ratio()로, 지인님이 노션에 기록한 예시20(1.00)·25(0.88)·20-2(0.79)를 그대로 재현하는
-    걸 확인한 알고리즘이다(2026-08-06 검증).
+    걸 확인한 알고리즘이다.
 
     Returns: {raw_text: {"is_leaked": bool, "max_similarity": float, "matched_example": str|None}}
     """
@@ -266,7 +266,7 @@ def compute_leak_map(rows: list[dict], few_shot_texts: list[str], threshold: flo
 
 def tag_leaked_rows(rows: list[dict], leak_map: dict[str, dict]) -> None:
     """rows 각 행에 is_leaked·leak_similarity를 in-place로 붙인다(load_dataset() 직후
-    단계 — §6 B안 2번). leak_map이 비어있으면(few-shot 파싱 실패 등) 전부 False로 채워
+    단계 — B안 2번). leak_map이 비어있으면(few-shot 파싱 실패 등) 전부 False로 채워
     이후 로직이 안전하게 동작하게 한다.
     """
     for r in rows:
@@ -300,7 +300,7 @@ def _stratified_by_aspect(rows: list[dict], limit: int, rng: random.Random) -> l
 def sample_rows(rows: list[dict], limit: int, seed: int, only_negative: bool = False) -> list[dict]:
     """true_aspect 비율을 유지한 층화 표본. limit<=0이면 전량.
 
-    ⚠️ only_negative 동작 변경(PR 리뷰 반영, 2026-08-05) — 기존엔 sentiment=-1인
+    only_negative 동작 변경 — 기존엔 sentiment=-1인
     것만 걸러서 뽑았는데, 그러면 골든에 비부정(0/1) 표본이 아예 없어져서
     score()의 neg_fp·neg_tn이 구조적으로 항상 0이 된다(오탐을 원리적으로 측정
     불가 — "모든 문의를 부정으로 뭉개는" 최악의 모델도 precision 100%가 나옴).
@@ -337,7 +337,7 @@ async def run_chunks(
     없이 실패하면 통째로 raise) — 청크 단위로 감싸서, 실패한 청크는 "무응답"으로
     기록하고 나머지는 살린다.
 
-    ⚠️ 이름은 "청크"지만 실제로는 item마다 별도 LLM 호출(동시 실행일 뿐, "진짜 배치"
+    이름은 "청크"지만 실제로는 item마다 별도 LLM 호출(동시 실행일 뿐, "진짜 배치"
     아님) — service.py의 classify_aspect()가 asyncio.gather()로 item당 개별 호출.
     프롬프트(시스템+예시, 현재 약 6,000+ 토큰)가 매 항목마다 통째로 반복 전송된다.
 
@@ -365,8 +365,8 @@ async def run_chunks(
             try:
                 results = await classification_service.classify_aspect(items)
             except AiServiceError as exc:
-                # classify_aspect()가 return_exceptions=True로 바뀌면서(2026-08-04
-                # 계약) 개별 실패는 더 이상 여기로 안 옴 — 이 except는 gather 시작
+                # classify_aspect()가 return_exceptions=True로 바뀌면서 개별 실패는
+                # 더 이상 여기로 안 옴 — 이 except는 gather 시작
                 # 전 셋업 단계 등 정말 예외적인 전체 실패만 잡는 안전망으로 남긴다.
                 print(f"   [{index + 1}/{len(chunks)}] ⚠️ 청크 전체 실패({len(chunk)}건 무응답): {exc}")
                 failed_ids.extend(r["inquiry_id"] for r in chunk)
@@ -486,7 +486,7 @@ def _basic_metrics(rows_subset: list[dict], predictions: dict[str, list[dict]]) 
 
     score()의 메인 루프와 로직은 동일하되(같은 tp/fp/fn·정답 판정 규칙), 임의의 행
     부분집합에 적용 가능하게 분리했다 — leak_filter의 "제외 후" 값을 실제로 재계산하는
-    용도(§6 B안 4번, 지인님 리뷰 2026-08-06). LLM 재호출 없음 — predictions는 이미 있는
+    용도. LLM 재호출 없음 — predictions는 이미 있는
     걸 그대로 재사용.
     """
     tp = fp = fn = 0
@@ -536,9 +536,9 @@ def score(
     operational_rate: float | None = None,
 ) -> dict:
     """aspect F1(다중예측 vs 단일정답 set 비교) + 감성정확도 + 완전일치
-    + 지인님 A안 지표 3종(2026-08-04, 실험③ 지표 재설계).
+    + A안 지표 3종(실험③ 지표 재설계).
 
-    ⚠️ 두 지표군의 용도가 다르다(합의사항 — 결과 JSON에 병기):
+    두 지표군의 용도가 다르다(합의사항 — 결과 JSON에 병기):
     - aspect_f1 등 기존 지표: 대시보드·채널비교분석·개선리포트가 소비(중립 포함
       전체 영역). 대표 지표 자리에서는 내려왔지만 폐기 아님.
     - negative_detection / negative_scoped_aspect: 이상탐지가 실제로 소비하는
@@ -551,13 +551,13 @@ def score(
     sent_correct = sent_total = 0
     exact_match = 0
     per_aspect: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])  # [tp, fp, fn]
-    mismatches: list[dict] = []  # 🆕 오답 상세(수동 오류분석용)
+    mismatches: list[dict] = []  # 오답 상세(수동 오류분석용)
 
-    # 🆕 ① 부정 판별 정확도용 2x2
+    # ① 부정 판별 정확도용 2x2
     neg_tp = neg_fp = neg_fn = neg_tn = 0
-    # 🆕 ② 부정 한정 aspect 정확도용(골든이 부정인 문항만)
+    # ② 부정 한정 aspect 정확도용(골든이 부정인 문항만)
     neg_aspect_tp = neg_aspect_fp = neg_aspect_fn = 0
-    # 🆕 ③ 예측 측 다중 출력 건수(진단용, explode 계약 근거)
+    # ③ 예측 측 다중 출력 건수(진단용, explode 계약 근거)
     multi_output_count = 0
 
     for r in scored:
@@ -592,7 +592,7 @@ def score(
             item_exact = False
         exact_match += item_exact
 
-        # 🆕 ① 문의 단위 부정/비부정 2x2 — 탐지의 분자를 결정하는 값
+        # ① 문의 단위 부정/비부정 2x2 — 탐지의 분자를 결정하는 값
         true_neg = true_sentiment == -1
         pred_neg = any(p["sentiment"] == -1 for p in pred_aspects)
         if true_neg and pred_neg:
@@ -604,7 +604,7 @@ def score(
         else:
             neg_tn += 1
 
-        # 🆕 ② 골든이 부정인 문항만 — aspect가 맞아야 올바른 분자(상품×aspect)에 잡힘
+        # ② 골든이 부정인 문항만 — aspect가 맞아야 올바른 분자(상품×aspect)에 잡힘
         if true_neg:
             if true_aspect in pred_aspect_set:
                 neg_aspect_tp += 1
@@ -612,7 +612,7 @@ def score(
                 neg_aspect_fn += 1
             neg_aspect_fp += len(pred_aspect_set - {true_aspect})
 
-        if not item_exact:  # 🆕 틀린 문항만 상세 기록
+        if not item_exact:  # 틀린 문항만 상세 기록
             mismatches.append({
                 "inquiry_id": r["inquiry_id"],
                 "raw_text": r["raw_text"],
@@ -632,7 +632,7 @@ def score(
         return round(p, 4), round(r, 4), round(f, 4)
 
     neg_precision, neg_recall, neg_f1 = _prf1(neg_tp, neg_fp, neg_fn)
-    # ⚠️ PR 리뷰 반영(2026-08-05) — fp+tn==0(비부정 표본이 0건)이면 precision·F1은
+    # PR 리뷰 반영 — fp+tn==0(비부정 표본이 0건)이면 precision·F1은
     # "측정 불가"이지 100%가 아니다. only_negative 표본이 부정만 있던 예전 버전에선
     # 이 조건이 항상 참이라서, "전부 부정으로 뭉개는" 최악의 모델도 precision 100%가
     # 나오는 함정이 있었다. sample_rows()가 이제 비부정도 같이 뽑아오므로 정상적으로는
@@ -641,7 +641,7 @@ def score(
     neg_fpr = round(neg_fp / (neg_fp + neg_tn), 4) if has_nonneg_sample else None
     neg_precision_reported = neg_precision if has_nonneg_sample else None
 
-    # ⚠️ **반대 방향도 같이 막는다** (서영님 리뷰 2026-08-10). 골든 부정 표본이 0건이면
+    # **반대 방향도 같이 막는다**. 골든 부정 표본이 0건이면
     #    recall 은 0/0 이라 **못 재는 것**이지 0% 가 아니다. _prf1 이 0.0 을 폴백으로 내는
     #    바람에 recall·f1·환산 precision 이 전부 "0%" 로 찍혔다 — 비부정 쪽은
     #    has_nonneg_sample 로 막아뒀는데 이쪽만 빠져 있었다. 이 파일이 없애려던
@@ -652,7 +652,7 @@ def score(
     neg_recall_reported = neg_recall if has_neg_sample else None
     neg_f1_reported = neg_f1 if (has_nonneg_sample and has_neg_sample) else None
 
-    # 🆕 운영 비율 환산 precision (Notion A안, 지인님 PR리뷰 2026-08-06 재요청)
+    # 운영 비율 환산 precision (Notion A안)
     # 균형표본(50:50)의 precision은 실제 운영 트래픽 비율(부정 7.4%)의 값이 아니다.
     # recall·FPR은 각자 자기 클래스 안에서만 계산돼 표본비율과 무관하지만, precision은
     # 두 클래스의 상대적 비중에 직접 좌우된다 — 베이즈 정리로 표본비율 의존성을 제거해
@@ -663,14 +663,14 @@ def score(
     # 골든 재생성에 안 따라가서 조용히 틀리는 사고가 있었다 — 그 함수의 주석 참고.
     # 안 넘어오면 **추정하지 않고 None**을 낸다. 못 재는 걸 그럴듯한 숫자로 채우면
     # 아무도 안 본다(위 neg_precision_reported 와 같은 원칙).
-    # ⚠️ **반올림 전 값으로 계산한다** (서영님 리뷰 2026-08-10). neg_recall·neg_fpr 은
+    # **반올림 전 값으로 계산한다**. neg_recall·neg_fpr 은
     #    보고용으로 4자리 반올림돼 있는데, FPR 이 작을수록 그 반올림이 환산값을 크게
     #    흔든다 — FPR 0.00004 가 0.0 으로 접히면 환산 precision 이 100%로 튄다.
     p_operational = operational_rate
     raw_recall = neg_tp / (neg_tp + neg_fn) if (neg_tp + neg_fn) else 0.0
     raw_fpr = neg_fp / (neg_fp + neg_tn) if has_nonneg_sample else None
 
-    # ⚠️ **분모가 0이면 None** (서영님 리뷰 2026-08-10). recall 과 FPR 이 둘 다 0이면
+    # **분모가 0이면 None**. recall 과 FPR 이 둘 다 0이면
     #    — 모델이 부정을 하나도 안 낸 상태 — 분모가 0이 돼 ZeroDivisionError 로 죽었다.
     #    이 계산이 JSON 쓰기 **전**에 있어서, 터지면 그 회차 LLM 비용이 통째로 날아간다.
     #    가드가 `is not None` 뿐이라 값이 0 인 건 안 걸렸다.
@@ -722,7 +722,7 @@ def score(
             }
             for a, v in sorted(per_aspect.items())
         },
-        # ── 이상탐지 소비 지표(부정만) — 지인님 A안, 2026-08-04부터 대표 지표 ──
+        # ── 이상탐지 소비 지표(부정만) — A안 대표 지표 ──
         "negative_detection": {
             "note": "탐지 분자를 결정하는 값 — 문의 단위 부정/비부정 2분류. "
                     "못 재는 값은 0/100이 아니라 null이다 — precision은 비부정 표본(fp+tn)이 "
@@ -768,8 +768,8 @@ def score(
             "rate": round(multi_output_count / len(scored), 4) if scored else 0.0,
             "count": multi_output_count,
         },
-        "mismatches": mismatches,  # 🆕
-        "leak_filter": _compute_leak_filter(scored, predictions, leak_threshold),  # 🆕
+        "mismatches": mismatches,
+        "leak_filter": _compute_leak_filter(scored, predictions, leak_threshold),
     }
 
 
@@ -778,16 +778,16 @@ def _compute_leak_filter(
     predictions: dict[str, list[dict]],
     leak_threshold: float | None = None,
 ) -> dict:
-    """§6 B안(2026-08-06, 지인님 리뷰) — few-shot 유출 제외 전/후 병기.
+    """B안 — few-shot 유출 제외 전/후 병기.
 
     영향받는 지표는 aspect_f1·sentiment_accuracy·exact_match_rate뿐이다(대시보드·
-    리포트 소비 영역, §6 본문 명시). negative_detection/negative_scoped_aspect(탐지
+    리포트 소비 영역, 요구사항에 명시). negative_detection/negative_scoped_aspect(탐지
     소비, 부정만)는 그대로 둔다 — 오탐 자체는 실제로 일어난 사건이라 부정판별 지표에서
     빼면 오히려 왜곡된다.
 
     "전" 값은 score()의 최상위 aspect_f1 등(이미 계산됨, scored 전체 기준)을 그대로
     쓰면 되고, 여기서는 "후"(clean_rows만) 값만 _basic_metrics()로 추가 계산한다.
-    LLM 재호출 없음 — 이미 있는 predictions 재사용(§6 요구사항: "검증에 LLM 재실행 불필요").
+    LLM 재호출 없음 — 이미 있는 predictions 재사용(요구사항: "검증에 LLM 재실행 불필요").
 
     rows에 is_leaked 태그가 없으면(tag_leaked_rows() 미호출) 유출 없음으로 간주 —
     이 필드를 몰라도 기존 호출부는 그대로 동작한다(하위호환).
@@ -875,8 +875,8 @@ async def main_async(args: argparse.Namespace) -> None:
     p_operational = operational_negative_rate(rows)
     sampled = sample_rows(rows, args.limit, args.seed, only_negative=args.only_negative)
 
-    # 🆕 §6 B안 — few-shot 유출 태깅(2026-08-06, 지인님 리뷰)
-    # ⚠️ leak_threshold<=0이면 검사 자체를 끈다(few_shot_texts를 안 채워서 compute_leak_map이
+    # B안 — few-shot 유출 태깅
+    # leak_threshold<=0이면 검사 자체를 끈다(few_shot_texts를 안 채워서 compute_leak_map이
     # 빈 결과 반환 → 전부 is_leaked=False). threshold=0.0을 compute_leak_map에 그대로 넘기면
     # SequenceMatcher.ratio()>=0.0이 사실상 항상 참이라 오히려 전부 유출로 잡히므로 여기서 분기.
     few_shot_texts = parse_few_shot_examples(classification_service.PROMPT_ASPECT_VERSION) if args.leak_threshold > 0 else []
@@ -930,19 +930,19 @@ async def main_async(args: argparse.Namespace) -> None:
             "run_at": datetime.now(KST).isoformat(timespec="seconds"),
             "golden": golden_path.name,
             "prompt_version": classification_service.PROMPT_ASPECT_VERSION,
-            "prompt_hash": prompt_hash,  # 🆕 PR 리뷰 반영 — 파일명은 같아도 제자리수정으로 내용이
+            "prompt_hash": prompt_hash,  # PR 리뷰 반영 — 파일명은 같아도 제자리수정으로 내용이
                                           # 달라질 수 있어, 어느 JSON이 어느 실제 프롬프트 내용으로
                                           # 나온 건지 이 해시로 구분(같은 이름=다른 프롬프트 문제 해결)
             "model": get_settings().llm_model,
             "seed": args.seed,
             "limit": args.limit,
             "chunk_size": args.chunk_size,
-            "mode": args.mode,  # 🆕 per_item(기존, item당 개별호출) vs batch(청크당 호출 1회)
-            "only_negative": args.only_negative,  # 🆕 PR 리뷰 반영 — 이 플래그 없인 8개 JSON이
+            "mode": args.mode,  # per_item(기존, item당 개별호출) vs batch(청크당 호출 1회)
+            "only_negative": args.only_negative,  # PR 리뷰 반영 — 이 플래그 없인 8개 JSON이
                                                     # run_at 빼고 구분 불가능했음
-            "leak_threshold": args.leak_threshold,  # 🆕 §6 B안 — few-shot 유출 판정 유사도 임계
-            "few_shot_examples_checked": len(few_shot_texts),  # 🆕 파싱된 few-shot 개수(0이면 검사 자체가 스킵됨)
-            # 🆕 어느 코퍼스에서 잰 값인가 (2026-08-11). ②는 이 장치를 갖고 있는데 ③에는
+            "leak_threshold": args.leak_threshold,  # B안 — few-shot 유출 판정 유사도 임계
+            "few_shot_examples_checked": len(few_shot_texts),  # 파싱된 few-shot 개수(0이면 검사 자체가 스킵됨)
+            # 어느 코퍼스에서 잰 값인가. ②는 이 장치를 갖고 있는데 ③에는
             # 없어서, 재생성 후 "같은 id 에 다른 텍스트"가 들어가도 조용히 통과했다.
             # 08-11 실행분은 사람이 사후 대조해서 07276bc5 임을 확인했지만 다음엔 못 잡는다.
             #   sample  이 실행이 실제로 채점한 행의 (id, 본문) 해시 — 캐시 키와 같은 값
@@ -968,7 +968,7 @@ async def main_async(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    # 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
     #    (`--only-negative` · `--leak-threshold` · `--no-cache` · `--mode`)에 `—`·`⚠️` 가 있다.
     #    `app/core/console.py`.
     force_utf8_output()
