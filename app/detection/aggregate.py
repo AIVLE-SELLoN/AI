@@ -4,7 +4,7 @@
 숫자로 오라클 테스트가 된다.
 
 행: {"product", "channel", "source", "aspect", "is_negative", "day", "id", "text"}.
-day 는 윈도우 day 번호(정수)이고 날짜→day 변환은 로더가 한다.
+day 는 날짜의 ordinal 정수이며 loader.py 와 service.py 가 `date.toordinal()` 로 변환한다.
 
 규약
     - 윈도우: 현재 = 최근 7일 / 과거 기준 = 직전 28일.
@@ -130,11 +130,12 @@ def build_combinations(
 ) -> tuple[list, dict]:
     """[0]+[1] 진입점 — run_detection([2]) 입력 조합 + 부정 텍스트 맵.
 
-    관측된 (상품,채널,source)마다 aspects 전체 슬롯을 방출한다. BH-FDR 배치(m)가 '현재 부정이
-    있는 조합'이 아니라 '평가 가능한 전 슬롯'이어야 컷오프가 캘리브레이션(m≈1,464)과 맞기
-    때문이다. cur_neg=0 슬롯은 발화할 수 없지만 배치 크기에 들어가 BH 를 보수적으로 유지한다.
+    관측된 (상품,채널,source)마다 aspects 전체 슬롯을 방출한다. 상품별 BH family 는 '현재
+    부정이 있는 조합'이 아니라 그 상품의 평가 가능한 전 슬롯(최대 36개)을 포함해야 한다.
+    cur_neg=0 슬롯은 발화할 수 없지만 자기 상품 family 에 들어가 컷오프를 보수적으로 유지한다.
+    canonical 배치의 1,464는 전체 상품의 검정 총량이지 family 크기가 아니다.
     scripts/validate_anomaly.py 의 검산 그리드도 이것과 같아야 한다 — 갈리면 검산기가 운영과
-    다른 m 으로 초록불을 낸다.
+    다른 슬롯 구성으로 초록불을 낸다.
 
     Args:
         aspects: 판정 대상 aspect 택소노미. 하드코딩하지 않고 주입받는다 — 기본값을 붙이면

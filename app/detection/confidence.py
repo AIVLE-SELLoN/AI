@@ -2,8 +2,9 @@
 
 순수 함수만. LLM·DB·FastAPI 를 import 하지 않는다.
 
-어떤 경우에도 '기각'은 없다 — 관문에서 걸러진 것도 알림은 나가고 확신도와 권장 조치만
-달라진다. 그래서 이 모듈에 "알림 안 함" 경로가 없다(정상은 발화가 없어 여기 오지 않는다).
+이 모듈에 도달한 후보는 통계 3관문을 이미 통과했다. 여기서는 원인 일관성이나 수정 이력이
+부족하다고 후보를 추가 기각하지 않고 확신도와 권장 조치만 조정한다. 그래서 이 모듈에
+"알림 안 함" 경로가 없으며, 통계 관문에서 탈락한 후보와 정상 판정은 애초에 들어오지 않는다.
 
 상세페이지 수정 이력(timestamp_matched)은 확신도 보강용이지 판정 권한이 없다. 없다고
 기각하지 않으며 확신도가 '높음'까지 못 갈 뿐이다.
@@ -12,7 +13,7 @@
 from app.core.schemas import Aspect, DetectionConfidence, RecommendedAction, Verdict
 from app.detection.scope import SCOPE_ASPECTS
 
-# [6]을 수행하지 않는 판정들 — 원인 진단 대상이 아니거나(전역) 근거가 없다(구분불가).
+# [6] 미수행 판정 중 확신도가 해당없음인 전역형. 구분불가는 별도 MEDIUM 분기다.
 _CAUSE_SKIPPED_VERDICTS = frozenset({Verdict.GLOBAL, Verdict.TENTATIVE_GLOBAL})
 
 # 편중형 + 스코프 밖 aspect 의 조치.
