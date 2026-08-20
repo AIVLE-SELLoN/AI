@@ -1,17 +1,17 @@
-"""담당: 지인 — 메인 → AI 이벤트 수신(`ai.inbound`, `feedback.#`). 계약은 `docs/mq_events.md` §8.
+"""담당: 지인 — 메인 → AI 이벤트 수신(`ai.inbound`, `feedback.#`). 계약 정본은 `docs/mq_events.md`.
 
 메인이 AI 로 되돌리는 건 **사용자 피드백 2종뿐**이다. "연산해달라"는 요청 이벤트는 없다.
 
-    feedback.recommendation.reviewed  → 개선안 승인/반려 (지인) — 컬렉션2 축적
-    feedback.report.created           → 보고서 피드백 (용준) — 기록만(저장 없음)
+    feedback.recommendation.reviewed  → 개선안 승인/반려 — 컬렉션2 축적
+    feedback.report.created           → 보고서 피드백 — 기록만(저장 없음)
 
 **한 큐(`ai.inbound`)에 둘 다 들어온다.** 그래서 처리기가 없는 이벤트를 ACK 하면 그
 메시지는 조용히 사라진다 — 처리한 적 없는 걸 처리했다고 하는 것이므로, 모르는
-`eventType` 은 nack 해서 DLX 로 보낸다(§10 공통 정책).
+`eventType` 은 nack 해서 DLX 로 보낸다.
 
-멱등성: 이벤트별로 키가 다르다(§10). `feedback.recommendation.reviewed` 는
-`recommendation_id` 이고, `record_hitl_outcome()` 이 그 ID 로 upsert 하므로 같은
-이벤트가 두 번 와도 컬렉션2 문서가 하나다 — 컨슈머가 따로 중복 제거를 하지 않는다.
+멱등성 키는 이벤트별로 다르다. `feedback.recommendation.reviewed` 는
+`recommendation_id` 이고, `record_hitl_outcome()` 이 그 ID 로 upsert 하므로 같은 이벤트가
+두 번 와도 컬렉션2 문서가 하나다 — 컨슈머가 따로 중복 제거를 하지 않는다.
 """
 
 from __future__ import annotations
@@ -41,18 +41,16 @@ RECOMMENDATION_REVIEWED = "feedback.recommendation.reviewed"
 REPORT_CREATED = "feedback.report.created"
 
 PREFETCH = 10
-"""동시에 처리 중인 미확인 메시지 상한(§10 은 10~50). 핸들러가 Chroma 쓰기라 낮게 잡는다."""
+"""동시에 처리 중인 미확인 메시지 상한(계약은 10~50). 핸들러가 Chroma 쓰기라 낮게 잡는다."""
 
 
 class RecommendationReviewed(BaseModel):
-    """`feedback.recommendation.reviewed` payload (§8).
+    """`feedback.recommendation.reviewed` payload.
 
-    **`alert`·`recommendation` 전문을 되싣는 것이 계약이다** (2026-08-12 A안 확정, §8.1).
-
-    ⚠️ 그런데도 **타입은 옵셔널로 둔다.** 필수로 바꾸면 백엔드 누락이 파싱 단계의
-    `ValidationError` 로 터져 사유가 안 보이는데, 지금은 `load_hitl_context()` 가
-    무엇이 없는지 문장으로 말해준다. 필드 추가를 옵셔널로만 하는 스키마 변경 규칙(§11)과도
-    같은 방향이다.
+    **`alert`·`recommendation` 전문을 되싣는 것이 계약이다.** 그런데도 **타입은 옵셔널로
+    둔다** — 필수로 바꾸면 백엔드 누락이 파싱 단계의 `ValidationError` 로 터져 사유가 안
+    보이는데, 지금은 `load_hitl_context()` 가 무엇이 없는지 문장으로 말해준다. 필드 추가를
+    옵셔널로만 하는 스키마 변경 규칙과도 같은 방향이다.
     """
 
     recommendation_id: str
@@ -70,9 +68,9 @@ def load_hitl_context(
     """이벤트 → `record_hitl_outcome()` 이 요구하는 (alert, recommendation).
 
     `record_hitl_outcome()` 은 "원인 라벨 + CS 요약 + 개선안 본문"으로 컬렉션2 문서를
-    만드는데(§4-2), ID 만으로는 그 재료가 없다. **백엔드가 `ai.anomaly.analyzed` 로
-    받았던 전문을 그대로 되실어주는 것으로 확정**됐다(2026-08-12 A안, §8.1) — 그래서 이
-    함수는 저장소를 읽지 않고 컨슈머가 무상태로 남는다.
+    만드는데 ID 만으로는 그 재료가 없다. **백엔드가 `ai.anomaly.analyzed` 로 받았던 전문을
+    그대로 되실어주는 것으로 확정**됐다 — 그래서 이 함수는 저장소를 읽지 않고 컨슈머가
+    무상태로 남는다.
 
     hitl 값은 **이벤트 쪽이 정본이다.** 실어 보낸 recommendation 은 발행 시점 사본이라
     `hitl_status` 가 `대기`로 굳어 있고, 그대로 쓰면 `record_hitl_outcome()` 이
@@ -101,8 +99,8 @@ core 가 컴포넌트(`app/recommendation/` 등)를 import 하면 의존 방향�
 (팀 규칙: 각 컴포넌트가 core 에서 가져다 쓴다). 그래서 core 는 "무엇을 처리할지"를
 모르고, 실행 진입점(`app/consumer.py`)이 시작할 때 등록해 준다.
 
-`feedback.report.created`(리포팅) 도 같은 방식으로 꽂혀 있다(2026-08-13). 등록되지 않은
-이벤트는 DLX 로 간다 — 우리가 ACK 해버리면 담당자가 영영 못 받는다."""
+`feedback.report.created`(리포팅) 도 같은 방식으로 꽂혀 있다. 등록되지 않은 이벤트는 DLX
+로 간다 — 우리가 ACK 해버리면 담당자가 영영 못 받는다."""
 
 
 def register_handler(event_type: str, handler: Callable[[dict], None]) -> None:
@@ -113,10 +111,10 @@ def register_handler(event_type: str, handler: Callable[[dict], None]) -> None:
 async def dispatch(event_type: str, body: bytes) -> None:
     """메시지 1건 처리. 예외를 던지면 호출부가 nack 한다.
 
-    핸들러는 **워커 스레드에서 돌린다.** 등록된 처리 함수가 동기 함수인데 안에서
-    블로킹 I/O(컬렉션2 Chroma 쓰기)를 하기 때문이다 — 이벤트 루프에서 직접 부르면
-    그동안 하트비트를 못 보내 브로커가 커넥션을 끊을 수 있다. 순서는 그대로 유지된다
-    (여기서 await 하므로 한 번에 한 건). (서영님 PR 리뷰 §3, 2026-08-07)
+    핸들러는 **워커 스레드에서 돌린다.** 등록된 처리 함수가 동기 함수인데 안에서 블로킹
+    I/O(컬렉션2 Chroma 쓰기)를 하기 때문이다 — 이벤트 루프에서 직접 부르면 그동안
+    하트비트를 못 보내 브로커가 커넥션을 끊을 수 있다. 순서는 그대로 유지된다(여기서
+    await 하므로 한 번에 한 건).
 
     Raises:
         KeyError: 등록된 핸들러가 없는 `eventType`.
@@ -129,19 +127,17 @@ async def dispatch(event_type: str, body: bytes) -> None:
 async def resolve_queue(channel: Any, queue_name: str, settings: Any) -> Any:
     """`ai.inbound` 큐를 얻는다. **우리 큐가 아니다 — 다시 선언하지 않는다.**
 
-    계약(§2-1)상 `ai.inbound` 는 **이미 있는 큐이고 우리는 바인딩만 추가**한다. 백엔드가
-    quorum 타입에 DLX·delivery-limit·TTL 을 걸어 만들어 뒀는데 우리가 맨 인자로
-    `declare` 하면 브로커가 `PRECONDITION_FAILED` 로 거부해 컨슈머가 아예 못 뜬다.
-    로컬에선 우리가 만든 큐라 이 사고가 안 나서 조용히 통과한다 — 실제로 붙일 때 터진다.
+    계약상 `ai.inbound` 는 **이미 있는 큐이고 우리는 바인딩만 추가**한다. 백엔드가 quorum
+    타입에 DLX·delivery-limit·TTL 을 걸어 만들어 뒀는데 우리가 맨 인자로 `declare` 하면
+    브로커가 `PRECONDITION_FAILED` 로 거부해 컨슈머가 아예 못 뜬다. 로컬에선 우리가 만든
+    큐라 이 사고가 안 나서 조용히 통과한다 — 실제로 붙일 때 터진다.
 
     두 방향 다 설정이 어긋났다는 뜻이라 `MqConfigError` 로 바꿔서 올린다 —
-    `mq.resolve_exchange()` 와 같은 처리이고 예외 목록도 같은 함수에서 가져온다(§2-1 이
-    두 함수를 한 문장으로 묶어 놨다). 브로커 원문만으로는 어느 플래그를 고쳐야 하는지
-    알 수 없다.
+    `mq.resolve_exchange()` 와 같은 처리이고 예외 목록도 같은 함수에서 가져온다.
 
-    ⚠️ **exchange 보다 이쪽이 먼저 걸린다.** 우리가 주는 인자는 `durable=True` 하나뿐인데
-    운영 큐는 quorum·DLX·delivery-limit·TTL 이라(§2-1) 맞을 수가 없다 — exchange 는
-    topic·durable 이 우연히 같을 수 있어서 통과하고 여기서 터지는 순서가 나온다.
+    **exchange 보다 이쪽이 먼저 걸린다.** 우리가 주는 인자는 `durable=True` 하나뿐인데 운영
+    큐는 quorum·DLX·delivery-limit·TTL 이라 맞을 수가 없다 — exchange 는 topic·durable 이
+    우연히 같을 수 있어서 통과하고 여기서 터지는 순서가 나온다.
 
     Raises:
         MqConfigError: 큐 소유권이 어긋남 — 재시도해도 안 고쳐진다. 브로커가 거부한 경우와,
@@ -179,7 +175,7 @@ async def resolve_queue(channel: Any, queue_name: str, settings: Any) -> Any:
 
 
 async def consume(*, queue_name: str = INBOUND_QUEUE) -> None:
-    """`ai.inbound` 를 구독한다. **Manual ACK** (§10) — 처리에 성공한 것만 확인한다.
+    """`ai.inbound` 를 구독한다. **Manual ACK** — 처리에 성공한 것만 확인한다.
 
     무한 대기하므로 배치가 아니라 상시 프로세스로 띄운다. 종료는 취소(Ctrl+C)로.
 
@@ -213,8 +209,8 @@ async def consume(*, queue_name: str = INBOUND_QUEUE) -> None:
         exchange = await resolve_exchange(channel, settings)
         queue = await resolve_queue(channel, queue_name, settings)
         # 바인딩도 인프라(Messaging Topology Operator CRD)가 건다 —
-        # `ai-inbound-feedback-binding` 이 그것이다(MQ 컨벤션 §2.1). 우리 AI 계정에
-        # 바인딩 권한이 없을 수 있으므로 운영에서는 시도하지 않는다.
+        # `ai-inbound-feedback-binding` 이 그것이다. 우리 AI 계정에 바인딩 권한이 없을 수
+        # 있으므로 운영에서는 시도하지 않는다.
         if settings.mq_declare_topology:
             await queue.bind(exchange, routing_key=FEEDBACK_BINDING)
         logger.info("컨슈머 시작 queue=%s binding=%s", queue_name, FEEDBACK_BINDING)
