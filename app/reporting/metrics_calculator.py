@@ -1,11 +1,11 @@
-"""월간 리포트 정량 지표 계산 — 문서 생성 스키마 §4-2.
+"""월간 리포트 정량 지표 계산. 계약은 `docs/reporting_schema.md`.
 
 여기서 만든 값이 그대로 MonthlyReportInput 이 된다(생성 주체는 FastAPI reporting 노드).
-LLM 은 이 수치를 문장으로 옮기기만 하고, 계산은 전부 이 모듈이 한다.
+LLM 은 이 수치를 문장으로 옮기기만 하고 계산은 전부 이 모듈이 한다.
 
-판정 순서가 중요하다 — 게이트 → 순열검정 → BH-FDR → severity 순이며,
-BH-FDR 을 severity 산출보다 **먼저** 돌려야 한다(§4-2). 유의성이 확정되기 전에
-단계를 매기면 다중검정 보정이 무의미해진다.
+판정 순서가 중요하다 — 게이트 -> 순열검정 -> BH-FDR -> severity 순이며, BH-FDR 을
+severity 산출보다 먼저 돌려야 한다. 유의성이 확정되기 전에 단계를 매기면 다중검정
+보정이 무의미해진다.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def calculate_sentiment_drift(
     current_neg_ratio: float,
     previous_neg_ratio: float,
 ) -> tuple[float, DriftStatus]:
-    """ΔP_neg 와 RISK/NORMAL 판정. RISK 는 drift >= DRIFT_RISK_THRESHOLD 일 때만(§1-1)."""
+    """ΔP_neg 와 RISK/NORMAL 판정. RISK 는 drift >= DRIFT_RISK_THRESHOLD 일 때만."""
     drift = current_neg_ratio - previous_neg_ratio
     status = (
         DriftStatus.RISK if drift >= constants.DRIFT_RISK_THRESHOLD else DriftStatus.NORMAL
@@ -59,7 +59,7 @@ def calculate_sentiment_drift(
 def calculate_jsd_bits(p_counts: list[int] | np.ndarray, q_counts: list[int] | np.ndarray) -> float:
     """두 감성 분포의 Jensen-Shannon Divergence (단위: bits, log₂ 기준).
 
-    스키마 §1-1 이 `jsd_score: 0.00–1.00 (log₂, bits)` 로 못박아서 nats 가 아니라 bits 다.
+    스키마가 `jsd_score: 0.00–1.00 (log₂, bits)` 로 못박아서 nats 가 아니라 bits 다.
     bits 기준 JSD 는 두 분포가 완전히 겹치지 않을 때 최대 1.0 이라 범위와도 맞는다.
     (제곱근을 씌운 JS distance 가 아니다 — divergence 그대로 쓴다.)
     """
@@ -94,7 +94,7 @@ def permutation_test_jsd(
     두 채널의 부정 문서를 한 통에 붓고 원래 크기대로 다시 나누는 것을 B회 반복한다
     (라벨 순열). 관측값 이상이 나온 비율이 p값이고, 순열 분포의 평균이 baseline 이다.
     baseline 을 빼는 이유: 표본이 작으면 같은 분포에서 나눠도 JSD 가 0 이 아니라서,
-    그 기저값을 빼지 않으면 소표본 채널이 항상 위기로 보인다(§4-2 excess).
+    그 기저값을 빼지 않으면 소표본 채널이 항상 위기로 보인다(excess).
 
     Returns:
         (jsd_score, jsd_baseline, p_value) — 전부 bits 기준.
@@ -128,7 +128,7 @@ def permutation_test_jsd(
 
 
 def apply_bh_fdr(p_values: list[float], q: float = constants.BH_FDR_Q) -> list[bool]:
-    """BH-FDR 다중검정 보정. 전 (상품 × 채널쌍) p값을 한 family 로 묶어 돌린다(§4-2 ②).
+    """BH-FDR 다중검정 보정. 전 (상품 × 채널쌍) p값을 한 family 로 묶어 돌린다.
 
     severity 산출보다 **먼저** 호출해야 한다. 여기서 떨어진 쌍은 excess 가 커도 SAFE 다.
     """
@@ -142,7 +142,7 @@ def apply_bh_fdr(p_values: list[float], q: float = constants.BH_FDR_Q) -> list[b
 
 
 def check_divergence_gate(n_a: int, n_b: int) -> HoldReason | None:
-    """[게이트] min(n_A, n_B) ≥ 1 AND N ≥ 30. 미충족이면 보류 사유를 돌려준다(§4-2)."""
+    """[게이트] min(n_A, n_B) >= 1 AND N >= 30. 미충족이면 보류 사유를 돌려준다."""
     if min(n_a, n_b) < 1:
         return HoldReason.EMPTY_CHANNEL
     if (n_a + n_b) < constants.JSD_GATE_MIN_TOTAL:
@@ -156,7 +156,7 @@ def decide_severity(
     *,
     bh_significant: bool,
 ) -> tuple[Severity, bool]:
-    """excess 와 유의성으로 severity·is_crisis 를 결정한다(§4-2 판정식).
+    """excess 와 유의성으로 severity·is_crisis 를 결정한다.
 
     유의하지 않으면 excess 가 아무리 커도 SAFE 다 — 다중검정을 통과하지 못한 차이는
     우연으로 본다.
@@ -241,7 +241,7 @@ def finalize_pair(pair: ChannelDivergencePair, *, bh_significant: bool) -> Chann
 def _worst_rank(pair: ChannelDivergencePair) -> tuple[int, float]:
     """worst_pair 정렬 키 — (severity 등급, excess).
 
-    ⚠️ jsd_score 최댓값으로 고르면 안 된다. severity 는 `excess = jsd − baseline` 과
+    jsd_score 최댓값으로 고르면 안 된다. severity 는 `excess = jsd − baseline` 과
        유의성으로 정해지는데 baseline 은 쌍마다 다르다(표본이 작을수록 크다). 그래서
        jsd 가 가장 큰 쌍이 SAFE 이고 다른 쌍이 CRISIS 인 상황이 실제로 생기고,
        그때 리포트 제목에는 "안정 단계"가 박히면서 is_crisis=true 로 나간다.

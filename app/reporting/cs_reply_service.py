@@ -59,7 +59,7 @@ def build_guideline_id(input_data: CSGuidelineInput) -> str:
 def _build_stats_summary(input_data: CSGuidelineInput) -> str:
     """프롬프트에 넣을 지표 요약 문장.
 
-    p_value·bh_significant 는 넣지 않는다 — §4-4 금지 표현이라 모델에게 보여주지 않는다.
+    p_value·bh_significant 는 넣지 않는다 — 금지 표현이라 모델에게 보여주지 않는다.
     """
     stats = input_data.stats
     return (
@@ -336,7 +336,7 @@ def build_guideline_input(
 
     탐지 쪽 모델을 그대로 못 넘기는 이유는 두 군데가 좁아지기 때문이다:
       - `DetectionStats.source` 는 가이드라인 입력에 없다. CS·리뷰를 종합한 뒤의
-        알림이라 "이 지표가 어느 쪽에서 왔는지"는 문서에 쓰지 않는다(§4-4).
+        알림이라 "이 지표가 어느 쪽에서 왔는지"는 문서에 쓰지 않는다.
       - `RootCause.consistent` 도 없다. 원인 일관성은 탐지가 판정에 쓰는 값이지
         상담원에게 보여 줄 내용이 아니다.
     남은 필드는 이름이 같아 그대로 옮긴다.

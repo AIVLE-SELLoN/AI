@@ -1,4 +1,4 @@
-"""월간 보고서 출력 검증 — 문서 생성 스키마 §4-4.
+"""월간 보고서 출력 검증. 계약은 `docs/reporting_schema.md`.
 
 계층 분담:
   - **구조**(미정의 키·배열 길이·문자열 길이·enum 도메인) → `MonthlyReportOutput` 스키마가 담당.
@@ -68,7 +68,7 @@ def _validate_stage_label(
     input_data: MonthlyReportInput,
     output_data: MonthlyReportOutput,
 ) -> list[str]:
-    """cause_title 이 worst_pair 의 severity 단계 라벨을 정확히 담고 있는지 검사(§1-2).
+    """cause_title 이 worst_pair 의 severity 단계 라벨을 정확히 담고 있는지 검사.
 
     전 쌍이 보류(severity=null)면 단계 자체가 없으므로 검사하지 않는다.
     """
@@ -104,7 +104,7 @@ def validate_monthly_report(
     """월간 보고서 LLM 출력의 그라운딩 검증. (통과여부, 사유목록)."""
     errors: list[str] = []
 
-    # 1. 식별자 일치 — 입력값 그대로 되돌려줘야 한다(§1-2)
+    # 1. 식별자 일치 — 입력값 그대로 되돌려줘야 한다
     if output_data.product_group_id != input_data.product_group_id:
         errors.append(
             f"product_group_id 불일치: 입력({input_data.product_group_id}) "
@@ -136,10 +136,10 @@ def validate_monthly_report(
     if unknown_pairs := output_pairs - input_pairs:
         errors.append(f"입력에 없는 채널쌍 분석: {sorted(unknown_pairs)}")
 
-    # 4. 단계 라벨 대조 (§1-2)
+    # 4. 단계 라벨 대조
     errors.extend(_validate_stage_label(input_data, output_data))
 
-    # 5. 수치 팩트체크 + 금지 표현 — §4-4 가 지정한 대상 필드에만 적용
+    # 5. 수치 팩트체크 + 금지 표현 — 지정된 대상 필드에만 적용
     allowed = build_allowed_numbers(input_data)
     targets: list[tuple[str, str]] = [
         (f"aspect_summaries[{s.aspect.value}].summary_text", s.summary_text)

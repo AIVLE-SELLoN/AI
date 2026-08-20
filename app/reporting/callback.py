@@ -90,7 +90,7 @@ def build_guideline_callback(
 
 
 def _build_source_payload(input_data: Any, output: Any) -> dict[str, Any]:
-    """입력 JSON + 출력 JSON 원본. **CS 가이드라인 전용**이다(§3-2).
+    """입력 JSON + 출력 JSON 원본. CS 가이드라인 전용이다.
 
     PostgreSQL JSONB 컬럼에 적재되며, PDF 를 다시 만들어야 할 때의 유일한 원천이다.
     mode="json" 으로 덤프하는 이유: datetime·date·Enum 이 그대로 남으면 JSONB 직렬화가
@@ -105,5 +105,5 @@ def _build_source_payload(input_data: Any, output: Any) -> dict[str, Any]:
 
 
 def build_hold_notice() -> str:
-    """표본 부족 보류 시의 고정 안내 문구(§4-3). LLM 이 쓰는 문장이 아니다."""
+    """표본 부족 보류 시의 고정 안내 문구. LLM 이 쓰는 문장이 아니다."""
     return constants.HOLD_INSUFFICIENT_DATA_NOTICE

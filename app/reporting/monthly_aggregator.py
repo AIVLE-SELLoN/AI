@@ -57,12 +57,12 @@ assert {Aspect(a) for a in JSD_ASPECT_ORDER} == set(SCHEMA_MONTHLY_ASPECTS), (
 
 # 원문 통합 뷰 — 분모와 "언제·어디서 발생했는가"의 정본.
 #
-# 분류 결과(§2-6 classified_item / classified_item_aspect)에는 발생 시각·채널·상품그룹이
-# 없다. 원문 사본을 만들지 않기로 했기 때문이다(아키텍처 확정 §6). 그래서 집계는 항상
-# 원문을 기준으로 잡고 분류 결과를 조인한다.
+# 분류 결과(classified_item / classified_item_aspect)에는 발생 시각·채널·상품그룹이
+# 없다. 원문 사본을 만들지 않기로 했기 때문이다. 그래서 집계는 항상 원문을 기준으로
+# 잡고 분류 결과를 조인한다.
 #
-# 「Raw DB 스키마 확정 (8/7)」에서 원문은 `cs`(§2-4)·`reviews`(§2-5) 두 테이블로 갈렸고
-# 시각 컬럼명도 다르다(cs.inquired_at / reviews.created_at). 두 테이블을 UNION 해
+# 원문은 `cs`·`reviews` 두 테이블로 갈렸고 시각 컬럼명도 다르다
+# (cs.inquired_at / reviews.created_at). 두 테이블을 UNION 해
 # `occurred_at` 하나로 맞춘 뷰가 `voc_document` 이고, 정의는 `app/core/raw_schema.py` 다.
 # 이름을 여기 다시 적지 않고 상수를 가져다 쓴다 — 뷰 이름이 바뀌면 한 곳만 고치면 된다.
 #
@@ -362,7 +362,7 @@ def aggregate_monthly_inputs(
 ) -> list[MonthlyReportInput]:
     """상품 목록을 한 번에 집계해 MonthlyReportInput 리스트를 만든다.
 
-    BH-FDR 을 배치 전체에 적용해야 하므로 상품별 호출로 쪼갤 수 없다(§4-2 ②).
+    BH-FDR 을 배치 전체에 적용해야 하므로 상품별 호출로 쪼갤 수 없다.
     `n_permutations` 를 낮추면 빨라지지만 p값 해상도가 떨어진다 — 리허설 전용이다.
     """
     products = product_group_ids or list_product_groups(conn, report_month)
