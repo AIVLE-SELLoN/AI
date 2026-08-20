@@ -248,7 +248,7 @@ async def generate_cs_reply_pipeline(
             source_id=input_data.alert_id,
         )
     except S3NotConfiguredError as exc:
-        # 업로드하지 않은 파일을 성공으로 보고하지 않는다(스텁 상태에서의 안전장치).
+        # 업로드하지 않은 파일을 성공으로 보고하지 않는다.
         logger.error(f"[FAILED_ERROR] {trace_base} | {exc!s}")
         return GenerationResult(
             output=None,
