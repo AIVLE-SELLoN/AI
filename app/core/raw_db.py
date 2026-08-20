@@ -338,10 +338,10 @@ def retryable_error_types(conn: RawDbConnection) -> tuple[type[BaseException], .
     (`persist_batch`). 둘을 안 가르면 스키마 오류에도 지수 백오프로 매달리거나, 반대로 잠금
     경합 한 번에 워커가 서서 다음 실행이 같은 배치를 LLM 에 다시 태운다.
 
-    Postgres 는 `OperationalError` 만으로 부족하다. 거기서 잠금·직렬화 실패는
-    `DeadlockDetected`·`SerializationFailure`·`LockNotAvailable` 이고 이들은
-    `OperationalError` 가 아니라 `DatabaseError` 계열이라, 그것만 잡으면 잠깐 기다리면 될
-    것이 "치명적 오류" 로 분류돼 워커가 선다.
+    Postgres 쪽 세 이름은 **지금 핀(psycopg 3.3.4)에서는 `OperationalError` 하위라 사실상
+    중복이다**(실측: 셋 다 `OperationalError -> DatabaseError -> Error`). 그래도 나열하는
+    것은 어느 실패를 재시도 대상으로 보는지 이름으로 남기고, 드라이버가 계층을 바꾸더라도
+    이 집합이 안 흔들리게 하려는 것이다 — 지우면 동작은 같지만 그 의도가 사라진다.
     """
     if dialect_of(conn) != POSTGRES:
         return (sqlite3.OperationalError,)
