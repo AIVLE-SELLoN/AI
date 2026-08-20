@@ -5,13 +5,13 @@
 
 발화 판정은 3관문 AND:
     ① 표본 가드   (상품,채널) 총문의 >= MIN_SAMPLE_SIZE           ← 아니면 보류
-    ② BH-FDR      상품별 family 안의 p값에 BH 보정 후 유의         ← run_batch
+    ② BH-FDR      상품별 family 안의 p값에 BH 보정 후 유의         ← decide_fires
     ③ min_delta   상승폭 >= MIN_DELTA                             ← run_one_test
 
 주의 — 적용 순서: 보류를 제외한 상품별 **판정 가능 검정 전체**에 BH(②)를 먼저 적용한 뒤
 min_delta(③)를 AND 로 겹친다. min_delta 로 먼저 거르면 '관측된 delta 데이터로 검정
 집합을 고르는 것'이 되어 FDR 제어 전제가 깨지고 컷오프가 흔들린다. 그래서
-run_one_test 는 delta 정보만 담고 발화는 안 정하며, 발화 확정은 run_batch 가 각 상품의
+run_one_test 는 delta 정보만 담고 발화는 안 정하며, 발화 확정은 decide_fires 가 각 상품의
 판정 가능 family를 보고 한다. 보류 채널이 있으면 family 크기는 최대 36보다 작아진다.
 """
 
@@ -30,7 +30,7 @@ def run_one_test(cur_neg: int, cur_total: int, past_neg: int, past_total: int) -
     각 채널이 자기 평소와만 싸우므로 채널간 baseline 차이가 판정에 안 끼어든다.
 
     반환값에 '발화 여부'는 없다. 발화는 같은 상품 family 전체를 봐야 정해지므로
-    run_batch 에서 확정한다.
+    decide_fires 에서 확정한다.
 
     Returns:
         {"p_value", "delta", "meaningful"}

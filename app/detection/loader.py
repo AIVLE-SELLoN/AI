@@ -183,7 +183,7 @@ def unreliable_slots(gaps: list[dict]) -> set[tuple[str, str, str]]:
 
     이 슬롯들은 **검정 전에** family 에서 빠져야 한다. 분모가 깎이면 부정률이
     부풀려져 p값이 실제보다 작게 나오는데, BH 는 step-up 이라 가짜로 작은 p값
-    하나가 기각 개수를 늘려 **나머지 검정의 임계까지 완화**시킨다. 한 상품의 데이터
-    결함이 다른 상품을 오탐시키는 셈이다.
+    하나가 기각 개수를 늘려 **나머지 검정의 임계까지 완화**시킨다. family 가
+    상품별이므로 번지는 범위는 같은 상품 안이다.
     """
     return {(g["product"], g["channel"], g["source"]) for g in gaps}
