@@ -152,12 +152,13 @@
 
 ### 4-3. Agent3 출력 구조
 
-Agent3 출력 JSON의 **정본은 별도 문서 [「개선안 출력 스키마」](https://app.notion.com/p/39fe39c614978017b36befb4730e520c?pvs=21)**. 구조·필드·값 범위는 그 문서를 따른다.
+Agent3 출력 JSON의 **정본은 별도 문서 [「개선안 출력 스키마」](https://app.notion.com/p/39fe39c614978017b36befb4730e520c?pvs=21)**(저장소 사본 [`docs/recommenation_schema.md`](recommenation_schema.md)). 구조·필드·값 범위는 그 문서를 따른다.
 
 - grounding 검사: 인용문이 실제 원문에 있는지 사후 검증 → 없으면 확신도 강등.
     - CS 인용=정본 `citations`(evidence.inquiry_ids 부분집합)
     - 상세페이지 인용=`proposal.current_text`로 구분.
-- **grounding 소스는 도구별로 분리**: copy_draft → current_text를 상세페이지(detail_fields)와 대조 / image_guide → current_text가 CS 문의 기반 요약이므로 CS citations와 대조 (image_guide를 상세페이지로 검증하면 항상 실패).
+- **grounding 소스는 도구별로 분리**: copy_draft → current_text를 상세페이지(`context["detail_text"]`)와 대조 / image_guide → current_text를 **CS 원문**(`context["cs_quotes"]` — `evidence.inquiry_ids`로 조회한 고객 문장)과 대조 (image_guide를 상세페이지로 검증하면 항상 실패).
+    - 🔴 **image_guide의 대조 대상은 `cs_quotes`(고객 원문)이지 `cs_summary`(우리가 만든 통계 한 줄)가 아니다.** 요약과 대조하면 LLM이 그 문장을 되풀이하기만 해도 통과한다 — PR #40(2026-08-09) 이전이 실제로 그 상태였다. 두 슬롯을 한 문자열로 합치면 그 버그가 그대로 돌아온다.
 - 출력이 형식에 안 맞으면 Evaluator 재시도 루프(최초 1 + 재시도 최대 2 = 총 3 시도)로 처리.
 
 `proposal.proposed_text`는 자유생성이 아니라 슬롯 채우기(원인 라벨·근거 인용·권장 액션 슬롯)로 생성. 
@@ -174,7 +175,7 @@ Agent3 출력 JSON의 **정본은 별도 문서 [「개선안 출력 스키마�
 
 | 축 | 판정 근거 |
 | --- | --- |
-| 근거 (필수) | `evaluator.checks.grounding` — 대조 대상은 타입별로 다르다 (copy_draft→상세페이지 / image_guide→CS 요약) |
+| 근거 (필수) | `evaluator.checks.grounding` — 대조 대상은 타입별로 다르다 (copy_draft→상세페이지 / image_guide→**CS 원문 `cs_quotes`**) |
 | 보강 ① 원인 일관 | `alert.root_cause.consistent` |
 | 보강 ② 유사 사례 | 컬렉션2 조회 결과 유무 |
 
@@ -192,8 +193,12 @@ Agent3 출력 JSON의 **정본은 별도 문서 [「개선안 출력 스키마�
 
 ### 4-5. 예외 상황 처리 규칙
 
-- 상세페이지가 등록 안 된 SKU → **copy_draft로 라우팅된 경우에만** 근거-없음 경로 (확신도 낮음 + 일반 가이드). image_guide는 CS 요약을 근거로 쓰므로 상세페이지가 없어도 정상 생성된다 (2026-08-04 실연동에서 확인)
-- detail_fields 빈 값 → null이 아닌 "정보 없음"으로 저장, 생성 시 근거-없음 경로 강제
+- 상세페이지가 등록 안 된 SKU → **copy_draft로 라우팅된 경우에만** 근거-없음 경로 (확신도 낮음 + 일반 가이드). image_guide는 CS 원문을 근거로 쓰므로 상세페이지가 없어도 정상 생성된다 (2026-08-04 실연동에서 확인)
+- detail_fields 빈 값 → null이 아닌 "정보 없음"(`NO_DETAIL_TEXT`)으로 저장
+- 🔴 **근거가 0건이면 개선안을 아예 안 만든다 — `run()`이 `None`** (PR #40, 2026-08-09). `fallback_guide`와 헷갈리지 말 것. 갈리는 지점은 **근거가 있었느냐**다.
+    - *근거 0건*(상세페이지 미등록 + CS 원문 조회 실패) → `None`, LLM 호출 0회. 입력만 보고 결정론적으로 아는 사실이라 모델을 태워도 일반론밖에 안 나온다. 라우팅 **전에** 걸러 그 호출도 아낀다. 사유는 `RecommendationOutcome.reason`(`NO_EVIDENCE`)으로 나간다
+    - *근거는 있는데 인용에 MAX_ATTEMPTS번 실패* → `fallback_guide` (확신도 낮음 + 일반 가이드 문구)
+- ⚠️ `evaluate()`의 `NO_DETAIL_TEXT` 가드를 지우지 말 것 — 프롬프트가 "근거가 '정보 없음'이면 그대로 쓰라"고 시키면 `has_evidence("정보 없음", "정보 없음")`이 통과해 **근거 0건인데 확신도 높음**이 나간다
 - 유사 사례 0건 → 4-2 규칙 적용 (블록 숨김 + 확신도 하향)
 
 ### 4-6. 원인 분류 라벨 목록·매핑
