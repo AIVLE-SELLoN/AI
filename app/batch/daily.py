@@ -30,14 +30,11 @@ import asyncio
 import json
 import logging
 import sys
-import uuid
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
 
 # 입력원과 상태 파일은 갈라져 있다(`inputs.py`·`state.py`). 여기서 다시 import 하는 것은
 # 이 모듈이 쓰기 때문이기도 하고, **기존 호출부의 import 경로를 지키기 위해서**이기도
@@ -93,108 +90,22 @@ __all__ = [
 ]
 
 
-# ── 담당자 미완성 함수 — import 폴백 ────────────────────────────
-# 실물이 생기면 아래 except 가 안 타므로 이 파일은 손댈 필요가 없다.
-#
-# **모듈이 없을 때만 폴백한다.** `except ImportError` 로 통째로 삼키면, 모듈은
-#    올라왔는데 그 안의 의존성(예: `aio_pika`)이 없어서 나는 ImportError 까지 먹고
-#    조용히 no-op 이 된다 — 요약엔 "미연결"로 찍혀서 보는 사람은 "아직 안 만들었나"
-#    로 읽고, 이벤트가 하나도 안 나가는데 배치는 정상 종료한다.
-
-
-def _missing(exc: ImportError, module: str) -> bool:
-    """그 모듈 자체가 없어서 난 ImportError 인가. 아니면 진짜 오류라 다시 던진다."""
-    return exc.name == module or (exc.name or "").startswith(module + ".")
-
-
-try:  # pragma: no cover - 실물이 생기면 이쪽
-    from app.core.mq import (  # type: ignore[attr-defined]
-        close_mq,
-        new_trace_id,
-        publish_anomaly_analyzed,
-        publish_guideline_generated,
-    )
-
-    MQ_AVAILABLE = True
-except ImportError as exc:  # pragma: no cover - 인프라 도입 전
-    if not _missing(exc, "app.core.mq"):
-        raise
-    MQ_AVAILABLE = False
-
-    def new_trace_id() -> str:
-        return f"trace-{uuid.uuid4().hex[:16]}"
-
-    async def publish_anomaly_analyzed(
-        alert: Any, rec: Any, trace_id: str, classifier_versions: dict | None = None
-    ) -> None:
-        logger.info(
-            "[MQ 미구현] ai.anomaly.analyzed 발행 생략 alert=%s", alert.alert_id
-        )
-
-    async def publish_guideline_generated(guideline: Any, trace_id: str) -> None:
-        logger.info("[MQ 미구현] ai.guideline.generated 발행 생략")
-
-    async def close_mq() -> None:
-        return None
-
-
-try:  # pragma: no cover
-    from app.recommendation.pipeline import (
-        generate_outcome_for_alert,  # type: ignore[attr-defined]
-    )
-
-    RECOMMENDATION_AVAILABLE = True
-except ImportError as exc:  # pragma: no cover
-    if not _missing(exc, "app.recommendation.pipeline"):
-        raise
-    RECOMMENDATION_AVAILABLE = False
-
-    async def generate_outcome_for_alert(alert: Any, inquiries: Any) -> Any:
-        logger.info("[Agent3 미연결] 개선안 생성 생략 alert=%s", alert.alert_id)
-        # 아래 루프가 읽는 필드만 흉내낸다. is_evidence_gap=False 라 미연결 상태가
-        # 데이터 갭으로 둔갑하지 않고 실패로 남는다 — Agent3 가 없는 건 갭이 아니다.
-        return SimpleNamespace(
-            recommendation=None, is_evidence_gap=False, detail="Agent3 미연결"
-        )
-
-
-try:  # pragma: no cover
-    from app.reporting.cs_reply_service import (  # type: ignore[attr-defined]
-        generate_guideline,
-        is_guideline_target,
-    )
-
-    GUIDELINE_AVAILABLE = True
-except ImportError as exc:  # pragma: no cover
-    if not _missing(exc, "app.reporting.cs_reply_service"):
-        raise
-    GUIDELINE_AVAILABLE = False
-
-    async def generate_guideline(
-        alert: Any, inquiries: Any, *, product_name: str | None = None
-    ) -> Any:
-        logger.info("[가이드라인 미연결] 생성 생략 alert=%s", alert.alert_id)
-        return None
-
-    def is_guideline_target(alert: Any) -> bool:
-        # 실물과 같은 규칙(빈 `evidence.inquiry_ids` 는 대상 아님). 폴백이 무조건 True 면
-        # 미연결 환경의 dry-run 추정이 실물보다 크게 나와 추정값을 못 믿게 된다.
-        return bool(alert.evidence.inquiry_ids)
-
-
-# [2] 개선안 생성 게이트. `recommended_action == "개선안 생성"` 인 alert 만 Agent3 로
-#     간다 — 큐 규약이 recommendation 을 그때만 non-null 로 못박고 있다.
-#     Agent3 가 아직 안 붙은 지금도 **dry-run 호출 수 추정에 필요**하므로 폴백을 둔다
-#     (조치 7종 중 개선안 생성은 1종뿐이라, 게이트 없이 세면 크게 과대추정된다).
-try:  # pragma: no cover
-    from app.recommendation.pipeline import should_generate
-except ImportError as exc:  # pragma: no cover
-    if not _missing(exc, "app.recommendation.pipeline"):
-        raise
-
-    def should_generate(alert: Any) -> bool:
-        return getattr(alert.recommended_action, "value", "") == "개선안 생성"
-
+# 조립부라 세 모듈을 가로질러 import 한다. 예전엔 `try/except ImportError` 로 감싸
+# 미구현 모듈을 no-op 스텁으로 대체했는데, 그 구조가 **막으려던 사고를 스스로 만들었다** —
+# 심볼 오타(`publish_anomaly_analyzedd`)도 `exc.name` 이 모듈명이라 "모듈 없음" 으로 잡혀
+# 조용히 스텁으로 빠졌다. 이벤트가 하나도 안 나가는데 배치는 정상 종료한다.
+# 지금은 부팅에서 `ImportError: cannot import name ...` 로 죽고 오타까지 알려준다.
+from app.core.mq import (
+    close_mq,
+    new_trace_id,
+    publish_anomaly_analyzed,
+    publish_guideline_generated,
+)
+from app.recommendation.pipeline import (
+    generate_outcome_for_alert,
+    should_generate,
+)
+from app.reporting.cs_reply_service import generate_guideline, is_guideline_target
 
 # ── dry-run 스텁 ────────────────────────────────────────────────
 
@@ -811,17 +722,6 @@ def print_summary(summary: dict) -> None:
         for f in summary["failures"][:10]:
             failure_key = f.get("target_key", "식별자 없음")
             print(f"     {failure_key} [{f['stage']}] {f['error'][:80]}")
-    missing = [
-        name
-        for name, ok in [
-            ("RabbitMQ(app.core.mq)", MQ_AVAILABLE),
-            ("Agent3(generate_outcome_for_alert)", RECOMMENDATION_AVAILABLE),
-            ("가이드라인(generate_guideline)", GUIDELINE_AVAILABLE),
-        ]
-        if not ok
-    ]
-    if missing:
-        print(f"\n  ℹ️ 미연결: {', '.join(missing)} — 해당 단계는 no-op 입니다.")
 
 
 def main() -> None:

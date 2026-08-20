@@ -458,8 +458,8 @@ def topology_config_errors() -> tuple[type[Exception], ...]:
     셋을 같이 쓰려다 ImportError 로 알았다). 클래스 객체는 양쪽이 동일하다.
 
     ⚠️ 모듈 상단에서 import 하지 않는 이유는 이 파일의 다른 전송 계층 import 와 같다 —
-    `app/batch/daily.py` 의 `_missing(exc, "app.core.mq")` 폴백이 `exc.name` 을 보므로,
-    상단 import 는 패키지 부재 시 폴백이 아니라 크래시가 된다.
+    `MQ_ENABLED=false` 로 도는 배포(웹·평가 하네스)는 브로커 라이브러리를 안 쓰는데,
+    상단에 두면 그런 환경까지 설치를 강제하게 된다.
     """
     from aiormq.exceptions import (
         ChannelAccessRefused,

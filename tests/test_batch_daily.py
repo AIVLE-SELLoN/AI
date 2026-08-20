@@ -138,23 +138,6 @@ def test_atomic_write_leaves_no_partial_file(tmp_path):
 # ── 배치 본체 ────────────────────────────────────────────────────
 
 
-def test_optional_wiring_is_actually_connected():
-    """🔴 폴백은 **미구현용**이다. 실물이 있는데 폴백을 타면 배치가 조용히 no-op 이 된다.
-
-    `_missing()` 은 모듈이 없을 때만 폴백하려는 것인데, `from X import Y` 에서 **Y 만**
-    없어도 `exc.name` 이 모듈명이라 True 가 나온다(3.12 확인). 그래서 import 하는 심볼
-    이름에 오타가 나면 폴백이 조용히 켜지고, 개선안·가이드라인이 **둘 다 no-op** 인데
-    요약엔 "ℹ️ 미연결" 한 줄만 찍히고 배치는 정상 종료한다. 셀러에게 개선안이 하나도
-    안 나가는 상태다.
-
-    이 파일의 다른 테스트는 그 함수들을 전부 monkeypatch 하므로 이 끊김을 못 잡는다.
-    (2026-08-11 리뷰 ②)
-    """
-    assert daily.MQ_AVAILABLE, "app.core.mq 가 있는데 폴백을 타고 있다"
-    assert daily.RECOMMENDATION_AVAILABLE, "Agent3 가 있는데 폴백을 타고 있다"
-    assert daily.GUIDELINE_AVAILABLE, "가이드라인이 있는데 폴백을 타고 있다"
-
-
 def test_classifier_versions_only_when_the_filter_guaranteed_them():
     """🔴 payload 의 분류기 신원은 **필터가 보장할 때만** 값이 있다.
 
