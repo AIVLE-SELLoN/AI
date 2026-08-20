@@ -1,9 +1,8 @@
 """담당: 지인 (Agent3) — 진입점.
 
-이 파일은 얇게 유지. 지금은 pipeline.py(순수 함수 파이프라인)를 직접 호출한다.
-LangGraph 이식 후에는 generate_recommendation()이 pipeline.run() 대신
-graph.ainvoke()를 호출하도록 바뀔 예정이며, router.py는 이 함수들의 시그니처가
-유지되는 한 수정할 필요가 없다.
+router.py(HTTP)와 app/consumer.py(MQ)가 같은 함수를 쓰도록 두는 얇은 층이다.
+전송 수단과 무관한 것만 여기 둔다 — CS 원문 조회와 raw DB degrade 판단이 그것이고,
+파이프라인 본체는 pipeline.py 가 갖는다.
 """
 
 from __future__ import annotations
@@ -23,23 +22,21 @@ async def generate_recommendation(alert: DetectionAlert) -> Recommendation | Non
     """DetectionAlert → Recommendation | None (트리거 미충족 시 None).
 
     body 로 alert 만 받으므로 **CS 원문은 `evidence.inquiry_ids` 로 직접 조회한다**
-    (`fetch_linked_inquiries`). 예전엔 안 넘겨서 image_guide 로 라우팅되면 근거가 0건이라
-    **항상 None** 이었다 — copy_draft 만 디버깅할 수 있었다(2026-08-10 해소).
+    (`fetch_linked_inquiries`). 안 조회하면 image_guide 로 라우팅됐을 때 근거가 0건이라
+    **항상 None** 이 되어 copy_draft 만 디버깅할 수 있다.
 
     운영 경로는 아니다 — 개선안은 탐지 배치가 `generate_outcome_for_alert(alert,
     inquiries)` 로 선생성해 `ai.anomaly.analyzed` payload 에 실어 보낸다. 이 엔드포인트는
     재현·디버깅용이다.
 
-    ⚠️ **raw DB 를 못 읽으면 원문 없이 진행한다.** 그 환경에서 500 을 내면 DB 없이 쓰던
+    **raw DB 를 못 읽으면 원문 없이 진행한다.** 그 환경에서 500 을 내면 DB 없이 쓰던
     copy_draft 디버깅까지 같이 막힌다. 대신 조용히 넘기지 않고 경고를 남긴다 — 근거가
     빠진 채 나온 결과를 "개선안이 안 만들어진다" 로 오해하지 않게 하려는 것이다.
 
-    🔴 **degrade 조건은 백엔드마다 다른 타입으로 온다.** sqlite 는 파일 부재
+    **degrade 조건은 백엔드마다 다른 타입으로 온다.** sqlite 는 파일 부재
     (`FileNotFoundError`)지만 Postgres 는 접속·스키마·권한 실패가 `psycopg.Error` 로
     오고 그건 `FileNotFoundError` 가 아니다 — `connection_error_types()` 를 안 넣으면
     이 degrade 가 sqlite 에서만 동작하고 Postgres 에서는 **500** 이 된다.
-
-    # TODO: LangGraph 이식 후 pipeline.run(alert) → graph.ainvoke(초기 상태) 로 교체.
     """
     try:
         inquiries = fetch_linked_inquiries(alert)
@@ -71,7 +68,7 @@ def handle_recommendation_reviewed(payload: dict) -> None:
     recommendation 을 import 하면 의존 방향이 거꾸로 뒤집히기 때문이다.
 
     Raises:
-        ValidationError: payload 가 계약과 다름 (§8).
+        ValidationError: payload 가 `docs/mq_events.md` 의 HITL 이벤트 계약과 다름.
         HitlContextUnavailableError: 적재 재료 부족 — `load_hitl_context()` 참고.
         ValueError: alert/recommendation 이 서로 다른 건이거나 아직 대기 상태.
     """

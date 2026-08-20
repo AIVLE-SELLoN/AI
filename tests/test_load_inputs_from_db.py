@@ -1,4 +1,4 @@
-"""담당: 지인 — `daily.load_inputs_from_db()` (raw DB → 탐지 입력).
+"""담당: 지인 — `inputs.load_inputs_from_db()` (raw DB → 탐지 입력).
 
 **스키마는 `app/core/raw_schema.py` 의 DDL 을 그대로 써서 만든다.** 픽스처에 CREATE
 TABLE 을 다시 적으면 확정 문서가 바뀔 때 테스트만 옛 스키마로 남아, 실제로는 깨지는
@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from app.batch import daily
+from app.batch import daily, inputs
 from app.config import get_settings
 from app.core import raw_schema
 from app.detection.service import detect_anomaly
@@ -68,7 +68,7 @@ def _db(tmp_path, cs_rows=(), review_rows=(), classified=(), prompt_version=None
     )
     # 활성 3축은 탐지가 실제로 거르는 값에서 그대로 가져온다 — 여기서 따로 적으면
     # 필터를 고쳤을 때 픽스처만 옛 값으로 남아 전 테스트가 cutover 에러로 죽는다.
-    active_cs, active_review, active_model, active_pipeline = daily._active_version_params()
+    active_cs, active_review, active_model, active_pipeline = inputs._active_version_params()
     for item_id, source, aspects in classified:
         version = prompt_version or (active_cs if source == "cs" else active_review)
         conn.execute(
@@ -108,7 +108,7 @@ def test_unclassified_document_stays_in_the_denominator(tmp_path):
         classified=[("INQ-1", "cs", [("색상", -1)])],
     )
 
-    items, documents = daily.load_inputs_from_db(WINDOW_END, db_path=db)
+    items, documents = inputs.load_inputs_from_db(WINDOW_END, db_path=db)
 
     assert {d["id"] for d in documents} == {"INQ-1", "INQ-2", "RVW-1"}
     assert [i.item_id for i in items] == ["INQ-1"]
@@ -122,7 +122,7 @@ def test_review_aspects_survive_the_join(tmp_path):
         classified=[("RVW-1", "review", [("소재", -1)])],
     )
 
-    items, documents = daily.load_inputs_from_db(WINDOW_END, db_path=db)
+    items, documents = inputs.load_inputs_from_db(WINDOW_END, db_path=db)
 
     assert documents[0]["source"] == "review"
     assert documents[0]["channel"] == "ZIGZAG"
@@ -143,7 +143,7 @@ def test_classified_item_without_aspect_is_still_an_item(tmp_path):
         classified=[("RVW-1", "review", [])],
     )
 
-    items, _ = daily.load_inputs_from_db(WINDOW_END, db_path=db)
+    items, _ = inputs.load_inputs_from_db(WINDOW_END, db_path=db)
 
     assert [i.item_id for i in items] == ["RVW-1"]
     assert items[0].aspects == []
@@ -151,7 +151,7 @@ def test_classified_item_without_aspect_is_still_an_item(tmp_path):
 
 def test_window_reads_exactly_35_days(tmp_path):
     """35일 = 현재 7 + 과거 28. 하루라도 더 읽으면 매 배치 풀스캔에 가까워진다."""
-    inside = date.fromordinal(WINDOW_END.toordinal() - daily.INPUT_WINDOW_DAYS + 1)
+    inside = date.fromordinal(WINDOW_END.toordinal() - inputs.INPUT_WINDOW_DAYS + 1)
     outside = date.fromordinal(inside.toordinal() - 1)
     db = _db(
         tmp_path,
@@ -162,10 +162,10 @@ def test_window_reads_exactly_35_days(tmp_path):
         ],
     )
 
-    _, documents = daily.load_inputs_from_db(WINDOW_END, db_path=db)
+    _, documents = inputs.load_inputs_from_db(WINDOW_END, db_path=db)
 
     assert {d["id"] for d in documents} == {"INQ-IN"}
-    assert daily.INPUT_WINDOW_DAYS == 35
+    assert inputs.INPUT_WINDOW_DAYS == 35
 
 
 def test_window_none_reads_everything(tmp_path):
@@ -178,7 +178,7 @@ def test_window_none_reads_everything(tmp_path):
         ],
     )
 
-    _, documents = daily.load_inputs_from_db(None, db_path=db)
+    _, documents = inputs.load_inputs_from_db(None, db_path=db)
 
     assert {d["id"] for d in documents} == {"INQ-OLD", "INQ-NEW"}
 
@@ -191,7 +191,7 @@ def test_day_boundary_uses_kst_not_utc(tmp_path):
     표기로** 넣는다 — `2026-07-24T23:00+00:00` 은 KST 로 07-25 08:00 이고, 07-25 가
     윈도우 첫날이다. UTC 로 자르면 07-24 로 밀려 윈도우 밖이 된다.
     """
-    first_day = date.fromordinal(WINDOW_END.toordinal() - daily.INPUT_WINDOW_DAYS + 1)
+    first_day = date.fromordinal(WINDOW_END.toordinal() - inputs.INPUT_WINDOW_DAYS + 1)
     same_instant_in_utc = (
         datetime(first_day.year, first_day.month, first_day.day, 8, tzinfo=KST)
         .astimezone(timezone.utc)
@@ -206,7 +206,7 @@ def test_day_boundary_uses_kst_not_utc(tmp_path):
         cs_rows=[("INQ-EARLY", "P001", "COUPANG", "이른 아침", same_instant_in_utc)],
     )
 
-    _, documents = daily.load_inputs_from_db(WINDOW_END, db_path=db)
+    _, documents = inputs.load_inputs_from_db(WINDOW_END, db_path=db)
 
     assert [d["id"] for d in documents] == ["INQ-EARLY"]
     # build_rows 가 `.date()` 로 날짜를 다시 뽑으므로 넘겨주는 값도 KST 여야 한다 —
@@ -225,7 +225,7 @@ def test_naive_timestamp_is_read_as_kst_not_host_local():
        무는 건 UTC 컨테이너다. 그래도 계약을 글로만 두지 않으려고 박아둔다.
        (2026-08-11 리뷰 ⑥)
     """
-    got = daily._to_kst("2026-08-28T20:00:00")
+    got = inputs._to_kst("2026-08-28T20:00:00")
 
     assert got.utcoffset() == timedelta(hours=9)
     # 벽시계가 그대로여야 한다. 호스트를 봤다면 UTC 컨테이너에서 08-29 05:00 이 된다.
@@ -234,7 +234,7 @@ def test_naive_timestamp_is_read_as_kst_not_host_local():
 
 def test_offset_aware_timestamp_is_converted_not_relabeled():
     """오프셋이 있으면 **변환**한다 — 라벨만 갈아치우면 같은 순간이 아니게 된다."""
-    got = daily._to_kst("2026-07-24T23:00:00+00:00")
+    got = inputs._to_kst("2026-07-24T23:00:00+00:00")
 
     assert (got.year, got.month, got.day, got.hour) == (2026, 7, 25, 8)
 
@@ -247,8 +247,8 @@ def test_naive_timestamp_is_kst_even_on_a_utc_host():
     실제로 도는 조건이다. 인코딩 배선을 서브프로세스로 검증한 PR #46 과 같은 방식이다.
     """
     code = (
-        "from app.batch import daily;"
-        "print(daily._to_kst('2026-08-28T20:00:00').isoformat())"
+        "from app.batch import inputs;"
+        "print(inputs._to_kst('2026-08-28T20:00:00').isoformat())"
     )
     result = subprocess.run(
         [sys.executable, "-c", code],
@@ -286,7 +286,7 @@ def test_unmapped_product_is_dropped_with_a_warning(tmp_path, caplog):
     )
 
     dropped: Counter[str] = Counter()
-    _, documents = daily.load_inputs_from_db(WINDOW_END, db_path=db, dropped=dropped)
+    _, documents = inputs.load_inputs_from_db(WINDOW_END, db_path=db, dropped=dropped)
 
     assert [d["id"] for d in documents] == ["INQ-2"]
     assert any("상품매핑 없음" in r.getMessage() for r in caplog.records)
@@ -304,7 +304,7 @@ def test_public_loader_contract_stays_a_pair(tmp_path):
     """
     db = _db(tmp_path, cs_rows=[("INQ-1", "P001", "COUPANG", "정상", _at(WINDOW_END))])
 
-    result = daily.load_inputs_from_db(WINDOW_END, db_path=db)
+    result = inputs.load_inputs_from_db(WINDOW_END, db_path=db)
 
     assert len(result) == 2
     items, documents = result
@@ -325,7 +325,7 @@ def test_source_only_db_fails_loudly(tmp_path):
     conn.close()
 
     with pytest.raises(RuntimeError, match="분류 결과 테이블"):
-        daily.load_inputs_from_db(WINDOW_END, db_path=str(path))
+        inputs.load_inputs_from_db(WINDOW_END, db_path=str(path))
 
 
 def test_child_table_alone_missing_fails_loudly(tmp_path):
@@ -354,7 +354,7 @@ def test_child_table_alone_missing_fails_loudly(tmp_path):
     conn.close()
 
     with pytest.raises(RuntimeError, match="classified_item_aspect"):
-        daily.load_inputs_from_db(WINDOW_END, db_path=str(path))
+        inputs.load_inputs_from_db(WINDOW_END, db_path=str(path))
 
 
 def test_legacy_schema_fails_before_the_query(tmp_path):
@@ -371,7 +371,7 @@ def test_legacy_schema_fails_before_the_query(tmp_path):
     conn.close()
 
     with pytest.raises(RuntimeError, match="확정 스키마와 다릅니다"):
-        daily.load_inputs_from_db(WINDOW_END, db_path=str(path))
+        inputs.load_inputs_from_db(WINDOW_END, db_path=str(path))
 
 
 def test_missing_unique_constraint_also_stops_the_batch(tmp_path):
@@ -400,7 +400,7 @@ def test_missing_unique_constraint_also_stops_the_batch(tmp_path):
     conn.close()
 
     with pytest.raises(RuntimeError, match="UNIQUE 제약") as exc:
-        daily.load_inputs_from_db(WINDOW_END, db_path=str(path))
+        inputs.load_inputs_from_db(WINDOW_END, db_path=str(path))
     # 어느 테이블인지 알려 준다 — 사유만 알고 대상을 모르면 조치를 못 한다.
     assert "classified_item_aspect" in str(exc.value)
 
@@ -437,7 +437,7 @@ def test_partially_stale_window_stops_the_batch(tmp_path):
     conn.close()
 
     with pytest.raises(RuntimeError, match="옛 분류기") as exc:
-        daily.load_inputs_from_db(WINDOW_END, db_path=db)
+        inputs.load_inputs_from_db(WINDOW_END, db_path=db)
 
     # 메시지가 활성 3축과 건수를 다 담아야 "설정 오타"와 "backfill 필요"를 가를 수 있다.
     message = str(exc.value)
@@ -468,7 +468,7 @@ def test_null_prompt_version_counts_as_old(tmp_path):
     conn.close()
 
     with pytest.raises(RuntimeError, match="옛 분류기"):
-        daily.load_inputs_from_db(WINDOW_END, db_path=db)
+        inputs.load_inputs_from_db(WINDOW_END, db_path=db)
 
 
 def test_full_stale_window_fails_loudly(tmp_path):
@@ -486,7 +486,7 @@ def test_full_stale_window_fails_loudly(tmp_path):
     )
 
     with pytest.raises(RuntimeError, match="옛 분류기"):
-        daily.load_inputs_from_db(WINDOW_END, db_path=db)
+        inputs.load_inputs_from_db(WINDOW_END, db_path=db)
 
 
 def test_model_change_alone_makes_rows_unreadable(tmp_path, monkeypatch):
@@ -509,7 +509,7 @@ def test_model_change_alone_makes_rows_unreadable(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "llm_model", "other-model", raising=False)
 
     with pytest.raises(RuntimeError, match="옛 분류기"):
-        daily.load_inputs_from_db(WINDOW_END, db_path=db)
+        inputs.load_inputs_from_db(WINDOW_END, db_path=db)
 
 
 def test_pipeline_version_change_alone_makes_rows_unreadable(tmp_path, monkeypatch):
@@ -523,10 +523,10 @@ def test_pipeline_version_change_alone_makes_rows_unreadable(tmp_path, monkeypat
         cs_rows=[("INQ-1", "P001", "COUPANG", "색이 달라요", _at(WINDOW_END))],
         classified=[("INQ-1", "cs", [("색상", -1)])],
     )
-    monkeypatch.setattr(daily, "CLASSIFIER_PIPELINE_VERSION", "classify_pipeline_v2")
+    monkeypatch.setattr(inputs, "CLASSIFIER_PIPELINE_VERSION", "classify_pipeline_v2")
 
     with pytest.raises(RuntimeError, match="옛 분류기"):
-        daily.load_inputs_from_db(WINDOW_END, db_path=db)
+        inputs.load_inputs_from_db(WINDOW_END, db_path=db)
 
 
 def test_unclassified_window_does_not_trip_the_version_guard(tmp_path):
@@ -539,7 +539,7 @@ def test_unclassified_window_does_not_trip_the_version_guard(tmp_path):
         cs_rows=[("INQ-1", "P001", "COUPANG", "색이 달라요", _at(WINDOW_END))],
     )
 
-    items, documents = daily.load_inputs_from_db(WINDOW_END, db_path=db)
+    items, documents = inputs.load_inputs_from_db(WINDOW_END, db_path=db)
 
     assert items == []
     assert len(documents) == 1
@@ -598,7 +598,7 @@ def test_control_window_without_stale_raises_no_alert(tmp_path):
     """
     db = _mixed_window_db(tmp_path, past_stale=False)
 
-    items, documents = daily.load_inputs_from_db(WINDOW_END, db_path=db)
+    items, documents = inputs.load_inputs_from_db(WINDOW_END, db_path=db)
     alerts, _ = asyncio.run(
         detect_anomaly(items, documents=documents, window_end=WINDOW_END)
     )
@@ -622,7 +622,7 @@ def test_mixed_window_stops_before_detection(tmp_path):
     db = _mixed_window_db(tmp_path, past_stale=True)
 
     with pytest.raises(RuntimeError, match="옛 분류기"):
-        daily.load_inputs_from_db(WINDOW_END, db_path=db)
+        inputs.load_inputs_from_db(WINDOW_END, db_path=db)
 
 
 def test_blank_content_stale_row_does_not_deadlock_the_batch(tmp_path):
@@ -657,7 +657,7 @@ def test_blank_content_stale_row_does_not_deadlock_the_batch(tmp_path):
     conn.close()
 
     # 고칠 수 없는 행이므로 세우지 않는다. 나머지는 정상적으로 읽힌다.
-    items, documents = daily.load_inputs_from_db(WINDOW_END, db_path=db)
+    items, documents = inputs.load_inputs_from_db(WINDOW_END, db_path=db)
 
     assert [i.item_id for i in items] == ["INQ-1"]
     assert {d["id"] for d in documents} == {"INQ-1", "INQ-BLANK"}
@@ -669,7 +669,7 @@ def test_missing_db_fails_loudly(tmp_path):
     그러면 배치가 아무 알림도 안 내고 **정상 종료**한다 — 조용한 무동작이 제일 나쁘다.
     """
     with pytest.raises(FileNotFoundError):
-        daily.load_inputs_from_db(WINDOW_END, db_path=str(tmp_path / "없음.db"))
+        inputs.load_inputs_from_db(WINDOW_END, db_path=str(tmp_path / "없음.db"))
 
 
 @pytest.mark.asyncio
@@ -684,7 +684,7 @@ async def test_batch_runs_end_to_end_on_the_db_loader(tmp_path, monkeypatch):
         classified=[("INQ-1", "cs", [("색상", -1)])],
     )
     monkeypatch.setattr(
-        daily.get_settings(), "raw_db_path", db, raising=False
+        inputs.get_settings(), "raw_db_path", db, raising=False
     )
 
     summary = await daily.run_batch(
@@ -718,7 +718,7 @@ async def test_batch_summary_reports_dropped_inputs(tmp_path, monkeypatch):
         ],
         classified=[("INQ-1", "cs", [("색상", -1)])],
     )
-    monkeypatch.setattr(daily.get_settings(), "raw_db_path", db, raising=False)
+    monkeypatch.setattr(inputs.get_settings(), "raw_db_path", db, raising=False)
 
     summary = await daily.run_batch(
         window_end=WINDOW_END, dry_run=True, state_path=tmp_path / "state.json"

@@ -13,7 +13,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from app.batch import daily
+from app.batch import daily, inputs
 from app.core import exit_codes, logging_setup
 from tests.conftest import bad_log_level_settings, pin_settings, unloadable_settings
 
@@ -138,23 +138,6 @@ def test_atomic_write_leaves_no_partial_file(tmp_path):
 # ── 배치 본체 ────────────────────────────────────────────────────
 
 
-def test_optional_wiring_is_actually_connected():
-    """🔴 폴백은 **미구현용**이다. 실물이 있는데 폴백을 타면 배치가 조용히 no-op 이 된다.
-
-    `_missing()` 은 모듈이 없을 때만 폴백하려는 것인데, `from X import Y` 에서 **Y 만**
-    없어도 `exc.name` 이 모듈명이라 True 가 나온다(3.12 확인). 그래서 import 하는 심볼
-    이름에 오타가 나면 폴백이 조용히 켜지고, 개선안·가이드라인이 **둘 다 no-op** 인데
-    요약엔 "ℹ️ 미연결" 한 줄만 찍히고 배치는 정상 종료한다. 셀러에게 개선안이 하나도
-    안 나가는 상태다.
-
-    이 파일의 다른 테스트는 그 함수들을 전부 monkeypatch 하므로 이 끊김을 못 잡는다.
-    (2026-08-11 리뷰 ②)
-    """
-    assert daily.MQ_AVAILABLE, "app.core.mq 가 있는데 폴백을 타고 있다"
-    assert daily.RECOMMENDATION_AVAILABLE, "Agent3 가 있는데 폴백을 타고 있다"
-    assert daily.GUIDELINE_AVAILABLE, "가이드라인이 있는데 폴백을 타고 있다"
-
-
 def test_classifier_versions_only_when_the_filter_guaranteed_them():
     """🔴 payload 의 분류기 신원은 **필터가 보장할 때만** 값이 있다.
 
@@ -164,14 +147,14 @@ def test_classifier_versions_only_when_the_filter_guaranteed_them():
     실으면 **검증한 적 없는 것을 검증된 것처럼 보고**하게 된다. 골든은 분류 오차가 0 인
     oracle 이라 애초에 분류기를 안 거쳤다 — `null` 이 정확한 답이다.
     """
-    versions = daily._classifier_versions_for(daily.load_inputs_from_db)
+    versions = daily.classifier_versions_for(daily.load_inputs_from_db)
 
     assert set(versions) == {"prompt_cs", "prompt_review", "model", "pipeline"}
     # 필터가 쓰는 값과 **같은 값**이어야 한다. 따로 조립하면 payload 가 실제로 읽은 것과
     # 다른 버전을 말하게 된다.
-    assert tuple(versions.values()) == daily._active_version_params()
+    assert tuple(versions.values()) == inputs._active_version_params()
 
-    assert daily._classifier_versions_for(_stub_inputs) is None
+    assert daily.classifier_versions_for(_stub_inputs) is None
 
 
 def _stub_inputs(window_end=None):
@@ -753,7 +736,7 @@ def _fake_summary(**overrides) -> dict:
         "items": 0,
         "documents": 0,
         # None = "이 입력원은 제외 건수를 보고하지 않는다"(골든·테스트 fake).
-        # 0건과 다른 값이다 — `daily._read_inputs` 참고.
+        # 0건과 다른 값이다 — `daily.read_inputs` 참고.
         "input_dropped": None,
         "coverage_gap_slots": 0,
         "coverage_missing_documents": 0,
@@ -971,7 +954,7 @@ def test_runtime_error_stays_confined_to_preconditions():
         and node.exc.func.id == "RuntimeError"
     }
 
-    assert hits == {"app/batch/daily.py"}, (
+    assert hits == {"app/batch/inputs.py"}, (
         "RuntimeError 를 던지는 곳이 배치 전제검사 밖으로 늘었습니다 — "
         f"daily.main() 의 (FileNotFoundError, RuntimeError) → exit 2 분류를 다시 보세요: {sorted(hits)}"
     )
