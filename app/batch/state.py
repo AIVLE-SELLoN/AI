@@ -71,7 +71,7 @@ GUIDELINE_RETRY_MAX_ATTEMPTS = 3
 """
 
 
-def _as_date(value: Any) -> date:
+def as_date(value: Any) -> date:
     """documents 의 `created_at`(str 또는 datetime)에서 날짜만 뽑는다."""
     if isinstance(value, str):
         value = datetime.fromisoformat(value)

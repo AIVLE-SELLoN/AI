@@ -96,3 +96,6 @@ eval/eval_sets/relabel_300.csv
 
 # 생성기 sandbox 출력 — data/ 와 같은 이유로 git 제외 (README 데이터 섹션)
 .sandbox/
+
+# CLAUDE.md 백업 사본 — 본체가 gitignore 라 사본도 올라가면 안 된다.
+CLAUDE.md.bak-*

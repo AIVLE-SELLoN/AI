@@ -45,9 +45,9 @@ from typing import Any
 # 재노출 목록은 아래 `__all__` 이 정본이다.
 from app.batch.inputs import (
     INPUT_WINDOW_DAYS,
-    _classifier_versions_for,
-    _read_inputs,
+    classifier_versions_for,
     load_inputs_from_db,
+    read_inputs,
 )
 from app.batch.state import (
     GUIDELINE_RETRY_MAX_ATTEMPTS,
@@ -55,7 +55,7 @@ from app.batch.state import (
     ROOT,
     STATE_PATH,
     STATE_RETENTION_DAYS,
-    _as_date,
+    as_date,
     load_pending_guidelines,
     load_prior_alerts,
     save_pending_guidelines,
@@ -463,7 +463,7 @@ async def run_batch(
         배치 요약 dict. 실패는 모아서 담고 **중간에 던지지 않는다.**
     """
     loader = load_inputs or load_inputs_from_db
-    classifier_versions = _classifier_versions_for(loader)
+    classifier_versions = classifier_versions_for(loader)
     if pending_path is None:
         # 커스텀 state_path 는 **파일명에서** 파생한다 — 디렉토리 기준이면 "파일명만 바꿔
         # 운영 디렉토리를 준" 디버그 실행이 운영 대기열을 그대로 소비·저장한다.
@@ -480,7 +480,7 @@ async def run_batch(
     started = datetime.now(timezone.utc)
     logger.info("배치 시작 trace_id=%s dry_run=%s", trace_id, dry_run)
 
-    items, documents, input_dropped = _read_inputs(loader, window_end)
+    items, documents, input_dropped = read_inputs(loader, window_end)
 
     # **window_end 를 여기서 한 번만 확정한다.** 로드·탐지·저장이 같은 값을 써야 한다.
     #    읽기는 실행 시각(`date.today()`), 쓰기는 데이터 시각(`window_end`)이면, 데이터가
@@ -488,7 +488,7 @@ async def run_batch(
     #    저장한 캐시를 통째로 버려 **매 배치가 첫 실행처럼 굴러간다.** 억제 모듈이 경과일을
     #    데이터 시각으로 세는 것과 같은 이유다.
     if window_end is None and documents:
-        window_end = max(_as_date(d["created_at"]) for d in documents)
+        window_end = max(as_date(d["created_at"]) for d in documents)
 
     # check_coverage 를 두 번 돌리지 않는다 — detect_anomaly 도 안에서 같은 계산을 한다.
     # 넘겨주면 128k 스캔이 한 번 줄고, "경고에 찍힌 슬롯 = 실제로 family 에서 빠진 슬롯"

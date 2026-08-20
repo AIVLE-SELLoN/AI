@@ -164,14 +164,14 @@ def test_classifier_versions_only_when_the_filter_guaranteed_them():
     실으면 **검증한 적 없는 것을 검증된 것처럼 보고**하게 된다. 골든은 분류 오차가 0 인
     oracle 이라 애초에 분류기를 안 거쳤다 — `null` 이 정확한 답이다.
     """
-    versions = daily._classifier_versions_for(daily.load_inputs_from_db)
+    versions = daily.classifier_versions_for(daily.load_inputs_from_db)
 
     assert set(versions) == {"prompt_cs", "prompt_review", "model", "pipeline"}
     # 필터가 쓰는 값과 **같은 값**이어야 한다. 따로 조립하면 payload 가 실제로 읽은 것과
     # 다른 버전을 말하게 된다.
     assert tuple(versions.values()) == inputs._active_version_params()
 
-    assert daily._classifier_versions_for(_stub_inputs) is None
+    assert daily.classifier_versions_for(_stub_inputs) is None
 
 
 def _stub_inputs(window_end=None):
@@ -753,7 +753,7 @@ def _fake_summary(**overrides) -> dict:
         "items": 0,
         "documents": 0,
         # None = "이 입력원은 제외 건수를 보고하지 않는다"(골든·테스트 fake).
-        # 0건과 다른 값이다 — `daily._read_inputs` 참고.
+        # 0건과 다른 값이다 — `daily.read_inputs` 참고.
         "input_dropped": None,
         "coverage_gap_slots": 0,
         "coverage_missing_documents": 0,

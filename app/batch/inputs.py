@@ -196,14 +196,14 @@ def load_inputs_from_db(
     return items, documents
 
 
-def _read_inputs(
+def read_inputs(
     loader: Callable[..., tuple[list[ClassifiedItem], list[dict]]],
     window_end: date | None,
 ) -> tuple[list[ClassifiedItem], list[dict], dict[str, int] | None]:
     """입력을 읽고, **관측할 수 있으면** 사유별 제외 건수도 같이 낸다. 못 보면 `None`.
 
     **`None`("이 입력원은 보고하지 않는다")과 `{}`("봤고 0건")은 다른 값이다.**
-       `_classifier_versions_for` 가 골든 입력에 `None` 을 싣는 것과 같은 규칙이다 —
+       `classifier_versions_for` 가 골든 입력에 `None` 을 싣는 것과 같은 규칙이다 —
        안 가르면 골든으로 돌린 배치가 "제외 0건" 이라고 **주장**하게 되는데, 골든 로더는
        매핑이 없는 행을 세지 않고 그냥 건너뛴다(`scripts/golden_inputs.py`). 즉 0 은
        관측이 아니라 무지다.
@@ -219,7 +219,7 @@ def _read_inputs(
     return items, documents, dict(dropped)
 
 
-def _classifier_versions_for(loader: Callable) -> dict | None:
+def classifier_versions_for(loader: Callable) -> dict | None:
     """알림에 실을 분류기 신원. 모르면 None(payload 에 `null`).
 
     **입력원이 `load_inputs_from_db` 일 때만 값이 있다.** 근거가 `_ASPECT_SQL` 의 활성 버전
