@@ -32,7 +32,10 @@ on:
   push:
     branches: [main]
 
-# 레지스트리 인증은 `secrets.DOCKERHUB_*` 로 하고 `GITHUB_TOKEN` 은 체크아웃에만 쓴다.
+# 시크릿이 셋이다. 레지스트리 인증은 `secrets.DOCKERHUB_*`, 이 저장소 체크아웃은
+# `GITHUB_TOKEN`, 그리고 **gitops 저장소 쓰기는 `secrets.GITOPS_PAT`** 이 맡는다.
+# `GITHUB_TOKEN` 은 다른 저장소에 쓰지 못하므로 `contents: read` 를 올릴 이유가 없다 —
+# 쓰기 권한은 전부 PAT 쪽에 있고, 그 범위는 `sellon-gitops` 한 곳으로 끊어져 있다.
 permissions:
   contents: read
 
@@ -59,6 +62,13 @@ concurrency:
 #    그날 이후 main push 는 로그인 스텝에서 인증 실패로 죽는다(빌드·스모크는 그 전에 끝나
 #    있으므로 실패 지점이 명확하다). 만료 전에 Docker Hub 에서 토큰을 새로 발급해
 #    레포 시크릿을 갈아끼울 것.
+#
+# ⚠️ **`secrets.GITOPS_PAT` 은 2026-09-19 에 만료된다 — 알고 그 기간으로 끊었다.**
+#    `AIVLE-SELLoN/sellon-gitops` 한 곳에만 Contents:write 가 있는 fine-grained 토큰이다.
+#    그날 이후 main push 는 `gitops 체크아웃` 스텝에서 인증 실패로 죽는다 — 이미지 push 는
+#    그 전에 끝나 있으므로 **레지스트리에는 새 이미지가 있는데 클러스터만 옛 태그에 멈춘**
+#    상태가 된다. 빨간불 자체는 뜨지만 원인이 자명하지 않으니 이 줄을 근거로 볼 것.
+#    발급 주체가 개인 계정이라, 그 계정이 조직을 떠나면 만료 전이라도 같은 증상이 난다.
 env:
   IMAGE: y0njunch0i/sellon-ai-node
 
@@ -199,6 +209,88 @@ jobs:
           docker push "${{ env.IMAGE }}:main-${{ steps.meta.outputs.short }}"
           docker push "${{ env.IMAGE }}:main"
 
+      # 🔴 **반드시 `레지스트리 push` 뒤에 온다 — 순서를 바꾸지 말 것.** gitops 는 ArgoCD 가
+      #    `automated: selfHeal` 로 즉시 따라가는 배포 선언이라, 태그를 먼저 올리면 아직
+      #    레지스트리에 없는 이미지를 클러스터가 받으러 가서 `ImagePullBackOff` 가 나는
+      #    창이 열린다. 스모크 → push → bump 순서라야 "검증된 바이트가 이미 레지스트리에
+      #    있는 태그" 만 gitops 에 박힌다.
+      - name: gitops 체크아웃
+        if: github.event_name == 'push'
+        uses: actions/checkout@v7
+        with:
+          repository: AIVLE-SELLoN/sellon-gitops
+          ref: main
+          token: ${{ secrets.GITOPS_PAT }}
+          path: gitops
+
+      # 🔴 **치환이 0줄이어도 스크립트는 성공한다 — 그래서 앞뒤로 가드를 건다.**
+      #    `sed` 는 패턴이 안 맞으면 조용히 0줄을 바꾸고 exit 0 한다. 그 상태로 진행하면
+      #    스테이지가 비어 "이미 그 태그다" 분기로 빠지는데, 실제로는 **못 바꾼 것**이다.
+      #    배포가 안 됐는데 CI 는 초록이고 요약에는 새 태그가 찍혀 사람이 오독한다.
+      #    그래서 (1) 치환 전 대상이 정확히 1줄인지, (2) 치환 후 그 값이 됐는지를 본다.
+      #
+      # 🔴 **들여쓰기는 캡처해서 되돌려 넣는다(`\1`).** 이걸 빼면 `newTag:` 가 컬럼 0 으로
+      #    올라붙어 `images:` 항목에서 떨어져 나가고 kustomize 가 파싱에 실패한다.
+      #    검증 `grep` 도 들여쓰기를 포함해서 본다 — 안 그러면 이 사고를 못 잡는다.
+      #
+      # ⚠️ 1줄 가드는 "항목이 둘 이상이면 멈춘다" 는 뜻이기도 하다. `sed` 는 매칭되는 모든
+      #    줄을 바꾸므로, `images:` 에 다른 이미지가 추가되면 그 항목까지 이 저장소의 SHA 로
+      #    덮어써 존재하지 않는 태그가 박힌다. 그때는 이름으로 블록을 고르는 방식(`yq` 등)
+      #    으로 바꿔야 하고, 그 전까지는 여기서 빨간불로 멈추는 편이 낫다.
+      - name: gitops 이미지 태그 갱신
+        id: gitops
+        if: github.event_name == 'push'
+        working-directory: gitops
+        env:
+          TAG: main-${{ steps.meta.outputs.short }}
+          FILE: fastapi/kustomization.yaml
+        run: |
+          n=$(grep -cE '^[[:space:]]*newTag:' "$FILE")
+          if [ "$n" -ne 1 ]; then
+            echo "::error::$FILE 의 newTag 줄이 ${n}개입니다 — 1개일 때만 자동 갱신합니다"
+            exit 1
+          fi
+
+          sed -i -E "s|^([[:space:]]*)newTag:.*|\1newTag: ${TAG}|" "$FILE"
+
+          if ! grep -qE "^[[:space:]]+newTag: ${TAG}$" "$FILE"; then
+            echo "::error::치환에 실패했습니다 — $FILE 의 현재 내용을 확인하세요"
+            grep -nE '^[[:space:]]*newTag:' "$FILE"
+            exit 1
+          fi
+
+          git config user.name  "ci-bot"
+          git config user.email "ci-bot@users.noreply.github.com"
+          git add "$FILE"
+
+          if git diff --staged --quiet; then
+            echo "이미 ${TAG} 입니다 — 커밋할 것이 없습니다."
+            echo "state=unchanged" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git commit -m "chore(fastapi): bump image to ${TAG}"
+
+          # 동시 실행은 `concurrency` 가 이미 직렬화한다. 이 루프가 실제로 대비하는 것은
+          # **사람이 gitops 를 직접 건드려 원격이 앞서간 경우**다.
+          for i in 1 2 3; do
+            if git push; then
+              echo "${i}회차에 push 했습니다."
+              echo "state=pushed" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "push 거부됨 — rebase 후 재시도합니다."
+            # `bash -e` 라 rebase 실패는 여기서 스크립트를 끝낸다. 그대로 두면 아래
+            # `::error::` 가 안 찍혀 원인이 로그에 묻히므로 직접 문구를 남긴다.
+            git pull --rebase || {
+              echo "::error::gitops rebase 실패 — 충돌을 사람이 풀어야 합니다"
+              exit 1
+            }
+          done
+
+          echo "::error::3회 시도 후에도 gitops push 에 실패했습니다"
+          exit 1
+
       - name: 태그 요약
         if: github.event_name == 'push'
         run: |
@@ -211,4 +303,11 @@ jobs:
             echo '```'
             echo ""
             echo "platform: linux/amd64"
+            echo ""
+            # 배포 여부가 스텝 로그에만 있으면 아무도 안 본다. 잡 화면에서 바로 보이게 남긴다.
+            case "${{ steps.gitops.outputs.state }}" in
+              pushed)    echo "gitops: fastapi → main-${{ steps.meta.outputs.short }} (갱신 커밋 push 됨)" ;;
+              unchanged) echo "gitops: fastapi → main-${{ steps.meta.outputs.short }} (이미 같은 태그, 변경 없음)" ;;
+              *)         echo "gitops: 갱신 결과 불명 — 스텝 로그를 확인하세요" ;;
+            esac
           } >> "$GITHUB_STEP_SUMMARY"
