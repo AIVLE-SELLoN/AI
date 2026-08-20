@@ -20,7 +20,7 @@ Manual ACK 라 확인하지 않은 메시지는 연결이 끊기는 순간 브�
 
 ⚠️ **Git Bash 에서 `MQ_VHOST=/` 를 인라인으로 주면 안 된다.** MSYS 경로 변환이 `/` 를
    `C:/Program Files/Git/` 로 바꿔서 엉뚱한 vhost 로 접속한다. `.env` 에 적거나
-   `MSYS_NO_PATHCONV=1` 을 앞에 붙일 것. (운영 vhost 는 `/app` 이라 이 문제가 없다.)
+   `MSYS_NO_PATHCONV=1` 을 앞에 붙일 것. (운영 vhost 는 `app` 이라 슬래시가 없어 무관하다.)
 """
 
 from __future__ import annotations
