@@ -1,12 +1,8 @@
-"""담당: 현진 (Agent1) — aspect·감성 분류.
+"""담당: 현진 (Agent1) — aspect·감성 분류 REST 진입점.
 
-완료 기준: 원문 리스트 → ClassifiedItem 리스트.
-           fixture 100건 분류 정확도 측정치 첨부.
-
-🔴 스코프 확인 필요: 분류 워커 명세 §1은 Kafka 컨슈머(폴링→배치→오프셋 커밋) 구조를
-   그리고 있음. 이 라우터는 README 표의 POST /api/v1/classify(요청-즉시응답 방식)를
-   우선 구현한 것 — Kafka 워커와 이 REST 엔드포인트가 둘 다 필요한지, 이 라우터가
-   나중에 대체되는지 팀 확인 필요.
+원문 리스트 → ClassifiedItem 리스트. 요청-즉시응답 경로다.
+배치 경로는 scripts/classification_worker.py 가 따로 맡는다 — 같은
+classify_aspect() 를 부르고 결과를 raw DB 에 적재한다.
 """
 
 from __future__ import annotations
@@ -29,13 +25,11 @@ class ClassifyRequest(BaseModel):
 
 
 class ClassifyErrorItem(BaseModel):
-    """부분 실패 1건. item_id로 요청의 어느 항목이 실패했는지 매칭.
+    """부분 실패 1건. item_id 로 요청의 어느 항목이 실패했는지 매칭.
 
-    error는 예외 타입명(LlmCallError/LlmParseError)만 담는 짧은 코드다(PR 리뷰
-    nit, 2026-08-04) — LlmParseError 메시지엔 LLM 원본 응답 전체가 그대로
-    포함될 수 있어(_parse_llm_response의 "원본: {raw_aspects}"), 이걸 API
-    응답에 그대로 실으면 내부 프롬프트·데이터가 외부로 노출된다. 상세는
-    logger.warning으로 서버 로그에만 남긴다.
+    error 는 예외 타입명만 담는다 — LlmParseError 메시지엔 LLM 원본 응답이 통째로
+    실릴 수 있어, 그대로 내보내면 내부 프롬프트·데이터가 외부로 샌다. 상세는 서버
+    로그에만 남긴다.
     """
 
     item_id: str
@@ -49,7 +43,7 @@ class ClassifyResponse(BaseModel):
 
 @router.get("/classify/ping")
 async def ping() -> dict[str, str]:
-    """0주차 확인용 — 앱 1개가 4명 코드로 뜨는지 보는 hello world."""
+    """헬스체크 — 앱 하나에 네 모듈이 함께 떠 있는지 본다."""
     return {"module": "classification", "owner": "현진", "status": "ok"}
 
 
@@ -57,14 +51,10 @@ async def ping() -> dict[str, str]:
 async def classify(request: ClassifyRequest) -> ClassifyResponse:
     """CS/리뷰 원문 → ClassifiedItem 리스트.
 
-    service.classify_aspect()가 내부적으로 asyncio.gather()를 써서 여러 건을
-    동시에 처리(분류 워커 명세 §1 "LLM 배치 분류 추론" 대응).
-
-    ⚠️ 부분 성공 허용(서영님↔현진 합의, 2026-08-04): classify_aspect()가 이제
-    실패 시 raise하지 않고 그 자리에 예외 객체를 담아 반환한다(계약 — service.py
-    참고). 1건(예: 환각으로 인한 파싱 실패)이 요청 전체를 502로 만드는 게 과하다고
-    판단해, 성공/실패를 나눠 200으로 응답하고 실패는 item_id와 함께 errors에
-    담는다. 클라이언트가 errors만 보고 그 항목만 재시도할 수 있게.
+    부분 성공을 허용한다 — 1건의 파싱 실패가 요청 전체를 502 로 만들지 않도록
+    성공·실패를 나눠 200 으로 응답하고, 실패는 item_id 와 함께 errors 에 담아
+    클라이언트가 그 항목만 재시도하게 한다. 실패가 예외가 아니라 반환값으로 오는
+    계약은 service.classify_aspect() 참고.
     """
     raw_results = await classify_aspect(request.items)
 
