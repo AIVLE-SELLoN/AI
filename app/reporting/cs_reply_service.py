@@ -48,7 +48,16 @@ logger = logging.getLogger("CSReplyService")
 # v4 부터 guideline_id 를 서버가 계산해 주입한다 — 모델이 만들면 알림별 유일성이 깨진다.
 # v5 는 원문 출처(문의/리뷰)를 분기한다. 리뷰는 공개 답글이라 응대가 다른데, 전 구간이
 # "문의" 를 전제하면 답글로는 접수할 수 없는 "무상 교환·반품을 도와드리겠습니다" 가 나간다.
-PROMPT_VERSION = "cs_reply_v5"
+#
+# 🔴 **v6 은 「출력 형식」 예시의 리터럴 값을 걷어낸다** — 월간 리포트 v7 과 같은 사유이고,
+#    이쪽이 더 위험했다. v5 예시가 수치(`5%`·`13%`·`8%p`·`200건`·`18건`·`26건`·`69%`)뿐
+#    아니라 **`INQ-000001` · `RVW-000002` 를 item_id 리터럴로** 담고 있었다.
+#
+#    수치는 검증기가 반려하지만(시끄럽게 실패), **ID 는 다르다.** 두 값 모두 운영 raw DB 에
+#    실재하는 ID 라(2026-08 실측), 모델이 베낀 ID 가 그 알림의 [원문] 목록에 우연히 들어
+#    있으면 `validate_cs_guideline` 의 근거성 검사를 **통과한다** — 그러면 상담원이
+#    **엉뚱한 고객의 문의에 붙은 응대 지침**을 받는다. 조용히 틀리는 쪽이다.
+PROMPT_VERSION = "cs_reply_v6"
 
 
 def build_guideline_id(input_data: CSGuidelineInput) -> str:
@@ -87,7 +96,12 @@ _SOURCE_LABEL = {Source.CS: "문의", Source.REVIEW: "리뷰"}
 
 
 # 출처 열이 있는 표(`ID|출처|내용`)를 읽는 프롬프트. 그 아래 버전은 `ID|원문` 2열이다.
-PROMPT_VERSIONS_WITH_SOURCE = frozenset({"cs_reply_v5"})
+#
+# ⚠️ **새 버전을 만들면 여기에도 넣어야 한다.** 빠뜨리면 표가 `ID|원문` 2열로 만들어지는데
+#    프롬프트는 `출처` 열이 있다고 설명하고 있어서, 모델이 문의와 리뷰를 구분하지 못한 채
+#    전 건을 "문의" 로 응대한다 — 리뷰 답글에 접수 약속이 나가는 그 사고다.
+#    **터지지 않고 문장만 틀리는 형태**라 테스트로도 잘 안 잡힌다.
+PROMPT_VERSIONS_WITH_SOURCE = frozenset({"cs_reply_v5", "cs_reply_v6"})
 
 
 def _build_inquiry_table(input_data: CSGuidelineInput, *, with_source: bool = True) -> str:
