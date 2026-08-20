@@ -54,7 +54,28 @@ logger = logging.getLogger("MonthlyReportService")
 # v6 이 글자 수 상한을 명시한다(항목당 80자, cause_title 40자). 레이아웃이 상품 1건 =
 # 1페이지라 문장이 길어지면 그 상품만 두 장으로 갈린다. 스키마 max_length(200자)는
 # 계약이라 그대로 두고 프롬프트로 실제 출력 길이를 잡는다.
-PROMPT_VERSION = "monthly_report_v6"
+#
+# 🔴 **v7 은 「출력 형식」 예시에서 실제처럼 보이는 값을 걷어낸다.** v6 예시가
+#    `8%p` · `50%` · `450건` · `P001` 을 리터럴로 담고 있었는데, gpt-4o-mini 가 그걸
+#    데이터로 오인해 그대로 옮겨 적었다 — 검증기의 수치 팩트체크가 전량 반려하고,
+#    예시가 고정이라 **재시도 3회가 모두 같은 값을 냈다**(2026-07 실행 실측: 42건 중
+#    9건이 FAILED_VALIDATION, 실패 사유가 저 네 값에 집중).
+#    `P001` 이 특히 분명한 증거였다 — P003 요청에 P001 이 돌아왔다.
+#    v7 은 숫자 자리를 `<속성표의 부정%>` 같은 자리표시자로 바꾸고, 상품코드·연월은
+#    `$master_product_code`·`$report_month` 로 두어 **예시가 곧 정답**이 되게 했다.
+#    → 실패 9건 → 2건 (42건 중, 2026-07 재실행 실측).
+#
+# v8 은 그 2건을 닫는다. 사유가 수치가 아니라 **스키마 위반**이었다:
+#   `List should have at least 3 items after validation, not 1` (aspect_summaries)
+# `aspect_summaries` 는 min_length=max_length=3(색상·사이즈·소재 각 1건)인데 v6·v7 의
+# 출력 예시에는 **항목이 1개뿐**이라, 모델이 예시의 형태를 따라 1건만 냈다. 규칙 4번은
+# "3개 속성 각 1건" 이라고 적혀 있었지만 **예시가 규칙을 이긴다.**
+# v8 은 예시에 세 항목을 다 넣고 규칙 4번에도 개수를 못박았다.
+#
+# ⚠️ 같은 함정을 다시 만들지 않으려면 **스키마의 고정 개수 제약과 예시 항목 수를 함께**
+#    봐야 한다. 확인해 둔 나머지: cause_analysis_results·recommended_actions 는 min 1
+#    (예시 2개로 맞춤), channel_pair_analyses 는 min 없음, 중첩 리스트는 min 1 이다.
+PROMPT_VERSION = "monthly_report_v8"
 
 
 def build_report_id(input_data: MonthlyReportInput) -> str:
