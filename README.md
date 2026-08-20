@@ -403,11 +403,13 @@ data/                    로컬 입력·골든·실행 상태, 대부분 git 제
 
 - 이 저장소의 Raw DB 실행 어댑터는 현재 SQLite 파일 경로를 사용합니다.
 - mock 입력·golden 데이터 대부분은 저장소에 포함되지 않습니다.
-- CI 워크플로는 아직 없으며 테스트는 로컬에서 실행합니다.
+- CI는 GitHub Actions 워크플로 3종(`test.yml` · `image.yml` · `mock-producer.yml`)으로 돌립니다.
 - 일일 배치 실행 코드는 구현되어 있지만 배포 스케줄러 정의는 이 저장소에 포함되지 않습니다.
 - `POST /api/v1/reports`는 단건 미리보기용이고, 운영 월간 산출물은 배치가 합본 PDF로 생성합니다.
 - 리포팅 완료 콜백은 현재 API 응답으로 반환합니다. Spring Boot callback push 전송은 별도 연동 범위입니다.
-- 실제 유입 주기의 freshness·watermark 임계값은 데이터 분포 확인 전 임의로 정하지 않았습니다.
+- 실제 유입 주기의 freshness·watermark 임계값은 아직 정하지 않았습니다 — 문서의 마지막
+  날짜만으로는 **문의가 실제로 없었던 날과 수집 장애를 구분할 수 없어서**, 백엔드의 수집
+  완료 신호가 확정된 뒤 구현합니다. coverage 제외 상태의 운영 노출도 같은 이유로 열려 있습니다.
 
 ---
 
@@ -419,11 +421,17 @@ data/                    로컬 입력·골든·실행 상태, 대부분 git 제
 | [`eval/README.md`](eval/README.md) | 실험 7종의 실행법, 결과, 비용, 해석 한계 |
 | [`docs/schemas.md`](docs/schemas.md) | Agent 간 공용 데이터 계약 |
 | [`docs/이상탐지 로직.md`](docs/이상탐지%20로직.md) | Agent2 단계별 탐지 명세 |
+| [`docs/이상탐지 시나리오.md`](docs/이상탐지%20시나리오.md) | 이상탐지 시나리오·분모 정의(§1) |
 | [`docs/detection_schema.md`](docs/detection_schema.md) | 이상 알림 스키마 |
 | [`docs/agent3_logic.md`](docs/agent3_logic.md) | 개선안 생성·검증·HITL 로직 |
+| [`docs/recommenation_schema.md`](docs/recommenation_schema.md) | 개선안 출력 스키마 (파일명 `recommenation`은 오타지만 참조가 이 철자로 박혀 있어 그대로 둡니다) |
 | [`docs/mq_events.md`](docs/mq_events.md) | RabbitMQ 이벤트 계약 |
 | [`docs/reporting_schema.md`](docs/reporting_schema.md) | 월간 리포트·CS 가이드라인 계약 |
+| [`docs/reporting_validation.md`](docs/reporting_validation.md) | 리포팅 산출물 검증 규칙·실험 설계 |
+| [`docs/classified_item_version_columns.md`](docs/classified_item_version_columns.md) | 분류기 버전 컬럼 3종 명세·적용 절차 |
 | [`docs/vectordb_tenancy.md`](docs/vectordb_tenancy.md) | 회사별 VectorDB 격리 정책 |
+
+`docs/`는 위 표가 전부입니다 — 날짜가 붙은 시점 기록은 두지 않습니다(이력은 git이 갖습니다).
 
 ---
 
