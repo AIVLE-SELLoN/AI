@@ -68,7 +68,7 @@ def handle_recommendation_reviewed(payload: dict) -> None:
     recommendation 을 import 하면 의존 방향이 거꾸로 뒤집히기 때문이다.
 
     Raises:
-        ValidationError: payload 가 계약과 다름 (§8).
+        ValidationError: payload 가 `docs/mq_events.md` 의 HITL 이벤트 계약과 다름.
         HitlContextUnavailableError: 적재 재료 부족 — `load_hitl_context()` 참고.
         ValueError: alert/recommendation 이 서로 다른 건이거나 아직 대기 상태.
     """

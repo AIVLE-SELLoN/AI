@@ -73,7 +73,7 @@ class ProcessHitlResponse(BaseModel):
 
 @router.post("/recommendations/hitl", response_model=ProcessHitlResponse)
 async def process_hitl(request: ProcessHitlRequest) -> ProcessHitlResponse:
-    """승인/반려 결과를 컬렉션2(과거·반려 사례)에 적재(§4-2).
+    """승인/반려 결과를 컬렉션2(과거·반려 사례)에 적재.
 
     다음 유사 케이스의 개선안 생성 때 "이런 개선안은 반려/승인됐었다"를 참고
     자료로 쓴다. hitl_status가 아직 PENDING이거나 alert/recommendation이 서로

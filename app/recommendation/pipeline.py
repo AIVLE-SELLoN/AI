@@ -66,10 +66,10 @@ from app.recommendation.grounding import has_evidence, verify_grounding
 logger = logging.getLogger(__name__)
 
 NO_DETAIL_TEXT = "정보 없음"
-"""상세페이지 미등록/빈 값 표기(§4-1·§4-5) — 근거없음 경로를 유발하는 값이라 상수로 뺀다."""
+"""상세페이지 미등록/빈 값 표기 — 근거없음 경로를 유발하는 값이라 상수로 뺀다."""
 
 ACTIONABLE_TEXT_MARKERS = ("하세요", "해보세요", "바랍니다", "권장", "검토", "확인", "진행", "추가")
-"""proposed_text가 실행 가능한 안내문인지 판정하는 키워드 휴리스틱(actionability, §2 방법5).
+"""proposed_text가 실행 가능한 안내문인지 판정하는 키워드 휴리스틱(actionability).
 팀 합의된 기준이 따로 없어 자체 설계한 임시 규칙 — 필요시 조정."""
 
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -159,15 +159,15 @@ _DETECTION_CONFIDENCE_CAP = {
     DetectionConfidence.LOW: RecommendationConfidence.LOW,
     DetectionConfidence.NOT_APPLICABLE: RecommendationConfidence.LOW,
 }
-"""탐지확신도→개선안확신도 상한 매핑(§5-1). should_generate 게이트 통과분은 실무적으로
+"""탐지확신도→개선안확신도 상한 매핑. should_generate 게이트 통과분은 실무적으로
 HIGH/MEDIUM만 들어오지만, LOW/NOT_APPLICABLE도 방어적으로 가장 낮은 상한을 매핑해둔다."""
 
 ETC_LABEL = "기타"
-"""원인 라벨이 "기타"면 확신도 상한을 중간으로 캡핑한다(팀 §4-3 도구선택표). 라우팅
+"""원인 라벨이 "기타"면 확신도 상한을 중간으로 캡핑한다(팀 도구선택표). 라우팅
 (어떤 tool을 쓸지)은 그대로 LLM이 판단하고, 확신도만 후처리로 깎는다 — score_confidence 참고."""
 
 SCOPE_LIMIT_LABELS = ("실물_염색_편차", "실제_원단_문제")
-"""텍스트도 사진도 해결 못하는 실제 상품/공급 단계 문제(팀 §4-3 도구선택표 스코프 한계
+"""텍스트도 사진도 해결 못하는 실제 상품/공급 단계 문제(팀 도구선택표 스코프 한계
 예외). LLM 호출 없이 고정 문구로 대체하고 확신도는 낮음으로 못박는다 — 생성해봐야
 지어내는 것밖에 안 되는 케이스라 애초에 LLM을 안 부른다."""
 
@@ -202,7 +202,7 @@ def retrieve_context(
     모른 채로 두 후보를 같이 준비해서 모델에게 보여준다:
 
     - detail_text: 컬렉션1(상세페이지) get(정확 필터) — 임베딩 안 거침. 미등록
-      SKU/빈 값이면 NO_DETAIL_TEXT(§4-5).
+      SKU/빈 값이면 NO_DETAIL_TEXT.
     - cs_quotes: image_guide 의 **근거 원문**. `evidence.inquiry_ids` 로 조회한 실제
       고객 문의다. 없으면 NO_DETAIL_TEXT.
     - cs_summary: root_cause 통계 한 줄. **근거가 아니라 맥락**이다.
@@ -212,8 +212,8 @@ def retrieve_context(
     되풀이하는 것만으로 통과한다 — 검증이 자기 자신을 대조하는 꼴이 된다.
     **evaluate() 가 대조하는 건 cs_quotes 하나뿐이다.**
 
-    컬렉션2(과거·반려 사례)는 공통, 0건이면 similar_case=None(§4-2 — 반려 적재
-    전엔 항상 0건이라 정상 상태).
+    컬렉션2(과거·반려 사례)는 공통이고, 0건이면 similar_case=None 이다 — 반려 적재
+    전에는 항상 0건이라 정상 상태다.
     """
     detail_text = _get_detail_page_text(alert)
     cs_quotes = _collect_cs_quotes(inquiries)
@@ -247,7 +247,7 @@ def retrieve_context(
 
 
 def _get_detail_page_text(alert: DetectionAlert) -> str:
-    """컬렉션1(상세페이지) get — 임베딩 안 거침. 미등록 SKU/빈 값이면 NO_DETAIL_TEXT(§4-5)."""
+    """컬렉션1(상세페이지) get — 임베딩 안 거침. 미등록 SKU/빈 값이면 NO_DETAIL_TEXT."""
     detail_pages = get_detail_pages()
     tenant = current_tenant()
     # 회사 축을 반드시 같이 좁힌다 — `product_group_id` 가 회사별 시퀀스라 A사 P001 과
@@ -343,7 +343,7 @@ def quotable_inquiries(inquiries: Sequence[LinkedCSInquiry]) -> list[LinkedCSInq
 
 
 def evidence_for(proposal_type: ProposalType, context: dict) -> str:
-    """도구별 근거 원문을 고른다 — copy_draft→상세페이지 / image_guide→CS 원문(§4-3).
+    """도구별 근거 원문을 고른다 — copy_draft→상세페이지 / image_guide→CS 원문.
 
     `generate_proposal`(무엇을 보여줄지)·`evaluate`(무엇과 대조할지)·`run`(근거가
     있는지)이 **같은 함수를 쓴다.** 셋이 각자 슬롯을 고르면 "프롬프트엔 A 를 주고
@@ -356,7 +356,7 @@ def evidence_for(proposal_type: ProposalType, context: dict) -> str:
 
 
 def _collect_cs_quotes(inquiries: Sequence[LinkedCSInquiry]) -> str:
-    """image_guide 의 근거 원문 — 실제 고객 문의를 그대로 이어 붙인다(§4-3).
+    """image_guide 의 근거 원문 — 실제 고객 문의를 그대로 이어 붙인다.
 
     앞에서부터 CS_QUOTE_TOP_N 건까지만 싣는다. 원문이 빈 항목은 버린다 — 빈 문자열은
     grounding 대조에서 "아무거나 통과"로 작동한다(`has_evidence` 가 빈 source 를
@@ -372,7 +372,7 @@ def _collect_cs_quotes(inquiries: Sequence[LinkedCSInquiry]) -> str:
 
 
 def _summarize_cs_evidence(alert: DetectionAlert) -> str:
-    """root_cause 통계 한 줄 요약 — **근거가 아니라 맥락이다**(§4-3).
+    """root_cause 통계 한 줄 요약 — **근거가 아니라 맥락이다**.
 
     프롬프트에 "몇 건 중 몇 건" 이라는 규모를 보여주는 용도이고, 컬렉션2 적재
     (`record_hitl_outcome`)의 검색용 텍스트에도 쓴다.
@@ -388,7 +388,7 @@ def _summarize_cs_evidence(alert: DetectionAlert) -> str:
 
 @traceable
 async def route_proposal_type(alert: DetectionAlert, context: dict) -> ProposalType:
-    """개선안 도구 라우팅 — LLM이 tool 호출로 직접 판단(§4-3).
+    """개선안 도구 라우팅 — LLM이 tool 호출로 직접 판단.
 
     copy_draft/image_guide 두 tool과 실제 근거(상세페이지 원문 + CS 요약)를 모델에게
     보여주고, tool_choice="required"로 반드시 둘 중 하나를 호출하게 한다. 판단
@@ -438,7 +438,7 @@ async def generate_proposal(
 
     current_text·proposed_text·rationale 셋 다 LLM이 채운다. current_text는 LLM이
     근거 원문에서 "인용"한 것이라고 주장하는 문구 — LLM 자기신고를 그대로 믿지 않고
-    evaluate()가 실제 근거(context)와 문자 그대로 대조해 사후 검증한다(§4-3). type
+    evaluate가 실제 근거(context)와 문자 그대로 대조해 사후 검증한다. type
     (route_proposal_type 결과)·target_field·detailpage_grounded는 alert/context에서
     이미 알고 있어 LLM에 맡기지 않는다.
 
@@ -490,7 +490,7 @@ async def generate_proposal(
 
 @traceable
 async def generate_fallback_proposal(alert: DetectionAlert, proposal_type: ProposalType) -> Proposal:
-    """근거없음 경로 — grounding이 MAX_RETRY번 실패했을 때만 호출된다(§2 방법1).
+    """근거없음 경로 — grounding이 MAX_RETRY번 실패했을 때만 호출된다.
 
     특정 인용 없이 일반 가이드 문구로 대체한다. current_text는 NO_DETAIL_TEXT로
     고정 — "근거를 특정하지 못했다"를 그대로 반영한다. evaluate()를 다시 태우지
@@ -514,11 +514,11 @@ async def generate_fallback_proposal(alert: DetectionAlert, proposal_type: Propo
 
 
 def _build_scope_limit_proposal(alert: DetectionAlert) -> Proposal:
-    """스코프 한계 원인(SCOPE_LIMIT_LABELS) 전용 — LLM 호출 없이 고정 문구(§4-3).
+    """스코프 한계 원인(SCOPE_LIMIT_LABELS) 전용 — LLM 호출 없이 고정 문구.
 
     텍스트·이미지 어느 쪽으로도 해결 안 되는 원인이라고 표에 이미 정해져 있어서,
     LLM한테 뭘 만들라고 시켜봐야 근거 없이 지어내는 것밖에 안 된다. type은 copy_draft로
-    고정(§4-3 표기 그대로), current_text는 인용할 근거가 없으므로 NO_DETAIL_TEXT.
+    고정(표기 그대로), current_text는 인용할 근거가 없으므로 NO_DETAIL_TEXT.
     """
     return Proposal(
         type=ProposalType.COPY_DRAFT,
@@ -531,7 +531,7 @@ def _build_scope_limit_proposal(alert: DetectionAlert) -> Proposal:
 
 
 def _is_consistent_with_root_cause(rationale: str, alert: DetectionAlert) -> bool:
-    """rationale이 실제 진단된 원인 라벨을 근거로 삼고 있는지(자기일관성, §2 방법4).
+    """rationale이 실제 진단된 원인 라벨을 근거로 삼고 있는지(자기일관성).
 
     grounding은 통과해도(current_text는 진짜 인용) rationale이 엉뚱한 사유를 댈 수
     있다 — 이 경우를 잡는다. root_cause가 없으면(원칙적으로 게이트에서 걸러지지만
@@ -554,7 +554,7 @@ def _is_consistent_with_root_cause(rationale: str, alert: DetectionAlert) -> boo
 
 
 def _is_actionable(proposed_text: str) -> bool:
-    """proposed_text가 실행 가능한 안내문 형태인지(actionability, §2 방법5).
+    """proposed_text가 실행 가능한 안내문 형태인지(actionability).
 
     ACTIONABLE_TEXT_MARKERS 키워드 휴리스틱 — "느낌"이나 "확신도" 같은 관찰만 있고
     행동 지시가 없는 문장을 거른다.
@@ -563,10 +563,10 @@ def _is_actionable(proposed_text: str) -> bool:
 
 
 def evaluate(proposal: Proposal, alert: DetectionAlert, context: dict, attempt: int = 1) -> Evaluator:
-    """Evaluator 검증 — 3기준 실제 판정(§2·§4-3).
+    """Evaluator 검증 — 3기준 실제 판정.
 
     - grounding: proposal.current_text(LLM이 "이게 근거다"라고 주장한 인용)가 실제
-      근거(context["detail_text"] 또는 context["cs_quotes"], §4-3 도구별 분리)에
+      근거(context["detail_text"] 또는 context["cs_quotes"], 도구별 분리)에
       있는지 grounding.py로 대조. 없는 내용을 인용했다고 우기면 실패한다.
       image_guide 쪽 대조 대상은 **cs_quotes(고객 원문)이지 cs_summary가 아니다.**
       cs_summary는 우리가 만든 문장이라 그걸 대조하면 LLM이 되풀이만 해도 통과한다.
@@ -619,7 +619,7 @@ def evaluate(proposal: Proposal, alert: DetectionAlert, context: dict, attempt: 
 def score_confidence(
     proposal: Proposal, context: dict, alert: DetectionAlert, evaluator: Evaluator
 ) -> tuple[RecommendationConfidence, str, bool]:
-    """개선안 확신도 산정(§4-4) + 캡핑 2단계(§4-3·§5-1).
+    """개선안 확신도 산정 + 캡핑 2단계.
 
     베이스 라벨은 **근거(필수) + 보강 2축**으로 정한다:
       - 근거 없음                       → 낮음
@@ -635,13 +635,13 @@ def score_confidence(
     전까지 항상 False라, 이 축이 없으면 "높음"이 구조적으로 나올 수 없었다.
 
     그 위에 캡핑을 두 번 거친다 — 라우팅(어떤 tool을 쓸지)은 그대로 LLM이 판단하고,
-    이 두 규칙은 결과 확신도만 후처리로 깎는 안전장치다(§4-3 도구선택표):
+    이 두 규칙은 결과 확신도만 후처리로 깎는 안전장치다(도구선택표):
     1. 원인 라벨이 "기타"면 상한을 중간으로 캡핑.
     2. SCOPE_LIMIT_LABELS(실물_염색_편차·실제_원단_문제)는 위 계산을 다 건너뛰고
        무조건 낮음으로 확정 — 텍스트·이미지 어느 쪽으로도 해결 안 되는 케이스라
        확신도를 매길 근거 자체가 없다.
 
-    마지막으로 alert.detection_confidence로 한 번 더 캡핑한다(§5-1) — 탐지
+    마지막으로 alert.detection_confidence로 한 번 더 캡핑한다 — 탐지
     확신도가 중간이면 개선안도 중간이 상한(높음 표시 금지).
 
     Returns:
@@ -705,7 +705,7 @@ def _build_citations(
     evaluator: Evaluator,
     inquiries: Sequence[LinkedCSInquiry],
 ) -> list[Citation]:
-    """`current_text` 가 실제로 인용한 CS 문의를 역추적한다(§4-3).
+    """`current_text` 가 실제로 인용한 CS 문의를 역추적한다.
 
     `evidence.inquiry_ids` 를 통째로 싣지 않는다 — `citations` 의 정의가 "근거가 된
     문의" 가 아니라 **"실제로 인용한 문의"** 라서다. 전부 실으면 인용하지 않은 문의까지
@@ -865,10 +865,10 @@ async def run_with_outcome(
 
     route_proposal_type()은 alert 하나당 1회만 — 재시도는 "같은 도구로 다시 생성"이지
     "도구를 바꿔서 다시 판단"이 아니다. MAX_ATTEMPTS를 다 써도 grounding이 안 되면
-    generate_fallback_proposal()로 넘어간다(§2 방법1) — 억지로 근거 있는 척 넘기지
+    generate_fallback_proposal로 넘어간다 — 억지로 근거 있는 척 넘기지
     않는다. LLM 호출 있는 함수는 async로 통일한다(협업 규칙 5).
 
-    SCOPE_LIMIT_LABELS(§4-3 스코프 한계)면 라우팅·생성 둘 다 건너뛰고 고정 문구로
+    SCOPE_LIMIT_LABELS(스코프 한계)면 라우팅·생성 둘 다 건너뛰고 고정 문구로
     바로 조립한다 — LLM한테 물어봐도 답이 안 바뀌는 케이스라 호출 자체를 안 한다.
     """
     if not should_generate(alert):
@@ -1023,14 +1023,14 @@ async def generate_for_alert(
 
 
 def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -> None:
-    """승인/반려 결과를 컬렉션2(과거·반려 사례)에 적재(§4-2).
+    """승인/반려 결과를 컬렉션2(과거·반려 사례)에 적재.
 
     Agent3는 hitl_status를 판단하지도, Recommendation을 저장하지도 않는다 — 그
     소유자는 Spring Boot다. 이 함수는 그 결정이 끝난 뒤 호출되는 사이드이펙트
     하나뿐이다: 다음 유사 케이스 생성 때 "이런 개선안은 반려/승인됐었다"를 참고할
     수 있도록 결과를 인덱싱한다.
 
-    승인·반려 둘 다 적재 대상이다(§4-2: "승인 또는 반려된 개선안 1건 = 문서 1건").
+    승인·반려 둘 다 적재 대상이다(: "승인 또는 반려된 개선안 1건 = 문서 1건").
     id는 recommendation_id로 결정적 — 같은 건에 대해 재호출해도 upsert라 중복 없음.
 
     적재 본문은 **수정후승인·승인**이면 `hitl_feedback.edited_text`(비었으면
@@ -1054,7 +1054,7 @@ def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -
     # 수정후승인이면 셀러가 승인한 건 우리 제안문이 아니라 셀러가 고쳐 쓴 문장이다 —
     # 그쪽을 적재해야 다음 유사 케이스가 실제 승인본을 참고한다.
     # 반려는 제외한다: 부예시의 뜻이 "이런 제안이 거절당했다"라 본문은 우리 제안문이어야
-    # 한다. 스키마상 반려 시 edited_text는 null이지만(recommenation_schema.md §3 "대기·
+    # 한다. 스키마상 반려 시 edited_text는 null이지만(recommenation_schema.md "대기·
     # 승인·반려 시 null"), 실려 오더라도 셀러 문장이 반려 사례로 새지 않게 막는다.
     # strip 하는 이유: 빈 문자열·공백만 있는 값(셀러가 입력칸을 비우고 저장)을 그대로
     # 쓰면 문서에서 개선안 본문이 통째로 빠진다 — 폴백 대상으로 정규화한다.
@@ -1068,7 +1068,7 @@ def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -
         if edited_text and recommendation.hitl_status != HitlStatus.REJECTED
         else proposed_text
     )
-    # 검색용 본문은 §4-2 스펙대로 "원인 라벨 + CS 요약 + 개선안 본문" 이다. aspect 로
+    # 검색용 본문은 스펙대로 "원인 라벨 + CS 요약 + 개선안 본문" 이다. aspect 로
     # 대신하면 같은 aspect 의 사례가 전부 뭉뚱그려져 유사 검색이 무의미해진다.
     cs_summary = _summarize_cs_evidence(alert)
     document = f"{root_cause_label} {cs_summary} {approved_text}"

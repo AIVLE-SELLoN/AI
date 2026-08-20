@@ -207,7 +207,7 @@ class _Tally:
     routing_misses: int = 0
     delivered: list[DetectionAlert] = field(default_factory=list)
     guideline_pending: list[DetectionAlert] = field(default_factory=list)
-    """알림은 나갔는데 가이드라인만 못 나간 건. 다음 배치가 재시도한다(§4)."""
+    """알림은 나갔는데 가이드라인만 못 나간 건. 다음 배치가 재시도한다."""
 
     def fail(self, target_key: str, stage: str, error: BaseException | str) -> None:
         self.failures.append(_failure(target_key, stage, error))
@@ -267,7 +267,7 @@ async def _process_alert(
     # alert 1건이 터져도 배치는 계속한다. 여기서 던지면 **이미 LLM 비용을 쓴
     #    앞쪽 알림들까지 발행되지 않고 날아간다.** 실패는 모아서 끝에 요약한다.
     rec = guideline = None
-    # §4 — 대기열 적재 판정용. 아래 두 예외 지점이 후보만 표시하고, 실제 적재는
+    # 대기열 적재 판정용. 아래 두 예외 지점이 후보만 표시하고, 실제 적재는
     # 알림 발행 성공 여부까지 보고 이 반복의 끝에서 한다.
     anomaly_delivered = False
     guideline_undelivered = False
@@ -312,7 +312,7 @@ async def _process_alert(
         if guideline is not None:
             tally.counts["가이드라인"] += 1
     except Exception as exc:  # noqa: BLE001
-        # §4 — 생성 예외 = 대상 알림인데 백엔드가 아무것도 못 들었다 → 대기 후보.
+        # 생성 예외 = 대상 알림인데 백엔드가 아무것도 못 들었다 → 대기 후보.
         #    FAILED_* 는 예외가 아니라 반환값이라 여기 안 온다. 그 콜백은 아래
         #    발행이 성공하는 순간 백엔드가 종결 상태를 들은 것이므로 재시도하지
         #    않는다(재시도하면 FAILED 행을 SUCCESS 로 덮는 계약 변경이 된다).
@@ -332,11 +332,11 @@ async def _process_alert(
             await publish_guideline_generated(guideline, trace_id)
             tally.counts["발행:가이드"] += 1
         except Exception as exc:  # noqa: BLE001
-            # §4 본체 — 만들어 놓고 백엔드가 못 들었다 → 대기 후보.
+            # 만들어 놓고 백엔드가 못 들었다 → 대기 후보.
             guideline_undelivered = True
             tally.fail(alert.alert_id, "발행:가이드", exc)
 
-    # §4 — 대기열은 "알림은 **나갔는데** 가이드라인만 못 나간" 건만 받는다.
+    # 대기열은 "알림은 **나갔는데** 가이드라인만 못 나간" 건만 받는다.
     # 알림 발행까지 실패한 건은 캐시에 안 들어가 다음 배치가 그 알림을 통째로
     # 재처리한다(가이드라인도 그 경로에서 다시 만들어진다) — 대기열에도 넣으면
     # 같은 guideline_id 가 두 번 발행되고 LLM·S3 를 이중 지불한다.
@@ -358,7 +358,7 @@ async def run_batch(
     Args:
         window_end: 현재 윈도우 마지막 날. 없으면 입력의 최신 날짜.
         max_alerts: Agent3·가이드라인에 태울 alert 수 상한 (비용 통제).
-            **가이드라인 재시도(§4)도 이 예산을 나눠 쓴다** — 신규 target 이 먼저
+            **가이드라인 재시도도 이 예산을 나눠 쓴다** — 신규 target 이 먼저
             쓰고 남는 만큼만 재시도한다. 밖에 두면 상한이 재시도로 우회된다.
         dry_run: LLM 을 한 번도 부르지 않고 **몇 번 부를지만 실측**한다.
         state_path: 발행 기록 캐시 경로 (테스트 주입용).
@@ -441,7 +441,7 @@ async def run_batch(
         window_end,
     )
 
-    # §4 가이드라인 재시도 대기열 — "알림은 나갔는데 가이드라인만 못 나간" 건들.
+    # 가이드라인 재시도 대기열 — "알림은 나갔는데 가이드라인만 못 나간" 건들.
     # window_end 가 없으면(문서 0건) 로드하지 않는다 — 보관 컷오프를 잴 기준이 없고
     # documents 가 비어 재시도가 성공할 수도 없다. 파일은 그대로 남는다.
     pending = load_pending_guidelines(window_end, pending_path) if window_end else []
@@ -490,7 +490,7 @@ async def run_batch(
     still_pending: list[dict] = list(pending)
     retried_ok = 0
     retry_exhausted = 0
-    # §4 — 재시도도 --max-alerts 예산 안에서 돈다: 신규 target 이 먼저 쓰고 남는 만큼만.
+    # 재시도도 --max-alerts 예산 안에서 돈다: 신규 target 이 먼저 쓰고 남는 만큼만.
     # 상한을 우회하면 장애 복구 직후 대기열 규모만큼 LLM·S3 비용이 한 번에 나간다
     # 예산 밖 대기 건은 attempts 를 안 쓰고 다음 배치로 넘어간다.
     retry_budget = (
@@ -517,7 +517,7 @@ async def run_batch(
                 tally=tally,
             )
 
-        # ── §4 가이드라인 재시도 패스 ────────────────────────────
+        # ── 가이드라인 재시도 패스 ──────────────────────────────
         # 메인 루프 **뒤**다 — 대기 건의 알림은 억제돼 있어 targets 에 없으므로 두
         # 경로가 같은 알림을 겹쳐 처리하지 않는다. 같은 try 안이라 finally 가 MQ 를
         # 닫아준다. 재시도 = **재생성**이다(PENDING_GUIDELINE_PATH docstring).
@@ -601,8 +601,8 @@ async def run_batch(
         "trace_id": trace_id,
         "dry_run": dry_run,
         # 입력원을 결과에 박아둔다 — 골든(oracle)으로 돌린 숫자를 "탐지 성능"으로
-        # 인용하는 사고를 막는 게 목적이다. eval/README §68 이 실험① 에 붙인 경고와
-        # 같은 이유이고, 거기서는 사람이 문서에 적었지만 여기서는 코드가 매번 낸다.
+        # 인용하는 사고를 막는 게 목적이다. 실험 문서에는 사람이 경고를 적어 두지만
+        # 여기서는 코드가 매번 낸다.
         "input_source": getattr(loader, "__name__", str(loader)),
         "elapsed_sec": round((datetime.now(timezone.utc) - started).total_seconds(), 1),
         "items": len(items),
@@ -633,7 +633,7 @@ async def run_batch(
         # `routing_miss` 가 계속 크면 라우팅 프롬프트를 볼 것.
         "no_evidence": tally.evidence_gaps,
         "routing_miss": tally.routing_misses,
-        # §4 가이드라인 재시도. retried = 이번 실행이 재발행에 성공한 건수 /
+        # 가이드라인 재시도. retried = 이번 실행이 재발행에 성공한 건수 /
         # pending = 다음 배치가 다시 시도할 건수 / exhausted = 상한 소진으로 포기.
         "guideline_retried": retried_ok,
         "guideline_pending": len(pending_after),
@@ -763,8 +763,8 @@ def main() -> None:
 
     loader = None
     if args.input_source == "golden":
-        # app/ 안에서 골든을 읽지 않기 위해 **여기서만** 늦게 import 한다
-        # (eval/README §232). 모듈 최상단에 두면 운영 import 경로에 골든이 딸려온다.
+        # app/ 안에서 골든을 읽지 않기 위해 **여기서만** 늦게 import 한다. 모듈 최상단에
+        # 두면 운영 import 경로에 골든이 딸려온다.
         from scripts.golden_inputs import load_golden_inputs
 
         loader = load_golden_inputs
