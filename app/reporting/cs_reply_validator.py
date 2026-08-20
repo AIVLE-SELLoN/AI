@@ -1,4 +1,4 @@
-"""CS 가이드라인 출력 검증 — 문서 생성 스키마 §4-4.
+"""CS 가이드라인 출력 검증. 계약은 `docs/reporting_schema.md`.
 
 계층 분담은 monthly_report_validator 와 같다 — 구조·도메인은 스키마가, 그라운딩은 여기가.
 
@@ -93,7 +93,7 @@ def validate_cs_guideline(
                 f"Grounding 오류: 인용된 item_id '{guide.item_id}' 가 입력 CS 문의 목록에 없습니다."
             )
 
-    # 3. root_cause 가 없으면 대체 문구가 반드시 들어가야 한다(§2-2)
+    # 3. root_cause 가 없으면 대체 문구가 반드시 들어가야 한다
     if input_data.root_cause is None:
         if constants.ROOT_CAUSE_UNSPECIFIED_TEXT not in generated_output.root_cause_summary:
             errors.append(
@@ -105,7 +105,7 @@ def validate_cs_guideline(
             f"root_cause_summary 에 최다 원인 라벨 '{input_data.root_cause.label}' 이 없습니다."
         )
 
-    # 4. 수치 팩트체크 — §4-4 대상 필드에만 적용
+    # 4. 수치 팩트체크 — 지정된 대상 필드에만 적용
     allowed = build_allowed_numbers(input_data)
     factcheck_targets: list[tuple[str, str]] = [
         ("summary.key_metric_text", generated_output.summary.key_metric_text),

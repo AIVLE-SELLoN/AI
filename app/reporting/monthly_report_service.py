@@ -1,12 +1,11 @@
-"""월간 리포트 생성 파이프라인 — 문서 생성 스키마 §1·§3·§4.
+"""월간 리포트 생성 파이프라인.
 
-⚠️ **PDF 는 월 1개 합본이고, 그게 유일한 산출물이다** (2026-08-03 확정).
-   데이터를 DB 에 적재하지 않고, S3 에 올린 합본 PDF 의 링크만 메시지 큐로 보낸다.
-   UI 는 **첫 페이지(표지)만 화면에 띄우고** 전체는 presigned URL 로 내려받는다.
-   따라서
-     - 콜백에 `source_payload` 를 싣지 않는다(저장하지 않을 데이터를 큐에 흘리지 않는다).
-     - 콜백은 **월 1건**이다. 상품별로 나가지 않는다.
-     - PDF 안에 수치 표·차트까지 모두 들어가야 한다(pdf_compiler 가 자립 문서를 만든다).
+PDF 는 월 1개 합본이고 그게 유일한 산출물이다. 데이터를 DB 에 적재하지 않고 S3 에
+올린 합본 PDF 의 링크만 메시지 큐로 보낸다. UI 는 첫 페이지(표지)만 화면에 띄우고
+전체는 presigned URL 로 내려받는다. 따라서:
+  - 콜백에 `source_payload` 를 싣지 않는다(저장하지 않을 데이터를 큐에 흘리지 않는다).
+  - 콜백은 월 1건이다. 상품별로 나가지 않는다.
+  - PDF 안에 수치 표·차트까지 다 들어가야 한다(pdf_compiler 가 자립 문서를 만든다).
 
 흐름(두 단계로 갈라진다):
 
@@ -22,9 +21,9 @@
         성공한 상품들을 모아 합본 PDF → S3 → SUCCESS 콜백 1건
         용량 초과면 FAILED_SIZE_EXCEEDED, 그 외 예외는 FAILED_ERROR
 
-⚠️ fallback 생성물을 만들어 성공처럼 내보내지 않는다. 검증을 통과 못 한 문서를
-   셀러에게 자동 발송하면 틀린 수치가 그대로 나가기 때문이다(§4-3 FAILED_VALIDATION 은
-   "운영자 알림, 자동 발송 중단"이다).
+fallback 생성물을 만들어 성공처럼 내보내지 않는다. 검증을 통과 못 한 문서를 셀러에게
+자동 발송하면 틀린 수치가 그대로 나간다 — FAILED_VALIDATION 은 "운영자 알림, 자동
+발송 중단"이다.
 """
 
 from __future__ import annotations
@@ -51,12 +50,10 @@ from app.reporting.s3_uploader import (
 
 logger = logging.getLogger("MonthlyReportService")
 
-# 프롬프트 버전 — 매직스트링 방지. 교체 시 이 한 줄만 바꾼다(구버전 파일은 남겨둔다).
-# v4: 지시문 압축 + 데이터를 JSON → 파이프 표로 바꾼 토큰 절감판.
-# v5: 채널쌍별 원인·조치(channel_pair_analyses) 생성 추가 — 리포트가 게이지마다 따로 보여준다.
-# v6: **글자 수 상한 명시**(항목당 80자, cause_title 40자) — 레이아웃이 상품 1건 = 1페이지라
-#     문장이 길어지면 그 상품만 두 장으로 갈린다. 스키마 max_length(200자)는 계약이라 그대로
-#     두고, 프롬프트로 실제 출력 길이를 잡는다(2026-08-09 확정).
+# 프롬프트 버전 — 교체 시 이 한 줄만 바꾼다(구버전 파일은 남겨둔다).
+# v6 이 글자 수 상한을 명시한다(항목당 80자, cause_title 40자). 레이아웃이 상품 1건 =
+# 1페이지라 문장이 길어지면 그 상품만 두 장으로 갈린다. 스키마 max_length(200자)는
+# 계약이라 그대로 두고 프롬프트로 실제 출력 길이를 잡는다.
 PROMPT_VERSION = "monthly_report_v6"
 
 
@@ -66,10 +63,10 @@ def build_report_id(input_data: MonthlyReportInput) -> str:
 
 
 def build_book_report_id(report_month: str) -> str:
-    """월간 합본의 **멱등 키**. 예: RPT-202607
+    """월간 합본의 멱등 키. 예: RPT-202607
 
-    PDF 가 월 1개라 콜백·이벤트도 월 1건이다. 상품 코드가 들어가지 않는다.
-    같은 달을 다시 돌려도 같은 ID 라 메인이 upsert 하면 된다.
+    PDF 가 월 1개라 콜백·이벤트도 월 1건이고 상품 코드가 들어가지 않는다. 같은 달을
+    다시 돌려도 같은 ID 라 메인이 upsert 하면 된다.
     """
     return f"RPT-{report_month.replace('-', '')}"
 
@@ -77,7 +74,7 @@ def build_book_report_id(report_month: str) -> str:
 def _resolve_stage_label(input_data: MonthlyReportInput) -> str:
     """worst_pair 의 severity 단계 라벨. 전 쌍 보류면 안정 단계로 안내한다.
 
-    프롬프트에 이 문자열을 그대로 넣어야 cause_title 이 §1-2 대조를 통과한다.
+    프롬프트에 이 문자열을 그대로 넣어야 cause_title 이 검증기 대조를 통과한다.
     """
     divergence = input_data.channel_divergence
     worst = next(
@@ -146,8 +143,8 @@ def _build_prompt_payloads(input_data: MonthlyReportInput) -> dict[str, str]:
     Template.substitute 는 쓰지 않는 키를 무시하므로, 실제 프롬프트에 실리는 것은
     그 버전이 참조하는 쪽뿐이다(안 쓰는 형식은 토큰을 먹지 않는다).
 
-    p_value 는 어느 형식에도 넣지 않는다 — §4-4 금지 표현이라 애초에 모델에게 보여주지
-    않는다(보여주면 문장에 옮겨 적고 검증에서 반려되는 낭비가 생긴다).
+    p_value 는 어느 형식에도 넣지 않는다 — 금지 표현이라 모델에게 보여주지 않는다
+    (보여주면 문장에 옮겨 적고 검증에서 반려되는 낭비가 생긴다).
     """
     aspect_distributions = [
         {
@@ -198,7 +195,7 @@ def build_prompt(
 ) -> str:
     """완성된 프롬프트 문자열. 파이프라인과 eval 이 같은 함수를 쓰도록 밖으로 뺐다.
 
-    ⚠️ str.format() 금지(프롬프트의 JSON 중괄호와 충돌) — Template + $플레이스홀더를 쓴다.
+    str.format() 금지(프롬프트의 JSON 중괄호와 충돌) — Template + $플레이스홀더를 쓴다.
     """
     template = Template(load_prompt("reporting", prompt_version))
     return template.substitute(
@@ -218,10 +215,9 @@ def build_prompt(
 async def generate_monthly_report_output(
     input_data: MonthlyReportInput,
 ) -> tuple[MonthlyReportOutput | None, CallbackStatus, list[str]]:
-    """상품 1건의 문장 생성 + 검증. **PDF·S3·콜백은 여기서 하지 않는다.**
+    """상품 1건의 문장 생성 + 검증. PDF·S3·콜백은 여기서 하지 않는다.
 
-    월간 PDF 가 상품별이 아니라 **월 1개 합본**으로 바뀌면서(2026-08-03 확정) 파이프라인이
-    둘로 갈라졌다:
+    PDF 가 월 1개 합본이라 파이프라인이 둘로 갈라져 있다:
         [상품별] 이 함수 — LLM 생성·검증까지만. 산출물은 MonthlyReportOutput.
         [월 단위] compile_and_upload_monthly_book() — 합본 PDF·S3·콜백 1건.
 
@@ -232,7 +228,7 @@ async def generate_monthly_report_output(
     report_id = build_report_id(input_data)
     trace_base = f"report_id={report_id}"
 
-    # [보류 게이트] 표본이 모자라면 LLM 을 아예 태우지 않는다(§4-3)
+    # [보류 게이트] 표본이 모자라면 LLM 을 아예 태우지 않는다
     if input_data.total_voc_count < constants.MIN_VOC_COUNT_FOR_REPORT:
         logger.info(
             f"[HOLD] {trace_base} | total_voc_count={input_data.total_voc_count} "
@@ -283,20 +279,20 @@ def _label(input_data: MonthlyReportInput) -> str:
 
 
 def _summarize(labels: list[str], budget: int) -> str:
-    """앞에서 몇 개만 나열하고 나머지는 "외 N개" 로 접는다. 기준은 **개수가 아니라 길이**다.
+    """앞에서 몇 개만 나열하고 나머지는 "외 N개" 로 접는다. 기준은 개수가 아니라 길이다.
 
     **`len(반환값) <= budget` 을 보장한다.** 호출부가 이 보장 위에서 전체 길이를 계산하므로
     깨뜨리면 안 된다. "외 N개" 꼬리도 예산 **안에** 들어간다 — 밖에 두면 접힐 때마다
     예산을 넘긴다.
 
-    ⚠️ 개수로 자르면 상품명이 길 때 상한이 안 지켜진다. `product_name` 은 커머스 노출명
-       (`products.channel_product_name`)이라 원래 길다 — 38자짜리 이름이면 5개만 나열해도
-       구절 하나가 200자를 넘는다. 목 데이터 이름이 7자라 로컬에서는 안 밟힌다.
-       (2026-08-09 리뷰: 개수 상한으로 재면 223자, 실제 노출명으로 재면 368자)
+    개수로 자르면 상품명이 길 때 상한이 안 지켜진다. `product_name` 은 커머스 노출명
+    (`products.channel_product_name`)이라 원래 길다 — 38자짜리 이름이면 5개만 나열해도
+    구절 하나가 200자를 넘는다. 목 데이터 이름이 7자라 로컬에서는 안 밟힌다(실측: 개수
+    상한이면 223자, 실제 노출명이면 368자).
 
     최소 1개는 반드시 나열한다 — 하나도 없으면 셀러가 무엇인지 알 수 없다. 다만 그
-    하나가 예산보다 길면 **이름 자체를 자른다.** 안 자르면 이름 하나가 상한을 통째로
-    무너뜨린다(노출명에 길이 제한이 없어서 얼마든지 길 수 있다).
+    하나가 예산보다 길면 이름 자체를 자른다. 노출명에 길이 제한이 없어 안 자르면 이름
+    하나가 상한을 통째로 무너뜨린다.
     """
     if not labels or budget <= 0:
         return ""
@@ -330,10 +326,10 @@ def _summarize(labels: list[str], budget: int) -> str:
         shown.append(label)
         used += cost
 
-    # ⚠️ 접힌 게 없으면 꼬리를 붙이지 않는다. 여기까지 왔다는 건 "전부 나열하면 예산을
-    #    넘는다"는 뜻이지 "여러 건 중 일부만 실었다"는 뜻이 아니다 — 긴 이름 **1건**을
-    #    잘라 실은 경우가 그렇다. 그때 꼬리를 붙이면 "상품 1개: …이름… 외 0개" 가 되어
-    #    셀러 화면에 나간다(2026-08-10 리뷰에서 실측). 잘린 것과 접힌 것은 다르다.
+    # 접힌 게 없으면 꼬리를 붙이지 않는다. 여기까지 왔다는 건 "전부 나열하면 예산을
+    # 넘는다"는 뜻이지 "여러 건 중 일부만 실었다"는 뜻이 아니다 — 긴 이름 1건을 잘라
+    # 실은 경우가 그렇다. 그때 꼬리를 붙이면 "상품 1개: …이름… 외 0개" 가 셀러 화면에
+    # 나간다. 잘린 것과 접힌 것은 다르다.
     folded = len(labels) - len(shown)
     if not folded:
         return ", ".join(shown)
@@ -341,11 +337,11 @@ def _summarize(labels: list[str], budget: int) -> str:
 
 
 def _truncate_label(label: str, room: int) -> str:
-    """`room` 글자에 맞춰 자른다. `이름(P001)` 꼴이면 **코드를 남기고 이름만** 줄인다.
+    """`room` 글자에 맞춰 자른다. `이름(P001)` 꼴이면 코드를 남기고 이름만 줄인다.
 
-    ⚠️ 오른쪽부터 자르면 끝에 붙은 상품 코드가 가장 먼저 날아간다. 셀러가 관리 화면에서
-       상품을 특정하는 값은 노출명이 아니라 **코드**라, 같은 예산에서 코드를 남기는 쪽이
-       정보가 더 많다(2026-08-10 리뷰). 코드까지 넣을 자리도 없으면 그때는 통째로 자른다.
+    오른쪽부터 자르면 끝에 붙은 상품 코드가 먼저 날아간다. 셀러가 관리 화면에서 상품을
+    특정하는 값은 노출명이 아니라 코드라, 같은 예산이면 코드를 남기는 쪽이 정보가 많다.
+    코드까지 넣을 자리도 없으면 그때는 통째로 자른다.
     """
     if len(label) <= room:
         return label
@@ -365,18 +361,18 @@ def _build_excluded_notice(
     held_inputs: list[MonthlyReportInput] | None,
     failed_products: list[str] | None,
 ) -> str | None:
-    """합본에서 빠진 상품 안내. 표지를 없앴으므로(2026-08-04) 이 정보는 콜백으로 나간다.
+    """합본에서 빠진 상품 안내. 표지가 없으므로 이 정보는 콜백으로 나간다.
 
     보류와 실패를 **한 문장에 섞지 않는다** — VOC 500건짜리 상품이 '표본 부족'으로
     안내되면 셀러가 데이터가 없다고 오해한다.
 
-    ⚠️ 보류 상품은 이제 **지면에도 페이지가 생긴다**(2026-08-09). 이 문구는 그것과 별개로
-       유지한다 — 메인 화면은 PDF 를 열지 않고도 빠진 상품을 알아야 한다.
+    보류 상품은 지면에도 페이지가 생기지만 이 문구는 별개로 유지한다 — 메인 화면은
+    PDF 를 열지 않고도 빠진 상품을 알아야 한다.
 
-    ⚠️ 상한은 **조립된 최종 문자열**에 건다(`NOTICE_MAX_CHARS`). 구절마다 따로 예산을 주면
-       구절 수·고정 문구 길이만큼 천장이 같이 올라가서 상한이 안 지켜진다 — 구절당 70자로
-       주던 때 실측 천장이 **260자**였다(2026-08-10 리뷰). 그래서 여기서 고정 문구가 쓸
-       자리를 먼저 빼고, 남은 것을 구절들이 **나눠 쓴다.**
+    상한은 조립된 최종 문자열에 건다(`NOTICE_MAX_CHARS`). 구절마다 따로 예산을 주면
+    구절 수·고정 문구 길이만큼 천장이 같이 올라가 상한이 안 지켜진다 — 구절당 70자로
+    주면 실측 천장이 260자다. 그래서 고정 문구가 쓸 자리를 먼저 빼고 남은 것을 구절들이
+    나눠 쓴다.
 
            총길이 = 고정 문구 + 구분자 + Σ(나열)  ≤  고정 문구 + 구분자 + n × 나열예산
                                                  ≤  NOTICE_MAX_CHARS
@@ -416,37 +412,34 @@ async def compile_and_upload_monthly_book(
     held_inputs: list[MonthlyReportInput] | None = None,
     failed_products: list[str] | None = None,
 ) -> GenerationResult:
-    """전 상품을 합친 **월 1개 PDF** 를 만들어 S3 에 올리고 콜백 1건을 낸다.
+    """전 상품을 합친 월 1개 PDF 를 만들어 S3 에 올리고 콜백 1건을 낸다.
 
     items       `{"input": MonthlyReportInput, "report": MonthlyReportOutput}` 목록.
     held_inputs 표본 부족으로 보류된 상품의 **입력**. 지면에 보류 페이지를 만들고
                 콜백 안내 문구도 여기서 만든다.
 
-    ⚠️ 보류 상품도 **페이지를 만든다**(2026-08-09). 예전에는 합본에서 통째로 빼고 콜백
-       `notice_message` 로만 알렸는데, 표지도 목차도 없는 구조라 PDF 만 받아보는 사람은
-       자기 상품이 왜 없는지 알 방법이 없었다. 콜백 안내는 그대로 두고(메인 화면용)
-       지면에도 사유를 남긴다.
+    보류 상품도 지면에 페이지를 만든다(사유는 `pdf_compiler.build_book_context`).
+    콜백 안내는 메인 화면용으로 그대로 둔다.
 
-    ⚠️ 보류는 `held_inputs`(입력 객체), 실패는 `failed_products`(코드 문자열)로 받는다 —
-       보류는 지면에 상품명·VOC 건수를 찍어야 해서 입력이 통째로 필요하고, 실패는 안내
-       문구에만 쓰여 코드면 충분하다.
+    보류는 `held_inputs`(입력 객체), 실패는 `failed_products`(코드 문자열)로 받는다 —
+    보류는 지면에 상품명·VOC 건수를 찍어야 해 입력이 통째로 필요하고, 실패는 안내
+    문구에만 쓰여 코드면 충분하다.
 
-    ⚠️ 상품 하나가 실패해도 합본은 나간다 — 나머지 상품의 리포트까지 막을 이유가 없다.
-       보류(표본 부족)와 실패(검증 미통과)는 **구분해서** 표기한다. 둘을 합치면 데이터가
-       멀쩡한 상품이 '표본 부족'으로 잘못 안내된다.
+    상품 하나가 실패해도 합본은 나간다 — 나머지 상품의 리포트까지 막을 이유가 없다.
+    보류(표본 부족)와 실패(검증 미통과)는 구분해서 표기한다. 둘을 합치면 데이터가
+    멀쩡한 상품이 '표본 부족'으로 잘못 안내된다.
     """
     report_id = build_book_report_id(report_month)
     trace_base = f"report_id={report_id}"
 
     if not items:
-        # ⚠️ 수록 상품이 0개면 PDF 를 만들지 않는다 — 계약이 그렇게 정해져 있다
-        #    (§5 status 표: "수록할 상품이 하나도 없음" → FAILED_ERROR).
-        #    보류 페이지만 있는 PDF 를 SUCCESS 로 내보내면 메인이 "링크 저장 + PDF 첨부
-        #    메일 발송" 을 타는데, 분석이 한 건도 없는 문서가 셀러에게 나간다.
+        # 수록 상품이 0개면 PDF 를 만들지 않는다(계약: FAILED_ERROR). 보류 페이지만
+        # 있는 PDF 를 SUCCESS 로 내보내면 메인이 "링크 저장 + 메일 발송" 을 타는데,
+        # 분석이 한 건도 없는 문서가 셀러에게 나간다.
         #
-        #    다만 **왜 하나도 없는지는 반드시 실어 보낸다.** 전 상품이 표본 부족인 상황
-        #    (신규 고객사 등)에서 "생성에 실패했다"만 가면 데이터 파이프라인이 고장난 것과
-        #    구분이 안 된다 — 보류는 정상 동작이다.
+        # 다만 왜 하나도 없는지는 반드시 실어 보낸다. 전 상품이 표본 부족인 상황(신규
+        # 고객사 등)에서 "생성에 실패했다"만 가면 데이터 파이프라인 고장과 구분이 안
+        # 된다 — 보류는 정상 동작이다.
         logger.error(
             f"[FAILED_ERROR] {trace_base} | 합본에 넣을 상품이 하나도 없습니다 "
             f"(보류 {len(held_inputs or [])}건)"
@@ -479,12 +472,12 @@ async def compile_and_upload_monthly_book(
         pdf_s3_meta = await upload_pdf_to_s3(
             pdf_bytes=pdf_bytes,
             report_type=REPORT_TYPE_MONTHLY,  # → monthly-report 프리픽스 (6개월 보존)
-            # 경로의 {yyyy}/{mm} 와 파일명의 {yyyyMM} 은 **보고 대상 월**이다.
+            # 경로의 {yyyy}/{mm} 와 파일명의 {yyyyMM} 은 보고 대상 월이다.
             # 업로드 시각(1일 새벽)을 쓰면 7월 리포트가 2026/08 폴더로 들어간다.
             period=report_month,
         )
     except S3NotConfiguredError as exc:
-        # 업로드하지 않은 파일을 성공으로 보고하지 않는다(스텁 상태에서의 안전장치).
+        # 업로드하지 않은 파일을 성공으로 보고하지 않는다.
         logger.error(f"[FAILED_ERROR] {trace_base} | {exc!s}")
         return GenerationResult(
             output=None,

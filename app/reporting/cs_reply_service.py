@@ -1,14 +1,14 @@
-"""CS 가이드라인 생성 파이프라인 — 문서 생성 스키마 §2·§3·§4.
+"""CS 가이드라인 생성 파이프라인.
 
-흐름은 월간 리포트와 같다(생성 → 검증 → 재시도 → PDF/S3 → 콜백). 다른 점 두 가지:
+흐름은 월간 리포트와 같다(생성 -> 검증 -> 재시도 -> PDF/S3 -> 콜백). 다른 점:
   - 표본 부족 보류(HOLD)가 없다. CS 가이드라인은 이미 발화한 알림 1건에 대응하는
     문서라, 문의가 적어도 상담원은 답을 해야 한다.
   - 그라운딩 대상이 수치뿐 아니라 **cs_id 포함관계**다(없는 문의를 가리키면 반려).
   - 출력 데이터를 DB 에 적재한다 — 콜백의 source_payload(입력+출력 JSON)가 필수이며,
     그 원본으로 PDF 를 언제든 재컴파일할 수 있다(월간과 달리 PDF 가 정본이 아니다).
 
-⚠️ 월간 리포트와 마찬가지로 fallback 생성물을 성공처럼 내보내지 않는다.
-   검증을 통과 못 하면 FAILED_VALIDATION 으로 운영자에게 넘긴다(§4-3).
+월간 리포트와 마찬가지로 fallback 생성물을 성공처럼 내보내지 않는다. 검증을 통과
+못 하면 FAILED_VALIDATION 으로 운영자에게 넘긴다.
 """
 
 from __future__ import annotations
@@ -45,11 +45,9 @@ from app.reporting.s3_uploader import (
 
 logger = logging.getLogger("CSReplyService")
 
-# v3: 지시문 압축 + 문의 목록을 JSON → 파이프 표로 바꾼 토큰 절감판.
-# v4: guideline_id 를 서버가 계산해 주입 — 모델이 만들면 알림별 유일성이 깨진다.
-# v5: 원문 출처(문의/리뷰) 분기. 리뷰를 근거로 쓰기로 확정(2026-08-11)하면서 붙였다 —
-#     리뷰는 공개 답글이라 응대가 다르다. v4 는 전 구간이 "문의" 를 전제해서, 리뷰에
-#     그대로 쓰면 답글로는 접수할 수 없는 "무상 교환·반품을 도와드리겠습니다" 가 나간다.
+# v4 부터 guideline_id 를 서버가 계산해 주입한다 — 모델이 만들면 알림별 유일성이 깨진다.
+# v5 는 원문 출처(문의/리뷰)를 분기한다. 리뷰는 공개 답글이라 응대가 다른데, 전 구간이
+# "문의" 를 전제하면 답글로는 접수할 수 없는 "무상 교환·반품을 도와드리겠습니다" 가 나간다.
 PROMPT_VERSION = "cs_reply_v5"
 
 
@@ -61,7 +59,7 @@ def build_guideline_id(input_data: CSGuidelineInput) -> str:
 def _build_stats_summary(input_data: CSGuidelineInput) -> str:
     """프롬프트에 넣을 지표 요약 문장.
 
-    p_value·bh_significant 는 넣지 않는다 — §4-4 금지 표현이라 모델에게 보여주지 않는다.
+    p_value·bh_significant 는 넣지 않는다 — 금지 표현이라 모델에게 보여주지 않는다.
     """
     stats = input_data.stats
     return (
@@ -82,10 +80,9 @@ def _build_root_cause_summary(input_data: CSGuidelineInput) -> str:
 
 # `LinkedCSInquiry.source` → 프롬프트 표기. 모델이 읽을 값이라 한글로 쓴다.
 #
-# ⚠️ `None`(출처 미상)은 **문의로 본다.** `build_linked_inquiries` 가 값이 이상하거나
-#    키가 없을 때 None 을 넣는데(2026-08-11), 그때 "리뷰 답글" 톤으로 쓰면 답변을
-#    기다리는 고객에게 "고객센터로 연락 주세요" 가 나간다. 반대(리뷰에 문의 답변 톤)는
-#    어색할 뿐이지만 이쪽은 응대 자체가 어긋나므로, 모르면 문의 쪽으로 기운다.
+# `None`(출처 미상)은 문의로 본다. `build_linked_inquiries` 가 값이 이상하거나 키가
+# 없을 때 None 을 넣는데, 그때 "리뷰 답글" 톤으로 쓰면 답변을 기다리는 고객에게
+# "고객센터로 연락 주세요" 가 나간다. 반대는 어색할 뿐이라 모르면 문의 쪽으로 기운다.
 _SOURCE_LABEL = {Source.CS: "문의", Source.REVIEW: "리뷰"}
 
 
@@ -101,15 +98,13 @@ def _build_inquiry_table(input_data: CSGuidelineInput, *, with_source: bool = Tr
     created_at 은 뺐다. 출력 어느 필드도 문의 시각을 쓰지 않아 순수 낭비였다.
     파이프·줄바꿈은 표가 깨지지 않게 치환한다.
 
-    ⚠️ 출처 열은 **리뷰를 근거로 쓰기로 확정**(2026-08-11)하면서 붙였다. 리뷰는 공개
-       답글이라 응대 방식이 다른데(반품 접수 불가·다른 구매자도 읽음), 표에 없으면
-       모델이 전부 1:1 문의로 답한다. 접두사(`RVW-`)로 추측시키지 않고 명시한다 —
-       ID 규칙이 바뀌면 조용히 틀리기 때문이다.
+    출처 열이 필요한 이유: 리뷰는 공개 답글이라 응대 방식이 다른데(반품 접수 불가·다른
+    구매자도 읽음) 표에 없으면 모델이 전부 1:1 문의로 답한다. 접두사(`RVW-`)로
+    추측시키지 않고 명시한다 — ID 규칙이 바뀌면 조용히 틀린다.
 
-    ⚠️ **구버전에는 출처 열을 넣지 않는다.** v4 의 헤더는 `[문의] 문의ID|원문` 이라 3열을
-       주면 자기가 선언하지 않은 열을 받게 된다. 구버전은 버전 비교 실험용으로 남겨 둔
-       것이라(CLAUDE.md 4), 입력이 달라지면 그때 잰 수치와 지금 수치를 나란히 못 놓는다.
-       (2026-08-11 리뷰 지적 — 처음엔 버전 무관하게 3열을 냈다.)
+    구버전에는 출처 열을 넣지 않는다. v4 의 헤더는 `[문의] 문의ID|원문` 이라 3열을 주면
+    자기가 선언하지 않은 열을 받는다. 구버전은 버전 비교 실험용이라 입력이 달라지면
+    그때 잰 수치와 지금 수치를 나란히 못 놓는다.
     """
     rows = []
     for item in input_data.linked_inquiries:
@@ -174,12 +169,8 @@ async def generate_cs_reply_pipeline(
     guideline_id = build_guideline_id(input_data)
     trace_base = f"alert_id={input_data.alert_id}"
 
-    # ⚠️ S3 구성 확인을 **LLM 호출 앞으로** 당긴다. 업로드는 파이프라인 마지막 단계라,
-    #    구성이 틀어져 있으면 알림 1건마다 LLM 값을 다 지불하고 FAILED_ERROR 만 돌아온다.
-    #    가이드라인은 개선안과 달리 발화한 알림 **거의 전부**에 대해 생성되므로 건수가
-    #    그대로 비용이다. 결론(FAILED_ERROR)은 같고 비용만 0 이 된다.
-    #
-    #    배치·REST 두 경로가 모두 이 함수를 지나므로 여기 한 곳이면 둘 다 덮인다.
+    # S3 구성 확인을 LLM 호출 앞으로 당긴다(사유는 `ensure_s3_ready`). 배치·REST 두
+    # 경로가 이 함수를 지나므로 여기 한 곳이면 둘 다 덮인다.
     try:
         ensure_s3_ready(context=trace_base)
     except S3NotConfiguredError as exc:
@@ -257,7 +248,7 @@ async def generate_cs_reply_pipeline(
             source_id=input_data.alert_id,
         )
     except S3NotConfiguredError as exc:
-        # 업로드하지 않은 파일을 성공으로 보고하지 않는다(스텁 상태에서의 안전장치).
+        # 업로드하지 않은 파일을 성공으로 보고하지 않는다.
         logger.error(f"[FAILED_ERROR] {trace_base} | {exc!s}")
         return GenerationResult(
             output=None,
@@ -320,18 +311,17 @@ def is_guideline_target(alert: DetectionAlert) -> bool:
     같은 스코프 밖 알림은 언제나 이 목록이 비어 있다(`app/detection/alert.py` 참고).
     답변할 문의가 없는데 상담 가이드라인을 만들 수는 없다.
 
-    ⚠️ 여기서 걸러 내지 않으면 스코프 밖 알림이 뜰 때마다 배치 요약에 "가이드라인 실패"가
-       쌓인다. 정상 동작이 실패로 보이기 시작하면 요약을 아무도 안 읽게 되고, 그때부터는
-       **진짜 실패도 같이 묻힌다**.
+    여기서 걸러 내지 않으면 스코프 밖 알림이 뜰 때마다 배치 요약에 "가이드라인 실패"가
+    쌓인다. 정상 동작이 실패로 보이면 요약을 아무도 안 읽게 되고, 그때부터는 진짜
+    실패도 같이 묻힌다.
 
     판정 유형(`GUIDELINE_EXCLUDED_VERDICTS`)과 중복 판정은 하지 않는다 — 그건
     `CSGuidelineInput` 의 검증기가 이미 본다.
 
-    🔴 **소스는 안 본다 — 리뷰(`RVW-`)도 근거로 쓰는 것이 확정 정책이다(2026-08-11).**
-    나중에 "CS 문의만" 으로 정책이 바뀌면 `app/core/inquiries.py` 의 필터와 **이 게이트를
-    같이** 고쳐야 한다. 조회 쪽만 거르면 리뷰 전용 알림이 여기를 통과한 뒤
-    `build_guideline_input` 의 `ValueError` 로 죽어서, 바로 위 ⚠️ 가 막으려던 모양이
-    그대로 재현된다.
+    소스는 안 본다 — 리뷰(`RVW-`)도 근거로 쓰는 것이 확정 정책이다. "CS 문의만" 으로
+    정책이 바뀌면 `app/core/inquiries.py` 의 필터와 이 게이트를 같이 고쳐야 한다.
+    조회 쪽만 거르면 리뷰 전용 알림이 여기를 통과한 뒤 `build_guideline_input` 의
+    `ValueError` 로 죽어서, 바로 위가 막으려던 모양이 그대로 재현된다.
     """
     return bool(alert.evidence.inquiry_ids)
 
@@ -346,7 +336,7 @@ def build_guideline_input(
 
     탐지 쪽 모델을 그대로 못 넘기는 이유는 두 군데가 좁아지기 때문이다:
       - `DetectionStats.source` 는 가이드라인 입력에 없다. CS·리뷰를 종합한 뒤의
-        알림이라 "이 지표가 어느 쪽에서 왔는지"는 문서에 쓰지 않는다(§4-4).
+        알림이라 "이 지표가 어느 쪽에서 왔는지"는 문서에 쓰지 않는다.
       - `RootCause.consistent` 도 없다. 원인 일관성은 탐지가 판정에 쓰는 값이지
         상담원에게 보여 줄 내용이 아니다.
     남은 필드는 이름이 같아 그대로 옮긴다.
