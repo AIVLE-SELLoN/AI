@@ -1,32 +1,27 @@
-"""담당: 서영 (Agent2) — [4] 주 aspect 선택 · [5] 스코프 필터 (이상탐지 로직 V3 §[4]·§[5]).
+"""담당: 서영 (Agent2) — [4] 주 aspect 선택 · [5] 스코프 필터.
 
-순수 함수만. LLM·DB·FastAPI 를 import 하지 않는다 (statistics.py·verdict.py 와 동일 원칙).
+순수 함수만. LLM·DB·FastAPI 를 import 하지 않는다.
 
-[4] 한 채널에서 여러 aspect 가 동시 발화하면 상승폭(delta) 최대를 주 원인으로.
-[5] 그 aspect 가 개선안 생성 가능한 것인지(색상·사이즈·소재) 판정.
-    탐지는 전 aspect 수행하되, 원인분류([6])·개선안은 스코프로 제한한다.
+탐지는 전 aspect 를 수행하고, 원인분류([6])·개선안만 스코프로 제한한다.
 """
 
 from app.core.schemas import Aspect
 
-# 개선안 생성 가능 aspect (로직 §[5] 표). 파손·오배송·기타는 알림만 — 원인분류·개선안 없음.
-# 도메인 정의(튜닝 대상 아님)라 상수 파일이 아닌 여기에 둔다.
-# 값은 **반드시 Aspect enum 경유** — 문자열을 다시 적으면 schemas.py 가 정본인데도
-# 값이 바뀔 때 여기만 옛 문자열로 남아 조용히 어긋난다.
+# 개선안 생성 가능 aspect. 파손·오배송·기타는 알림만 — 원인분류·개선안이 없다.
+# 튜닝 대상이 아닌 도메인 정의라 상수 파일이 아니라 여기 둔다. 값은 Aspect enum 경유 —
+# 문자열로 다시 적으면 schemas.py 가 바뀔 때 여기만 옛 값으로 남아 조용히 어긋난다.
 SCOPE_ASPECTS = frozenset({Aspect.COLOR, Aspect.SIZE, Aspect.MATERIAL})
 
 
 def pick_main_aspect(fired_aspects: dict) -> tuple:
-    """[4] 여러 aspect 동시 발화 시 delta 최대를 주 aspect 로 선택. (로직 §[4])
+    """[4] 여러 aspect 동시 발화 시 delta 최대를 주 aspect 로 선택.
 
     Args:
-        fired_aspects: {aspect: delta}  (delta = 현재율 - 과거율). 발화 aspect 만 담는다.
-            호출 측이 비어있지 않음을 보장한다(발화가 있어야 [4]에 온다).
+        fired_aspects: {aspect: delta}. 발화 aspect 만 담기며, 비어있지 않음을 호출 측이
+            보장한다(발화가 있어야 [4]에 온다).
 
     Returns:
-        (main, subs)
-          - main: delta 최대 aspect (주 원인)
-          - subs: 나머지 aspect 리스트 (버리지 않고 부가 관찰로 병기 — §361)
+        (main, subs) — subs 는 버리지 않고 부가 관찰로 병기한다.
     """
     main = max(fired_aspects, key=fired_aspects.get)
     subs = [a for a in fired_aspects if a != main]
@@ -34,16 +29,14 @@ def pick_main_aspect(fired_aspects: dict) -> tuple:
 
 
 def is_in_scope(aspect: str) -> bool:
-    """[5] 이 aspect 가 원인분류·개선안 생성 대상인지. (로직 §[5])
+    """[5] 이 aspect 가 원인분류·개선안 생성 대상인지.
 
     색상·사이즈·소재만 True. 파손·오배송·기타는 False(알림만).
-    그대로 alert 의 `scope_in` 필드 값이 된다 (탐지 결과 스키마 §3).
+    그대로 alert 의 `scope_in` 필드 값이 된다.
 
-    ⚠️ 문서 내 모순 주의: §3 필드정의는 "순수 aspect 속성 — 색상·사이즈·소재=true,
-       개선안 생성 여부와 별개"라고 명시하는데, §5.1·§3.2 표는 전역형·구분불가 행을
-       scope_in=false 로 적어놨다. **§3 을 따른다** — §3 이 이 혼동을 명시적으로
-       선점한 문장이고, verdict 를 섞으면 "순수 aspect 속성"이라는 정의가 깨진다.
-       (Agent3 는 recommended_action=="개선안 생성" 으로 작동 여부를 판단하므로
-        scope_in 에 verdict 를 섞지 않아도 동작에는 영향이 없다.)
+    스펙 안에서 필드 정의와 판정표가 어긋난다 — 필드 정의는 "순수 aspect 속성"이라
+    하고, 판정표는 전역형·구분불가 행을 scope_in=false 로 적어놨다. 필드 정의를 따른다.
+    verdict 를 섞으면 "순수 aspect 속성"이라는 정의 자체가 깨지고, Agent3 는
+    recommended_action 으로 작동 여부를 판단하므로 동작에도 영향이 없다.
     """
     return aspect in SCOPE_ASPECTS

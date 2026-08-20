@@ -1,13 +1,11 @@
-"""담당: 서영 (Agent2) — [6] 원인 분류 (이상탐지 로직 V3 §[6]).
+"""담당: 서영 (Agent2) — [6] 원인 분류.
 
-편중형 & 스코프 내(색상·사이즈·소재) 일 때만 수행한다. 편중 채널의 해당 aspect 부정
-문의 텍스트를 프롬프트3으로 **사전 정의된 원인 후보로 분류**하고, 그 분포로 원인을 특정한다.
+편중형 & 스코프 내(색상·사이즈·소재) 일 때만 수행한다. 편중 채널의 해당 aspect 부정 문의
+텍스트를 프롬프트3으로 사전 정의된 원인 후보로 분류하고, 그 분포로 원인을 특정한다.
 
 - judge_cause   : 라벨 분포 → 주원인·일관 여부 (순수 함수)
 - classify_cause: 문의 배치 → LLM(프롬프트3) 분류 결과 (async, llm_client 경유)
 - diagnose_cause: 위 둘을 엮은 [6] 진입점 (classify → aspect_match 필터 → judge)
-
-judge_cause 는 순수라 숫자만으로 테스트하고, classify_cause 는 LLM 을 목킹해 테스트한다.
 """
 
 import json
@@ -193,16 +191,14 @@ def _validate_response(
 
 
 def judge_cause(classified_causes: list, *, total_count: int | None = None) -> tuple:
-    """[6] 분류된 원인 라벨 분포로 주원인을 특정한다. (로직 §[6])
+    """[6] 분류된 원인 라벨 분포로 주원인을 특정한다.
 
     Args:
-        classified_causes: ["사진_색감_오차", "사진_색감_오차", "조명_보정_차이", ...]
-            문의 1건당 원인 1개.
+        classified_causes: 원인 라벨 리스트. 문의 1건당 원인 1개.
 
     Returns:
-        (주원인 또는 None, 일관 여부, 빈도표)
-          - 최다 원인이 CONSISTENT_RATIO 이상 AND CONSISTENT_COUNT 이상이면 '일관'
-          - 미달이면 원인이 흩어진 것 → 특정하지 않음(None) → [7] 확신도 낮음 경로
+        (주원인 또는 None, 일관 여부, 빈도표). 최다 원인이 CONSISTENT_RATIO 이상 AND
+        CONSISTENT_COUNT 이상이면 '일관'이고, 미달이면 특정하지 않아 [7] 확신도 낮음으로 간다.
     """
     freq = Counter(classified_causes)
     if not freq:
@@ -286,10 +282,10 @@ async def diagnose_cause(
           - freq:       원인별 빈도표 ("20건 중 14건…" 리포트용)
           - cs_ids:     집계에 쓴 문의 ID (total 과 같은 집합)
 
-    cs_ids 를 따로 돌려주는 이유: 이게 그대로 alert.evidence.inquiry_ids 가 되고,
-    스키마 §3 이 그 필드를 "원인분류 투입 문의 전체(= root_cause.total 건)"로 정의한다.
-    aspect_match=false 로 걷어낸 문의를 인용 경계에 남기면 개수가 total 과 어긋나고,
-    **Agent3 가 '다른 aspect 불만'을 근거로 인용할 수 있게 된다.**
+    cs_ids 를 따로 돌려주는 이유: 이게 그대로 alert.evidence.inquiry_ids 가 되고, 스키마가
+    그 필드를 "원인분류 투입 문의 전체(= root_cause.total 건)"로 정의한다. aspect_match=false
+    로 걷어낸 문의를 인용 경계에 남기면 개수가 total 과 어긋나고, Agent3 가 '다른 aspect
+    불만'을 근거로 인용할 수 있게 된다.
     """
     validation = CauseValidationSummary()
     results = await classify_cause(
