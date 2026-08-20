@@ -1,7 +1,4 @@
-"""담당: 서영 (Agent2) — 이상탐지 + 원인분류.
-
-완료 기준: ClassifiedItem → DetectionAlert.
-           진양성·위양성함정 케이스 통과.
+"""담당: 서영 (Agent2) — 이상탐지 + 원인분류 REST 창구.
 
 라우터는 얇게 — 판정 로직은 전부 service.py 아래 단계별 모듈에 있다.
 """
@@ -20,7 +17,7 @@ router = APIRouter(prefix="/api/v1", tags=["detection"])
 
 @router.get("/detect/ping")
 async def ping() -> dict[str, str]:
-    """0주차 확인용 — 앱 1개가 4명 코드로 뜨는지 보는 hello world."""
+    """앱 부팅·라우터 등록 확인용 (tests/test_app_boot.py)."""
     return {"module": "detection", "owner": "서영", "status": "ok"}
 
 
@@ -28,17 +25,14 @@ async def ping() -> dict[str, str]:
 async def detect(request: DetectRequest) -> DetectResponse:
     """ClassifiedItem 집합 → DetectionAlert (편중형/전역형 + 원인라벨).
 
-    ⚠️ **운영 진입점이 아니다.** 매일 도는 배치(`app/batch/daily.py`)가 `detect_anomaly()`
-       를 직접 부른다. 이 API 는 "이 케이스만 넣으면 왜 알림이 안 뜨지?"를 보는
-       재현·디버깅 창구다 (2026-08-05 지인님 결선 정리).
+    운영 진입점이 아니다 — 매일 도는 배치(`app/batch/daily.py`)가 `detect_anomaly()` 를
+    직접 부른다. 이 API 는 "이 케이스만 넣으면 왜 알림이 안 뜨지?"를 보는 재현·디버깅 창구다.
 
-    ⚠️ BH-FDR family 는 상품별이다. 상품 하나만 재현해도 결과는 전체 배치 속 같은
-       상품과 동일하지만, 그 상품의 aspect×채널×source 슬롯을 일부만 보내면 family가
-       줄어 컷오프가 달라진다. **상품 하나의 완전한 윈도우 입력**을 넘길 것.
+    BH-FDR family 는 상품별이라, 그 상품의 aspect×채널×source 슬롯을 일부만 보내면 family
+    가 줄어 컷오프가 달라진다. 상품 하나의 완전한 윈도우 입력을 넘길 것.
     """
-    # ⚠️ `documents: []` 는 거절한다. 빈 리스트를 그대로 넘기면 build_rows 가 0행을 내고
-    #    detect_anomaly 의 `if not rows` 에 걸려 **조용히 빈 응답**이 나간다. 재현 창구인데
-    #    "왜 아무것도 안 뜨지?"가 정확히 이 형태다. (지인님 PR 리뷰 §8, 2026-08-06)
+    # `documents: []` 는 거절한다. 빈 리스트를 그대로 넘기면 build_rows 가 0행을 내고
+    # detect_anomaly 의 `if not rows` 에 걸려 조용히 빈 응답이 나간다.
     if request.documents is not None and not request.documents:
         raise HTTPException(
             status_code=422,
@@ -51,8 +45,8 @@ async def detect(request: DetectRequest) -> DetectResponse:
     if request.documents is None and any(
         i.source == Source.REVIEW for i in request.items
     ):
-        # 정상 빈 배열 리뷰도 부모 item 으로 들어오지만, documents 없이는 분류 자체가
-        # 누락된 원문이 있는지 확인할 수 없다. 누락 시 분모가 줄어 부정률이 부풀 수 있다.
+        # documents 없이는 분류가 누락된 원문이 있는지 확인할 수 없고, 누락되면 분모가
+        # 줄어 부정률이 부풀 수 있다(오탐 방향).
         logger.warning(
             "documents 없이 리뷰가 섞인 요청 — 원문 대비 부모 분류 레코드 coverage를 "
             "검증할 수 없어 운영 경로와 결과가 달라질 수 있습니다. documents 를 함께 "
