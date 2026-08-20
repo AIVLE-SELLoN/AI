@@ -3,7 +3,7 @@
 ## 무엇을 재나
 
 리포팅은 "정답 문장"이 없다. 요약문이 좋은지 나쁜지는 골든으로 채점할 수 없다.
-대신 **검증 가능한 것만** 잰다 — 문서 생성 스키마 §4-4 가 반려 사유로 못박은 것들이다.
+대신 **검증 가능한 것만** 잰다 — 문서 생성 스키마가 반려 사유로 못박은 것들이다.
 
   (A) 검증기 민감도 [$0, LLM 미호출]
       정상 출력에 "반드시 반려돼야 하는 오염"을 한 군데씩 주입해, 검증기가 잡아내는
@@ -265,7 +265,7 @@ def build_cs_cases() -> list[tuple[str, CSGuidelineInput, CSGuidelineOutput]]:
 # ── (A) 검증기 민감도 — $0 ────────────────────────────────────────────────
 #
 # 오염 1건당 "반려돼야 한다", 정상 변형 1건당 "통과해야 한다"가 정답이다.
-# 정답을 우리 코드가 아니라 §4-4 규칙에서 가져오므로 자기채점이 아니다.
+# 정답을 우리 코드가 아니라 스키마 규칙에서 가져오므로 자기채점이 아니다.
 
 MutationFn = Callable[[Any], None]
 
@@ -354,7 +354,7 @@ def run_storage_policy_check() -> dict[str, Any]:
     검사 항목:
       - 문서 종류별 **프리픽스**가 분리돼 있는가 (버킷은 하나, Lifecycle 은 프리픽스 단위)
       - 보존 기간이 확정값(월간 6개월 / CS 7일)과 같은가
-      - 링크 수명이 문서 종류 무관 7일 고정인가 (인프라 §5)
+      - 링크 수명이 문서 종류 무관 7일 고정인가 (인프라 문서)
       - 링크 만료가 객체 만료를 넘지 않는가 (넘으면 스키마가 거부한다)
       - 재컴파일 불가 문서(월간)의 보존이 충분히 긴가
     """
@@ -379,7 +379,7 @@ def run_storage_policy_check() -> dict[str, Any]:
         "월간은 재컴파일 불가로 표시": monthly.recompilable is False,
         "CS 는 재컴파일 가능으로 표시": guideline.recompilable is True,
         "미등록 종류는 짧은 보존으로": unknown.retention_hours == guideline.retention_hours,
-        # 파일 산출물 공통 필수 4종(2026-08-03 확정) — optional 로 새면 메인이 파일을 못 찾는다
+        # 파일 산출물 공통 필수 4종 — optional 로 새면 메인이 파일을 못 찾는다
         "파일 메타 4종 필수": all(
             PdfS3Meta.model_fields[f].is_required()
             for f in ("original_file_name", "new_file_name", "created_at", "file_size_bytes")
@@ -645,7 +645,7 @@ async def main_async(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    # 🔴 **첫 문장이어야 한다.** 예전엔 모듈 최상단에서 `sys.stdout` 만 `reconfigure` 했다.
+    # **첫 문장이어야 한다.** 예전엔 모듈 최상단에서 `sys.stdout` 만 `reconfigure` 했다.
     #    ① stderr 를 안 바꿔서 로깅·traceback 은 그대로 깨졌고 ② `contextlib.suppress` 가
     #    없어 `.reconfigure` 가 아예 없는 스트림(pytest 캡처 등)에서는 `AttributeError` 로
     #    **import 만 해도** 터졌다. 사유 전문은 `app/core/console.py`.

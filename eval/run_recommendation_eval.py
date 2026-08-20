@@ -12,7 +12,7 @@
 
 전제: scripts/seed_vectordb.py로 Chroma에 실데이터가 이미 시딩돼 있어야 함.
 
-⚠️ 2026-08-09부터 golden 15건 실험도 CS 코퍼스(input_cs_inquiries.csv·golden_cs_labels.csv)를
+golden 15건 실험도 CS 코퍼스(input_cs_inquiries.csv·golden_cs_labels.csv)를
 읽는다. image_guide 의 근거가 통계 요약에서 **실제 CS 원문**으로 바뀌었기 때문에, 원문을
 안 넘기면 cs_quotes 가 "정보 없음"이 되어 라우팅이 copy_draft 로 쏠린다(운영과 다른 경로를
 재게 됨). 그래서 mock 재생성 시 상세페이지 기반 실험과 달리 **재측정이 필요하다.**
@@ -93,7 +93,7 @@ NO_RAG_PROMPT = """당신은 이커머스 상세페이지 개선안을 작성하
 JSON만 반환:
 {{"current_text": "...", "proposed_text": "...", "rationale": "..."}}
 """
-"""§5-3 (A) 원인 라벨만으로 생성 조건 전용 — copy_draft_v1.md와 달리 "정보 없음이면
+"""(A) 원인 라벨만으로 생성 조건 전용 — copy_draft_v1.md와 달리 "정보 없음이면
 정보 없음이라 쓰라"는 지시가 없음. 있으면 NO_DETAIL_TEXT 입력 시 LLM이 정직하게
 "정보 없음"이라 답해서 다른 실험이 됨."""
 
@@ -107,7 +107,7 @@ EXPECTED_TOOL_BY_ROOT_CAUSE = {
     "조명_보정_차이": ProposalType.IMAGE_GUIDE,
     "이미지_질감표현_부족": ProposalType.IMAGE_GUIDE,
 }
-"""§4-3 도구선택표(팀 Notion, 결정론적 매핑) — copy_draft형/image_guide형 원인 분류는
+"""도구선택표(팀 Notion, 결정론적 매핑) — copy_draft형/image_guide형 원인 분류는
 scripts/prompts/generate_detail_field_text_v1.md의 설계 원칙("원인 유형이 있음/없음의
 방향을 결정한다")에서 가져옴. SCOPE_LIMIT_LABELS(실물_염색_편차·실제_원단_문제)와
 원인 미지정("") 케이스는 정답이 없어 이 표에서 제외 — 라우팅 정확도 실험에서도 제외."""
@@ -190,7 +190,7 @@ def load_negative_cs_by_product() -> dict[tuple[str, str, str], list[dict]]:
     달아주기 위해서다. 상품과 무관하게 aspect 만 맞는 남의 CS 를 쓰면 운영과 다른
     걸 재게 된다(운영은 그 상품의 CS 를 넣는다).
 
-    ⚠️ 이 함수 때문에 golden 15건 실험이 CS 코퍼스에 묶인다 — mock 재생성하면 뽑히는
+    이 함수 때문에 golden 15건 실험이 CS 코퍼스에 묶인다 — mock 재생성하면 뽑히는
     문장이 바뀔 수 있다. 상세페이지 기반인 다른 실험과 달리 **재측정이 필요하다.**
     """
     labels = {r["inquiry_id"]: r for r in _load_csv(CS_LABELS_PATH)}
@@ -402,7 +402,7 @@ def report_evaluator_quality(
 def report_citation_coverage(
     cases: list[tuple[DetectionAlert, Recommendation]],
 ) -> None:
-    """image_guide 가 실제로 CS 문의를 인용했는가(§4-3 citations).
+    """image_guide 가 실제로 CS 문의를 인용했는가(citations).
 
     분모를 image_guide 로 한정하는 이유: copy_draft 는 상세페이지를 인용하므로 CS
     인용이 0건인 게 정상이다. 여기에 섞으면 커버리지가 이유 없이 낮아 보인다.
@@ -448,7 +448,7 @@ def report_citation_coverage(
 async def check_rag_baseline_comparison(
     cases: list[tuple[DetectionAlert, Recommendation]],
 ) -> None:
-    """§5-3 베이스라인 비교 — (A) RAG 없음 vs (B) RAG 있음(2단계에서 이미 측정한 100%).
+    """베이스라인 비교 — (A) RAG 없음 vs (B) RAG 있음(2단계에서 이미 측정한 100%).
 
     cases는 check_grounding_precision()이 계산한 결과를 재사용 — route_proposal_type()
     중복 호출 방지. SCOPE_LIMIT은 proposal.type이 copy_draft로 고정돼 있어도 실제
@@ -499,16 +499,16 @@ async def check_rag_baseline_comparison(
 async def check_routing_accuracy(
     alerts: list[tuple[DetectionAlert, list[LinkedCSInquiry]]], *, label: str
 ) -> None:
-    """§4-3 도구선택표 대조 — LLM의 choose_tool() 판단이 팀 정답표와 얼마나 일치하는가.
+    """도구선택표 대조 — LLM의 choose_tool() 판단이 팀 정답표와 얼마나 일치하는가.
 
     SCOPE_LIMIT·원인 미지정 등 EXPECTED_TOOL_BY_ROOT_CAUSE에 없는 원인은 정답 자체가
     없어 제외. golden 15건 기반(synthetic)과 실제 CS 데이터 기반 둘 다 이 함수를
     공유한다 — label로 어느 쪽 결과인지만 구분.
 
-    🔴 **CS 원문을 반드시 같이 넘긴다.** 안 넘기면 cs_quotes 가 "정보 없음"이 되고,
+    **CS 원문을 반드시 같이 넘긴다.** 안 넘기면 cs_quotes 가 "정보 없음"이 되고,
     라우팅 프롬프트의 "CS 원문이 없으면 copy_draft 쪽에 무게" 지시가 발동해 결과가
     copy_draft 로 쏠린다. 그건 모델 성능이 아니라 **하네스가 근거를 안 준 것**이라
-    숫자를 그대로 읽으면 안 된다(2026-08-09).
+    숫자를 그대로 읽으면 안 된다.
     """
     targets = [
         (a, q)
@@ -620,10 +620,10 @@ def build_alerts_from_real_cs_data() -> list[
 
 
 def main() -> None:
-    # 🔴 첫 문장이어야 한다. stdout 만 바꾸면 안 된다 — 로깅은 **stderr** 로 나가서
+    # 첫 문장이어야 한다. stdout 만 바꾸면 안 된다 — 로깅은 **stderr** 로 나가서
     #    cp949 로 깨지고, 라우팅 사유(한글)가 그 로그로 나오므로 진단이 통째로 못 읽는
     #    글자가 된다. 예전엔 모듈 최상단에서 불렀는데 **import 만 해도** 남의 스트림을 바꿨다.
-    # ⚠️ 위 `logging.basicConfig()` 가 먼저 핸들러를 만들어도 무해하다 — `reconfigure` 는
+    # 위 `logging.basicConfig()` 가 먼저 핸들러를 만들어도 무해하다 — `reconfigure` 는
     #    스트림 객체를 교체하지 않고 제자리에서 바꾼다(`app/core/console.py`).
     force_utf8_output()
 

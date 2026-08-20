@@ -4,10 +4,10 @@
 어떻게:     golden 카운트를 검정에 **직접 입력**(oracle)하고 golden_anomaly 와 대조
 비용:       **$0** — 통계 계산이고 앞단 분류를 안 태운다
 
-⚠️ oracle 인 이유: 저사건 케이스는 분류 오차 1건에 판정이 뒤집혀서, 탐지 로직이
+oracle 인 이유: 저사건 케이스는 분류 오차 1건에 판정이 뒤집혀서, 탐지 로직이
    정상인데도 오답 처리된다. 분류 성능은 실험②·③·⑥에서 따로 잰다.
 
-배치 구성 (validate_anomaly.py 와 동일 — 로직 V3 §[2-B])
+배치 구성 (validate_anomaly.py 와 동일 — 로직 V3)
 --------------------------------------------------------
 ① 42상품 × 6aspect × 3채널 × 2source = 1,512슬롯을 한 배치로 구성.
    케이스 슬롯은 config_anomaly 값, 나머지는 baseline 으로 채운다.
@@ -17,11 +17,11 @@
    (윈도우가 25개로 흩어져 있으나 Fisher 는 4개 숫자만 쓰므로 날짜는 무관 —
     validate_anomaly.py 헤더 "window 선택은 통계 결과에 전혀 영향을 주지 않는다")
 
-⚠️ validate_anomaly.py 는 scipy 를 직접 호출해 **config 가 옳은지** 검산한다.
+validate_anomaly.py 는 scipy 를 직접 호출해 **config 가 옳은지** 검산한다.
    이 스크립트는 같은 배치를 **app.detection 에 먹여 우리 코드가 옳은지** 잰다.
    둘은 목적이 다르다. 배치 구성 규약만 공유한다.
 
-채점 단위 (스키마 §6.1)
+채점 단위 (스키마)
 -----------------------
 - 편중형  → (case_id × channel). 비유의 채널의 '안 울림'까지 정답
 - 전역형  → case_id 수준 (예측은 channel=ALL 1건이라 채널별 대조 면제)
@@ -74,7 +74,7 @@ DOC_MAX_FAMILY_SIZE = 36
 family가 36보다 작을 수 있고, 상품 수가 바뀌면 전체 검정 수도 달라진다.
 """
 
-# ⚠️ str(Verdict.NORMAL) 은 "Verdict.NORMAL" 을 낸다(3.11+ StrEnum 아님). 반드시 .value.
+# str(Verdict.NORMAL) 은 "Verdict.NORMAL" 을 낸다(3.11+ StrEnum 아님). 반드시 .value.
 NORMAL = Verdict.NORMAL.value
 BIASED = Verdict.BIASED.value
 SCOPE_IN = {"색상", "사이즈", "소재"}
@@ -258,7 +258,7 @@ def predicted_row(pred: dict, product: str, source: str, channel: str) -> dict:
 
     후보 조회는 **케이스 수준**이다. 골든의 verdict·main_aspect 는 케이스 전체에
     같은 값이 들어가고(3채널 행 모두 '편중형'), 채널별 차이는 channel_significant
-    한 칸으로만 표현되기 때문이다(mock 정의서 §7). 발화 채널에만 후보가 생기므로
+    한 칸으로만 표현되기 때문이다(mock 정의서). 발화 채널에만 후보가 생기므로
     골든 행의 채널로 조회하면 비유의 채널 행이 전부 '정상'으로 잡혀 미탐이 된다.
 
     channel_significant 만 인자로 받은 채널의 검정 결과를 본다.
@@ -352,7 +352,7 @@ def score(golden: list[dict], pred: dict) -> dict:
             if not g["root_cause"] and g["main_aspect"] in SCOPE_IN:
                 cause_skipped += 1
 
-        if g["detection_confidence"]:  # 골든이 채운 칸만 (시나리오 §4 채점 범위)
+        if g["detection_confidence"]:  # 골든이 채운 칸만 (시나리오 채점 범위)
             confidence.add(g["detection_confidence"] == p["detection_confidence"])
 
         mark = "✅" if g["verdict"] == p["verdict"] else "❌"
@@ -433,7 +433,7 @@ def main() -> None:
     # 출력이 나가기 전에. 사유는 app/core/console.py 참고 —
     # 결과 표에 `—`·`✅` 를 쓰는데 cp949 콘솔에서 그 줄이 터진다.
     #
-    # ⚠️ 예전엔 모듈 최상단에서 `sys.stdout.reconfigure()` 를 직접 불렀는데 걷어냈다.
+    # 예전엔 모듈 최상단에서 `sys.stdout.reconfigure()` 를 직접 불렀는데 걷어냈다.
     #    헬퍼가 없애려던 중복이고, 그 사본은 **stderr 를 안 바꾸고** `errors="replace"`
     #    도 없으며 `contextlib.suppress` 가 없어 **import 시점에 터질 수 있었다**.
     force_utf8_output()
