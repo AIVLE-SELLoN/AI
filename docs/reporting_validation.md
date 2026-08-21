@@ -38,9 +38,9 @@
 | 산출물 | **전 상품 합본 PDF 1개/월** (첫 페이지만 화면, 전체는 presigned URL 다운로드) | 출력 데이터(DB) + PDF |
 | DB 적재 | 하지 않음 | 함 |
 | `source_payload` | **미전송** | **필수** (재컴파일 원본) |
-| S3 버킷 | `sellon-reports` | `sellon-temp-reports` |
-| 자동 삭제(S3 Lifecycle) | **6개월** — 원본이 없어 만료 = 영구 소실(경과분 조회 불필요로 확정) | **24시간** — 원본으로 재컴파일 |
-| presigned 링크 | 7일 (만료 시 재발급) | 24시간 |
+| S3 위치 | 버킷 **1개**, prefix `monthly-report/` | 같은 버킷, prefix `cs-guideline/` |
+| 자동 삭제(S3 Lifecycle) | **180일** — 원본이 없어 만료 = 영구 소실(경과분 조회 불필요로 확정) | **7일** — 원본으로 재컴파일 (`GUIDELINE_RETENTION_HOURS`) |
+| presigned 링크 | 7일 (만료 시 재발급) | 7일 — SigV4 상한 (`PRESIGNED_URL_TTL_HOURS`) |
 | PDF 생성 실패 시 | **산출물 없음** → 재시도 필수 | 데이터는 남음, PDF만 재컴파일 |
 
 월간은 **UI가 이 PDF를 뷰어로 그대로 띄우므로**(2026-08-03 확정) 문서 안에 수치 표·차트까지
@@ -54,7 +54,7 @@
 | `positive + neutral + negative = 1.00 (±0.005)` | `MonthlyAspectDistribution` |
 | `status = RISK` ⟺ `drift_rate ≥ 0.03` | `MonthlySentimentDrift` |
 | `hold_reason` 설정 시 판정 6개 값 전부 `null`, 아니면 전부 `non-null` | `ChannelDivergencePair` |
-| `worst_pair` = `jsd_score` 최댓값 쌍, `is_crisis` = pairs 롤업 | `MonthlyChannelDivergenceInput` |
+| `worst_pair` = **`(severity, excess)` 사전식 최댓값** 쌍, `is_crisis` = pairs 롤업 | `MonthlyChannelDivergenceInput` (`metrics_calculator._worst_rank`) |
 | `start_date` = 해당 월 1일, `end_date` = 말일 | `MonthlyReportInput` |
 | aspect 3종 고정, `aspect_distributions`와 `sentiment_drifts`의 aspect 집합 동일 | `MonthlyReportInput` |
 | `delta = cur_rate − past_rate` | `CSGuidelineStatsInput` |

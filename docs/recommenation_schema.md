@@ -4,7 +4,7 @@
 
 ---
 
-> 🟢 **문서 상태: [미확정]**
+> 🟢 **문서 상태: [확정]** — 코드가 이 계약대로 동작한다(`app/core/schemas.py` `Recommendation`).
 > 
 
 ## 1. 개요
@@ -114,7 +114,7 @@ Agent3(개선안 생성)가 내보내는 JSON의 정의.
 | evaluator.attempts | int | 1~3 | 시도 횟수 (재시도 최대 2회) | 평가 |
 | evaluator.checks.* | bool | 3개 기준 | 기준별 통과 여부(셋 다 true여야 passed=true). **grounding**=인용이 근거 안에 실재 / **consistency**=제안이 원인·aspect와 일치 / **actionability**=바로 실행 가능 | 평가 |
 | evaluator.failure_reason | string/null |  | 최종 실패 시 사유 | 대시보드 |
-| recommendation_confidence | enum | 높음/중간/낮음/null | **개선안 확신도**(탐지 확신도와 별개, 셀러 화면 표시). **높음**=상세페이지 근거+유사사례 둘 다 / **중간**=하나만 / **낮음**=둘 다 없음 / **null**=검증 실패(§5) | HITL 화면 |
+| recommendation_confidence | enum \| null | 높음/중간/낮음 | **개선안 확신도**(탐지 확신도와 별개, 셀러 화면 표시). **높음**=상세페이지 근거+유사사례 둘 다 / **중간**=하나만 / **낮음**=둘 다 없음 / **null**=검증 실패(§5) | HITL 화면 |
 | confidence_reason | string |  | 확신도 판단 이유 한 줄(셀러 화면 근거 표시용) | HITL 화면 |
 | capped_by_detection | bool |  | 탐지 확신도 때문에 개선안 확신도가 눌렸으면 true. 탐지 중간→개선안 상한도 중간(높음 금지), 탐지 높음→상한 없음 | 평가 |
 | hitl_status | enum | 대기/승인/반려/수정후승인 | 생성 시 항상 "대기" — 이후 갱신은 Agent 아닌 HITL 처리 담당 | HITL 화면·피드백 |
@@ -135,7 +135,7 @@ Agent3(개선안 생성)가 내보내는 JSON의 정의.
 
 | 상황 | 처리 |
 | --- | --- |
-| Evaluator 최종 실패 (3회 시도 소진) | proposal=null로 발행, evaluator.passed=false + failure_reason 기록, recommendation_confidence=null. HITL 화면엔 "개선안 생성 실패 — 원인·알림만 표시". **기각 없음 원칙 유지** |
+| Evaluator 최종 실패 (3회 시도 소진) | **일반 가이드로 강등해 발행**한다(`generate_fallback_proposal`). `proposal` 은 채워지고 `evaluator.passed=true`·`checks.grounding=false` 로 나가며, 확신도는 근거가 없어 자동으로 **낮음**이 된다. **기각 없음 원칙 유지**<br>⚠️ `proposal=null` 로 나가는 경로는 없다 — 스키마상 nullable 이지만 코드가 그 값을 만들지 않는다 |
 | recommended_action ≠ "개선안 생성" (트리거 미충족) | Agent3 미호출 — JSON 미생성. **트리거는 recommended_action=="개선안 생성" 단일 조건**(scope_in=false·전역/잠정전역·구분불가·원인 미특정 모두 제외) |
 | 갱신 알림 (updates_alert_id 있음) | 새 개선안 생성하되 이전 recommendation의 hitl_status를 참조 — 이전 건이 "대기"면 백엔드가 만료 처리(soft-delete — hitl_status 값 아님) 후 신규 발행 |
 | detection_confidence=낮음 (원인 미특정) | **해소(트리거로 자동 제외)**: 원인 미특정 → recommended_action="채널 운영 요소 점검 권장"이라 개선안 생성 트리거에 미해당 → Agent3 미호출. 별도 분기 불필요 |
@@ -154,18 +154,3 @@ Agent3(개선안 생성)가 내보내는 JSON의 정의.
 - **스코프 한계 케이스(실물_염색_편차·실제_원단_문제)** → image_guide 강제 예외: detailpage_grounded 값과 무관하게 proposal.type=copy_draft로 "상품/공급 확인 권장" 일반 가이드 문구 출력 + recommendation_confidence=낮음 고정
 
 **스코프 한계 (의도적 스코프 밖)** — 편중형인데 원인이 실제 상품 문제(실물_염색_편차·실제_원단_문제)로 잡히는 드문 경우, 문구·사진 어느 도구로도 해결되지 않는다. 이때는 recommendation_confidence를 "낮음"으로 두고 일반 가이드 + "상품/공급 확인 권장" 성격 문구로 처리하며, 상세페이지 자동 개선 범위 밖으로 명시한다. (향후 과제: 상품 품질 이슈를 탐지 단계에서 별도 라우팅 분리 — 현 스코프에선 전역형만 "상품 자체 점검 권장"으로 걸러짐.)
-
-## 7. 변경 내역
-
-| 날짜 | 변경 내용 | 합의자 |
-| --- | --- | --- |
-| 2026-07-16 | 최초 초안 (데이터 트랙 제안) | 유지인 (Agent3 담당 공동 확정 대기) |
-| 2026-07-22 | 탐지 스키마(확정) 정합 개정 — 트리거 단일화(recommended_action)·캡핑 규칙·Evaluator 3기준을 §3·§5 본문에 반영, §5 경계표 2행 해소, JSON 값 빠른이해 추가, 확신도 null 허용 | 유지인 (지인 검토 대기) |
-| 2026-07-22 | 도구 선택 규칙(§6) 확정 + 필드 3개 추가(detailpage_grounded·similar_case·confidence_reason) + JSON 예시 반영, 스코프 한계 명시. 팀 컨펌 대기 | 유지인 |
-| 2026-07-22 | 확정 이상탐지 대조 검수 반영 — hitl_feedback.rejection_reason 필드 신설(반려 사유 필수, 팀 코멘트 반영), JSON 구문오류 수정 | 유지인 |
-| 2026-07-23 | 로직 문서 정합 확정 — §6 copy_draft에 채널_사이즈_표준차이 추가, 스코프 한계를 image_guide 강제 예외로 명시, hitl_feedback.edited_text 필드 신설(수정후승인 정본·컬렉션2 정예시), 로직 상호참조 갱신(§5-2·§4-1). [미확정]→[확정] | 유지인 |
-| 2026-07-23 | 로직 §4 번호 밀림 반영 — 컬렉션2 스키마 참조 §4-1→§4-2(reason_text) | 유지인 |
-| 2026-07-23 | 냉철 검수 반영 — §2 JSON 예시를 규칙 정합본으로 교체(색감→image_guide, detailpage_grounded=false, 유사사례 있음→중간), §5 갱신 만료 처리 명확화(soft-delete), §3 detailpage_grounded 스코프 예외 주석, §6 "기타" 도구규칙 aspect 반영, §5 Evaluator 실패 시 recommendation_confidence=null 명시, §2 예시에 edited_text=null 필드 보강 | 유지인 |
-| 2026-07-23 | image_guide current_text 소스 확정(CS 문의 기반, 이미지·비전 미참조) — §3·§5 정정. grounding 소스 도구별 분리는 개선안 로직 §4-3 참조 | 유지인 |
-
----
