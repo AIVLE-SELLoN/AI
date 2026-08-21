@@ -1054,7 +1054,7 @@ def record_hitl_outcome(alert: DetectionAlert, recommendation: Recommendation) -
     # 수정후승인이면 셀러가 승인한 건 우리 제안문이 아니라 셀러가 고쳐 쓴 문장이다 —
     # 그쪽을 적재해야 다음 유사 케이스가 실제 승인본을 참고한다.
     # 반려는 제외한다: 부예시의 뜻이 "이런 제안이 거절당했다"라 본문은 우리 제안문이어야
-    # 한다. 스키마상 반려 시 edited_text는 null이지만(recommenation_schema.md "대기·
+    # 한다. 스키마상 반려 시 edited_text는 null이지만(recommendation_schema.md "대기·
     # 승인·반려 시 null"), 실려 오더라도 셀러 문장이 반려 사례로 새지 않게 막는다.
     # strip 하는 이유: 빈 문자열·공백만 있는 값(셀러가 입력칸을 비우고 저장)을 그대로
     # 쓰면 문서에서 개선안 본문이 통째로 빠진다 — 폴백 대상으로 정규화한다.

@@ -62,7 +62,7 @@
 
 ## 6. Recommendation
 
-[개선안 출력 스키마 [확정]](https://app.notion.com/p/39fe39c614978017b36befb4730e520c?pvs=21) (Agent3 → HITL·피드백·대시보드) — 저장소 사본 [`recommenation_schema.md`](recommenation_schema.md)
+[개선안 출력 스키마 [확정]](https://app.notion.com/p/39fe39c614978017b36befb4730e520c?pvs=21) (Agent3 → HITL·피드백·대시보드) — 저장소 사본 [`recommendation_schema.md`](recommendation_schema.md)
 
 ## 7. 검증 규칙 (validator)
 

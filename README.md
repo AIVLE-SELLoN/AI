@@ -443,11 +443,11 @@ data/                    로컬 입력·골든·실행 상태, 대부분 git 제
 | [`eval/README.md`](eval/README.md) | 실험 9종의 실행법, 결과, 비용, 해석 한계 |
 | [`eval/results/`](eval/results/) | 실험을 돌릴 때마다 쌓인 결과 파일. 각 파일은 실행 당시의 기록이라 **최신 수치는 위 `eval/README.md`를 봅니다** |
 | [`docs/schemas.md`](docs/schemas.md) | Agent 간 공용 데이터 계약 |
-| [`docs/이상탐지 로직.md`](docs/이상탐지%20로직.md) | Agent2 단계별 탐지 명세 |
-| [`docs/이상탐지 시나리오.md`](docs/이상탐지%20시나리오.md) | 이상탐지 시나리오·분모 정의(§1) |
+| [`docs/detection_logic.md`](docs/detection_logic.md) | Agent2 단계별 탐지 명세 |
+| [`docs/detection_scenarios.md`](docs/detection_scenarios.md) | 이상탐지 시나리오·분모 정의(§1) |
 | [`docs/detection_schema.md`](docs/detection_schema.md) | 이상 알림 스키마 |
 | [`docs/agent3_logic.md`](docs/agent3_logic.md) | 개선안 생성·검증·HITL 로직 |
-| [`docs/recommenation_schema.md`](docs/recommenation_schema.md) | 개선안 출력 스키마 (파일명 `recommenation`은 오타지만 참조가 이 철자로 박혀 있어 그대로 둡니다) |
+| [`docs/recommendation_schema.md`](docs/recommendation_schema.md) | 개선안 출력 스키마 |
 | [`docs/mq_events.md`](docs/mq_events.md) | RabbitMQ 이벤트 계약 |
 | [`docs/reporting_schema.md`](docs/reporting_schema.md) | 월간 리포트·CS 가이드라인 계약 |
 | [`docs/reporting_validation.md`](docs/reporting_validation.md) | 리포팅 산출물 검증 규칙·실험 설계 |

@@ -1,6 +1,6 @@
 """단계 간 입출력 Pydantic 모델 = 팀 계약서.
 
-정본: docs/schemas.md §3·§4·§7, docs/detection_schema.md §3, docs/recommenation_schema.md §3.
+정본: docs/schemas.md §3·§4·§7, docs/detection_schema.md §3, docs/recommendation_schema.md §3.
 각 컴포넌트는 이 모듈만 import한다 (서로의 폴더에 의존하지 않는다).
 """
 
@@ -200,7 +200,7 @@ class DetectionAlert(BaseModel):
     evidence: Evidence
 
 
-# ── Recommendation 전용 Enum (docs/recommenation_schema.md) ──────
+# ── Recommendation 전용 Enum (docs/recommendation_schema.md) ──────
 
 
 class ProposalType(str, Enum):
@@ -228,7 +228,7 @@ class RejectionReasonCode(str, Enum):
     OTHER = "기타"
 
 
-# ── Recommendation (docs/recommenation_schema.md) ────────────────
+# ── Recommendation (docs/recommendation_schema.md) ────────────────
 
 
 class Proposal(BaseModel):

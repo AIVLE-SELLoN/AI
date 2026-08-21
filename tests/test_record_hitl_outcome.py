@@ -192,7 +192,7 @@ def test_rejected_keeps_proposed_text_even_if_edited_text_arrives(monkeypatch, b
     부예시의 뜻은 "이런 제안이 거절당했다"라 본문이 우리 제안문이어야 한다. 셀러가
     승인 의도로 쓴 문장이 반려 사례로 들어가면, 이 파일이 고친 버그(승인 사례에 실제
     승인 안 된 문장이 들어감)와 같은 모양이 반려 쪽에 생긴다.
-    스키마상 반려 시 edited_text는 null이지만(recommenation_schema.md §3) 계약 위반이
+    스키마상 반려 시 edited_text는 null이지만(recommendation_schema.md §3) 계약 위반이
     실제로 오면 조용히 오염되므로 코드에서 막는다.
     """
     fake_collection = _FakeCollection()
