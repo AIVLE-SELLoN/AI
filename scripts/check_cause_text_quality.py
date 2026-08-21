@@ -98,11 +98,9 @@ def check_case(case_id_aspect: str, items: list[dict]) -> dict:
 
 
 def main():
-    # 🔴 첫 문장이어야 한다. ⚠️ 이 파일만 `--help` 가 원래 통과한다 —
-    #    `ArgumentParser()` 에 `description=` 이 없어 docstring 의 `—` 가 도움말에 안 실린다.
-    #    대신 아래 진단 출력(119·124·127행)이 `⚠️`·`✅`·`—` 를 쓰므로
-    #    **점검 결과가 통째로 사라진다.**
-    #    `app/core/console.py`.
+    # 첫 문장이어야 한다. 이 파일은 `--help` 자체는 통과한다 — `ArgumentParser()` 에
+    # `description=` 이 없어 docstring 의 `—` 가 도움말에 안 실린다. 대신 아래 진단 출력이
+    # `⚠️`·`✅`·`—` 를 쓰므로 **점검 결과가 통째로 사라진다.** `app/core/console.py`.
     force_utf8_output()
 
     ap = argparse.ArgumentParser()

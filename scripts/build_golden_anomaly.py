@@ -3,28 +3,27 @@
 무엇을 만드나
 -------------
 실험①(탐지율·오탐률·편중/전역 판정 정확도)의 정답지.
-행 단위: (case_id × channel × source) — mock 정의서 §7.
+행 단위: (case_id × channel × source) — mock 정의서 기준.
 
-⚠️ **탐지 코드(app/detection)를 절대 쓰지 않는다.**
-   우리 로직으로 정답을 만들면 자기 코드로 자기를 채점하는 순환이 된다.
-   정답의 출처는 오직 config_anomaly.csv 의 `intended_answer`(= 서영이 설계한
-   "이 채널이 울려야 하는가") 뿐이다.
+**탐지 코드(app/detection)를 절대 쓰지 않는다.** 우리 로직으로 정답을 만들면 자기 코드로
+자기를 채점하는 순환이 된다. 정답의 출처는 오직 config_anomaly.csv 의 `intended_answer`
+(= "이 채널이 울려야 하는가" 설계값) 뿐이다.
 
 파생 규칙 (전부 문서 근거)
 --------------------------
 - channel_significant  ← intended_answer (TRUE→Y / FALSE→N / 빈값→빈값)
 - verdict              ← (case, source) 단위 Y 개수:  3개=전역형 / 1~2개=편중형 / 0개=정상
                          빈값이 하나라도 있으면 판정 불가 → 비움(scoring_included=N 케이스)
-                         스키마 §6.2 "golden 에서 보류 값 제거, 5종 유지"
-- is_anomaly           ← verdict ≠ 정상            (스키마 §6.2 파생 규칙)
+                         스키마가 "golden 에서 보류 값 제거, 5종 유지" 로 못박았다
+- is_anomaly           ← verdict ≠ 정상            (스키마 파생 규칙)
 - is_biased            ← verdict == 편중형 → true / 전역형·잠정전역 → false
-                         정상·구분불가 → 빈값(null)  (mock 정의서 §7)
+                         정상·구분불가 → 빈값(null)  (mock 정의서)
 - main_aspect          ← 케이스 내 delta(cur_rate-past_rate) 최대 aspect
 - sub_aspects          ← 나머지 aspect (SC-029 파손). 채점 대상 아님, 완결성용
 - root_cause           ← cause_distribution 최다 라벨. 없으면 빈값(미특정 허용)
 - window_start/end     ← Day 번호 + --anchor-date 기준 역산
 
-수동 확인이 필요한 칸은 채우지 않고 비워서 리포트한다(§7 미결 항목).
+수동 확인이 필요한 칸은 채우지 않고 비워서 리포트한다.
 
 실행:
     python scripts/build_golden_anomaly.py --anchor-date 2026-08-28
@@ -112,7 +111,7 @@ def significance(intended: str) -> str:
 def decide_verdict(flags: list[str]) -> str:
     """한 (case, source) 의 채널별 유의 플래그 → verdict.
 
-    ⚠️ '전부 발화 = 전역형' 판정은 채널 3개가 다 있을 때만 성립한다. config 에
+    '전부 발화 = 전역형' 판정은 채널 3개가 다 있을 때만 성립한다. config 에
     2채널만 적힌 케이스가 생기면 둘 다 Y 인 것이 전역형으로 잘못 찍힌다 —
     실제로는 나머지 한 채널이 안 울렸는지 알 수 없으므로 전역이라 단정할 수 없다.
     그런 케이스가 나오면 여기서 멈추고 config 를 먼저 확인할 것.
@@ -137,7 +136,7 @@ def derive_confidence(notes: list[str], verdict: str) -> str:
     - 전역형·잠정 전역형: alert 는 나오나 [6] 미수행 → '해당없음'
       (decide_confidence 가 _CAUSE_SKIPPED_VERDICTS 에서 NOT_APPLICABLE 을 낸다)
     - 편중형: config note 가 명시한 케이스만(SC-030/031/033). 나머지는 비워 둔다
-      — 시나리오 §4 가 확신도 채점 범위를 그 케이스들로 한정한다.
+      — 시나리오 정의서가 확신도 채점 범위를 그 케이스들로 한정한다.
     """
     for note in notes:
         for needle, value in _CONFIDENCE_FROM_NOTE.items():
@@ -270,8 +269,8 @@ def report(rows: list[dict], config_rows: list[dict]) -> None:
 
 
 def main() -> None:
-    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
-    #    (`description=__doc__`)에 `—`·`⚠️` 가 있다. `app/core/console.py`.
+    # 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    # (`description=__doc__`)에 `—`·`⚠️` 가 있다. `app/core/console.py`.
     force_utf8_output()
 
     ap = argparse.ArgumentParser(description=__doc__)

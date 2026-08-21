@@ -332,8 +332,8 @@ def write_outputs(rows: list[dict]) -> None:
 
 
 def main() -> None:
-    # 🔴 첫 문장이어야 한다 — 사설 `sys.stdout.reconfigure()` 를 대체한다(stderr 미변경 ·
-    #    `contextlib.suppress` 부재). 사유 전문은 `app/core/console.py`.
+    # 첫 문장이어야 한다 — 사설 `sys.stdout.reconfigure()` 를 대체한다(stderr 미변경 ·
+    # `contextlib.suppress` 부재). 사유 전문은 `app/core/console.py`.
     force_utf8_output()
 
     rows = rows_from_counts(collect())

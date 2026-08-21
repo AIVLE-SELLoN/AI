@@ -1,6 +1,6 @@
 """Mock Producer — CSV 대본 데이터를 시각순으로 재생하는 스크립트.
 
-워크플로우 회의(2026-08-02) 반영:
+Kafka 단일 경로 폐기:
   기존   : CSV → Kafka → classification_worker(Kafka consumer)
   변경후 : CSV → Kafka(발행 그대로 유지)
               └→ **raw DB** ← classification_worker 가 여기를 참조
@@ -11,15 +11,14 @@
 
 「Raw DB 스키마 확정 (8/7)」 반영:
   기존   : 이벤트 종류를 컬럼으로 구분하는 단일 `raw_event` 테이블
-  변경후 : 확정 문서 §2 의 실테이블 — `cs` · `reviews` · `orders` (+ `channel` 마스터)
+  변경후 : 확정 문서의 실테이블 — `cs` · `reviews` · `orders` (+ `channel` 마스터)
 
-  이 스크립트는 목 파이프라인에서 **main server 자리를 대신한다**(§1 소유권). 그래서
+  이 스크립트는 목 파이프라인에서 **main server 자리를 대신한다.** 그래서
   main server 소유 테이블만 쓰고, AI 소유 테이블(classified_*)은 건드리지 않는다.
   DDL 은 `app/core/raw_schema.py` 한 곳에 있다 — 워커와 같은 정의를 봐야 한다.
 
-⚠️ 원본 CSV 행 전체를 담던 `payload` 컬럼은 없앴다. 스키마가 확정되기 전 "나중에 컬럼을
-   뽑아 쓰려고" 남겨 둔 보험이었는데, 이제 컬럼이 정해져서 목적이 사라졌다. Kafka 메시지는
-   그대로 전체 행을 싣는다.
+원본 CSV 행 전체를 담는 `payload` 컬럼은 없다 — 컬럼이 확정된 뒤로 목적이 사라졌다.
+Kafka 메시지는 그대로 전체 행을 싣는다.
 
 raw DB 는 기본이 sqlite 파일이고 `RAW_DB_HOST` 가 있으면 Postgres 다 — 연결·문법 차이는
 `app.core.raw_db` 가 흡수하므로 이 파일의 SQL 은 한 벌뿐이다. 운영에서 main server 가 하는
@@ -45,7 +44,7 @@ from app.core.console import force_utf8_output
 from app.core.constants import KST
 from app.core.schemas import Channel
 
-# §2-1 channel 마스터에 넣을 채널. `Channel` enum 이 정본이다.
+# channel 마스터에 넣을 채널. `Channel` enum 이 정본이다.
 # ALL 은 전역형 알림을 가리키는 가상 채널이라 연동 채널이 아니다.
 MASTER_CHANNELS: tuple[str, ...] = tuple(c.value for c in Channel if c is not Channel.ALL)
 
@@ -79,10 +78,9 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
     "orders": {
         "file_name": "input_orders.csv",
         "time_column": "order_date",
-        # 🔴 **주문의 시각 컬럼은 날짜다 — 오프셋을 붙이지 않는다.** §2-9 가 `order_date` 를
-        #    DATE(하루 합산 키)로 정의했고 `build_db_row` 도 순수 날짜로 넣는다. payload 만
-        #    `2026-06-30T00:00:00` 처럼 시각을 달고 나가던 것을 여기서 맞춘다 —
-        #    날짜에 `+09:00` 을 붙이면 "그 날 09시"라는 없는 뜻이 생긴다.
+        # **주문의 시각 컬럼은 날짜다 — 오프셋을 붙이지 않는다.** `order_date` 는 DATE(하루
+        # 합산 키)이고 `build_db_row` 도 순수 날짜로 넣는다. 날짜에 `+09:00` 을 붙이면 "그
+        # 날 09시"라는 없는 뜻이 생긴다.
         "time_is_date": True,
         "topic": "raw.orders",
         "event_type": "ORDER",
@@ -90,7 +88,7 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
         "id_prefix": "ORD",
         "source": None,             # 분류 대상 아님(이상탐지 분모용 데이터)
         "text_column": None,
-        "table": "orders",          # §2-9
+        "table": "orders",
     },
     "inquiries": {
         "file_name": "input_cs_inquiries.csv",
@@ -102,7 +100,7 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
         "id_prefix": "INQ",
         "source": "cs",             # schemas.Source.CS
         "text_column": "content",
-        "table": "cs",              # §2-4
+        "table": "cs",
     },
     "reviews": {
         "file_name": "input_reviews.csv",
@@ -114,12 +112,12 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
         "id_prefix": "RVW",
         "source": "review",         # schemas.Source.REVIEW
         "text_column": "content",
-        "table": "reviews",         # §2-5
+        "table": "reviews",
     },
     "detail_changes": {
-        # ⚠️ 현재 data/input 에는 `input_detail_fields.csv`(상세페이지 스냅샷, 505행)만 있고
-        #    시각 컬럼이 없다 — 시계열 이벤트가 아니라 정적 참조 테이블이라 재생 대상이 아니다.
-        #    변경 이벤트 대본(input_detail_changes.csv)이 생성되면 그때부터 자동으로 잡힌다.
+        # data/input 에는 `input_detail_fields.csv`(상세페이지 스냅샷)만 있고 시각 컬럼이
+        # 없다 — 시계열 이벤트가 아니라 정적 참조 테이블이라 재생 대상이 아니다. 변경 이벤트
+        # 대본(input_detail_changes.csv)이 생기면 그때부터 자동으로 잡힌다.
         "file_name": "input_detail_changes.csv",
         "time_column": "changed_at",
         "time_is_date": False,
@@ -129,9 +127,9 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
         "id_prefix": "CHG",
         "source": None,             # 상세페이지 변경은 분류가 아니라 탐지 근거(linked_change_id)로 쓰임
         "text_column": "new_value",
-        # ⚠️ 확정 스키마 §1 테이블 목록에 상세페이지 변경 테이블이 없다. 적재할 자리가
-        #    없으므로 Kafka 발행만 하고 raw DB 는 건너뛴다 — 아무 테이블에나 밀어 넣어
-        #    스키마를 임의로 늘리지 않는다. 테이블이 정해지면 여기에 이름만 넣으면 된다.
+        # 확정 스키마에 상세페이지 변경 테이블이 없다. 적재할 자리가 없으므로 Kafka 발행만
+        # 하고 raw DB 는 건너뛴다 — 아무 테이블에나 밀어 넣어 스키마를 임의로 늘리지 않는다.
+        # 테이블이 정해지면 여기에 이름만 넣으면 된다.
         "table": None,
     },
 }
@@ -139,16 +137,15 @@ STREAMING_FILE_CONFIGS: dict[str, dict[str, Any]] = {
 
 # ── raw DB (원본 적재) ────────────────────────────────────────────────────────
 #
-# 확정 스키마 §2 의 실테이블에 그대로 넣는다. 테이블별 컬럼은 `app/core/raw_schema.py` 참고.
+# 확정 스키마의 실테이블에 그대로 넣는다. 테이블별 컬럼은 `app/core/raw_schema.py` 참고.
 #
-# ⚠️ 멱등 INSERT(upsert)를 쓰는 이유: 같은 대본을 다시 재생해도 중복 행이 쌓이지 않게
-#    한다(PK 로 덮어쓴다). cs/reviews 는 원문 PK, orders 는 복합 PK 가 그 역할을 한다.
+# 멱등 INSERT(upsert)를 쓰는 이유: 같은 대본을 다시 재생해도 중복 행이 쌓이지 않게 한다(PK 로
+# 덮어쓴다). cs/reviews 는 원문 PK, orders 는 복합 PK 가 그 역할을 한다.
 #
-# 🔴 **`INSERT OR REPLACE` 였다가 표준 `ON CONFLICT DO UPDATE` 로 바꿨다(2026-08-18).**
-#    이유는 하나다 — 전자는 **sqlite 전용 문법**이라 Postgres 에서 구문 오류다.
-#    ⚠️ 뜻은 완전히 같지 않다(앞은 지우고 다시 넣기, 뒤는 제자리 갱신). 다만 우리 스키마에
-#       `ON DELETE CASCADE` 가 한 곳도 없어서 **동작이 안 바뀐다** — 재실행 시 자식
-#       (`mapped_data`)이 남는 것까지 실측으로 확인했다. CASCADE 를 새로 걸면 다시 볼 것.
+# **`INSERT OR REPLACE` 가 아니라 표준 `ON CONFLICT DO UPDATE` 다** — 전자는 sqlite 전용 문법이라
+# Postgres 에서 구문 오류다. 뜻이 완전히 같지는 않지만(앞은 지우고 다시 넣기, 뒤는 제자리 갱신)
+# 우리 스키마에 `ON DELETE CASCADE` 가 한 곳도 없어 **동작이 안 바뀐다** — 재실행 시 자식
+# (`mapped_data`)이 남는 것까지 실측으로 확인했다. CASCADE 를 새로 걸면 다시 볼 것.
 
 TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     "cs": (
@@ -177,15 +174,13 @@ TABLE_INSERTS: dict[str, str] = {
     for table, columns in TABLE_COLUMNS.items()
 }
 
-# §3 날짜 경계는 Asia/Seoul 로 통일한다. 대본 CSV 의 시각은 오프셋 없는 한국 벽시계라
-# 그대로 넣으면 TIMESTAMPTZ 로 옮길 때 어느 지역 시각인지 알 수 없어 하루가 밀린다.
+# 날짜 경계는 Asia/Seoul 로 통일한다. 대본 CSV 의 시각은 오프셋 없는 한국 벽시계라 그대로
+# 넣으면 TIMESTAMPTZ 로 옮길 때 어느 지역 시각인지 알 수 없어 하루가 밀린다.
 #
-# 🔴 **`KST` 를 여기서 다시 정의하지 말 것 — `app.core.constants` 것을 쓴다.**
-#    이 파일은 오프셋을 붙여 **쓰는** 쪽이고, `app/batch/daily.py::_to_kst` 가 그걸 읽어
-#    날짜를 **자르는** 쪽이다. 두 벌이 되면 한쪽만 바뀌었을 때 행 수도 `verify_counts` 도
-#    전부 통과하는데 **날짜 경계의 문서만 다른 날로 집계된다** — 08-11 밤 생성기
-#    비결정성과 같은 모양(집계는 같은데 행이 갈림)이라 집계 검산으로는 안 잡힌다.
-#    (PR #68 후속)
+# **`KST` 를 여기서 다시 정의하지 말 것 — `app.core.constants` 것을 쓴다.** 이 파일은 오프셋을
+# 붙여 **쓰는** 쪽이고 `app/batch/daily.py::_to_kst` 가 그걸 읽어 날짜를 **자르는** 쪽이다. 두
+# 벌이 되면 한쪽만 바뀌었을 때 행 수도 `verify_counts` 도 전부 통과하는데 **날짜 경계의 문서만
+# 다른 날로 집계된다** — 집계 검산으로는 안 잡히는 모양이다.
 
 
 def to_kst_iso(value: datetime) -> str:
@@ -197,15 +192,15 @@ def to_kst_iso(value: datetime) -> str:
 def open_raw_db(db_path_str: str) -> raw_db.RawDbConnection:
     """raw DB 연결 + 스키마 보장. sqlite 면 없을 때 파일째로 새로 만든다.
 
-    ⚠️ **이 프로듀서는 목 파이프라인에서 main server 자리를 대신한다** — 운영에서는 돌지
-       않는다. Postgres 로도 붙을 수 있게 해 둔 것은 로컬 compose 검증용이다(원문을 넣어야
-       워커·집계를 실연결로 재볼 수 있다).
+    **이 프로듀서는 목 파이프라인에서 main server 자리를 대신한다** — 운영에서는 돌지 않는다.
+    Postgres 로도 붙을 수 있게 해 둔 것은 로컬 compose 검증용이다(원문을 넣어야 워커·집계를
+    실연결로 재볼 수 있다).
 
-    ⚠️ 연결·PRAGMA 는 `raw_db.connect_readwrite()` 가 한다 — 여기서 `sqlite3.connect` 를
-       직접 부르면 WAL·FK 설정이 워커 쪽과 두 벌이 되고, 한쪽만 바뀌어도 조용히 갈린다.
+    연결·PRAGMA 는 `raw_db.connect_readwrite()` 가 한다 — 여기서 `sqlite3.connect` 를 직접
+    부르면 WAL·FK 설정이 워커 쪽과 두 벌이 되고, 한쪽만 바뀌어도 조용히 갈린다.
     """
-    # ⚠️ Postgres 접속 실패는 `FileNotFoundError` 가 아니라 `psycopg.Error` 로 온다 —
-    #    안 잡으면 raw traceback 이라, 재생 대본이 잘못된 것처럼 보인다.
+    # Postgres 접속 실패는 `FileNotFoundError` 가 아니라 `psycopg.Error` 로 온다 — 안 잡으면
+    # raw traceback 이라, 재생 대본이 잘못된 것처럼 보인다.
     try:
         conn = raw_db.connect_readwrite(db_path_str)
     except raw_db.connection_error_types() as exc:
@@ -229,15 +224,14 @@ CHANNEL_UPSERT = raw_db.upsert_sql(
 
 
 def seed_channels(conn: raw_db.RawDbConnection, observed: set[str]) -> None:
-    """§2-1 channel 마스터를 채운다. 마스터의 정본은 **`Channel` enum** 이다.
+    """channel 마스터를 채운다. 마스터의 정본은 **`Channel` enum** 이다.
 
-    확정 문서 §2-1 이 "channel_id 는 문자열 자체가 PK — 우리 `Channel` enum 과 그대로
-    일치" 로 못박았다. 그래서 대본에서 관측된 값이 아니라 enum 을 넣는다.
+    확정 문서가 "channel_id 는 문자열 자체가 PK — 우리 `Channel` enum 과 그대로 일치" 로
+    못박았다. 그래서 대본에서 관측된 값이 아니라 enum 을 넣는다.
 
-    ⚠️ 예전에는 관측된 채널을 그대로 넣었는데, 그러면 **FK 가 아무것도 못 잡는다** —
-       대본에 'coupang' 오타가 있으면 그 오타가 마스터에도 같이 들어가 버려서 참조가
-       항상 성립한다. 마스터를 enum 으로 고정해야 오타가 FK 위반으로 걸린다.
-       (걸린 행은 `RawDbSink` 가 행 단위로 격리해 실패 건수로 집계한다.)
+    **관측된 채널을 그대로 넣으면 FK 가 아무것도 못 잡는다** — 대본에 'coupang' 오타가 있으면
+    그 오타가 마스터에도 같이 들어가 버려서 참조가 항상 성립한다. 마스터를 enum 으로 고정해야
+    오타가 FK 위반으로 걸린다(걸린 행은 `RawDbSink` 가 행 단위로 격리해 실패 건수로 집계한다).
 
     `Channel.ALL` 은 전역형 알림을 가리키는 가상 채널이라 연동 채널 마스터에 넣지 않는다.
     """
@@ -280,17 +274,17 @@ def seed_product_catalog(
     products: list[dict[str, str]],
     group_of_variant: dict[str, str],
 ) -> None:
-    """§2-2 products · §2-3 mapped_data 를 채운다.
+    """products · mapped_data 를 채운다.
 
-    운영에서는 **백엔드(Spring Boot)가 상품 매핑을 수행해 이 두 테이블에 적재한다**
-    (2026-08-11 확정). producer 는 목 파이프라인에서 main server 자리를 대신할 뿐이라,
-    여기서 하는 일은 그 적재를 흉내 내는 것이지 매핑 규칙을 정하는 것이 아니다.
+    운영에서는 **백엔드(Spring Boot)가 상품 매핑을 수행해 이 두 테이블에 적재한다.** producer
+    는 목 파이프라인에서 main server 자리를 대신할 뿐이라, 여기서 하는 일은 그 적재를 흉내 내는
+    것이지 매핑 규칙을 정하는 것이 아니다.
 
-    ⚠️ `channel` 다음에 불러야 한다 — products.channel_id 가 채널 마스터를 참조한다.
+    `channel` 다음에 불러야 한다 — products.channel_id 가 채널 마스터를 참조한다.
 
-    ⚠️ mapped_data 는 products 에 있는 variant 만 넣는다. 없는 variant 를 넣으면 FK 위반으로
-       행이 통째로 빠지는데, 그러면 "매핑은 했는데 조회는 안 되는" 상태가 되어 원인을
-       찾기 어렵다. 빠진 건수를 세어 알린다.
+    mapped_data 는 products 에 있는 variant 만 넣는다. 없는 variant 를 넣으면 FK 위반으로 행이
+    통째로 빠지는데, 그러면 "매핑은 했는데 조회는 안 되는" 상태가 되어 원인을 찾기 어렵다.
+    빠진 건수를 세어 알린다.
     """
     if not products:
         logger.warning(
@@ -302,15 +296,15 @@ def seed_product_catalog(
     # 수집·매핑 시각. 대본 CSV 에는 없어서 **적재 시각**으로 둔다 — 목에서는 producer 가
     # main server 자리를 대신하므로 그게 실제로 이 행이 생긴 시각이다.
     #
-    # ⚠️ `mapping_method`·`mapping_confidence` 는 채우지 않는다(§2-3). "무엇으로 묶었는지"
-    #    (slm_embedding/rule_naming/manual — `sim` 이 아니라 `slm`, 소형 언어모델)와 그
-    #    확신도는 **백엔드 매핑의 산물**이라 우리가 아는 값이 아니다. 그럴듯한 값을 넣으면
-    #    나중에 실제 매핑 품질을 볼 때 지어낸 수치가 섞인다. 모르는 것은 NULL 로 둔다.
+    # `mapping_method`·`mapping_confidence` 는 채우지 않는다. "무엇으로 묶었는지"
+    # (slm_embedding/rule_naming/manual — `sim` 이 아니라 `slm`, 소형 언어모델)와 그 확신도는
+    # **백엔드 매핑의 산물**이라 우리가 아는 값이 아니다. 그럴듯한 값을 넣으면 나중에 실제 매핑
+    # 품질을 볼 때 지어낸 수치가 섞인다. 모르는 것은 NULL 로 둔다.
     now = datetime.now(KST).isoformat()
 
-    # ⚠️ `known` 과 INSERT 가 **같은 값**을 봐야 한다. 예전에는 여기서만 strip 하고 INSERT 는
-    #    원본을 넣어서, CSV 에 공백이 섞이면 products 엔 공백 포함으로 들어가고 mapped_data
-    #    는 orphan 으로 빠졌다 — 매핑은 했는데 조회가 안 되는, 제일 찾기 어려운 형태다.
+    # `known` 과 INSERT 가 **같은 값**을 봐야 한다. 한쪽만 strip 하면 CSV 에 공백이 섞였을 때
+    # products 엔 공백 포함으로 들어가고 mapped_data 는 orphan 으로 빠진다 — 매핑은 했는데
+    # 조회가 안 되는, 제일 찾기 어려운 형태다.
     known: set[str] = set()
     for row in products:
         variant_row_id = str(row.get("variant_row_id") or "").strip()
@@ -355,7 +349,7 @@ def build_db_row(event: dict[str, Any]) -> tuple | None:
     """이벤트 1건 → 대상 테이블의 INSERT 파라미터. 적재 대상이 아니면 None.
 
     `created_at`(레코드 적재 시각)은 재생 시점의 벽시계다 — 대본상 발생 시각
-    (`inquired_at` / `reviews.created_at`)과 다르며, §2-4 가 둘을 구분해 두었다.
+    (`inquired_at` / `reviews.created_at`)과 다르며, 확정 문서가 둘을 구분해 두었다.
     """
     table = event["table"]
     if table is None:
@@ -378,7 +372,7 @@ def build_db_row(event: dict[str, Any]) -> tuple | None:
             occurred_at,
         )
     if table == "orders":
-        # §2-9 order_date 는 DATE 다 — 하루 합산 행이라 시각·오프셋이 없다.
+        # order_date 는 DATE 다 — 하루 합산 행이라 시각·오프셋이 없다.
         order_date = event["time"].date() if isinstance(event["time"], datetime) else event["time"]
         return (
             event["channel"], event["channel_product_id"],
@@ -395,9 +389,8 @@ class RawDbSink:
     테이블마다 컬럼 수가 달라 버퍼를 테이블별로 나눈다. flush 는 한꺼번에 돈다 —
     한 번의 commit 안에 세 테이블이 함께 들어가야 워커가 보는 시점이 갈리지 않는다.
 
-    ⚠️ 적재 실패는 **여기서 흡수하고 집계만** 한다. 밖으로 던지지 않는 이유:
-       한 행이 잘못됐다고 나머지 재생(특히 Kafka 발행)까지 멈추면 안 되기 때문이다.
-       실패 건수는 self.failed 에 쌓여 종료 요약에 함께 찍힌다.
+    적재 실패는 **여기서 흡수하고 집계만** 한다. 한 행이 잘못됐다고 나머지 재생(특히 Kafka
+    발행)까지 멈추면 안 되기 때문이다. 실패 건수는 self.failed 에 쌓여 종료 요약에 찍힌다.
     """
 
     def __init__(self, conn: raw_db.RawDbConnection) -> None:
@@ -500,36 +493,32 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
-# §2-2 products 의 대본. 채널 쪽 사실만 들어 있고 **상품 그룹은 없다**(그건 매핑 결과라
+# products 의 대본. 채널 쪽 사실만 들어 있고 **상품 그룹은 없다**(그건 매핑 결과라
 # mapped_data 소관). 컬럼은 `raw_schema.PRODUCTS_DDL` 과 1:1 이다.
 CHANNEL_PRODUCTS_FILE = "input_channel_products.csv"
 
-# §2-3 mapped_data 의 대본. variant → 상품 그룹.
+# mapped_data 의 대본. variant → 상품 그룹.
 #
-# ⚠️ 매핑 자체는 **백엔드(Spring Boot)가 수행해 적재한다**(2026-08-11 확정). 여기서 읽는
-#    파일은 그 결과를 목으로 흉내 낸 것뿐이고, 규칙을 정하는 쪽은 producer 가 아니다.
+# 매핑 자체는 **백엔드(Spring Boot)가 수행해 적재한다.** 여기서 읽는 파일은 그 결과를 목으로
+# 흉내 낸 것뿐이고, 규칙을 정하는 쪽은 producer 가 아니다.
 #
-# 🔴 **이 파일은 백엔드가 주지 않는다. 우리가 만들어야 한다**(2026-08-13 백엔드 확인).
-#    예전 주석은 "백엔드가 준다"였는데 **틀렸다** — 백엔드는 CSV 를 아예 만들지 않고 매핑
-#    결과를 raw DB 에 직접 적재한다. 운영에서는 그게 맞지만, 목 파이프라인에서는 producer
-#    가 메인 서버 자리를 대신하므로 **적재 이전의 대본은 저장소가 스스로 마련해야 한다.**
-#    "받을 때까지 기다린다"는 영원히 오지 않는 것을 기다리는 셈이었다.
+# **이 파일은 백엔드가 주지 않는다. 우리가 만들어야 한다** — 백엔드는 CSV 를 아예 만들지 않고
+# 매핑 결과를 raw DB 에 직접 적재한다. 목 파이프라인에서는 producer 가 메인 서버 자리를
+# 대신하므로 **적재 이전의 대본은 저장소가 스스로 마련해야 한다.**
 #
 #    만드는 방법은 `data/golden/golden_mapping.csv` → 이 파일 변환 하나뿐이다. producer 는
-#    golden 을 못 읽으므로(`validate_data_directory` 가드 · CLAUDE.md 9) 실행 중에 조인할
-#    수 없고, **사람이 한 번 변환해서 input 쪽에 둬야 한다.**
-#    → `scripts/build_mapped_data_input.py` (2026-08-13 서영님 작성)
+#    golden 을 못 읽으므로(`validate_data_directory` 가드) 실행 중에 조인할 수 없고, **사람이
+#    한 번 변환해서 input 쪽에 둬야 한다** → `scripts/build_mapped_data_input.py`.
 #
-#    ⚠️ 이렇게 만든 매핑은 **오라클(정답지 유래)이다.** 상품 매핑은 우리가 채점하는 ML
-#       산출물이 아니라 백엔드 소관 입력이라 목에서는 정답을 그대로 써도 된다. 다만 이걸
-#       근거로 **어떤 정확도도 재면 안 된다** — 그 순간 CLAUDE.md 9 의 컨닝이 된다.
+#    이렇게 만든 매핑은 **오라클(정답지 유래)이다.** 상품 매핑은 우리가 채점하는 ML 산출물이
+#    아니라 백엔드 소관 입력이라 목에서는 정답을 그대로 써도 된다. 다만 이걸 근거로 **어떤
+#    정확도도 재면 안 된다** — 그 순간 컨닝이 된다.
 #
-#    ⚠️ 예전 주석이 짚었던 오해 하나는 지금도 유효하다: 생성기가 `--golden-mapping-dir` 로
-#       조인해 만들어 주지 **않는다.** `generate_cs_review_data.py` 는 golden 매핑을 자기
-#       입력으로 읽을 뿐 이 파일을 내지 않는다. 출처가 두 갈래로 적혀 있으면 다음 사람이
-#       없는 생성기 기능을 고치러 간다.
+#    생성기가 `--golden-mapping-dir` 로 조인해 만들어 주지 **않는다.**
+#    `generate_cs_review_data.py` 는 golden 매핑을 자기 입력으로 읽을 뿐 이 파일을 내지 않는다.
+#    출처가 두 갈래로 적혀 있으면 다음 사람이 없는 생성기 기능을 고치러 간다.
 #
-#    파일이 없으면 조용히 다 틀린다(2026-08-13 실측, `data/input/` 1,134행 기준):
+#    파일이 없으면 조용히 다 틀린다(`data/input/` 1,134행 기준):
 #        매핑 있음: 상품그룹  42종 · 채널 2개 이상 걸친 그룹  42종 → 채널 간 비교 42건
 #        매핑 없음: 상품그룹 126종 · 채널 2개 이상 걸친 그룹   0종 → 채널 간 비교  0건
 #    채널상품 하나가 곧 그룹 하나가 되어(P001 → C1057/N1024/Z1108) 한 그룹에 채널이 둘
@@ -546,20 +535,19 @@ def _resolve_group(
 ) -> str:
     """채널 상품 → 상품 그룹. **매핑에 없으면 빈 문자열이다 — 대체값을 만들지 않는다.**
 
-    🔴 **예전에는 매핑 미스일 때 `channel_product_id` 를 그룹 자리에 넣었다(2026-08-18 제거).**
-       값이 채워져 있으니 조회는 성공하는데, 채널마다 다른 그룹이 되어(P001 →
-       C1057/N1024/Z1108) 한 그룹에 채널이 둘 이상 모이는 경우가 하나도 안 남았다
-       (실측: 채널 간 비교 42종 → 0종). 게다가 값이 있으니 탐지 배치의
-       `dropped["상품매핑 없음"]` 가드가 **발동하지 못해** 조용히 틀렸다. 비우면 호출부의
-       `or None` 이 `None` 으로 접고 그 가드가 제 일을 한다(제외 건수는 배치 요약에 뜬다).
+    **매핑 미스일 때 `channel_product_id` 를 그룹 자리에 넣지 말 것.** 값이 채워져 있으니
+    조회는 성공하는데, 채널마다 다른 그룹이 되어(P001 → C1057/N1024/Z1108) 한 그룹에 채널이
+    둘 이상 모이는 경우가 하나도 안 남는다(실측: 채널 간 비교 42종 → 0종). 게다가 값이 있으니
+    탐지 배치의 `dropped["상품매핑 없음"]` 가드가 **발동하지 못해** 조용히 틀린다. 비우면
+    호출부의 `or None` 이 `None` 으로 접고 그 가드가 제 일을 한다.
 
-    ⚠️ 매핑 자체를 여기서 **하지 않는다.** 무엇으로 묶을지는 백엔드 소관이고(네이밍·임베딩),
-       우리는 이미 끝난 매핑을 조회할 뿐이다. 못 찾으면 비워 두는 것이 정직하다.
+    매핑 자체를 여기서 **하지 않는다.** 무엇으로 묶을지는 백엔드 소관이고(네이밍·임베딩), 우리는
+    이미 끝난 매핑을 조회할 뿐이다. 못 찾으면 비워 두는 것이 정직하다.
 
-    ⚠️ **여기서 정한 값은 Kafka 로 안 나간다.** `product_group_id` 는 이벤트 dict 에만 있고
-       `build_db_row` 를 거쳐 **raw DB 로만** 간다(비면 그 컬럼이 NULL 이 된다). Kafka 로
-       나가는 것은 `event["payload"]` 뿐이라 그룹 ID 는 payload 계약의 일부가 아니다 —
-       `test_product_group_id_never_reaches_the_payload` 가 그 경계를 못박고 있다.
+    **여기서 정한 값은 Kafka 로 안 나간다.** `product_group_id` 는 이벤트 dict 에만 있고
+    `build_db_row` 를 거쳐 **raw DB 로만** 간다(비면 그 컬럼이 NULL 이 된다). Kafka 로 나가는
+    것은 `event["payload"]` 뿐이라 그룹 ID 는 payload 계약의 일부가 아니다 —
+    `test_product_group_id_never_reaches_the_payload` 가 그 경계를 못박고 있다.
     """
     if not channel_product_id:
         return ""
@@ -573,7 +561,7 @@ def _resolve_group(
 
 
 def load_product_catalog(data_dir: Path) -> tuple[list[dict[str, str]], dict[str, str]]:
-    """§2-2 products · §2-3 mapped_data 대본을 읽는다. 적재와 조인에 둘 다 쓴다.
+    """products · mapped_data 대본을 읽는다. 적재와 조인에 둘 다 쓴다.
 
     Returns:
         (products 행 목록, variant_row_id → product_group_id)
@@ -606,16 +594,16 @@ def build_channel_product_map(
     적재 **전에** 이벤트 필드를 채워야 해서 메모리에서 같은 조인을 한다 — 기준이 갈리지
     않도록 원본은 어디까지나 위 두 대본 하나씩이다.
 
-    ⚠️ 이 매핑이 비면 **채널마다 다른 그룹으로 갈린다.** 상품 하나가 쿠팡·네이버·지그재그
-       에서 서로 다른 `product_group_id` 가 되어(P001 → C1057/N1024/Z1108), 한 그룹에
-       채널이 둘 이상 모이는 경우가 **하나도 안 남는다**(2026-08-13 실측: 채널 2개 이상
-       걸친 그룹 42종 → 0종). 그래서 아래 둘은 "부정확해지는" 게 아니라 **아예 안 나온다** —
-       비교할 짝이 없으면 계산 자체가 시작되지 않는다:
-         - 탐지의 채널 간 비교(편중형/전역형)가 성립하지 않는다
-         - 월간 리포트의 채널 격차(JSD)도 같은 이유로 산출물이 비어 버린다
-         - ChromaDB 컬렉션1(상세페이지)은 `P001` 로 적재돼 있어 조회가 **전부** 빗나간다
-           (2026-08-11 실측: 적중 0% → 개선안이 전부 근거없음 경로로 떨어졌다)
-       전부 조용히 틀리는 실패라, 비면 아래에서 경고를 남긴다.
+    이 매핑이 비면 **채널마다 다른 그룹으로 갈린다.** 상품 하나가 쿠팡·네이버·지그재그에서
+    서로 다른 `product_group_id` 가 되어(P001 → C1057/N1024/Z1108), 한 그룹에 채널이 둘 이상
+    모이는 경우가 **하나도 안 남는다**(실측: 채널 2개 이상 걸친 그룹 42종 → 0종). 그래서 아래
+    셋은 "부정확해지는" 게 아니라 **아예 안 나온다** — 비교할 짝이 없으면 계산 자체가 시작되지
+    않는다:
+      - 탐지의 채널 간 비교(편중형/전역형)가 성립하지 않는다
+      - 월간 리포트의 채널 격차(JSD)도 같은 이유로 산출물이 비어 버린다
+      - ChromaDB 컬렉션1(상세페이지)은 `P001` 로 적재돼 있어 조회가 **전부** 빗나간다
+        (실측: 적중 0% → 개선안이 전부 근거없음 경로로 떨어졌다)
+    전부 조용히 틀리는 실패라, 비면 아래에서 경고를 남긴다.
     """
     mapping: dict[tuple[str, str], str] = {}
     for row in products:
@@ -643,9 +631,9 @@ def build_channel_product_map(
 def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[dict[str, Any]]:
     """대본 CSV 들을 읽어 이벤트 리스트로 합친다.
 
-    ⚠️ 대상 파일을 **하나도** 못 찾으면 경고가 아니라 에러로 죽는다.
-       data/ 는 gitignore 라 팀원마다 파일이 다른데, 경고 한 줄만 남기고 "0건 발행"으로
-       조용히 끝나면 파일명이 틀린 건지 정상인지 구분할 수가 없다.
+    대상 파일을 **하나도** 못 찾으면 경고가 아니라 에러로 죽는다. data/ 는 gitignore 라
+    팀원마다 파일이 다른데, 경고 한 줄만 남기고 "0건 발행"으로 조용히 끝나면 파일명이 틀린
+    건지 정상인지 구분할 수가 없다.
     """
     products, group_of_variant = load_product_catalog(data_dir)
     group_of = build_channel_product_map(products, group_of_variant)
@@ -684,12 +672,11 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
             raw_dict = row.to_dict()
 
             sanitized_payload: dict[str, Any] = {k: _to_jsonable(v) for k, v in raw_dict.items()}
-            # 🔴 **KST 오프셋을 붙여 내보낸다(2026-08-18 결정).** 대본 CSV 의 시각은 오프셋
-            #    없는 한국 벽시계인데 그대로 실어 보내면 받는 쪽이 UTC 로 읽어 9시간이 밀린다 —
-            #    그 시각이 탐지 윈도우의 날짜 경계를 정한다(§3). raw DB 적재 경로
-            #    (`build_db_row` 의 `to_kst_iso`)와 같은 표기로 맞춘 것이고, **값이 바뀌는 게
-            #    아니라 표기가 완성되는 것**이다.
-            #    ⚠️ 주문은 예외 — `order_date` 는 DATE 라 오프셋 대상이 아니다(§2-9).
+            # **KST 오프셋을 붙여 내보낸다.** 대본 CSV 의 시각은 오프셋 없는 한국 벽시계인데
+            # 그대로 실어 보내면 받는 쪽이 UTC 로 읽어 9시간이 밀리고, 그 시각이 탐지 윈도우의
+            # 날짜 경계를 정한다. raw DB 적재 경로(`build_db_row` 의 `to_kst_iso`)와 같은
+            # 표기이고, **값이 바뀌는 게 아니라 표기가 완성되는 것**이다.
+            # 주문은 예외 — `order_date` 는 DATE 라 오프셋 대상이 아니다.
             sanitized_payload[time_col] = (
                 event_time.date().isoformat()
                 if config["time_is_date"]
@@ -703,7 +690,7 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
 
             # 이벤트 고유 ID: CSV 의 자연키(inquiry_id/review_id/...)를 그대로 쓰고,
             # 없는 파일(주문)은 파일 내 행 순번으로 만든다. cs/reviews 에서는 이 값이
-            # 그대로 PK(§5-1 A안: item_id = cs.id / reviews.id)라, 같은 대본을 다시
+            # 그대로 PK(item_id = cs.id / reviews.id)라, 같은 대본을 다시
             # 재생해도 중복 행이 쌓이지 않고 덮어써진다. orders 는 복합 PK 라 안 쓴다.
             id_column = config["id_column"]
             natural_id = sanitized_payload.get(id_column) if id_column else None
@@ -723,11 +710,11 @@ def load_and_merge_csvs(data_dir: Path, topics_filter_str: str | None) -> list[d
                 "source": config["source"],
                 "channel": channel or None,
                 "channel_product_id": channel_product_id or None,
-                # ⚠️ 마스터 상품 그룹(P001…)은 답 노출 방지 설계상 input CSV 에 없다
-                #    (generate_mock_data.py 참고). 그래서 매핑으로 되찾는다 —
-                #    운영에서는 `products ⋈ mapped_data` 가 하는 일이다.
-                #    매핑에 없으면 **비워 두고**(대체값 금지) 아래에서 건수를 남긴다.
-                #    이 값은 raw DB 로만 가고 Kafka payload 에는 안 실린다.
+                # 마스터 상품 그룹(P001…)은 답 노출 방지 설계상 input CSV 에 없다
+                # (generate_mock_data.py 참고). 그래서 매핑으로 되찾는다 — 운영에서는
+                # `products ⋈ mapped_data` 가 하는 일이다. 매핑에 없으면 **비워 두고**
+                # (대체값 금지) 아래에서 건수를 남긴다. 이 값은 raw DB 로만 가고 Kafka
+                # payload 에는 안 실린다.
                 "product_group_id": (
                     sanitized_payload.get("product_group_id")
                     or _resolve_group(channel, channel_product_id, group_of, unmapped)
@@ -790,10 +777,9 @@ def publish(event: dict[str, Any], producer: Any | None, sink: RawDbSink | None,
     # 호스트 로컬 오프셋이 붙어 있었다 — UTC 컨테이너에서 돌리면 같은 이벤트 안에서
     # `occurred_at`(+09:00)과 `published_at`(+00:00)의 오프셋이 갈린다.
     #
-    # ⚠️ `classified_at` 과 같은 성격이다 — **일관성 확보이지 지금 깨지는 것을 고치는 게
-    #    아니다.** `published_at` 은 payload 에 실려 Kafka 로 나가고 `--dry-run` 로그
-    #    한 줄에 찍히는 것이 전부이고, 읽어서 비교하는 소비처는 저장소에 없다.
-    #    (2026-08-13)
+    # `classified_at` 과 같은 성격이다 — **일관성 확보이지 지금 깨지는 것을 고치는 게 아니다.**
+    # `published_at` 은 payload 에 실려 Kafka 로 나가고 `--dry-run` 로그 한 줄에 찍히는 것이
+    # 전부이고, 읽어서 비교하는 소비처는 저장소에 없다.
     payload["published_at"] = datetime.now(KST).isoformat()
 
     # 원본 적재를 먼저 한다 — 워커가 참조하는 정본은 이제 raw DB 쪽이다.
@@ -806,9 +792,9 @@ def publish(event: dict[str, Any], producer: Any | None, sink: RawDbSink | None,
         # --dry-run 의 정의가 "콘솔로 재생 타임라인을 검증한다"이므로 INFO 로 찍는다
         # (debug 로 두면 기본 로그 레벨이 INFO 라 아무것도 안 보인다).
         #
-        # ⚠️ **payload 에 실린 시각을 그대로 찍는다.** `event["time"]` 은 정렬용 naive 라
-        #    그걸 찍으면 오프셋이 안 붙은 것처럼 보인다 — dry-run 으로 이 계약을 확인하려는
-        #    사람이 **정반대 결론**을 가져간다. 콘솔이 발행 내용과 같은 말을 해야 한다.
+        # **payload 에 실린 시각을 그대로 찍는다.** `event["time"]` 은 정렬용 naive 라 그걸
+        # 찍으면 오프셋이 안 붙은 것처럼 보인다 — dry-run 으로 이 계약을 확인하려는 사람이
+        # **정반대 결론**을 가져간다. 콘솔이 발행 내용과 같은 말을 해야 한다.
         logger.info(
             f"[DRY-RUN] Virtual Time: {payload[event['time_column']]} | Topic: {event['topic']} | "
             f"EventType: {payload['event_type']} | PublishedAt: {payload['published_at']}"
@@ -875,7 +861,7 @@ def main() -> None:
         # channel 마스터를 먼저 채운다 — cs·reviews·orders 의 channel_id 가 참조한다.
         seed_channels(conn, {e["channel"] for e in events if e["channel"]})
         # 그다음 상품 카탈로그 — products.channel_id 가 channel 을,
-        # mapped_data.variant_row_id 가 products 를 참조한다(§2-2 → §2-3 순서).
+        # mapped_data.variant_row_id 가 products 를 참조한다.
         seed_product_catalog(conn, *load_product_catalog(data_dir))
         sink = RawDbSink(conn)
 

@@ -12,8 +12,8 @@
         alerts, suppressed = await detect_anomaly(..., prior_alerts=prior)
         발행분만 prior 에 누적          ← save_published 규칙과 동일
 
-⚠️ [6] 원인분류는 detect_anomaly 안에서 LLM 을 부른다. daily.py 의 CountingClient
-   스텁을 주입해 과금 0 을 보장한다(daily.py:357 과 같은 이유).
+[6] 원인분류는 detect_anomaly 안에서 LLM 을 부른다. daily.py 의 CountingClient 스텁을
+주입해 과금 0 을 보장한다.
 
 family 변형은 statistics.decide_fires 를 교체해서 넣는다 — run_detection 이 모듈
 전역으로 조회하므로 이 자리만 바꾸면 [2-B] 전체가 바뀐다. q·MIN_DELTA 는 불변.
@@ -46,15 +46,13 @@ CACHE_GLOB = "pipeline_*_run*.json"
 """분류 캐시 후보. **파일명을 고정하지 않는다.**
 
 옛 코드는 파일 하나를 하드코딩했는데(`...classify_aspect_v5-15290041_run1.json`),
-캐시 이름에는 프롬프트 지문이 들어가고 2026-08-09 부터 데이터 지문까지 들어간다
-(run_pipeline_eval.cache_fingerprint). 이름을 박아두면 캐시를 새로 만들어도 못 찾고
-조용히 oracle 만 나온다.
+캐시 이름에는 프롬프트 지문과 데이터 지문이 들어간다(run_pipeline_eval.cache_fingerprint).
+이름을 박아두면 캐시를 새로 만들어도 못 찾고 조용히 oracle 만 나온다.
 
-⚠️ **지문 대조로는 못 고른다.** 데이터 지문은 그 실행의 문서 집합으로 계산되는데,
-   실험②는 케이스 상품 현재 윈도우(약 12,000건)만 분류하고 데모는 전량(약 128,000건)을
-   본다. 두 집합이 다르니 지문은 원리상 영영 안 맞는다. 그래서 지문이 아니라
-   **실제 적용률(캐시가 덮는 item 비율)** 로 고른다 — 그게 결과의 정확성을 실제로
-   좌우하는 값이다.
+**지문 대조로는 못 고른다.** 데이터 지문은 그 실행의 문서 집합으로 계산되는데, 실험②는 케이스
+상품 현재 윈도우(약 12,000건)만 분류하고 데모는 전량(약 128,000건)을 본다. 두 집합이 다르니
+지문은 원리상 영영 안 맞는다. 그래서 지문이 아니라 **실제 적용률(캐시가 덮는 item 비율)** 로
+고른다 — 그게 결과의 정확성을 실제로 좌우하는 값이다.
 """
 
 MIN_CACHE_COVERAGE = 0.99
@@ -65,11 +63,11 @@ swap_real 은 캐시에 없는 item_id 를 조용히 golden 으로 되돌린다.
 """
 
 FAMILIES = {
-    # 🔴 **전 팔을 명시 keyfn 으로 둔다 — `None`(=운영 기본값) 을 쓰지 않는다.**
-    #    2026-08-13 에 운영 기본값이 전체 → 상품별로 바뀌었다. 그때 `None` 로 두면
-    #    "전체" 라고 이름 붙은 팔이 조용히 상품별이 되어 **비교표가 거짓말을 한다.**
-    #    라벨과 실제 보정 단위가 어긋나는 것이 이 스크립트에서 제일 위험하다.
-    "전체(구정책)": lambda k: None,  # 전 검정이 한 그룹 = 2026-08-13 이전 동작
+    # **전 팔을 명시 keyfn 으로 둔다 — `None`(=운영 기본값) 을 쓰지 않는다.** 운영 기본값은
+    # 전체 → 상품별로 바뀐 적이 있고, `None` 로 두면 "전체" 라고 이름 붙은 팔이 조용히 그때의
+    # 기본값을 따라가 **비교표가 거짓말을 한다.** 라벨과 실제 보정 단위가 어긋나는 것이 이
+    # 스크립트에서 제일 위험하다.
+    "전체(구정책)": lambda k: None,  # 전 검정이 한 그룹 = 구정책
     "상품별": lambda k: k[0],  # ← 현재 운영 정책
     "상품x source": lambda k: (k[0], k[3]),
 }
@@ -80,8 +78,8 @@ _ORIGINAL_DECIDE = stats_mod.decide_fires
 def make_decide(keyfn):
     """decide_fires 를 family 별 BH 로 교체. keyfn=None 이면 **운영 기본값 그대로**.
 
-    ⚠️ `keyfn=None` 은 "전체 family" 가 아니라 "현재 운영 코드가 뭘 쓰든 그것" 이다.
-       전체 family 를 원하면 `lambda k: None` 을 넘길 것(위 FAMILIES 참고).
+    `keyfn=None` 은 "전체 family" 가 아니라 "현재 운영 코드가 뭘 쓰든 그것" 이다. 전체
+    family 를 원하면 `lambda k: None` 을 넘길 것(위 FAMILIES 참고).
     """
     if keyfn is None:
         return _ORIGINAL_DECIDE
@@ -158,9 +156,9 @@ def classify_alert(alert, truth, day_n: int, ignored: dict | None = None) -> str
     발행 알림은 (상품, 채널, main_aspect, stats.source) 로 식별한다. 전역형은 채널이
     여러 개라 significant_channels 중 하나라도 맞으면 그 슬롯으로 본다.
 
-    ⚠️ **여진을 헛알림과 섞으면 안 된다.** 케이스 기간이 [ws, we] 여도 그 데이터는
-       현재 윈도우(7일)에 we+6 까지 남아 있다. we+1~we+6 에 뜬 알림은 진짜 이상을
-       보고 있는 것이지 가짜가 아니다. 다만 '늦은 알림'이라 참으로도 안 센다.
+    **여진을 헛알림과 섞으면 안 된다.** 케이스 기간이 [ws, we] 여도 그 데이터는 현재
+    윈도우(7일)에 we+6 까지 남아 있다. we+1~we+6 에 뜬 알림은 진짜 이상을 보고 있는 것이지
+    가짜가 아니다. 다만 '늦은 알림'이라 참으로도 안 센다.
     """
     source = alert.stats.source
     aspect = alert.main_aspect.value
@@ -289,11 +287,11 @@ async def main() -> None:
     items, documents = load_inputs()
     truth, ignored = load_truth_sets()
 
-    # ⚠️ swap_real 은 캐시에 없는 item_id 를 **조용히 golden 으로 폴백**한다(cache.get →
-    #    None 이면 원본 유지). 그래서 캐시가 없거나 비면 "real" 열에 oracle 값이 그대로
-    #    찍히면서 실제 분류 결과인 척한다. 숫자가 안 나오는 것보다 나쁜 실패라 막는다.
-    #    2026-08-09 mock 재생성으로 옛 캐시는 전부 무효다 — 같은 item_id 에 다른 텍스트가
-    #    들어가서, 남아 있는 캐시를 그대로 쓰면 옛 라벨로 새 문서를 채점하게 된다.
+    # swap_real 은 캐시에 없는 item_id 를 **조용히 golden 으로 폴백**한다(cache.get → None
+    # 이면 원본 유지). 그래서 캐시가 없거나 비면 "real" 열에 oracle 값이 그대로 찍히면서 실제
+    # 분류 결과인 척한다. 숫자가 안 나오는 것보다 나쁜 실패라 막는다. mock 을 재생성하면 옛
+    # 캐시는 전부 무효다 — 같은 item_id 에 다른 텍스트가 들어가서, 남아 있는 캐시를 그대로
+    # 쓰면 옛 라벨로 새 문서를 채점하게 된다.
     arms: list[tuple[str, list]] = [("oracle", items)]
     best = pick_cache(items)
     if best is None:
@@ -351,10 +349,10 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    # 🔴 첫 문장이어야 한다 — 이 파일 요약 출력이 `—`·`⚠️` 를 쓰는데 cp949 에 없다.
-    # ⚠️ `async def main()` 이라 `main()` 안이 아니라 **여기**다. 가드
-    #    (`tests/test_console_encoding.py::_entry_body`)가 `ast.FunctionDef` 만 보고
-    #    `AsyncFunctionDef` 는 못 찾아 `__main__` 블록을 진입 지점으로 삼는다.
+    # 첫 문장이어야 한다 — 이 파일 요약 출력이 `—`·`⚠️` 를 쓰는데 cp949 에 없다.
+    # `async def main()` 이라 `main()` 안이 아니라 **여기**다. 가드
+    # (`tests/test_console_encoding.py::_entry_body`)가 `ast.FunctionDef` 만 보고
+    # `AsyncFunctionDef` 는 못 찾아 `__main__` 블록을 진입 지점으로 삼는다.
     force_utf8_output()
 
     asyncio.run(main())

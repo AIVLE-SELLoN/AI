@@ -65,9 +65,9 @@ USED_PREFIXES = [
     "소재,디자인도 좋아요 사이즈가",
     "텐션감이 좋아 착용감은",
     "뱃살이 좀 있는편이라",
-    # 🆕 2026-08-06 재검증으로 추가 — 위 4개(허벅지도/텐션감이/뱃살이 포함)가 v4 현재
-    # 텍스트와 매치 안 됨을 발견, v4의 실제 현재 문장으로 재작성 + 9~16번 전부 추가.
-    # 기존 것도 혹시 다른 버전에서 쓰일까봐 안 지우고 그대로 둠(안전마진).
+    # 재검증으로 추가 — 위 4개(허벅지도/텐션감이/뱃살이 포함)가 v4 현재 텍스트와 매치 안 되는
+    # 것을 발견해 v4의 실제 현재 문장으로 재작성하고 9~16번을 전부 추가했다. 기존 것도 다른
+    # 버전에서 쓰일 수 있어 안 지우고 그대로 둔다(안전마진).
     "허벅지 부분이 너무 껴서",
     "스판끼가 좋아서 착용감은",
     "허벅지 살이 있는 편이라",
@@ -165,8 +165,8 @@ def write_csv(selected: list[dict], outfile: str):
 
 
 def main():
-    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
-    #    (`description=__doc__`)에 `—` 가 있다. `app/core/console.py`.
+    # 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    # (`description=__doc__`)에 `—` 가 있다. `app/core/console.py`.
     force_utf8_output()
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

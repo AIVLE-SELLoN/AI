@@ -11,10 +11,9 @@
 읽지 않는다. detail_pages는 pipeline.retrieve_context()가 DetectionAlert의
 product_group_id로 조회하므로 여기도 product_group_id로 통일한다).
 
-2026-07-28: tests/fixtures/detail_pages.json(5행 샘플) 대신 현진님이 채워넣은
-실데이터를 읽도록 변경. 컬럼 구성(product_group_id/channel/aspect/detail_text)이
-스펙과 정확히 일치함을 확인함(중복 키 0건, 빈 값 0건, channel/aspect 전부
-core/schemas.py의 Channel·Aspect enum 값에 포함).
+입력은 `data/input/input_detail_fields.csv` 실데이터다(컬럼:
+product_group_id/channel/aspect/detail_text). channel·aspect 값은 core/schemas.py 의
+Channel·Aspect enum 에 있어야 한다.
 """
 
 from __future__ import annotations
@@ -53,7 +52,7 @@ CSV_PATH = Path(__file__).resolve().parent.parent / "data" / "input" / "input_de
 def _make_id(entry: dict[str, Any]) -> str:
     """product_group_id+channel+aspect로 결정적 id 생성 — 재실행해도 중복 안 쌓인다.
 
-    ⚠️ **회사 축은 여기 없다** — 호출부가 `scoped_document_id(tenant, ...)` 로 감싼다.
+    **회사 축은 여기 없다** — 호출부가 `scoped_document_id(tenant, ...)` 로 감싼다.
     `product_group_id` 는 회사별 시퀀스라 이 값만으로는 회사 간에 유일하지 않다
     (`vectordb.current_tenant` docstring).
     """
@@ -67,7 +66,7 @@ def reset_collections() -> None:
     남아 새 모델과 벡터 공간이 갈리기 때문이다. 컬렉션2 는 시드 대상이 아니므로 다시
     안 채운다 — 다음 `record_hitl_outcome()` 때 새 설정으로 생성된다.
 
-    ⚠️ 컬렉션2 에 쌓인 반려 사례는 **복구 불가**다(`.chroma/` 는 gitignore).
+    컬렉션2 에 쌓인 반려 사례는 **복구 불가**다(`.chroma/` 는 gitignore).
     """
     client = get_client()
     for name in (COLLECTION_DETAIL_PAGES, COLLECTION_REJECTION_REASONS):
@@ -83,19 +82,18 @@ def reset_collections() -> None:
 def report_legacy_documents(collection: Any, tenant: str) -> int:
     """회사 축이 **없는** 구형 문서가 몇 건 남았는지 시딩 직후 알려준다.
 
-    🔴 **판별을 여기서 하는 이유 (서영님 #84 리뷰 후속).** "이 컬렉션이 구형인가" 는
-       알림별이 아니라 **컬렉션 전체의 성질**이다. 런타임(`_log_detail_page_miss`)에서
-       미스마다 다시 계산하면 ① 같은 답을 수십 번 구하고 ② 핫 패스라 전수를 못 봐
-       표본으로 어림잡게 된다. 여기는 **한 번만 돌고 전수를 보며**, 무엇보다 **사람이
-       이 콘솔 앞에 서 있는 시점**이다.
+    **판별을 런타임이 아니라 여기서 한다.** "이 컬렉션이 구형인가" 는 알림별이 아니라
+    **컬렉션 전체의 성질**이다. 런타임(`_log_detail_page_miss`)에서 미스마다 다시 계산하면
+    ① 같은 답을 수십 번 구하고 ② 핫 패스라 전수를 못 봐 표본으로 어림잡게 된다. 여기는 **한
+    번만 돌고 전수를 보며**, 무엇보다 **사람이 이 콘솔 앞에 서 있는 시점**이다.
 
-    ⚠️ **Chroma 1.5.9 엔 `$exists` 가 없다** — `where` 연산자 목록에서 거부한다
-       (`ValueError: Expected where operator to be one of $gt … $not_contains`).
-       대신 **`$nin` 이 키가 아예 없는 문서도 매칭**하므로(실측) 그걸로 후보를 뽑고,
-       metadata 에 키가 실제로 있는지는 파이썬에서 본다.
+    **Chroma 1.5.9 엔 `$exists` 가 없다** — `where` 연산자 목록에서 거부한다
+    (`ValueError: Expected where operator to be one of $gt … $not_contains`). 대신 **`$nin` 이
+    키가 아예 없는 문서도 매칭**하므로(실측) 그걸로 후보를 뽑고, metadata 에 키가 실제로 있는지는
+    파이썬에서 본다.
 
-    ⚠️ `include=["metadatas"]` 로 **본문 전송을 없앤다** — 상세페이지가 건당 700자대라
-       빼지 않으면 수십 건만 훑어도 수만 자가 오간다.
+    `include=["metadatas"]` 로 **본문 전송을 없앤다** — 상세페이지가 건당 700자대라 빼지 않으면
+    수십 건만 훑어도 수만 자가 오간다.
 
     Returns:
         구형 문서 수(정리 여부 판단용). 조회 실패 시 -1.
@@ -140,9 +138,8 @@ def main(reset: bool = False) -> None:
         print(f"임베딩 모델 = {EMBEDDING_MODEL} / 컬렉션 초기화")
         reset_collections()
 
-    # 🔴 **한 번만 읽어 ID·metadata 에 같이 쓴다** — 두 번 읽으면 어긋날 수 있고,
-    #    조회 필터(`pipeline._get_detail_page_text`)까지 셋이 같은 값이어야 격리가
-    #    성립한다(컬렉션2 `record_hitl_outcome` 과 같은 형태).
+    # **한 번만 읽어 ID·metadata 에 같이 쓴다** — 두 번 읽으면 어긋날 수 있고, 조회 필터
+    # (`pipeline._get_detail_page_text`)까지 셋이 같은 값이어야 격리가 성립한다.
     tenant = current_tenant()
 
     # 적재는 문서를 임베딩하므로 네트워크와 유효한 키가 필요하다. 실패는
@@ -151,8 +148,8 @@ def main(reset: bool = False) -> None:
     try:
         upsert_documents(
             collection,
-            # 🔴 회사 축을 붙인다. `product_group_id` 가 회사별 시퀀스라 A사 P001 과
-            #    B사 P001 이 **같은 ID** 를 받아 나중 시딩이 앞엣것을 덮는다.
+            # 회사 축을 붙인다. `product_group_id` 가 회사별 시퀀스라 A사 P001 과 B사
+            # P001 이 **같은 ID** 를 받아 나중 시딩이 앞엣것을 덮는다.
             ids=[scoped_document_id(tenant, _make_id(entry)) for entry in entries],
             documents=[entry["detail_text"] for entry in entries],
             metadatas=[

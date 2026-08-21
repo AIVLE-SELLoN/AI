@@ -13,7 +13,7 @@ Agent1(분류)은 태우지 않는다 — golden 라벨을 oracle 로 쓴다.
 이 확인의 관심사는 '분류 정확도'가 아니라 '**Agent2 산출물이 Agent3 에 그대로 들어가는가**'다.
 분류 오차 전파는 check_agent1_to_agent2.py 가 이미 본다.
 
-⚠️ 비용
+비용
    ① Agent2 [6] 원인분류 — detect_anomaly() 가 편중형·스코프 내 후보마다 배치 1회
    ② Agent3 — alert 1건당 LLM 2회(라우팅+생성). grounding 실패 시 재시도로 최대 4회
    --max-alerts 로 ②의 상한을 건다.
@@ -45,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_agent1_to_agent2 import DAY1, read
 
 # dry-run 스텁은 배치(app/batch/daily.py)와 **같은 것을 쓴다.** 복제하면 한쪽만
-# 고쳤을 때 두 도구의 실측 호출 수가 갈린다 (지인님 PR 리뷰, 2026-08-06).
+# 고쳤을 때 두 도구의 실측 호출 수가 갈린다.
 from app.batch.daily import STUB_CAUSE, CountingClient
 from app.core.console import force_utf8_output
 from app.core.inquiries import build_linked_inquiries
@@ -74,11 +74,10 @@ def build_items(
     golden 라벨이 없는 문의는 aspects=[] 로 들어간다 — 분모에는 들고 분자에는 안 드는
     정상 케이스라 버리지 않는다.
 
-    ⚠️ documents 를 함께 내는 이유 — **운영과 같은 분모 경로를 타기 위해서다.**
-    `detect_anomaly()` 는 documents 를 받으면 `loader.build_rows()` 로 원본에서 분모를
-    세고, 안 받으면 `normalize(items)` 로 items 에서 센다. 재현 도구가 운영과 다른
-    경로를 타면 결과가 이상할 때 **로직 문제인지 경로 차이인지 구분이 안 된다.**
-    (지인님 지적, 2026-08-05)
+    documents 를 함께 내는 이유 — **운영과 같은 분모 경로를 타기 위해서다.**
+    `detect_anomaly()` 는 documents 를 받으면 `loader.build_rows()` 로 원본에서 분모를 세고,
+    안 받으면 `normalize(items)` 로 items 에서 센다. 재현 도구가 운영과 다른 경로를 타면
+    결과가 이상할 때 **로직 문제인지 경로 차이인지 구분이 안 된다.**
 
     이 스크립트는 golden oracle 이라 CS 전량에 라벨이 있어 두 경로의 분모가 지금은
     같지만, 그건 **우연이지 보장이 아니다** — golden 에 빈 라벨이 생기면 갈린다.
@@ -218,7 +217,7 @@ def _enum_value(v: object) -> str:
 async def crosscheck_one(alert: DetectionAlert, documents: list[dict]) -> bool:
     """alert 1건을 Agent3 에 태우고 계약·근거·산출을 검사한다. 통과하면 True.
 
-    ⚠️ **documents 를 받는 이유는 운영과 같은 경로를 타기 위해서다** — 배치는
+    **documents 를 받는 이유는 운영과 같은 경로를 타기 위해서다** — 배치는
     `build_linked_inquiries()` 로 CS 원문을 만들어 Agent3 에 넘긴다. 안 넘기면
     image_guide 근거가 0건이라 개선안이 아예 안 나오고, 그러면 이 스크립트가 재현
     도구로서 가치가 없다(`build_items` docstring 의 분모 경로 얘기와 같은 이유).
@@ -342,7 +341,7 @@ async def main(args: argparse.Namespace) -> None:
     stub = CountingClient() if args.dry_run else None
     how = "스텁 클라이언트 — LLM 호출 0" if args.dry_run else "실제 LLM"
     print(f"\nAgent2 탐지 중... ({how})")
-    # documents 를 함께 넘겨 **운영과 같은 분모 경로**를 탄다 (build_items docstring ⚠️ 참고).
+    # documents 를 함께 넘겨 **운영과 같은 분모 경로**를 탄다 (build_items docstring 참고).
     alerts, suppressed = await detect_anomaly(
         items, documents=documents, window_end=case["window_end"], client=stub
     )
@@ -422,9 +421,9 @@ async def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
-    # 🔴 첫 문장이어야 한다. ⚠️ 이 파일은 `--help` 가 원래 통과한다 — `description` 이
-    #    리터럴이라 docstring 의 `—`·`⚠️` 가 도움말에 안 실리고, `→`(U+2192)는 cp949 에
-    #    **있다**. 대신 아래 대조 결과 출력이 그 문자를 써서 결과가 통째로 사라진다.
+    # 첫 문장이어야 한다. 이 파일은 `--help` 자체는 통과한다 — `description` 이 리터럴이라
+    # docstring 의 `—`·`⚠️` 가 도움말에 안 실리고, `→`(U+2192)는 cp949 에 **있다**. 대신 아래
+    # 대조 결과 출력이 그 문자를 써서 결과가 통째로 사라진다.
     force_utf8_output()
 
     ap = argparse.ArgumentParser(description="Agent2 → Agent3 실연동 확인")

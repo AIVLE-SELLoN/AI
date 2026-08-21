@@ -12,8 +12,8 @@
 채로 부정만 설계값이 된다. sweep_v2.py 가 쓴 방법과 같고, 다른 점은 케이스를 0으로
 지우지 않고 **남겨둔다**는 것이다(귀무가 아니라 '깨끗한 배경 + 진짜 이상').
 
-⚠️ 이건 mock 데이터 결함을 제거한 **가상 조건**이다. 실서비스 예측이 아니라
-   "배경이 설계대로였다면" 의 상한이다. demo_sim.py 의 실측과 나란히 읽을 것.
+이건 mock 데이터 결함을 제거한 **가상 조건**이다. 실서비스 예측이 아니라 "배경이 설계대로
+였다면" 의 상한이다. demo_sim.py 의 실측과 나란히 읽을 것.
 """
 import asyncio
 import csv
@@ -60,10 +60,10 @@ def day_number(when) -> int:
 def case_regions() -> dict:
     """(product, channel, source) → [(ws, we), ...]. intended_answer=TRUE 만.
 
-    ⚠️ **aspect 를 키에 넣으면 안 된다.** 케이스 창 안에서 '다른 aspect 문서'를
-       재추첨하면 그 문서가 케이스 aspect 의 부정을 배경률로 새로 만들어내서
-       cur_neg 가 부풀려진다(실측: config 34/200 → 49/200). config 의 cur_neg 는
-       이미 배경분을 포함한 총량이므로, 창 안은 **통째로 보존**해야 설계값이 유지된다.
+    **aspect 를 키에 넣으면 안 된다.** 케이스 창 안에서 '다른 aspect 문서'를 재추첨하면 그
+    문서가 케이스 aspect 의 부정을 배경률로 새로 만들어내서 cur_neg 가 부풀려진다(실측:
+    config 34/200 → 49/200). config 의 cur_neg 는 이미 배경분을 포함한 총량이므로, 창 안은
+    **통째로 보존**해야 설계값이 유지된다.
     """
     with (ROOT / "data/config/config_anomaly.csv").open(encoding="utf-8-sig") as f:
         cfg = list(csv.DictReader(f))
@@ -108,11 +108,10 @@ def idealize(gold_items, real_items, regions, rng, labels: str = "real"):
             for a in pool
             if rng.random() < BASELINE_RATE[a][channel]
         ]
-        # ⚠️ 부정만 뽑고 끝내면 CS 문서의 ~80% 가 aspect 0개가 된다. detect_anomaly 는
-        #    documents 를 받으면 check_coverage 를 스스로 돌리는데(service.py:429),
-        #    거기서 "aspect 0개 = 미분류"로 세어 그 슬롯을 통째로 family 에서 뺀다.
-        #    실제 CS 는 _cs_empty_fallback 이 aspect >= 1 을 보장하므로 그걸 맞춘다.
-        #    중립은 분자에 안 들어가니 부정률에는 영향이 없다.
+        # 부정만 뽑고 끝내면 CS 문서의 ~80% 가 aspect 0개가 된다. detect_anomaly 는
+        # documents 를 받으면 check_coverage 를 스스로 돌리는데, 거기서 "aspect 0개 = 미분류"
+        # 로 세어 그 슬롯을 통째로 family 에서 뺀다. 실제 CS 는 _cs_empty_fallback 이
+        # aspect >= 1 을 보장하므로 그걸 맞춘다. 중립은 분자에 안 들어가니 부정률에는 영향이 없다.
         if source == "cs" and not drawn:
             drawn = [
                 AspectSentiment(aspect=a.aspect, sentiment=0) for a in real.aspects
@@ -173,8 +172,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    # 🔴 첫 문장이어야 한다. ⚠️ `async def main()` 이라 `main()` 안이 아니라 **여기**다 —
-    #    가드가 `AsyncFunctionDef` 를 못 찾아 `__main__` 블록을 진입 지점으로 삼는다.
+    # 첫 문장이어야 한다. `async def main()` 이라 `main()` 안이 아니라 **여기**다 — 가드가
+    # `AsyncFunctionDef` 를 못 찾아 `__main__` 블록을 진입 지점으로 삼는다.
     force_utf8_output()
 
     asyncio.run(main())

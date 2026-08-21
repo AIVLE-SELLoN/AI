@@ -127,10 +127,10 @@ def fmt_pct(value: float) -> str:
 
 
 def main() -> None:
-    # 🔴 첫 문장이어야 한다. 예전엔 모듈 최상단에서 `sys.stdout` 만 직접 돌렸는데,
-    #    stderr 를 안 바꿔 로깅·traceback 은 그대로 깨졌고 `contextlib.suppress` 가 없어
-    #    `.reconfigure` 없는 스트림에서는 **import 만 해도** `AttributeError` 로 터졌다.
-    #    사유 전문은 `app/core/console.py`.
+    # 첫 문장이어야 한다 — 사설 `sys.stdout.reconfigure()` 를 대체한다. 그 형태는 stderr 를
+    # 안 바꿔 로깅·traceback 이 그대로 깨지고, `contextlib.suppress` 가 없어 `.reconfigure`
+    # 없는 스트림에서는 **import 만 해도** `AttributeError` 로 터진다.
+    # 사유 전문은 `app/core/console.py`.
     force_utf8_output()
 
     docs = load_docs()

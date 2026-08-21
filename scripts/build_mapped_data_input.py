@@ -2,42 +2,36 @@
 
 왜 이 스크립트가 있나
 --------------------
-`mock_producer.py` 는 목 파이프라인에서 **main server 자리를 대신한다**(§1 소유권).
-그래서 `products`(§2-2)·`mapped_data`(§2-3) 대본이 `data/input/` 에 있어야 하는데,
-`input_mapped_data.csv` 는 저장소에 만드는 코드가 없었다.
+`mock_producer.py` 는 목 파이프라인에서 **main server 자리를 대신한다.** 그래서
+`products`·`mapped_data` 대본이 `data/input/` 에 있어야 하는데, `input_mapped_data.csv` 는
+저장소에 만드는 코드가 없었다.
 
-🔴 **2026-08-13 확인: 백엔드는 CSV 를 만들지 않는다. raw DB 에 직접 적재한다.**
-   그전 가정("이 파일은 백엔드가 준다")이 깨졌으므로, 목에서 쓸 대본은 **우리가**
-   준비한다. 운영에서 백엔드가 하는 일과 최종 상태는 같다 — `mapped_data` 테이블이
-   채워지는 것.
+**백엔드는 CSV 를 만들지 않는다. raw DB 에 직접 적재한다.** 그래서 목에서 쓸 대본은 **우리가**
+준비한다. 운영에서 백엔드가 하는 일과 최종 상태는 같다 — `mapped_data` 테이블이 채워지는 것.
 
-⚠️ **이건 매핑 알고리즘이 아니다. oracle 매핑이다.**
-   `golden_mapping.csv` 의 정답 매핑을 그대로 옮긴다. 채널 상품을 무엇으로 묶을지
-   정하는 규칙(제목 정규화·유사도 등)은 **백엔드 소관이고 우리 저장소에 없다.**
-   따라서 이 파일로 돌린 결과를 "상품 매핑 성능"으로 말하면 안 된다. 매핑은 분석의
-   **전제**이지 측정 대상이 아니다.
+**이건 매핑 알고리즘이 아니다. oracle 매핑이다.** `golden_mapping.csv` 의 정답 매핑을 그대로
+옮긴다. 채널 상품을 무엇으로 묶을지 정하는 규칙(제목 정규화·유사도 등)은 **백엔드 소관이고 우리
+저장소에 없다.** 따라서 이 파일로 돌린 결과를 "상품 매핑 성능"으로 말하면 안 된다. 매핑은
+분석의 **전제**이지 측정 대상이 아니다.
 
 왜 producer 가 직접 golden 을 안 읽고 이 스크립트를 거치나
-    `mock_producer.validate_data_directory` 가드와 팀 규칙(CLAUDE.md 9)이 producer 의
-    golden 접근을 막는다. 변환을 사람이 한 번 해서 input 쪽에 두는 구조다
-    (`mock_producer.MAPPED_DATA_FILE` 주석).
+    `mock_producer.validate_data_directory` 가드와 팀 규칙이 producer 의 golden 접근을 막는다.
+    변환을 사람이 한 번 해서 input 쪽에 두는 구조다(`mock_producer.MAPPED_DATA_FILE` 주석).
 
 매핑이 비면 무엇이 깨지나 (`build_channel_product_map` docstring)
     상품 하나가 채널마다 다른 `product_group_id` 로 갈린다:
       - 탐지의 채널 간 비교(편중형/전역형)가 성립하지 않는다
       - 월간 리포트의 채널 격차(JSD)는 비교할 짝이 없어 산출물이 비어 버린다
       - ChromaDB 컬렉션1(상세페이지)은 `P001` 로 적재돼 있어 조회가 전부 빗나간다
-    실측(2026-08-13, `data/input/` 1,134행): 매핑 없이 적재하면
+    실측(`data/input/` 1,134행): 매핑 없이 적재하면
     `cs.product_group_id` 가 `C1101` 처럼 channel_product_id 로 폴백되고
     (`_resolve_group`), 채널 2개 이상 걸친 상품 그룹이 42종 → **0종**이 된다.
     앞의 둘은 "부정확해지는" 게 아니라 **아예 안 나온다** — 짝이 없으면 계산이
     시작되지 않는다. 조용히 비는 실패라 리포트를 열어봐야 안다.
 
-🔴 **전제: `data/golden/golden_mapping.csv` 를 먼저 받아야 한다.**
-   `data/**` 가 `.gitignore` 대상이라 **입력도 출력도 저장소에 없다.** 새로 클론한
-   상태에서 이 스크립트만으로는 아무것도 못 만든다 — 팀 데이터 번들을 받거나
-   `scripts/generate_cs_review_data.py` 로 생성한 뒤에 돌린다.
-   (2026-08-13 지적 반영: "스크립트만 있으면 같은 상태를 만들 수 있다"는 틀린 말이었다.)
+**전제: `data/golden/golden_mapping.csv` 를 먼저 받아야 한다.** `data/**` 가 `.gitignore`
+대상이라 **입력도 출력도 저장소에 없다.** 새로 클론한 상태에서 이 스크립트만으로는 아무것도 못
+만든다 — 팀 데이터 번들을 받거나 `scripts/generate_cs_review_data.py` 로 생성한 뒤에 돌린다.
 
 실행::
 
@@ -87,8 +81,8 @@ def _require_columns(fieldnames: list[str] | None, src: Path, required: tuple[st
     원인과 다르다. golden 쪽은 "1행이 비었다"로, catalog 쪽은 "매핑에만 있는 variant"로
     엉뚱한 곳을 지목한다. 원인은 컬럼명이므로 **읽기 전에** 잡는다.
 
-    ⚠️ **두 파일이 같이 쓴다.** golden 은 두 컬럼, catalog 는 `variant_row_id` 하나만
-       필요해서 `required` 를 받는다.
+    **두 파일이 같이 쓴다.** golden 은 두 컬럼, catalog 는 `variant_row_id` 하나만 필요해서
+    `required` 를 받는다.
     """
     present = set(fieldnames or ())
     missing = [c for c in required if c not in present]
@@ -106,13 +100,12 @@ def build_rows(src: Path) -> list[dict[str, str]]:
     `mock_scenario_tag` 는 **가져오지 않는다** — 시나리오 메타데이터라 운영 테이블에
     있을 수 없는 값이고, 들고 오면 목이 운영보다 많이 아는 상태가 된다.
 
-    🔴 **불완전한 행은 건너뛰지 않고 죽는다.** 처음엔 값이 빈 행을 조건절에서 걸러
-       냈는데, 그러면 **부분 매핑 파일이 종료코드 0 으로 만들어진다**(2026-08-13
-       서영님 지적, 재현됨: 2행짜리 입력에서 1행만 나오고 성공으로 끝났다).
-       빠진 variant 는 producer 에서 채널상품 ID 로 폴백되므로, 이 PR 이 막으려던
-       "부분 매핑 때문에 채널 비교가 조용히 사라지는" 실패가 변환 단계에서 그대로
-       재현된다. 골라서 버리는 것과 다 가져오는 것 중 **하나만 맞는데, 여기서는
-       판단할 근거가 없다** — 그래서 사람에게 돌려준다.
+    **불완전한 행은 건너뛰지 않고 죽는다.** 값이 빈 행을 조건절에서 걸러 내면 **부분 매핑
+    파일이 종료코드 0 으로 만들어진다**(재현: 2행짜리 입력에서 1행만 나오고 성공으로 끝났다).
+    빠진 variant 는 producer 에서 채널상품 ID 로 폴백되므로, 이 검사가 막으려던 "부분 매핑
+    때문에 채널 비교가 조용히 사라지는" 실패가 변환 단계에서 그대로 재현된다. 골라서 버리는
+    것과 다 가져오는 것 중 **하나만 맞는데, 여기서는 판단할 근거가 없다** — 그래서 사람에게
+    돌려준다.
 
     Raises:
         SystemExit: 필수 컬럼 없음 · 빈 값 · `variant_row_id` 중복 · 행 0건.
@@ -140,9 +133,9 @@ def build_rows(src: Path) -> list[dict[str, str]]:
             # variant_row_id 는 mapped_data 의 PRIMARY KEY 다. 중복이면 적재 시
             # INSERT OR REPLACE 로 조용히 덮어써져서 어느 쪽이 남는지 알 수 없다.
             #
-            # ⚠️ **그룹이 같아도 죽인다.** 지금 결과가 같다고 넘기면 원본이 1:1 이라는
-            #    전제가 깨진 것을 아무도 모르고, 나중에 한쪽만 고쳐져 갈라질 때
-            #    비로소 드러난다. 그때는 어느 행이 맞는지 알 수 없다.
+            # **그룹이 같아도 죽인다.** 지금 결과가 같다고 넘기면 원본이 1:1 이라는 전제가
+            # 깨진 것을 아무도 모르고, 나중에 한쪽만 고쳐져 갈라질 때 비로소 드러난다. 그때는
+            # 어느 행이 맞는지 알 수 없다.
             if vrid in seen:
                 prev_group, prev_line = seen[vrid]
                 same = " (그룹은 같지만 원본이 1:1 이어야 합니다)" if prev_group == group else ""
@@ -174,11 +167,10 @@ def check_against_catalog(rows: list[dict[str, str]], catalog: Path) -> None:
     catalog 파일이 **없으면** 건너뛴다 — `data/**` 가 gitignore 라 없는 게 정상인 환경이
     있고, 대조는 이 변환기의 본업이 아니다.
 
-    🔴 **다만 "없음"과 "헤더가 틀림"은 다르게 다룬다.** 파일이 있는데 `variant_row_id`
-       컬럼이 없으면 전 행이 빈 값으로 읽혀 `catalog_variants` 가 공집합이 되고, 그러면
-       대조가 통과해 버린다(2026-08-14 서영님 지적, 재현됨: 종료코드 0 · 출력 파일까지
-       기록). 게다가 그때 나가는 경고가 "매핑에만 있는 variant"라 **원인과 반대쪽을
-       지목한다** — 문제는 매핑이 아니라 catalog 헤더다.
+    **다만 "없음"과 "헤더가 틀림"은 다르게 다룬다.** 파일이 있는데 `variant_row_id` 컬럼이
+    없으면 전 행이 빈 값으로 읽혀 `catalog_variants` 가 공집합이 되고, 그러면 대조가 통과해
+    버린다(재현: 종료코드 0 · 출력 파일까지 기록). 게다가 그때 나가는 경고가 "매핑에만 있는
+    variant"라 **원인과 반대쪽을 지목한다** — 문제는 매핑이 아니라 catalog 헤더다.
 
        같은 파일을 producer 가 읽으면 `build_channel_product_map` 의 조인이 통째로
        비어 채널 비교가 사라진다. 이 변환기가 막으려는 바로 그 실패라, 건너뛰지 않고
@@ -219,12 +211,11 @@ def check_against_catalog(rows: list[dict[str, str]], catalog: Path) -> None:
 
 
 def main() -> None:
-    # 🔴 **첫 문장이어야 한다.** 예전엔 `parse_args()` 뒤에서 stdout·stderr 를
-    #    직접 `reconfigure` 했는데, 그러면 `--help` 가 그 전에 찍힌다 — 이 스크립트의
-    #    `description` 첫 줄에 `—`(U+2014) 가 있어서 cp949 콘솔에서는 도움말만 요청해도
-    #    `UnicodeEncodeError` 로 죽었다(2026-08-14 실측). 사유 전문은 `app/core/console.py`.
-    # ⚠️ stdout 만이 아니라 **stderr 도** 바꿔야 한다 — 이 스크립트의 실패는 전부
-    #    `SystemExit` 이고, 어느 행이 왜 틀렸는지가 그 메시지에 실린다(`_BUNDLE_HINT` 포함).
+    # **첫 문장이어야 한다.** `parse_args()` 뒤에 두면 `--help` 가 그 전에 찍히는데, 이
+    # 스크립트의 `description` 첫 줄에 `—`(U+2014) 가 있어서 cp949 콘솔에서는 도움말만 요청해도
+    # `UnicodeEncodeError` 로 죽는다. 사유 전문은 `app/core/console.py`.
+    # stdout 만이 아니라 **stderr 도** 바꿔야 한다 — 이 스크립트의 실패는 전부 `SystemExit`
+    # 이고, 어느 행이 왜 틀렸는지가 그 메시지에 실린다(`_BUNDLE_HINT` 포함).
     force_utf8_output()
 
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])

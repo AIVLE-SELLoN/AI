@@ -1,7 +1,7 @@
 """
 input_detail_fields.csv / golden_detail_fields.csv 생성기
 ============================================================
-Mock 데이터 정의서 §5-1, §9-1 기준.
+Mock 데이터 정의서 기준.
 
 - input_detail_fields.csv: 42상품 × 3채널 × 4aspect(색상/사이즈/소재/기타) = 504행
   이 중 Agent3가 실제 호출되는 15개 (product,channel,aspect) 조합만 LLM으로
@@ -37,9 +37,9 @@ from app.core.exceptions import LlmCallError, LlmParseError
 ASPECTS = ["색상", "사이즈", "소재", "기타"]
 CHANNELS = ["COUPANG", "NAVER", "ZIGZAG"]
 
-# Mock 정의서 §5-1 명시: 15개 (product,channel,aspect) 조합
+# Mock 정의서 명시: 15개 (product,channel,aspect) 조합
 # = SC-001~009(9) + SC-029·030·031(각1) + SC-032(2, 쿠팡·네이버) + SC-034(1)
-# golden_group_id/channel/aspect/root_cause는 config_anomaly.csv에서 실측 확인됨(대화 중 검증 완료).
+# golden_group_id/channel/aspect/root_cause 는 config_anomaly.csv 에서 실측 확인했다.
 # evidence_level: 있음/없음/애매 — 원인 유형(copy_draft/image_guide/스코프한계) 기준 배치,
 # SC-030만 팀 확정으로 "있음(고정)"(사진_색감_오차인데도 있음).
 FIFTEEN_COMBOS = [
@@ -183,8 +183,8 @@ def write_csv(rows: list[dict], path: Path):
 
 
 def main():
-    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
-    #    (`description=__doc__` · `--golden-outdir`)에 `—` 가 있다. `app/core/console.py`.
+    # 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    # (`description=__doc__` · `--golden-outdir`)에 `—` 가 있다. `app/core/console.py`.
     force_utf8_output()
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
