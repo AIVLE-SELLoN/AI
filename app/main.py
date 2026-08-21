@@ -7,12 +7,11 @@
 
 종료 코드는 `app/core/exit_codes.py` 가 정본이다 — 설정 문제면 **2** 로 끝낸다.
 
-⚠️ **설정 오류 처리는 import 시점에 일어난다.** 여기엔 `main()` 이 없고 uvicorn 이 이
-   모듈을 import 하므로, 부팅 실패를 알릴 수 있는 지점이 그것뿐이다. 종료코드가 실제로
-   OS 까지 나가는 것은 **배포 형태(`uvicorn app.main:app`)에서 확인했다**(실측).
-   `--reload`·`--workers` 는 부모가 감독 프로세스라 자식이 죽어도 부모가 안 끝난다 —
-   uvicorn 쪽 동작이라 우리가 어쩌지 못하고, Dockerfile `CMD` 에 두 플래그가 없어 운영
-   경로도 아니다. 그 경우에도 **사유 한 줄은 그대로 찍힌다.**
+**설정 오류 처리는 import 시점에 일어난다.** 여기엔 `main()` 이 없고 uvicorn 이 이 모듈을
+import 하므로 부팅 실패를 알릴 지점이 그것뿐이다. 종료코드가 OS 까지 나가는 것은 배포 형태
+(`uvicorn app.main:app`)에서 확인했다(실측). `--reload`·`--workers` 는 부모가 감독 프로세스라
+자식이 죽어도 부모가 안 끝나는데, uvicorn 쪽 동작이고 Dockerfile `CMD` 에 두 플래그가 없어
+운영 경로도 아니다. 그 경우에도 **사유 한 줄은 그대로 찍힌다.**
 """
 
 from fastapi import FastAPI
