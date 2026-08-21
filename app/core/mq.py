@@ -26,7 +26,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.config import get_settings
-from app.core.constants import KST
 from app.core.exceptions import MqConfigError, MqDisabledError, MqPublishError
 from app.core.ids import ALERT_ID_PREFIX, GUIDELINE_ID_PREFIX
 from app.core.schemas import (
@@ -67,50 +66,6 @@ def _now_iso() -> str:
         .isoformat(timespec="milliseconds")
         .replace("+00:00", "Z")
     )
-
-
-def _to_backend_local_iso(value: str) -> str:
-    """시간대가 붙은 ISO 시각을 **KST 벽시계 naive** 문자열로. 아니면 원본 그대로.
-
-    백엔드 DTO 가 `java.time.LocalDateTime` 이라 **존 성분을 아예 못 읽는다.** 실패 로그의
-    포맷이 `ISO_LOCAL_DATE_TIME`(연-월-일 T 시:분[:초[.나노]])이고 오프셋 자리가 없다 —
-    `+09:00` 도 `Z` 도 같은 위치에서 `unparsed text` 로 거부된다. 그래서 UTC 로 바꿔
-    `Z` 를 붙이는 것으로는 안 고쳐진다. 오프셋을 **떼야** 한다.
-
-    KST 로 맞춘 뒤 떼는 이유: 백엔드가 이 값을 로컬 시각으로 읽어 화면에 그대로 쓴다.
-    UTC 로 떼면 표시 시각이 9시간 당겨진다.
-
-    날짜만 있는 값(`2026-06-30`)과 이미 naive 인 값은 건드리지 않는다 — 전자는 스키마상
-    DATE 고(§2-9), 후자는 이미 원하는 모양이다.
-
-    2026-08-21 실측: `payload.recommendation.created_at` 이 `...506524+09:00` 으로 나가
-    `ai.anomaly.analyzed` 3건이 `MALFORMED_PAYLOAD` 로 데드레터에 쌓였다.
-    """
-    if "T" not in value:
-        return value
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return value
-    if parsed.tzinfo is None:
-        return value
-    return parsed.astimezone(KST).replace(tzinfo=None).isoformat()
-
-
-def normalize_payload_datetimes(value: Any) -> Any:
-    """payload 안의 모든 시각을 백엔드가 읽을 수 있는 모양으로 맞춘다.
-
-    빌더마다 손대지 않고 **발행 길목 한 곳**에서 돈다. 빌더는 `model_dump(mode="json")`
-    결과를 그대로 싣기 때문에, 새 스키마 필드가 늘 때마다 사람이 기억해야 하는 구조면
-    조용히 빠진다 — 실제로 `occurredAt` 에만 정규화가 걸려 있어서 이 사고가 났다.
-    """
-    if isinstance(value, dict):
-        return {k: normalize_payload_datetimes(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [normalize_payload_datetimes(v) for v in value]
-    if isinstance(value, str):
-        return _to_backend_local_iso(value)
-    return value
 
 
 def build_envelope(
@@ -352,10 +307,7 @@ async def _publish(event_type: str, payload: dict, trace_id: str, *, key: str) -
         )
 
     envelope = build_envelope(
-        event_type,
-        normalize_payload_datetimes(payload),
-        trace_id,
-        company_id=settings.mq_company_id,
+        event_type, payload, trace_id, company_id=settings.mq_company_id
     )
     body = json.dumps(envelope, ensure_ascii=False).encode("utf-8")
 
