@@ -440,14 +440,20 @@ POST /api/v1/internal/reports/complete
 | `pdf_s3_meta` | Object \| null | 실패 시 null |
 | `notice_message` | String \| null | 사용자 안내 문구 |
 
-### 6-2. `status` enum 4종
+### 6-2. `status` enum 5종
 
 | 값 | 발생 조건 | UI 동작 |
 | --- | --- | --- |
 | `SUCCESS` | 정상 | PDF 첨부 메일 발송 |
 | `HOLD_INSUFFICIENT_DATA` | 🟡 `total_voc_count < 10` | 보류 안내 문구 출력, **LLM 추론 미수행** |
+| `FAILED_VALIDATION` | 그라운딩 검증 3회 연속 실패 | **자동 발송 중단** + 운영자 알림. 틀린 수치가 담긴 문서가 셀러에게 나가는 것을 막는 값이다 |
 | `FAILED_SIZE_EXCEEDED` | `file_size_bytes > 10MB` | S3 업로드·메일 발송 **트랜잭션 이전 차단** |
 | `FAILED_ERROR` | 그 외 | SSE 에러 알림 |
+
+⚠️ **월간 합본 이벤트(`ai.report.generated`)에는 `HOLD_INSUFFICIENT_DATA`·`FAILED_VALIDATION` 이
+나오지 않는다** — 둘 다 **상품 단위** 판정인데 그 이벤트는 월 단위다. 해당 상품은 합본에서
+빠지고 그 사실이 `notice_message` 에 실린다. 상품 1건 REST(`POST /api/v1/reports`)에서는
+보류가 `409`, 검증 실패가 `422` 로 살아 있다. 상세는 `docs/mq_events.md` §5.
 
 ### 🟡 #11 — 보류 임계값 `≤10` → `<10` 통일
 
@@ -535,7 +541,7 @@ GET /api/v1/dashboard/monthly-summary?month=2026-07
 | 순번 | 작업 | 선행 조건 |
 | --- | --- | --- |
 | 1 | 🟢 필드명 4건 수정 (`total_voc_count`, `item_id` ×2, `s3_full_key` alias 제거) | **없음 — 지금 가능** |
-| 2 | 🟢 `status` enum 4종 + 콜백 API | 없음 |
+| 2 | 🟢 `status` enum 5종 + 콜백 API | 없음 |
 | 3 | 🟡 `aspect_stats` 분모 통일 + `scope_in` · `detection_negative_rate` 신규 | #5 팀 확인 |
 | 4 | 🟡 보류 임계값 `<10` 통일 | #11 팀 확인 |
 | 5 | 🔴 `channel_divergence` 개편 | **#8·#9·#10 확정 후** |

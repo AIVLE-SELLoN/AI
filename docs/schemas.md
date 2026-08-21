@@ -9,12 +9,12 @@
 
 `app/core/schemas.py`는 SELLoN 파이프라인의 컴포넌트가 주고받는 데이터 구조를 Pydantic 모델로 정의한 **단일 계약 파일**이다.
 
-분류·이상탐지·개선안·인사이트가 이 파일을 공통 import하며, 컴포넌트 간 데이터는 이 모델을 통과·검증한다. 
+분류·이상탐지·개선안·리포팅이 이 파일을 공통 import하며, 컴포넌트 간 데이터는 이 모델을 통과·검증한다. 
 
 데이터 구조만 정의하고, 처리 로직·인프라(Kafka·DB)는 포함하지 않는다.
 
 - **위치**: `app/core/schemas.py`
-- **소비자**: 분류 워커 / 이상탐지 / Agent3(개선안) / 인사이트
+- **소비자**: 분류 워커 / 이상탐지 / Agent3(개선안) / 리포팅
 - **의존 원칙**: 각 컴포넌트는 core에서만 import하며, 서로의 모듈에 의존하지 않는다.
 
 ## 2. 정의 대상
@@ -22,7 +22,7 @@
 | 모델 | 생산자 | 주 소비자 | 정본 |
 | --- | --- | --- | --- |
 | ClassifiedItem | 분류 워커 | 이상탐지 집계 | 본 문서 §4 |
-| DetectionAlert | 이상탐지 | Agent3·인사이트·대시보드 | [탐지 결과 스키마 [확정]](https://app.notion.com/p/39fe39c614978038bb10d19a6a487517?pvs=21) |
+| DetectionAlert | 이상탐지 | Agent3·리포팅·대시보드 | [탐지 결과 스키마 [확정]](https://app.notion.com/p/39fe39c614978038bb10d19a6a487517?pvs=21) |
 | Recommendation | Agent3 | HITL·피드백·대시보드 | [개선안 출력 스키마 [확정]](https://app.notion.com/p/39fe39c614978017b36befb4730e520c?pvs=21) |
 
 ## 3. 공통 Enum
@@ -58,7 +58,7 @@
 
 ## 5. DetectionAlert
 
-[탐지 결과 스키마 [확정]](https://app.notion.com/p/39fe39c614978038bb10d19a6a487517?pvs=21) (이상탐지 → Agent3·인사이트 입력 계약) — 저장소 사본 [`detection_schema.md`](detection_schema.md)
+[탐지 결과 스키마 [확정]](https://app.notion.com/p/39fe39c614978038bb10d19a6a487517?pvs=21) (이상탐지 → Agent3·리포팅 입력 계약) — 저장소 사본 [`detection_schema.md`](detection_schema.md)
 
 ## 6. Recommendation
 
@@ -71,8 +71,6 @@
 - `citations[].inquiry_id` ⊆ `DetectionAlert.evidence.inquiry_ids` (모델 간 교차검증 함수)
 - `source == "review"`이면 모든 `aspects[].aspect` ∈ {색상, 사이즈, 소재} (아니면 검증 에러)
 
-## 9. 변경 내역
+## 8. 변경 내역
 
-| 날짜 | 내용 | 합의자 |
-| --- | --- | --- |
-| 2026-07-24 | 최초 초안 | 유지인 |
+변경 이력은 git 이 갖는다 — `git log --follow docs/schemas.md`.
