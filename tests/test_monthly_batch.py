@@ -7,10 +7,10 @@
 그 줄에 닿으면 `UnicodeEncodeError` 로 죽는다. 하필 그런 줄이 실패 경로에 몰려 있어
 (발행 실패 안내 등) 정상 동작만 확인하면 영영 못 본다.
 
-⚠️ **인코딩은 pytest 안에서 검증할 수 없다.** pytest 가 캡처한 stdout 에는
+**인코딩은 pytest 안에서 검증할 수 없다.** pytest 가 캡처한 stdout 에는
    `reconfigure` 가 없어서 `console.force_utf8_output()` 이 조용히 건너뛰고, 그 스트림은
    원래 utf-8 이라 무엇을 하든 안 죽는다. 실제로 호출을 통째로 지워도 in-process
-   테스트는 전부 통과했다(2026-08-09 리뷰 지적). 그래서 **서브프로세스로 진짜 cp949
+   테스트는 전부 통과했다. 그래서 **서브프로세스로 진짜 cp949
    콘솔을 만들어** 확인한다.
 """
 
@@ -50,7 +50,7 @@ def _run_script(*args: str, io_encoding: str) -> subprocess.CompletedProcess:
 def test_help_survives_cp949_console():
     """cp949 콘솔에서 `--help` 가 죽지 않는다.
 
-    ⚠️ 이 테스트가 **세 가지 배치를 전부 구분한다** — 호출이 제자리(통과) / 아예 없음
+    이 테스트가 **세 가지 배치를 전부 구분한다** — 호출이 제자리(통과) / 아예 없음
        (실패) / `parse_args()` 뒤로 밀림(실패). in-process 테스트는 셋 다 통과시킨다.
        argparse 는 도움말을 stdout 으로 **바로** 쓰므로, 전환이 파싱보다 뒤면 그 시점에
        이미 늦다.
@@ -67,10 +67,10 @@ def test_help_survives_cp949_console():
 def test_help_output_actually_needs_the_switch():
     """위 cp949 테스트의 **전제** — `--help` 출력에 cp949 로 못 내보내는 문자가 실린다.
 
-    ⚠️ 이 전제가 깨지면 위 테스트가 조용히 무력해진다. 실제로 `--help` 출력에 실리는
+    이 전제가 깨지면 위 테스트가 조용히 무력해진다. 실제로 `--help` 출력에 실리는
        cp949 밖 문자는 `--permutations` help 문구의 `—` **하나뿐**이라, 누가 그 문구만
        다듬으면 `force_utf8_output()` 을 통째로 지워도 위 테스트가 통과한다
-       (2026-08-10 리뷰에서 실증). 나머지 20여 개는 docstring·주석이라 화면에 안 나온다.
+       (실증됨). 나머지 20여 개는 docstring·주석이라 화면에 안 나온다.
 
     그래서 소스 파일 전체가 아니라 **출력**을 본다. 파일을 재면 docstring 의 `—` 때문에
     전제가 계속 참인 것처럼 보인다 — 정작 필요한 건 "`--help` 출력에 있나" 다.
@@ -85,8 +85,8 @@ def test_help_output_actually_needs_the_switch():
 def test_missing_required_arg_exits_with_argparse_code():
     """필수 인자가 없으면 argparse 종료코드 2 로 끝난다 — 스크립트가 뜨고 파싱까지 간다.
 
-    ⚠️ **인코딩 배선과는 무관하다.** `force_utf8_output()` 을 통째로 지워도 통과한다
-       (2026-08-10 리뷰에서 확인). argparse 의 usage 와
+    **인코딩 배선과는 무관하다.** `force_utf8_output()` 을 통째로 지워도 통과한다
+       (확인됨). argparse 의 usage 와
        `the following arguments are required: --month` 는 전부 ASCII 라 cp949 에서도
        멀쩡하고, 그 경로에서는 로깅도 아직 안 돈다.
 
@@ -104,8 +104,8 @@ def test_missing_required_arg_exits_with_argparse_code():
 def test_main_switches_encoding_before_parsing(monkeypatch):
     """`main()` 이 **인자 파싱보다 먼저** `force_utf8_output()` 을 부른다.
 
-    ⚠️ 예전 판은 `calls` 에 파싱 이벤트가 없어서 실제로는 `utf8 < aggregate` 만 쟀다.
-       그래서 호출을 `parse_args()` **뒤로** 옮겨도 통과했다(2026-08-09 지적).
+    예전 판은 `calls` 에 파싱 이벤트가 없어서 실제로는 `utf8 < aggregate` 만 쟀다.
+       그래서 호출을 `parse_args()` **뒤로** 옮겨도 통과했다.
        argparse 를 감싸 파싱 시점을 기록해 순서를 진짜로 고정한다.
     """
     calls: list[str] = []

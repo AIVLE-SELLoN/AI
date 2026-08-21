@@ -7,11 +7,11 @@
     2. data/config/config_anomaly.csv — SC-001 past_neg=40 / past_total=800 (=28일 x 28건)
     3. app/detection/aggregate.py — 탐지 분모도 aspect 무관
 
-2026-08-09 이전 배경 경로는 볼륨을 aspect 수로 먼저 나눈 뒤 그 안에서 BASELINE_RATE 를
+옛 배경 경로는 볼륨을 aspect 수로 먼저 나눈 뒤 그 안에서 BASELINE_RATE 를
 적용해서, 전체 분모로 보면 CS 1/6·리뷰 1/3 로 희석됐다. 케이스 경로는 past_neg/past_total
 로 전체 분모에 정확 건수를 심고 있었으므로, 한 생성기 안에 규약이 두 개인 상태였다.
 
-⚠️ **이 테스트를 관측률 임계로 느슨하게 풀지 말 것.** 희석은 6배짜리라 웬만한 허용오차로는
+**이 테스트를 관측률 임계로 느슨하게 풀지 말 것.** 희석은 6배짜리라 웬만한 허용오차로는
    안 잡힌다. 여기서는 확률 자체(`_negative_rate`)를 직접 고정하고, 표본 검증은 넉넉한
    허용오차로 따로 둔다 — 시드 고정이라 재현되지만 이항 변동은 남기 때문이다.
 """
@@ -61,7 +61,7 @@ def test_aspect_denominator_reproduces_old_dilution():
     per_doc = _negative_rate("색상", "COUPANG", len(ASPECTS), BASELINE_DENOMINATOR_ASPECT)
     observed_over_total = per_doc / len(ASPECTS)
     assert observed_over_total == pytest.approx(BASELINE_RATE["색상"]["COUPANG"] / len(ASPECTS))
-    # 2026-08-07 감사 실측 0.903% 와 같은 자리수인지 (희석분 0.833%)
+    # 감사 실측 0.903% 와 같은 자리수인지 (희석분 0.833%)
     assert 0.005 < observed_over_total < 0.012
 
 

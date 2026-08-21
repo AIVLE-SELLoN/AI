@@ -1,6 +1,7 @@
 """분류 워커(`scripts/classification_worker.py`)의 실패 격리 회귀 테스트.
 
 여기서 재는 것 하나: **분류 실패 1건이 그 건에만 국한되는가.**
+적재 구조의 절 번호는 노션 「Raw DB 스키마 확정 (8/7)」 기준이다.
 
 이게 깨지면 조용히 깨진다 — 예외 객체가 성공 목록에 섞여 들어가고, 실패는
 dead-letter 에 안 남고, persist 단계에서 배치가 통째로 터진다. 그 건은 커서만
@@ -106,7 +107,7 @@ def test_failed_item_is_reported_as_failure(classify_items) -> None:
 def test_success_list_never_contains_exceptions(classify_items) -> None:
     """성공 목록에는 ClassifiedItem 만 들어간다.
 
-    ⚠️ 이 테스트가 막는 것: 워커가 `classify_aspect([item])` 를 건별로 부르고 그 바깥을
+    이 테스트가 막는 것: 워커가 `classify_aspect([item])` 를 건별로 부르고 그 바깥을
        다시 `gather(return_exceptions=True)` 로 감싸는 형태. 그러면 outcome 이
        `[LlmParseError(...)]` 라는 **리스트**로 와서 `isinstance(outcome, BaseException)`
        이 False 가 되고, 예외 객체가 그대로 results 에 섞인다. 아래 `.aspects` 접근이
@@ -189,10 +190,10 @@ def test_no_raw_text_copy_is_persisted() -> None:
     conn = _open_memory_db()
     columns = {row[1] for row in conn.execute("PRAGMA table_info(classified_item)")}
 
-    # ⚠️ **리터럴로 적는다 — `raw_schema.VERSION_COLUMNS` 를 펼치지 말 것.** 검사 대상
+    # **리터럴로 적는다 — `raw_schema.VERSION_COLUMNS` 를 펼치지 말 것.** 검사 대상
     #    코드를 그대로 참조하면 그 상수에 오타가 나도, 확정 문서와 갈려도 통과한다.
     #    "테스트가 정답을 잘못 베꼈으면 테스트도 같이 통과한다"를 막는 게 이 단언의
-    #    존재 이유다. (2026-08-12 리뷰 §3)
+    #    존재 이유다.
     assert columns == {
         "item_id",
         "source",
@@ -233,7 +234,7 @@ def test_item_with_no_aspect_still_has_parent_row() -> None:
 def test_reinsert_is_idempotent() -> None:
     """같은 배치를 다시 적재해도 행이 늘지 않는다(재시도·재실행 안전).
 
-    ⚠️ 반환값은 이제 **다시 쓴 aspect 행 수**다(예전엔 0 이었다). 적재가 upsert +
+    반환값은 이제 **다시 쓴 aspect 행 수**다(예전엔 0 이었다). 적재가 upsert +
        aspect 교체로 바뀌어서, 재적재는 "무시"가 아니라 "같은 값으로 덮어쓰기"다.
        DB 상태가 안 변한다는 계약은 그대로이므로 아래 두 COUNT 로 확인한다.
     """
@@ -250,7 +251,7 @@ def test_reinsert_is_idempotent() -> None:
 def test_reclassification_replaces_the_previous_result() -> None:
     """프롬프트를 바꿔 재분류하면 **옛 결과가 덮인다.**
 
-    🔴 이게 예전 `INSERT OR IGNORE` 의 실제 버그다. 이미 있는 item_id 를 통째로 무시해서,
+    이게 예전 `INSERT OR IGNORE` 의 실제 버그다. 이미 있는 item_id 를 통째로 무시해서,
        프롬프트를 갈아끼우고 재분류를 돌려도 `prompt_version` 도 aspect 도 옛 값 그대로
        남았다. 그러면 탐지가 읽는 35일 창에 두 프롬프트 결과가 섞이고, 라벨러 교체가
        고객 이상처럼 발화한다.
@@ -287,7 +288,7 @@ async def _all_parse_errors(items: list[ClassifyRequestItem]) -> list[Classified
 def test_batch_wide_call_failure_halts_worker(worker_instance) -> None:
     """배치가 통째로 호출 단계에서 죽으면 워커를 세운다.
 
-    ⚠️ 안 세우면 시스템 장애가 "N건 개별 실패"로 위장된다. 커서는 계속 전진하므로
+    안 세우면 시스템 장애가 "N건 개별 실패"로 위장된다. 커서는 계속 전진하므로
        96,531건이면 배치 9,654개가 전부 dead-letter 로 넘어간 채 정상 종료한다.
        장애가 길어져 재처리가 DEAD_LETTER_MAX_ATTEMPTS 를 넘기면 회수 대상에서도 빠진다.
     """
@@ -355,7 +356,7 @@ def _insert_cs(conn: sqlite3.Connection, item_id: str, occurred: str) -> sqlite3
 def test_dead_letter_records_occurred_at(worker_instance) -> None:
     """실패 건이 dead-letter 에 **발생 시각과 함께** 기록된다.
 
-    ⚠️ 여기에 숨은 결합이 있다. `record_failures` 는 `occurred_at_by_id[item_id]` 로
+    여기에 숨은 결합이 있다. `record_failures` 는 `occurred_at_by_id[item_id]` 로
        조회하는데, 그 키를 채우는 것은 `classify_items` 가 돌려준 `item.item_id` 다.
        둘이 같은 값이라는 보장은 `_to_request_item` 의 `"item_id": row["item_id"]`
        한 줄뿐이다(§5-1 A안이 그 근거다 — item_id 는 원문 PK 재사용). 어긋나면
@@ -445,11 +446,11 @@ def test_view_merges_cs_and_reviews_on_one_time_axis() -> None:
 def test_denominator_counts_source_not_classified_rows() -> None:
     """커버리지 분모는 **원문**에서 센다 — 분류 안 된 문의도 남는다(§2-4).
 
-    ⚠️ **탐지 분모가 아니다.** `COUNT_SOURCE_SQL` 은 `log_coverage()` 한 곳에서만 쓰이는
+    **탐지 분모가 아니다.** `COUNT_SOURCE_SQL` 은 `log_coverage()` 한 곳에서만 쓰이는
        커버리지 로그용 카운터다. 이상탐지가 쓰는 분모는 `daily.py::load_inputs_from_db`
        쪽이라 여기를 뒤집어도 부정률·발화 기준은 안 움직인다.
-       (2026-08-11 리뷰 정정 — 예전 문장은 "그 값이 그대로 이상탐지 발화 기준이 된다"
-        였는데 틀렸다. 그대로 두면 다음 사람이 "탐지 분모가 여기 있다" 고 믿는다.)
+       예전 서술은 "그 값이 그대로 이상탐지 발화 기준이 된다" 였는데 틀렸다.
+       그대로 두면 다음 사람이 "탐지 분모가 여기 있다" 고 믿는다.
 
     그래도 고정할 값어치가 있다: 이 카운터가 `classified_item` 을 세도록 바뀌면 커버리지
     로그의 total 이 **분류 성공분만** 세게 되어, "원문 대비 얼마나 분류됐나" 라는 이 로그의
@@ -496,12 +497,12 @@ CREATE TABLE classification_cursor (
 
 
 def test_schema_matches_the_confirmed_ddl() -> None:
-    """🔴 `raw_schema` 가 확정 DDL 전문과 컬럼이 일치한다 — 부분집합이면 안 된다.
+    """`raw_schema` 가 확정 DDL 전문과 컬럼이 일치한다 — 부분집합이면 안 된다.
 
-    ⚠️ 이 파일은 우리가 정한 규칙이 아니라 **확정 문서를 옮겨 적은 것**이다(모듈 docstring).
+    이 파일은 우리가 정한 규칙이 아니라 **확정 문서를 옮겨 적은 것**이다(모듈 docstring).
        옮기다 빠뜨려도 당장은 안 깨진다 — 빠진 컬럼을 아무도 안 읽으면 그만이다. 실제로
        `products.fetched_at/updated_at` 과 `mapped_data` 의 매핑 메타 3종이 그렇게 빠져
-       있었다(2026-08-11 리뷰에서 발견).
+       있었다.
 
     조용히 아픈 이유가 둘이다:
       · `mapped_at` 은 §5-3 이 확정한 스냅샷 동기화의 근거 컬럼이다. "최신 매핑을 고른다"
@@ -533,7 +534,7 @@ def test_schema_matches_the_confirmed_ddl() -> None:
             "id", "channel_product_id", "product_group_id", "channel_id",
             "content", "rating", "created_at",
         },
-        # ⚠️ 다른 테이블과 마찬가지로 **리터럴이다.** `raw_schema.VERSION_COLUMNS` 를
+        # 다른 테이블과 마찬가지로 **리터럴이다.** `raw_schema.VERSION_COLUMNS` 를
         #    펼치면 검사 대상 코드를 정답지로 쓰는 셈이라 이 테스트가 눈을 감는다.
         "classified_item": {
             "item_id", "source", "classified_at",
@@ -573,20 +574,20 @@ def test_fresh_db_is_not_flagged_as_legacy() -> None:
 
 
 def test_version_columns_missing_is_flagged_as_legacy() -> None:
-    """🔴 버전 컬럼이 없는 옛 `classified_item` 도 구버전으로 잡힌다.
+    """버전 컬럼이 없는 옛 `classified_item` 도 구버전으로 잡힌다.
 
     `LEGACY_MARKERS` 의 판정이 "마커 컬럼이 없으면 옛것"이라 **마커는 그 테이블에 가장
     나중에 들어온 컬럼이어야 한다.** 컬럼을 추가하고 마커를 안 옮기면 그 사이 버전의
     테이블이 전부 최신으로 통과한다.
 
-    실제로 버전 컬럼 2개를 넣으면서(2026-08-12) 마커가 `prompt_version` 에 남아 있었고,
+    실제로 버전 컬럼 2개를 넣으면서 마커가 `prompt_version` 에 남아 있었고,
     4컬럼 시절 테이블이 이 함수를 통과했다. `IF NOT EXISTS` 가 옛 테이블을 그대로 두는데
     인덱스는 새 컬럼을 참조해서, 가드가 막으려던 자리(`no such column`)로 되돌아갔다:
 
         find_legacy_tables()       = []
         create_classified_tables() → OperationalError: no such column: model_version
 
-    ⚠️ **컬럼명을 리터럴로 적는다** — `raw_schema.VERSION_COLUMNS[-1]` 로 쓰면 마커를
+    **컬럼명을 리터럴로 적는다** — `raw_schema.VERSION_COLUMNS[-1]` 로 쓰면 마커를
        안 옮겼을 때 이 테스트도 같이 통과해서 아무것도 못 잡는다.
     """
     old = sqlite3.connect(":memory:")
@@ -602,7 +603,7 @@ def test_version_columns_missing_is_flagged_as_legacy() -> None:
 def test_legacy_raw_db_is_rejected_with_guidance(tmp_path, caplog) -> None:
     """확정 이전 구조가 남아 있으면 안내하고 멈춘다.
 
-    ⚠️ `CREATE TABLE IF NOT EXISTS` 는 옛 테이블을 그대로 둔다. 이걸 안 잡으면 스키마
+    `CREATE TABLE IF NOT EXISTS` 는 옛 테이블을 그대로 둔다. 이걸 안 잡으면 스키마
        생성은 조용히 통과하고 `load_cursor()` 가 `no such column: last_inquired_at` 로
        터진다 — 스택트레이스만 보고는 "DB 를 다시 만들어야 한다"를 알 수 없다.
     """
@@ -619,10 +620,10 @@ def test_legacy_raw_db_is_rejected_with_guidance(tmp_path, caplog) -> None:
     assert "classification_cursor" in caplog.text
     assert "DROP TABLE IF EXISTS classification_cursor;" in caplog.text
 
-    # 🔴 **원문 보호 가드 — 문구를 좁히지 말 것.** 원문까지 지우라고 하면 12.8만 행을
+    # **원문 보호 가드 — 문구를 좁히지 말 것.** 원문까지 지우라고 하면 12.8만 행을
     #    다시 재생해야 한다. `"DROP TABLE IF EXISTS cs;"` 처럼 정확한 문장으로 단언하면
     #    안내가 `DROP TABLE cs;`(IF EXISTS 없이)로 바뀌었을 때 **그냥 통과한다.**
-    #    실제로 IF EXISTS 를 붙이면서 한 번 좁혔다(2026-08-13 리뷰 §2). 테이블 이름이
+    #    실제로 IF EXISTS 를 붙이면서 한 번 좁혔다. 테이블 이름이
     #    DROP 문에 등장하는지로 넓게 본다.
     for protected in ("cs", "reviews", "channel", "products", "mapped_data", "orders"):
         assert f"DROP TABLE IF EXISTS {protected};" not in caplog.text
@@ -630,7 +631,7 @@ def test_legacy_raw_db_is_rejected_with_guidance(tmp_path, caplog) -> None:
 
 
 def test_legacy_guidance_always_drops_the_child_table(tmp_path, caplog) -> None:
-    """🔴 안내가 `classified_item_aspect` 도 함께 지우게 한다.
+    """안내가 `classified_item_aspect` 도 함께 지우게 한다.
 
     그 테이블에는 `LEGACY_MARKERS` 마커가 없어서(8/7 이전엔 아예 없던 테이블) `legacy`
     목록에 **절대 안 들어온다.** 안내를 목록으로만 만들면 `DROP TABLE classified_item;`
@@ -641,8 +642,7 @@ def test_legacy_guidance_always_drops_the_child_table(tmp_path, caplog) -> None:
     안 거친다** — 원문이 그대로 있으니 그 행들이 계속 집계에 잡히고 옛 분류기 라벨이
     리포트에 섞인다.
 
-    문서 §4-3 이 두 테이블을 지우라고 하므로, 안내와 절차가 같은 끝 상태를 만들어야 한다.
-    (2026-08-13 리뷰 §3)
+    확정 문서가 두 테이블을 지우라고 하므로, 안내와 절차가 같은 끝 상태를 만들어야 한다.
     """
     db_path = tmp_path / "legacy.db"
     conn = sqlite3.connect(db_path)
@@ -663,9 +663,9 @@ def test_legacy_guidance_always_drops_the_child_table(tmp_path, caplog) -> None:
     assert "DROP TABLE IF EXISTS classified_item;" in caplog.text
     assert "DROP TABLE IF EXISTS classified_item_aspect;" in caplog.text
 
-    # 🔴 **자식이 부모보다 앞에 와야 한다.** `PRAGMA foreign_keys=ON` 세션에서 부모부터
+    # **자식이 부모보다 앞에 와야 한다.** `PRAGMA foreign_keys=ON` 세션에서 부모부터
     #    지우면 `FOREIGN KEY constraint failed` 로 안내가 통째로 실패한다. sqlite3 CLI 는
-    #    기본이 OFF 라 보통은 돌지만, 켜 둔 셸에서는 안 돈다. (2026-08-13 리뷰 §4)
+    #    기본이 OFF 라 보통은 돌지만, 켜 둔 셸에서는 안 돈다.
     assert caplog.text.index("DROP TABLE IF EXISTS classified_item_aspect;") < caplog.text.index(
         "DROP TABLE IF EXISTS classified_item;"
     )
@@ -677,11 +677,11 @@ def test_legacy_guidance_always_drops_the_child_table(tmp_path, caplog) -> None:
 def test_foreign_keys_are_actually_enforced(tmp_path) -> None:
     """`PRAGMA foreign_keys=ON` 이 켜져 DDL 의 REFERENCES 가 실제로 걸린다.
 
-    ⚠️ sqlite 는 FK 가 **기본 OFF** 라, 안 켜면 REFERENCES 가 장식으로만 남는다. 그러면
+    sqlite 는 FK 가 **기본 OFF** 라, 안 켜면 REFERENCES 가 장식으로만 남는다. 그러면
        부모 없는 aspect 행이 조용히 생기고 — "분류 결과는 있는데 문서가 없는" 상태 —
        원문에서 분모를 세는 합의 아래에서 커버리지 집계가 어긋난다.
 
-    ⚠️ 평문 INSERT 가 아니라 **프로덕션과 같은 `INSERT OR IGNORE`** 로 찌른다. 워커의
+    평문 INSERT 가 아니라 **프로덕션과 같은 `INSERT OR IGNORE`** 로 찌른다. 워커의
        적재 구문이 `OR IGNORE` 라, 평문으로 검증하면 "OR IGNORE 니까 실제로는 조용히
        넘어가는 것 아닌가" 라는 의심이 그대로 남는다. sqlite 에서 `OR IGNORE` 는 제약
        위반 중 **FK 만은 삼키지 않는다** — 그 사실까지 여기서 같이 고정한다.
@@ -708,7 +708,7 @@ def test_foreign_keys_are_actually_enforced(tmp_path) -> None:
     conn.close()
 
 
-# ── 분류기 버전 backfill (--reclassify-stale, 2026-08-12) ────────────────────
+# ── 분류기 버전 backfill (--reclassify-stale) ────────────────────────────────
 
 
 def _active_of(source: str) -> tuple[str, str, str]:
@@ -741,7 +741,7 @@ def _mark_classified(
 def test_stale_scan_finds_only_old_version_rows(worker_instance) -> None:
     """활성 버전이 아닌 행만 재분류 대상이다.
 
-    ⚠️ **신규 조회(FETCH_BATCH_SQL)로는 절대 안 잡히는 행들이다.** 그쪽은 커서보다 뒤에
+    **신규 조회(FETCH_BATCH_SQL)로는 절대 안 잡히는 행들이다.** 그쪽은 커서보다 뒤에
        있는 원문만 보는데, 이 행들은 커서가 이미 지나간 자리에 있다 — 분류기를 바꿔도
        지난 문서가 영원히 옛 라벨로 남던 이유가 이것이다.
     """
@@ -761,7 +761,7 @@ def test_stale_scan_finds_only_old_version_rows(worker_instance) -> None:
 
 
 def test_stale_scan_covers_model_and_pipeline_axes(worker_instance) -> None:
-    """🔴 프롬프트가 같아도 **모델·파이프라인이 다르면 stale 이다.**
+    """프롬프트가 같아도 **모델·파이프라인이 다르면 stale 이다.**
 
     프롬프트 축만 보면 "같은 프롬프트, 다른 라벨러" 가 통째로 새어 나간다 — 모델을
     갈아끼우거나 후처리·폴백을 손보면 프롬프트 파일은 한 글자도 안 바뀌었는데 분포가
@@ -785,24 +785,24 @@ def test_stale_scan_covers_model_and_pipeline_axes(worker_instance) -> None:
 
 
 def test_stale_scan_catches_null_model_and_pipeline_axes(worker_instance) -> None:
-    """🔴 프롬프트는 맞고 **모델·파이프라인만 NULL** 인 행도 재분류 대상이다.
+    """프롬프트는 맞고 **모델·파이프라인만 NULL** 인 행도 재분류 대상이다.
 
     위 테스트와 행 하나 차이인데 잡는 것이 다르다. 저쪽은 축 값이 *다른* 경우라
     `=` 로 비교해도 FALSE 가 나와 `NOT (...)` 이 참이 된다 — 즉 **널 안전 비교가
     아니어도 통과한다.** 갈리는 것은 널일 때뿐이다:
 
         prompt 일치 + model NULL 로 두고 stale 조회
-            IS NOT DISTINCT FROM  →  FALSE  →  NOT FALSE = 참  →  재분류 대상 ✅
+            IS NOT DISTINCT FROM  →  FALSE  →  NOT FALSE = 참  →  재분류 대상
             =                     →  NULL   →  NOT NULL  = 널  →  **영원히 안 잡힌다**
 
     그리고 이 행은 지어낸 것이 아니다 — 버전 컬럼이 `prompt_version` 하나뿐이던 시절
-    (4컬럼)에 적재된 뒤 2026-08-12 에 컬럼 2개가 늘면서 정확히 이 모양이 된다.
+    (4컬럼)에 적재된 뒤 컬럼 2개가 늘면서 정확히 이 모양이 된다.
 
-    🔴 **놓치면 교착이다.** 배치 쪽 `_VERSION_COUNT_SQL` 은 `SUM(CASE WHEN ... ELSE 0)`
+    **놓치면 교착이다.** 배치 쪽 `_VERSION_COUNT_SQL` 은 `SUM(CASE WHEN ... ELSE 0)`
        이라 널을 FALSE 와 똑같이 "옛 버전" 으로 세서 **배치는 선다.** 그런데 여기 조회가
        그 행을 못 집으면 `--reclassify-stale` 이 "재분류할 문서가 없습니다" 로 끝나,
        에러가 시키는 조치로는 빠져나갈 수 없다("배치를 세우는 집합 ⊆ 재분류가 고칠 수
-       있는 집합", 2026-08-12).
+       있는 집합").
     """
     conn = _open_pipeline_db()
     worker_instance.conn = conn
@@ -822,7 +822,7 @@ def test_stale_scan_catches_null_model_and_pipeline_axes(worker_instance) -> Non
 
 
 def test_stale_scan_is_per_source(worker_instance) -> None:
-    """🔴 활성 버전은 source 마다 다르다 — CS 는 프롬프트1, 리뷰는 프롬프트2.
+    """활성 버전은 source 마다 다르다 — CS 는 프롬프트1, 리뷰는 프롬프트2.
 
     값 하나로 거르면 한쪽 source 전체가 stale 로 잡혀서, 멀쩡한 96,524건을 통째로 다시
     LLM 에 태우게 된다(= 비용 전액 재지불).
@@ -847,12 +847,12 @@ def test_stale_scan_is_per_source(worker_instance) -> None:
 
 
 def test_orphan_stale_rows_are_counted_separately(worker_instance) -> None:
-    """🔴 원문이 사라진 stale 행은 **재분류로 없앨 수 없다** — 따로 센다.
+    """원문이 사라진 stale 행은 **재분류로 없앨 수 없다** — 따로 센다.
 
     예전에는 `count_stale()` 이 `classified_item` 만 세고 `fetch_stale_batch()` 는 원문 뷰와
     INNER JOIN 을 타서 범위가 갈렸다. 그러면 `--reclassify-stale` 이 "1건 남았다"고 알리고
     곧바로 "대상을 모두 처리했습니다"로 끝난 뒤 종료 경고가 **영원히 남는다** — 고치라는데
-    고칠 수단이 없는 경고라 다음 사람이 시간을 쓴다. (2026-08-12 리뷰 §5)
+    고칠 수단이 없는 경고라 다음 사람이 시간을 쓴다.
 
     목 데이터를 다시 만들면(원문만 갈아끼우면) 실제로 나는 상태다.
     """

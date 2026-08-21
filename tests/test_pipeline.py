@@ -1,6 +1,7 @@
 """담당: 서영 (Agent2) — 알림 발행 규칙 · 재알림 억제 · [0]~[8] 파이프라인 통합 테스트.
 
-LLM 은 목킹한다 (비용 0). 통합 테스트는 "숫자를 넣으면 몇 건이 어떤 채널로 나가는가"를
+LLM 은 목킹한다 (비용 0). 절 번호는 `docs/detection_schema.md` 기준.
+통합 테스트는 "숫자를 넣으면 몇 건이 어떤 채널로 나가는가"를
 본다 — 개별 판정 규칙은 test_detection.py·test_confidence.py 가 각각 담당.
 """
 
@@ -221,7 +222,7 @@ def _alert(
 ):
     """day = 데이터 시각(window_end). run_at 을 주면 실행 시각만 따로 움직인다.
 
-    ⚠️ `alert_id` 를 따로 못박는 인자가 없다 — `alert_id` 는 이제 (window_end, 상품,
+    `alert_id` 를 따로 못박는 인자가 없다 — `alert_id` 는 이제 (window_end, 상품,
        aspect, 채널)에서 **결정론적으로 나온다.** 그래서 `day` 를 바꾸면 ID 도 같이
        바뀌고, `day` 를 같게 두면 ID 도 같아진다. 아래 억제 테스트들이 그 성질에 기댄다.
     """
@@ -329,7 +330,7 @@ def test_different_channel_is_not_suppressed():
 
 # ── 결정론적 alert_id 와 갱신 체인 (백엔드 멱등 upsert 계약) ──────
 def test_same_window_update_reuses_id_and_does_not_self_reference():
-    """🔴 같은 구간 재실행 → **같은 ID** · `updates_alert_id`는 **None**.
+    """같은 구간 재실행 → **같은 ID** · `updates_alert_id`는 **None**.
 
     `alert_id` 가 (window_end, 상품, aspect, 채널)에서 나오므로 같은 구간을 다시 돌리면
     글자까지 같은 ID 가 나온다 — 백엔드가 그 값으로 upsert 하니 그래야 맞다.
@@ -396,7 +397,7 @@ def test_alert_id_axes_all_change_the_id():
     aspect 축이 특히 그렇다. 알림의 논리 키가 원래 (상품, main_aspect, 채널)인데
     aspect 를 빼면 색상 알림과 사이즈 알림이 같은 ID 를 받고, 백엔드 멱등 upsert 가
     나중 것으로 앞엣것을 덮어 **원인·근거·권장조치·개선안이 통째로 바뀐다**
-    (PR #22 `guideline_id` 사고와 같은 모양).
+    (`guideline_id` 사고와 같은 모양).
     """
     base = _alert()
     assert base.alert_id == "ALT-20260707-P001-COLOR-COUPANG"
@@ -445,7 +446,7 @@ def test_alert_id_length_formula_holds_for_the_worst_case():
 
 
 def test_make_alert_id_accepts_plain_str_aspect():
-    """🔴 호출부는 평범한 `str`(`'색상'`)을 넘긴다 — `Aspect` 멤버가 아니다.
+    """호출부는 평범한 `str`(`'색상'`)을 넘긴다 — `Aspect` 멤버가 아니다.
 
     `build_alert:aspect` 는 `judgement["aspect"]` 를 그대로 받고, `Aspect` 로 바뀌는 건
     `DetectionAlert` 생성 시 Pydantic 이 변환하는 시점이라 **ID 만드는 자리는 그 이전**
@@ -483,7 +484,7 @@ def test_aspect_codes_match_the_backend_mapping_table():
     ]
 
 
-# ── [3]~[5] 후보 접기 — aspect별 보류 채널 귀속 (PR #14 리뷰) ────
+# ── [3]~[5] 후보 접기 — aspect별 보류 채널 귀속 ──────────────────
 def _test_result(product, aspect, channel, source, fired, delta=0.08):
     return {
         "key": (product, aspect, channel, source),
@@ -537,9 +538,9 @@ def test_excluded_channels_belong_to_own_aspect():
 
 
 def test_channel_rates_carry_the_denominator():
-    """🔴 비율 옆에 분모가 같이 실린다 — 관측 0건은 `total=0` 이지 `None` 이 아니다.
+    """비율 옆에 분모가 같이 실린다 — 관측 0건은 `total=0` 이지 `None` 이 아니다.
 
-    `None` 은 이 필드가 생기기 전(2026-08-11) 발행분의 값이다. 신규 발행에서 나오면
+    `None` 은 이 필드가 생기기 전 발행분의 값이다. 신규 발행에서 나오면
     백엔드가 "구버전인가 관측 0건인가" 를 못 가린다.
 
     채널마다 분모를 다르게 둔 건 `stats.cur_total`(대표 채널 1개분) 을 그대로 복사하는
@@ -791,7 +792,7 @@ async def test_pipeline_empty_input_returns_nothing():
 
 @pytest.mark.asyncio
 async def test_detected_at_default_is_kst_not_host_local(monkeypatch):
-    """🔴 `detected_at` 기본값은 **KST 벽시계**다 — 호스트 시간대를 보지 않는다.
+    """`detected_at` 기본값은 **KST 벽시계**다 — 호스트 시간대를 보지 않는다.
 
     이 값의 날짜 부분이 CS 가이드라인 기간(`%Y-%m`, `reporting/cs_reply_service`)이
     된다. naive `datetime.now()` 는 로컬 시각이라, 배치를 **UTC 컨테이너**로 올리면
@@ -801,7 +802,7 @@ async def test_detected_at_default_is_kst_not_host_local(monkeypatch):
     시계를 UTC 호스트로 고정해 재현한다 — UTC 8/11 23:30 은 KST 로 **8/12 08:30** 이라
     두 시간대의 날짜가 갈리는 순간이다. 옛 코드면 8/11 이 나온다.
 
-    ⚠️ **`alert_id` 로는 이 회귀를 못 잡는다** — 그쪽은 `window_end`(데이터 시각)를 쓰기
+    **`alert_id` 로는 이 회귀를 못 잡는다** — 그쪽은 `window_end`(데이터 시각)를 쓰기
        때문이다. 예전엔 ID 에 `detected_at` 의 날짜가 들어가서 그걸 프록시로 볼 수 있었고,
        이 테스트도 그렇게 검사했다. 지금은 **`detected_at` 자체를 직접 봐야 한다.**
        (아래 assert 가 그렇게 바뀐 이유다 — 프록시가 사라졌는데 assert 를 안 옮기면
@@ -837,10 +838,10 @@ async def test_detected_at_default_is_kst_not_host_local(monkeypatch):
 async def test_aware_detected_at_argument_is_converted_not_relabeled():
     """오프셋이 **있는** 인자는 라벨을 갈아치우지 않고 **변환**한다.
 
-    🔴 **인자도 정규화한다** — 기본값만 KST 로 두면 호출부가 넘긴 값이 그대로 나가서
+    **인자도 정규화한다** — 기본값만 KST 로 두면 호출부가 넘긴 값이 그대로 나가서
        naive·aware·비KST 가 한 배치 안에서 섞이고, 백엔드 파싱이 호출 경로에 따라 갈린다.
 
-    ⚠️ **`==` 로만 재면 이 회귀를 못 잡는다.** aware datetime 의 `==` 는 **같은 순간인지**
+    **`==` 로만 재면 이 회귀를 못 잡는다.** aware datetime 의 `==` 는 **같은 순간인지**
        를 보므로 UTC 00:30 과 KST 09:30 이 같다고 나온다 — 정규화를 통째로 지워도 통과한다.
        그래서 `isoformat()` 문자열로 잰다(발행 payload 에 실제로 실리는 형태다).
     """
@@ -862,7 +863,7 @@ async def test_naive_detected_at_argument_is_treated_as_kst():
     위 테스트의 반대편 갈래다. 둘 중 하나만 두면 `_to_kst_aware` 를 한 줄로 뭉개는
     변경(`replace` 만 / `astimezone` 만)이 조용히 통과한다.
 
-    ⚠️ **이 테스트만으로는 `astimezone` 단독 구현을 못 잡는다** — 개발 머신이 KST 라
+    **이 테스트만으로는 `astimezone` 단독 구현을 못 잡는다** — 개발 머신이 KST 라
        naive 를 호스트 로컬로 읽어도 같은 값이 나온다. 그쪽은 아래 `TZ=UTC` 서브프로세스
        테스트가 잡는다. **한 쌍이므로 하나만 지우지 말 것.**
     """
@@ -879,7 +880,7 @@ async def test_naive_detected_at_argument_is_treated_as_kst():
 
 
 def test_naive_detected_at_is_kst_even_on_a_utc_host():
-    """🔴 위 계약을 **UTC 호스트에서** 확인한다 — 개발 머신이 KST 라 여기서만 잡힌다.
+    """위 계약을 **UTC 호스트에서** 확인한다 — 개발 머신이 KST 라 여기서만 잡힌다.
 
     같은 프로세스에서 재면 호스트가 마침 KST 라 `.astimezone()` 단독 구현도 통과한다.
     `TZ=UTC` 서브프로세스로 띄워서 잰다 — 배치를 컨테이너(UTC)로 올렸을 때 실제로 도는
@@ -999,14 +1000,14 @@ async def test_documents_auto_coverage_accepts_empty_review_parents():
     assert unreliable_slots(check_coverage(documents, items)) == set()
 
 
-# ── POST /detect 의 documents 패스스루 (지인님 결선 정리 2026-08-05) ──────
+# ── POST /detect 의 documents 패스스루 ────────────────────────────────────
 #
 # /detect 는 운영 경로가 아니라 **재현·디버깅 창구**다(운영은 app/batch/daily.py).
 # 그래서 운영과 같은 분모 경로를 타야 한다 — 다른 분모를 쓰면 결과가 이상할 때
 # 로직 문제인지 경로 차이인지 구분할 수 없다.
 #
-# ⚠️ detect_anomaly 에 documents 인자가 있어도 **라우터가 안 넘기면 소용없다.**
-#    실제로 그런 상태로 하루 넘게 있었다(2026-08-04~05). 그래서 서비스 함수가 아니라
+# detect_anomaly 에 documents 인자가 있어도 **라우터가 안 넘기면 소용없다.**
+#    실제로 그런 상태로 하루 넘게 있었다. 그래서 서비스 함수가 아니라
 #    **HTTP 요청으로** 알림 발행이 갈리는지 확인한다.
 
 
@@ -1068,7 +1069,7 @@ def test_detect_endpoint_warns_when_review_without_documents(monkeypatch, caplog
     assert any("documents" in r.message for r in caplog.records)
 
 
-# ── 억제 기간 불변식 (지인님 지적 2026-08-05) ─────────────────────
+# ── 억제 기간 불변식 ──────────────────────────────────────────────
 #
 # 억제된 날은 알림이 안 나가 prior_alerts 에 안 남는데도 기준선에서 빠진다.
 # 억제가 풀린 뒤 나가는 알림의 윈도우가 그 구간을 덮어주기 때문이다.
@@ -1105,6 +1106,6 @@ def test_current_block_days_leaves_no_gap():
 
 
 def test_longer_block_days_would_break_baseline():
-    """⚠️ 늘리면 실제로 깨진다 — 불변식이 형식적 assert 가 아님을 보인다."""
+    """늘리면 실제로 깨진다 — 불변식이 형식적 assert 가 아님을 보인다."""
     assert len(_uncovered_days(CURRENT_WINDOW_DAYS + 1)) > 0
     assert len(_uncovered_days(14)) >= 21

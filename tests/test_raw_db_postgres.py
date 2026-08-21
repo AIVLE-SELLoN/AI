@@ -10,11 +10,11 @@
     RAW_DB_TEST_DSN="postgresql://sellon:sellon@localhost:5433/rawdb?sslmode=disable" \
         pytest tests/test_raw_db_postgres.py
 
-⚠️ **`sslmode=disable` 을 붙인다.** compose 의 Postgres 는 SSL 을 안 켜는데 우리 기본값이
+**`sslmode=disable` 을 붙인다.** compose 의 Postgres 는 SSL 을 안 켜는데 우리 기본값이
    `require` 라, 안 붙이면 접속 자체가 거부된다. 운영 기본값을 로컬 편의로 되돌리지 않으려고
    여기서 명시하는 쪽을 골랐다(`config.raw_db_sslmode` 주석 참고).
 
-⚠️ **`RAW_DB_TEST_DSN` 만 단일 문자열이다.** 운영 경로는 원자값 5개를 우리가 조립하는데
+**`RAW_DB_TEST_DSN` 만 단일 문자열이다.** 운영 경로는 원자값 5개를 우리가 조립하는데
    (`raw_db.conninfo_from_settings`), 이 키는 `.env` 에 안 들어가는 테스트 게이트라 운영
    경로와 섞이지 않는다. 아래 `pg` 픽스처가 psycopg 로 파싱해 **원자값으로 되돌려** 넣으므로
    실연결 검증이 조립 경로를 그대로 통과한다 — 게이트만 우회하면 그 경로가 안 걸린다.
@@ -26,7 +26,7 @@
   3. 스키마 가드가 `information_schema` 로 돈다   (`PRAGMA`·`sqlite_master` 면 죽는다)
   4. `TIMESTAMPTZ` 가 `datetime` 으로 와도 날짜 절단이 된다 (문자열만 받으면 `TypeError`)
 
-⚠️ LLM·네트워크 없음. 로컬 Postgres 에 표식 행 몇 개를 넣고 지운다.
+LLM·네트워크 없음. 로컬 Postgres 에 표식 행 몇 개를 넣고 지운다.
 """
 
 from __future__ import annotations
@@ -98,13 +98,13 @@ def _alert(inquiry_ids: list[str]) -> DetectionAlert:
 def pg(monkeypatch):
     """접속 원자값을 Postgres 로 돌리고 표식 행을 심는다. 끝나면 지운다.
 
-    🔴 **게이트 DSN 을 원자값으로 되돌려 넣는다 — `dsn=` 로 우회하지 않는다.** 우회하면
+    **게이트 DSN 을 원자값으로 되돌려 넣는다 — `dsn=` 로 우회하지 않는다.** 우회하면
        `conninfo_from_settings()` 조립 경로가 **실연결 검증을 통째로 안 탄다.** 값이
        빠지거나 `sslmode` 가 안 실리는 회귀가 여기서도 안 걸리면, sqlite 에서도 안 걸리니
        아무 데서도 안 걸린다. 파싱은 psycopg 에 맡긴다(우리 게이트 문자열이라 남의 형식을
        파싱하는 것과 다르다).
 
-    ⚠️ **별도 연결로 심는다.** 우리 조회 연결은 읽기 전용이라 자기 자신으로는 못 넣고,
+    **별도 연결로 심는다.** 우리 조회 연결은 읽기 전용이라 자기 자신으로는 못 넣고,
        심는 트랜잭션이 열려 있으면 다른 연결에서 안 보이므로 commit 까지 해야 한다.
     """
     import psycopg
@@ -285,13 +285,13 @@ def test_load_inputs_from_db_reads_postgres(pg):
 def test_active_version_filter_excludes_stale_rows_on_postgres(pg):
     """활성 버전 필터가 Postgres 에서도 **거른다.**
 
-    🔴 이게 통과만 보고 넘어가면 안 되는 이유: `IS NOT DISTINCT FROM` 을 `=` 로
+    이게 통과만 보고 넘어가면 안 되는 이유: `IS NOT DISTINCT FROM` 을 `=` 로
        되돌려도 위 테스트는 그대로 초록이다(값이 다 NOT NULL 이라). 널이 섞였을 때만
        갈리므로 `model_version = NULL` 인 옛 행을 일부러 넣어 확인한다.
 
-    ⚠️ 옛 행이 윈도우 안에 있으면 `_check_version_cutover` 가 배치를 세운다(fail-closed).
+    옛 행이 윈도우 안에 있으면 `_check_version_cutover` 가 배치를 세운다(fail-closed).
        여기서는 그 **세우는 동작 자체**가 관측 대상이다 — 세우지 않으면 과거 구간
-       분자가 0 이 되어 최대 강도 오탐이 난다(2026-08-12 실측).
+       분자가 0 이 되어 최대 강도 오탐이 난다.
     """
     import psycopg
 
@@ -332,6 +332,6 @@ def test_fetch_linked_inquiries_reads_postgres(pg):
     assert [i.item_id for i in inquiries] == [f"{PREFIX}-INQ-2", f"{PREFIX}-RVW-1"]
     assert inquiries[0].raw_text == "받아보니 화면보다 어둡네요"
     assert inquiries[0].source.value == "cs"
-    # 리뷰도 근거로 쓴다(2026-08-11 확정 정책). 출처만 갈라서 실어 보낸다.
+    # 리뷰도 근거로 쓴다(확정 정책). 출처만 갈라서 실어 보낸다.
     assert inquiries[1].source.value == "review"
     assert inquiries[0].created_at.date() == date(2026, 8, 28)

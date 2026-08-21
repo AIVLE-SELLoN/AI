@@ -1,6 +1,6 @@
 """담당: 현진 — eval/run_classify_eval.py의 score()·sample_rows() 테스트.
 
-PR 리뷰(2026-08-05) 지적사항 반영: "신규 지표 3종에 테스트가 없다 — tests/가 eval/을
+PR 리뷰 지적사항 반영: "신규 지표 3종에 테스트가 없다 — tests/가 eval/을
 임포트하지 않아 1번(FPR 구조적 0건) 같은 회귀가 안 잡힌다." LLM 호출 없는 순수 함수만
 테스트 대상(score()·sample_rows() 자체는 네트워크 호출이 없다 — 예측 결과를 입력으로
 받아 채점만 함).
@@ -78,11 +78,11 @@ class TestNegativeDetectionFPR:
         assert nd["recall"] == 1.0, "recall은 fp+tn과 무관하니 정상 계산돼야 함"
 
     def test_precision_operational_reproduces_jiin_example(self):
-        """운영비율 환산 precision — 지인님 PR리뷰 예시(recall95%·FPR5%→~61%) 재현
-        (Notion A안, 2026-08-06 반영). 균형표본(50:50) precision은 95%로 높게 나오지만,
+        """운영비율 환산 precision — 환산 예시(recall95%·FPR5%→~61%) 재현.
+        균형표본(50:50) precision은 95%로 높게 나오지만,
         실제 운영 부정비율(7.4%)로 환산하면 60%대로 뚝 떨어진다는 게 이 지표의 핵심.
 
-        p를 인자로 **명시해서** 넘긴다(2026-08-10). 예전엔 score() 안에 0.074가 박혀
+        p를 인자로 **명시해서** 넘긴다. 예전엔 score() 안에 0.074가 박혀
         있어서 이 테스트가 골든 파일 상태에 묶여 있었다 — 골든을 재생성하면 실제 p가
         움직이는데 이 기대값은 안 움직여서, 공식이 맞는지 데이터가 맞는지 못 가린다.
         여기서 검증할 것은 **베이즈 공식**뿐이므로 p를 고정한다.
@@ -108,7 +108,7 @@ class TestNegativeDetectionFPR:
         assert nd["precision"] != nd["precision_operational"], "표본기준과 운영환산은 반드시 달라야 함(그게 이 지표의 존재 이유)"
 
     def test_precision_operational_is_null_without_p(self):
-        """p를 안 넘기면 환산값은 None이다 — 추정해서 채우면 안 된다 (2026-08-10).
+        """p를 안 넘기면 환산값은 None이다 — 추정해서 채우면 안 된다.
 
         예전엔 0.074가 박혀 있어서, 골든이 재생성돼 실제 부정비율이 3배 넘게 움직인
         뒤에도 옛 p로 계산한 숫자가 아무 경고 없이 나왔다. 못 재는 건 None으로 낸다.
@@ -122,7 +122,7 @@ class TestNegativeDetectionFPR:
         assert nd["precision_operational_p"] is None
 
     def test_no_zero_division_when_model_predicts_no_negative(self):
-        """모델이 부정을 하나도 안 내면 recall·FPR 이 둘 다 0 → 분모 0 (서영님 리뷰 2026-08-10).
+        """모델이 부정을 하나도 안 내면 recall·FPR 이 둘 다 0 → 분모 0.
 
         전엔 여기서 ZeroDivisionError 로 죽었다. 이 계산이 결과 JSON 쓰기 **전**이라,
         터지면 그 회차 LLM 비용이 통째로 날아간다. 값이 아니라 None 을 낸다.
@@ -140,7 +140,7 @@ class TestNegativeDetectionFPR:
 
         _prf1 이 0.0 을 폴백으로 내는 바람에 recall·f1·환산 precision 이 전부 "0%" 로
         찍혔다 — 비부정 쪽은 has_nonneg_sample 로 막아뒀는데 이쪽만 빠져 있었다.
-        (서영님 리뷰 2026-08-10) precision 은 예외다 — tp/(tp+fp) 는 부정 표본이 없어도
+        precision 은 예외다 — tp/(tp+fp) 는 부정 표본이 없어도
         "낸 예측이 다 틀렸다"로 실제 측정된 값이라 0.0 이 맞다.
         """
         rows = [_row(f"P{i}", "색상", 0) for i in range(50)]
@@ -161,7 +161,7 @@ class TestNegativeDetectionFPR:
 
         100% 는 '오탐이 없다'가 아니라 '이 표본에서 못 봤다'는 뜻이고, 환산식은 FPR 0
         근처에서 극도로 민감하다. 표본 크기가 안 보이면 30건이든 3,000건이든 똑같이
-        100% 로 찍힌다. (서영님 리뷰 2026-08-10)
+        100% 로 찍힌다.
         """
         rows = [_row(f"N{i}", "색상", -1) for i in range(10)] + [_row(f"P{i}", "색상", 0) for i in range(30)]
         predictions = {r["inquiry_id"]: _pred("색상", r["true_sentiment"]) for r in rows}
@@ -175,7 +175,7 @@ class TestNegativeDetectionFPR:
         )
 
     def test_operational_uses_unrounded_recall_and_fpr(self):
-        """반올림 전 값으로 환산한다 (서영님 리뷰 2026-08-10).
+        """반올림 전 값으로 환산한다.
 
         neg_recall·neg_fpr 은 보고용 4자리 반올림이다. FPR 이 작을수록 그 반올림이
         환산값을 크게 흔든다 — 여기선 fp=1/tn=9999 라 FPR 이 1e-4 다.
@@ -319,15 +319,14 @@ class TestSampleRowsBalancedNegativeSampling:
 
 
 class TestFewShotLeakFilter:
-    """§6 B안(2026-08-06, 지인님 리뷰) — few-shot 유출 방어. PR #30 전량 실행에서
-    오탐 65건이 전부 예시20 템플릿 하나였던 것(4,058건 완전일치)이 계기.
-    """
+    """few-shot 유출 방어. 전량 실행에서 오탐 65건이 전부 예시20 템플릿
+    하나였던 것(4,058건 완전일치)이 계기."""
 
     def test_parse_few_shot_examples_finds_all_v5_inputs(self):
         """v5의 '입력:' 문장이 전부(49개) 파싱돼야 한다 — 하드코딩이 아니라 실제 파일 파싱
-        확인용(§6 B안 1번: '예시가 늘어도 자동 반영').
+        확인용(유출 방어 B안 1번: '예시가 늘어도 자동 반영').
 
-        40 → 46: v5 3차 수정(2026-08-09)에서 감성 정책 예시 6개 추가.
+        40 → 46: v5 3차 수정에서 감성 정책 예시 6개 추가.
           20-6  배송 미도착 주장 → -1 (일정만 문의는 0을 같은 예시에서 대비)
           22-1  "문제 없음" + 명시적 칭찬 → 1
           22-1b 완만한 칭찬도 긍정(리뷰 문체)
@@ -335,11 +334,11 @@ class TestFewShotLeakFilter:
           22-3  포장 결함 관측 + 가정형 → -1 (22-2와 대비)
           24-1  담백한 오배송 서술 → -1
 
-        46 → 49: v5 4차 수정(2026-08-10, 실험② 오차분해)에서 대비 예시 3개 추가.
+        46 → 49: v5 4차 수정(실험② 오차분해)에서 대비 예시 3개 추가.
           27-1  게시 정보 누락 지적(소재) → -1 (27 의 "일반 질문은 0" 과 대비)
           29-1  상세페이지 언급하되 아무 주장 없음 → 0
           29-2  같은 사진 얘기라도 "다르다"고 주장하면 → -1 (29 와 대비)
-        ⚠️ 예시 29 는 0 유지다 — 초안에서 -1 로 뒤집었다가 실험③ FPR 이 0.0 → 1.8% 로
+        예시 29 는 0 유지다 — 초안에서 -1 로 뒤집었다가 실험③ FPR 이 0.0 → 1.8% 로
            올라 되돌렸다. 갈림길은 "비교했는가"가 아니라 "다르다고 말했는가"였다.
         """
         texts = parse_few_shot_examples("classify_aspect_v5")
@@ -347,8 +346,8 @@ class TestFewShotLeakFilter:
         assert "배송 조회가 안 되는데 확인 부탁드려요." in texts
 
     def test_similarity_reproduces_notion_reported_numbers(self):
-        """difflib.SequenceMatcher가 지인님이 노션에 기록한 예시20(1.00)·25(0.88)·
-        20-2(0.79) 유사도를 정확히 재현하는지 — 알고리즘 검증(2026-08-06)."""
+        """difflib.SequenceMatcher가 노션에 기록된 예시20(1.00)·25(0.88)·
+        20-2(0.79) 유사도를 정확히 재현하는지 — 알고리즘 검증."""
         few_shot = parse_few_shot_examples("classify_aspect_v5")
 
         exact_match_text = "배송 조회가 안 되는데 확인 부탁드려요."
@@ -380,7 +379,7 @@ class TestFewShotLeakFilter:
         """--leak-threshold 0이면 main_async()가 few_shot_texts를 아예 안 채워서(빈 리스트)
         검사가 완전히 꺼진다 — compute_leak_map 자체에 threshold=0을 넘기면 오히려 거의
         전부 유출로 잡히므로(SequenceMatcher.ratio()>=0이 사실상 항상 참), CLI 레벨에서
-        분기해야 한다는 걸 이 테스트로 고정한다(구현 중 실제로 이 버그를 잡았음, 2026-08-06).
+        분기해야 한다는 걸 이 테스트로 고정한다(구현 중 실제로 잡은 버그다).
         """
         rows = [{"inquiry_id": "A", "raw_text": "아무 문장"}]
         # "검사 꺼짐" 상태 = few_shot_texts가 빈 리스트로 넘어온 상황을 그대로 재현
@@ -389,7 +388,7 @@ class TestFewShotLeakFilter:
 
     def test_leak_filter_recomputes_metrics_excluding_leaked_rows(self):
         """score()의 leak_filter가 유출 제외 후 aspect_f1·sentiment_accuracy를 실제로
-        재계산하는지 — LLM 재호출 없이 predictions만으로(§6 B안: '검증에 LLM 재실행 불필요')."""
+        재계산하는지 — LLM 재호출 없이 predictions만으로(B안: '검증에 LLM 재실행 불필요')."""
         few_shot = parse_few_shot_examples("classify_aspect_v5")
         rows = [
             {"inquiry_id": "A", "raw_text": "배송 조회가 안 되는데 확인 부탁드려요.",
@@ -438,7 +437,7 @@ class TestFewShotLeakFilter:
 class TestClassifyCache:
     """분류 캐시 — 전량 실행이 중간에 죽어도 이어서 돌 수 있어야 한다.
 
-    2026-08-11: 전량(4,827청크)을 돌리다 API 크레딧이 3,248청크째에 소진돼 70%만
+    전량(4,827청크)을 돌리다 API 크레딧이 3,248청크째에 소진돼 70%만
     채점된 결과가 나왔다. 캐시가 없어서 재개가 불가능했고 쓴 돈이 통째로 날아갔다.
     """
 

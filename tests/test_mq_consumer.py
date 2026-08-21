@@ -1,6 +1,7 @@
 """담당: 지인 — `ai.inbound` 컨슈머(`app/core/mq_consumer.py`).
 
 브로커 없이 돈다 — 파싱·디스패치·재수화만 본다. 실제 수신은 `scripts/smoke_mq.py --feedback`.
+계약 정본은 `docs/mq_events.md`.
 """
 
 import json
@@ -130,7 +131,7 @@ def test_rejects_unknown_hitl_status():
 
 
 def test_missing_context_is_loud_not_silent():
-    """⚠️ 전문이 없으면 조용히 넘기지 않는다.
+    """전문이 없으면 조용히 넘기지 않는다.
 
     이 이벤트가 **컬렉션2 축적의 유일한 경로**라, 조용히 스킵하면 학습 자료가 영영
     안 쌓이는데 아무도 모른다. 컨슈머는 이 예외를 받아 DLX 로 보낸다.
@@ -188,18 +189,18 @@ async def test_dispatches_to_registered_handler(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_unhandled_event_type_raises_instead_of_acking(monkeypatch):
-    """⚠️ 핸들러 없는 이벤트를 ACK 하면 그 메시지는 사라진다.
+    """핸들러 없는 이벤트를 ACK 하면 그 메시지는 사라진다.
 
     `ai.inbound` 한 큐에 `feedback.#` 이 전부 들어온다. 바인딩이 와일드카드라 계약(§8)에
     없는 이벤트도 이 큐로 올 수 있는데, 우리가 삼키면 담당자가 영영 못 받는다 —
     던져서 DLX 로 보낸다.
 
-    ⚠️ 예시로 **실재하는 이벤트를 쓰지 않는다.** 원래 이 테스트는 아직 핸들러가 없던
-       `feedback.report.created` 를 예시로 삼았는데, 그게 등록되자(2026-08-13) 전제가
+    예시로 **실재하는 이벤트를 쓰지 않는다.** 원래 이 테스트는 아직 핸들러가 없던
+       `feedback.report.created` 를 예시로 삼았는데, 그게 등록되자 전제가
        깨져 실패했다. 인바운드 2종은 이제 둘 다 꽂혀 있으므로 여기서 검증할 것은
        "모르는 이벤트"이지 특정 이벤트가 아니다.
 
-    ⚠️ `HANDLERS` 를 비워 두고 시작한다. 전역이라 앞서 돈 테스트가 `wire_handlers()` 를
+    `HANDLERS` 를 비워 두고 시작한다. 전역이라 앞서 돈 테스트가 `wire_handlers()` 를
        불렀으면 내용이 남아 있다 — 순서에 따라 결과가 갈리면 안 된다.
     """
     monkeypatch.setattr(mq_consumer, "HANDLERS", {})
@@ -214,7 +215,7 @@ async def test_unhandled_event_type_raises_instead_of_acking(monkeypatch):
 
 
 def test_core_does_not_import_components():
-    """⚠️ core 는 컴포넌트를 import 하지 않는다 (팀 규칙: 컴포넌트가 core 에서 가져다 쓴다).
+    """core 는 컴포넌트를 import 하지 않는다 (팀 규칙: 컴포넌트가 core 에서 가져다 쓴다).
 
     처리 함수는 실행 진입점이 `register_handler()` 로 꽂아 준다. 여기서 core 가
     `app.recommendation` 을 직접 부르기 시작하면 의존 방향이 거꾸로 뒤집힌다.
@@ -260,7 +261,7 @@ class _FakeChannel:
 
 @pytest.mark.asyncio
 async def test_does_not_redeclare_inbound_queue(monkeypatch):
-    """⚠️ `ai.inbound` 는 우리 큐가 아니다 — 바인딩만 추가하는 게 계약(§2-1)이다.
+    """`ai.inbound` 는 우리 큐가 아니다 — 바인딩만 추가하는 게 계약(§2-1)이다.
 
     백엔드가 quorum·DLX·TTL 을 걸어 만든 큐를 우리가 맨 인자로 declare 하면
     PRECONDITION_FAILED 로 컨슈머가 아예 못 뜬다.
@@ -278,7 +279,7 @@ async def test_does_not_redeclare_inbound_queue(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_declares_queue_only_for_local_topology(monkeypatch):
-    """⚠️ `mq_host` 를 명시한다 — 가드가 호스트도 보고 기본값 `""` 는 fail-closed 다.
+    """`mq_host` 를 명시한다 — 가드가 호스트도 보고 기본값 `""` 는 fail-closed 다.
 
     안 주면 `.env` 를 만든 사람만 통과하는 테스트가 된다.
     """
@@ -296,7 +297,7 @@ async def test_declares_queue_only_for_local_topology(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_refuses_to_declare_queue_against_a_remote_broker(monkeypatch):
-    """🔴 컨슈머 쪽도 같은 가드를 탄다 — **선언 자체를 시도하지 않는다.**
+    """컨슈머 쪽도 같은 가드를 탄다 — **선언 자체를 시도하지 않는다.**
 
     이쪽이 스크립트보다 위험하다. 스크립트는 사람이 돌려야 돌지만 컨슈머는 배포되면
     자동으로 뜬다. 운영 큐가 아직 없으면 `declare_queue` 가 그냥 성공해서
@@ -318,7 +319,7 @@ async def test_refuses_to_declare_queue_against_a_remote_broker(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_remote_broker_is_fine_when_we_do_not_declare_queue(monkeypatch):
-    """⚠️ 운영 설정(플래그 off + 원격 호스트)은 막으면 안 된다 — 컨슈머가 못 뜬다."""
+    """운영 설정(플래그 off + 원격 호스트)은 막으면 안 된다 — 컨슈머가 못 뜬다."""
     from app.config import get_settings
 
     settings = get_settings()
@@ -346,7 +347,7 @@ class _RefusingQueueChannel:
 
 @pytest.mark.asyncio
 async def test_declaring_someone_elses_queue_says_which_flag_to_drop(monkeypatch):
-    """🔴 운영 브로커에 `MQ_DECLARE_TOPOLOGY=true` 로 붙었을 때의 안내.
+    """운영 브로커에 `MQ_DECLARE_TOPOLOGY=true` 로 붙었을 때의 안내.
 
     **exchange 보다 이쪽이 먼저 걸린다.** 우리가 주는 인자는 `durable=True` 하나뿐인데
     운영 큐는 quorum·DLX·delivery-limit·TTL 이라(§2-1) 맞을 수가 없다 — exchange 는
@@ -406,12 +407,12 @@ async def test_missing_queue_points_at_the_local_setup_script(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_queue_and_exchange_share_one_error_list(monkeypatch):
-    """🔴 두 함수가 **같은** 예외 목록을 봐야 한다 — 한쪽만 넓히면 조용히 갈린다.
+    """두 함수가 **같은** 예외 목록을 봐야 한다 — 한쪽만 넓히면 조용히 갈린다.
 
     403 을 exchange 쪽에만 넣으면 exchange 는 잡히고 큐는 안 잡히는 상태가 되는데,
     둘 다 같은 브로커·같은 계정이라 실제로는 항상 같이 온다.
     """
-    # ⚠️ `aio_pika.exceptions` 에는 이 이름이 없다 — 정의처인 aiormq 에서 가져온다
+    # `aio_pika.exceptions` 에는 이 이름이 없다 — 정의처인 aiormq 에서 가져온다
     #    (`mq.topology_config_errors()` 주석 참고).
     from aiormq.exceptions import ChannelAccessRefused
 
@@ -571,11 +572,11 @@ async def test_successful_handling_acks(monkeypatch):
     ],
 )
 async def test_permanent_failures_go_straight_to_dlx(monkeypatch, body, handler):
-    """⚠️ 다시 넣어도 결과가 같은 실패는 requeue 하지 않는다.
+    """다시 넣어도 결과가 같은 실패는 requeue 하지 않는다.
 
     재시도로 분류하면 운영에서는 delivery-limit 5 를 다 태운 뒤에야 DLX 로 가고
     (Chroma 쓰기 5회 + 에러 로그 5줄), 로컬 classic 큐는 그 상한이 없어 무한 재전달이
-    된다. 2026-08-07 재검토에서 ValueError 계열이 이 분류에서 빠져 있던 것을 고쳤다.
+    된다. ValueError 계열이 이 분류에서 빠져 있던 것을 고쳤다.
     """
     message = await _consume_one(monkeypatch, body, handler)
 

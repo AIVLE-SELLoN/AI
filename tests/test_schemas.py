@@ -31,7 +31,7 @@ def test_indeterminate_alert_is_valid(indeterminate_alert):
     assert indeterminate_alert.excluded_channels == ["NAVER", "ZIGZAG"]
 
 
-# ── ChannelRate.total (2026-08-11 신설) ──────────────────────────
+# ── ChannelRate.total ────────────────────────────────────────
 
 
 def test_channel_rate_total_is_optional_but_zero_is_not_null():

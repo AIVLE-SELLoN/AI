@@ -1,4 +1,4 @@
-"""`feedback.report.created` 핸들러 — 파싱·관대함의 경계·배선.
+"""`feedback.report.created` 핸들러 — 파싱·관대함의 경계·배선. 계약은 `docs/mq_events.md`.
 
 이 핸들러는 저장을 하지 않아서 "무엇이 남았는가"로 검증할 수가 없다. 그래서 확인할 것이
 셋이다: **camelCase 를 제대로 읽는가**, **어디까지 봐주고 어디서 죽는가**, 그리고
@@ -32,7 +32,7 @@ PAYLOAD = {
 
 
 def test_camel_case_payload_is_parsed() -> None:
-    """🔴 인바운드 2종 중 이 이벤트만 camelCase 다 — 그걸 실제로 읽는지 본다."""
+    """인바운드 2종 중 이 이벤트만 camelCase 다 — 그걸 실제로 읽는지 본다."""
     event = ReportFeedbackCreated.model_validate(PAYLOAD)
 
     assert event.feedback_id == "FB-0001"
@@ -54,7 +54,7 @@ def test_snake_case_also_works() -> None:
 
 @pytest.mark.parametrize("missing", ["feedbackId", "reportId"])
 def test_missing_identifier_raises(missing: str) -> None:
-    """🔴 식별자가 없으면 **죽어야 한다** — DLX 로 가서 백엔드가 고쳐 재발행한다.
+    """식별자가 없으면 **죽어야 한다** — DLX 로 가서 백엔드가 고쳐 재발행한다.
 
     어느 리포트의 무슨 피드백인지 모르면 로그를 남길 이유가 없다. 여기서 봐주면
     빈 줄만 쌓이고 아무도 계약이 깨진 걸 모른다.
@@ -71,7 +71,7 @@ def test_optional_fields_may_be_absent() -> None:
 
 
 def test_unknown_feedback_type_warns_but_survives(caplog) -> None:
-    """🔴 값이 이상한 것과 식별자가 없는 것은 다르게 다룬다 — 여기서는 죽지 않는다."""
+    """값이 이상한 것과 식별자가 없는 것은 다르게 다룬다 — 여기서는 죽지 않는다."""
     with caplog.at_level(logging.WARNING):
         handle_report_feedback({**PAYLOAD, "feedbackType": "AWESOME"})
 
@@ -88,7 +88,7 @@ def test_out_of_range_rating_warns_but_survives(caplog, rating: int) -> None:
 
 
 def test_submitted_at_is_logged_in_kst(caplog) -> None:
-    """🔴 UTC 로 와도 KST 로 찍는다 — 로그의 다른 시각이 전부 KST 라 여기만 어긋나면 안 된다."""
+    """UTC 로 와도 KST 로 찍는다 — 로그의 다른 시각이 전부 KST 라 여기만 어긋나면 안 된다."""
     utc_noon = "2026-08-13T03:30:00+00:00"  # = KST 12:30
 
     with caplog.at_level(logging.INFO):
@@ -100,9 +100,9 @@ def test_submitted_at_is_logged_in_kst(caplog) -> None:
 
 
 def test_naive_submitted_at_is_not_guessed(caplog) -> None:
-    """🔴 타임존이 없으면 KST 를 씌우지 않는다 — UTC 였다면 9시간이 조용히 밀린다.
+    """타임존이 없으면 KST 를 씌우지 않는다 — UTC 였다면 9시간이 조용히 밀린다.
 
-    ⚠️ `at_level` 을 **INFO 로 잡는다.** WARNING 으로 잡으면 경고만 보이고 시각이 찍히는
+    `at_level` 을 **INFO 로 잡는다.** WARNING 으로 잡으면 경고만 보이고 시각이 찍히는
        기록 줄은 캡처되지 않아, KST 를 씌우는 회귀를 놓친다(변이 검증에서 실제로 새어
        나갔다). 경고가 났는지와 무엇이 찍혔는지를 **둘 다** 봐야 한다.
     """
@@ -116,7 +116,7 @@ def test_naive_submitted_at_is_not_guessed(caplog) -> None:
 
 
 def test_comment_text_is_not_logged(caplog) -> None:
-    """🔴 셀러가 쓴 자유 텍스트는 원문을 남기지 않는다.
+    """셀러가 쓴 자유 텍스트는 원문을 남기지 않는다.
 
     연락처·주문정보가 섞여 들어올 수 있고, 로그는 우리가 지울 수 없는 수집기로 간다.
     있었는지만 남긴다.
@@ -150,10 +150,10 @@ def test_duplicate_delivery_is_harmless() -> None:
 
 
 def test_wiring_registers_both_inbound_handlers(monkeypatch) -> None:
-    """🔴 운영 배선에 실제로 꽂혀 있는지 — 이게 없으면 위 테스트가 전부 통과해도 DLQ 로 간다.
+    """운영 배선에 실제로 꽂혀 있는지 — 이게 없으면 위 테스트가 전부 통과해도 DLQ 로 간다.
 
     다른 테스트는 핸들러를 직접 부르기 때문에 `wire_handlers()` 가 비어 있어도 통과한다.
-    같은 구멍으로 한 번 깨진 적이 있다(2026-08-07, `test_consumer_entrypoint`).
+    같은 구멍으로 한 번 깨진 적이 있다(`test_consumer_entrypoint`).
     """
     from app import consumer
     from app.core import mq_consumer
@@ -168,7 +168,7 @@ def test_wiring_registers_both_inbound_handlers(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_dispatch_routes_the_event_end_to_end(monkeypatch) -> None:
-    """🔴 이벤트 이름이 실제로 이 핸들러로 라우팅되는지 — 상수 오타를 잡는 유일한 자리.
+    """이벤트 이름이 실제로 이 핸들러로 라우팅되는지 — 상수 오타를 잡는 유일한 자리.
 
     `REPORT_CREATED` 를 잘못 적어도 등록 테스트는 통과한다(등록한 이름으로 확인하므로).
     브로커가 보내는 **문자열 그대로** 넣어 봐야 걸린다.
@@ -207,13 +207,13 @@ def test_offset_other_than_kst_is_converted_not_relabeled() -> None:
     ],
 )
 def test_wrong_type_still_raises(field: str, value) -> None:
-    """🔴 **관대함은 "필드 누락" 한정이다.** 타입이 틀리면 pydantic 이 먼저 죽인다.
+    """**관대함은 "필드 누락" 한정이다.** 타입이 틀리면 pydantic 이 먼저 죽인다.
 
     docstring 의 "나머지를 필수로 올리면 전량 DLQ" 가 일반 보증처럼 읽히기 쉬운데,
     실제로는 손수 만든 검사 둘(feedbackType 계약값·rating 범위)에서만 성립한다.
     `rating` 은 **한 필드 안에서 갈린다** — 0/6/-1 은 경고만이고 4.5/"good" 은 DLQ 다.
     지금은 백엔드가 타입 있는 Spring DTO 라 실제 위험이 낮다고 보고 그대로 둔다.
-    이 테스트는 그 경계가 어디인지를 **고정해 두는 것**이 목적이다. (2026-08-14 리뷰)
+    이 테스트는 그 경계가 어디인지를 **고정해 두는 것**이 목적이다.
     """
     with pytest.raises(ValidationError):
         handle_report_feedback({**PAYLOAD, field: value})
@@ -249,7 +249,7 @@ def _cp949_unsafe(text: str) -> list[str]:
 
 
 def test_log_messages_survive_a_cp949_console() -> None:
-    """🔴 로그 메시지에 cp949 밖 문자(`—`·`⚠️` 등)를 쓰지 않는다.
+    """로그 메시지에 cp949 밖 문자(`—`·`⚠️` 등)를 쓰지 않는다.
 
     인코딩 편의 문제가 아니라 **메시지 유실** 문제다. 진입점이 `force_utf8_output()` 을
     안 부른 상태에서 이 핸들러가 돌면:
@@ -260,10 +260,10 @@ def test_log_messages_survive_a_cp949_console() -> None:
         UnicodeEncodeError 는 ValueError 하위 -> consume() 이 계약 위반으로 분류
         -> nack(requeue=False) -> DLX. **피드백이 유실된다.**
 
-    ⚠️ 소스를 읽어 **메시지 리터럴만** 본다. 주석·docstring 은 콘솔로 안 나가므로
+    소스를 읽어 **메시지 리터럴만** 본다. 주석·docstring 은 콘솔로 안 나가므로
        대상이 아니다 — 거기까지 막으면 `—` 로 설명을 쓰지 못한다.
 
-    ⚠️ 여러 줄로 쪼갠 호출은 traceback 에 첫 줄만 실려 우연히 통과하는데, 그 차이에
+    여러 줄로 쪼갠 호출은 traceback 에 첫 줄만 실려 우연히 통과하는데, 그 차이에
        기대지 않는다. 누가 한 줄로 합치면 되살아나고 합치는 건 정상적인 정리다.
     """
     import ast
@@ -294,7 +294,7 @@ def test_log_messages_survive_a_cp949_console() -> None:
 
 
 def test_handler_survives_a_cp949_stderr_without_the_entry_point_helper() -> None:
-    """🔴 진입점이 `force_utf8_output()` 을 안 불러도 핸들러가 예외를 던지지 않는다.
+    """진입점이 `force_utf8_output()` 을 안 불러도 핸들러가 예외를 던지지 않는다.
 
     이게 실제 증상이다 — 던지면 `consume()` 이 DLX 로 보낸다. 위 정적 검사와 짝이라,
     검사를 지워도 이쪽이 잡는다.

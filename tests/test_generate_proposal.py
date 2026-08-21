@@ -4,7 +4,7 @@
 파싱·Proposal 조립 로직을 검증한다. copy_draft/image_guide 두 경로 모두 확인 —
 서로 다른 프롬프트 파일을 쓰는지, detailpage_grounded가 타입별로 맞게 갈리는지가 핵심.
 
-current_text는 이제 LLM이 만든다(2026-07-27부터) — "근거 원문이라고 주장하는 인용"을
+current_text는 LLM이 만든다 — "근거 원문이라고 주장하는 인용"을
 LLM이 내고, evaluate()가 사후에 진짜인지 대조한다. 그래서 여기 있는 assert들은
 "LLM이 응답한 대로 Proposal에 그대로 들어가는지"만 본다 — 진짜/할루시네이션 판정은
 test_evaluate.py가 담당.
@@ -119,7 +119,7 @@ async def test_image_guide_prompt_carries_quotes_and_summary_separately(monkeypa
 
 @pytest.mark.asyncio
 async def test_retry_includes_previous_failure_and_raised_temperature(monkeypatch, biased_alert):
-    """2026-07-27 버그 수정 확인: 재시도가 온도 0으로 같은 프롬프트를 그대로 반복하면
+    """재시도가 온도 0으로 같은 프롬프트를 그대로 반복하면
     같은 답이 나올 수밖에 없었다. 실패 사유를 프롬프트에 넣고 temperature도 올려야
     재시도가 실질적인 의미를 가진다.
     """

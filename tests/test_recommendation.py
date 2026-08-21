@@ -81,7 +81,7 @@ async def test_run_generates_recommendation_for_biased_alert(
     assert result.hitl_feedback is None
     assert result.proposal is not None
 
-    # 인용이 실제로 박제된다(2026-08-09). 인용문은 첫 번째 문의에만 있으므로 1건이어야
+    # 인용이 실제로 박제된다. 인용문은 첫 번째 문의에만 있으므로 1건이어야
     # 한다 — inquiries 전체를 그냥 싣는 구현이면 여기서 2건이 되어 걸린다.
     assert [c.inquiry_id for c in result.citations] == ["INQ-000412"]
     assert result.citations[0].quote == "사진이랑 색이 너무 달라요"
@@ -91,12 +91,12 @@ async def test_run_generates_recommendation_for_biased_alert(
 
 @pytest.mark.asyncio
 async def test_run_returns_none_when_routed_evidence_is_missing(monkeypatch, biased_alert):
-    """image_guide 로 갔는데 CS 원문이 없으면 **개선안을 만들지 않는다**(2026-08-09).
+    """image_guide 로 갔는데 CS 원문이 없으면 **개선안을 만들지 않는다**.
 
     근거 0건은 입력만 보고 아는 사실이라 생성을 태워봐야 일반론밖에 안 나온다.
     예전엔 통계 요약을 근거로 써서 이 경우에도 grounding=True 가 나왔다(자기참조).
 
-    ⚠️ **사유는 NO_EVIDENCE 가 아니다** — 반대쪽(상세페이지)엔 근거가 있었는데 모델이
+    **사유는 NO_EVIDENCE 가 아니다** — 반대쪽(상세페이지)엔 근거가 있었는데 모델이
     빈 쪽을 골라 버린 것이라, 데이터 갭이 아니라 배치가 실패로 세야 하는 건이다.
     """
     fake_client = _FakeAgentLlmClient(
@@ -152,7 +152,7 @@ async def test_run_skips_routing_when_no_evidence_at_all(monkeypatch, biased_ale
     outcome = await pipeline.run_with_outcome(biased_alert)
 
     assert outcome.recommendation is None
-    # 배치가 이걸 실패로 세면 상시 종료코드 1 이 된다(2026-08-10) — 사유를 값으로 고정한다.
+    # 배치가 이걸 실패로 세면 상시 종료코드 1 이 된다 — 사유를 값으로 고정한다.
     assert outcome.reason is pipeline.SkipReason.NO_EVIDENCE
     assert outcome.is_evidence_gap
     assert any("근거가 0건" in r.getMessage() for r in caplog.records), (
@@ -163,7 +163,7 @@ async def test_run_skips_routing_when_no_evidence_at_all(monkeypatch, biased_ale
 class _FakeRecoveringClient:
     """첫 시도는 근거와 안 맞는 current_text(할루시네이션), 두 번째 시도부터 정상 응답.
 
-    attempts 필드가 항상 1로 고정돼 있던 버그(2026-07-27 이전)를 재현/검증하기 위한
+    attempts 필드가 항상 1로 고정돼 있던 버그를 재현/검증하기 위한
     fake — 재시도가 실제로 일어났고 그 회차가 Evaluator.attempts에 반영되는지 본다.
     prompt/temperature를 회차별로 기록해서, 재시도가 "같은 프롬프트를 온도 0으로
     반복"이 아니라 실패 피드백+온도 상승이 실제로 반영되는지도 같이 확인한다.
@@ -206,7 +206,7 @@ async def test_run_records_real_attempt_number_after_retry(monkeypatch, biased_a
     assert result.evaluator.attempts == 2
     assert fake_client.complete_json_call_count == 2
 
-    # 2026-07-27 버그 수정 확인: 재시도가 1차와 똑같은 프롬프트·온도로 반복되지 않는다.
+    # 재시도가 1차와 똑같은 프롬프트·온도로 반복되지 않는다.
     assert fake_client.temperatures[0] != fake_client.temperatures[1]
     assert fake_client.prompts[0] != fake_client.prompts[1]
     assert "이전 시도" in fake_client.prompts[1]
@@ -231,7 +231,7 @@ def test_recommendation_id_is_derived_from_alert_id():
     같은 알림을 재처리하면(백엔드 재시도·배치 재실행) 같은 ID 가 나와야 한다. 옛
     `REC-{uuid4[:12]}` 는 매번 달라져서 **재발행 payload 를 글자 단위로 대조할 수 없었다.**
 
-    ⚠️ 백엔드 중복 판정에는 영향이 없다 — `Proposal` 한 행에 `alert_id` 가 같이 들어가고
+    백엔드 중복 판정에는 영향이 없다 — `Proposal` 한 행에 `alert_id` 가 같이 들어가고
        그 컬럼에 유니크 제약이 걸려 있어 중복 INSERT 가 구조적으로 불가능하다. 이 변경의
        값어치는 **우리 쪽 재현·테스트**에 있다.
     """

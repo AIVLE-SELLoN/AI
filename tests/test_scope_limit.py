@@ -1,4 +1,4 @@
-"""담당: 지인 — 스코프 한계 원인(§4-3) 처리 테스트.
+"""담당: 지인 — 스코프 한계 원인(`docs/agent3_logic.md` §4-3) 처리 테스트.
 
 실물_염색_편차·실제_원단_문제는 텍스트·이미지 어느 쪽으로도 해결 안 되는 원인이라
 run()이 라우팅·생성을 아예 건너뛰고 고정 문구로 조립한다. LLM을 한 번도 안 부르는지
@@ -37,7 +37,7 @@ async def test_run_skips_llm_entirely_for_scope_limit_label(monkeypatch, biased_
     assert result.recommendation_confidence == RecommendationConfidence.LOW
     assert result.evaluator.passed is True
 
-    # grounding=False가 정직한 기록(대조할 근거 자체가 없음, 2026-07-27 이전엔 True로
+    # grounding=False가 정직한 기록(대조할 근거 자체가 없음, 예전엔 True로
     # 잘못 기록되던 버그). consistency/actionability는 고정 문구를 실제로 검사한 값 —
     # 우연이 아니라 SCOPE_LIMIT_PROPOSED_TEXT·rationale이 실제로 그 기준을 만족해서 True.
     assert result.evaluator.checks == EvaluatorChecks(grounding=False, consistency=True, actionability=True)

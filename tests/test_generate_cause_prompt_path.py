@@ -52,7 +52,7 @@ def test_missing_prompt_is_fatal_not_a_warning():
 
     실제 실행으로 확인한다 — 인자 파싱부터 종료까지가 대상이라 함수 단위로는 못 잡는다.
     """
-    # ⚠️ 자식에 `PYTHONUTF8=1` 을 박지 않는다. 박으면 cp949 콘솔에서 이 가드 메시지가
+    # 자식에 `PYTHONUTF8=1` 을 박지 않는다. 박으면 cp949 콘솔에서 이 가드 메시지가
     #    화면에 못 닿는 문제가 가려진다 — 실제로 그렇게 초록이던 적이 있다.
     #    스크립트가 `force_utf8_output()` 으로 스스로 해결해야 한다(아래 배선 테스트).
     #    `encoding` 은 명시한다. 자식은 UTF-8 로 쓰는데 `text=True` 만 주면 **부모가**
@@ -167,7 +167,7 @@ def _run(*args: str, io_encoding: str) -> subprocess.CompletedProcess:
 def test_help_survives_cp949_console():
     """cp949 콘솔에서 `--help` 가 죽지 않는다.
 
-    ⚠️ pytest 안에서는 검증할 수 없다 — 캡처된 stdout 에는 `reconfigure` 가 없어서
+    pytest 안에서는 검증할 수 없다 — 캡처된 stdout 에는 `reconfigure` 가 없어서
        `force_utf8_output()` 이 조용히 건너뛰고, 그 스트림은 원래 utf-8 이라 호출을
        통째로 지워도 통과한다. 그래서 서브프로세스로 진짜 cp949 콘솔을 만든다.
 

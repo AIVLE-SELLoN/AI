@@ -64,7 +64,7 @@ def test_cause_llm_model_default_is_gpt_4o():
 @pytest.mark.asyncio
 async def test_choose_tool_raises_llm_parse_error_when_arguments_never_parse():
     """tool 인자 JSON이 계속 깨져 있으면 LlmCallError가 아니라 LlmParseError로
-    구분해서 던져야 한다(2026-07-27 발견·수정) — complete_json()과 같은 관례를
+    구분해서 던져야 한다 — complete_json()과 같은 관례를
     따르지 않고 있던 버그. 재시도를 다 써도 파싱 자체가 안 되는 상황을 재현한다.
     """
     broken_call = _FakeToolCall(name="use_copy_draft", arguments="{이건 유효한 JSON이 아님")

@@ -3,7 +3,7 @@
 실제 ChromaDB·임베딩 API 는 안 쓴다(테스트 비용 0 원칙). `upsert_documents` 인자만
 잡아서 **회사 축이 문서 ID 와 metadata 에 실제로 실리는지** 본다.
 
-🔴 조회 쪽 반쪽은 `tests/test_retrieve_context.py` 에 있다
+조회 쪽 반쪽은 `tests/test_retrieve_context.py` 에 있다
    (`test_detail_page_lookup_is_scoped_to_the_current_company`). **둘은 짝이고 서로를
    대신하지 못한다** — ID 만 격리하면 조회가 새고, 조회만 막으면 시딩이 서로를 덮는다.
 """
@@ -64,7 +64,7 @@ def _seed(monkeypatch, tmp_path, company=None, foreign_rows=()):
 
 
 def test_seed_ids_carry_the_company_axis(monkeypatch, tmp_path):
-    """🔴 문서 ID 에 회사 접두어가 붙는다.
+    """문서 ID 에 회사 접두어가 붙는다.
 
     `{product_group_id}:{channel}:{aspect}` 는 **회사 안에서만** 유일하다 —
     `product_group_id` 가 회사별 시퀀스라 A사 P001 과 B사 P001 이 같은 ID 를 받는다.
@@ -79,7 +79,7 @@ def test_seed_ids_carry_the_company_axis(monkeypatch, tmp_path):
 
 
 def test_seed_metadata_carries_the_company_axis(monkeypatch, tmp_path):
-    """🔴 metadata 에도 같은 값이 실린다 — **조회 필터가 이 키를 본다.**
+    """metadata 에도 같은 값이 실린다 — **조회 필터가 이 키를 본다.**
 
     ID 접두어만으로는 조회가 안 막힌다(`retrieve_context` 는 metadata `where` 로 좁힌다).
     그래서 ID 테스트와 **별개로** 잡는다 — 한쪽만 지웠을 때 다른 쪽이 통과하면 안 된다.
@@ -114,9 +114,9 @@ def test_seed_uses_the_configured_company_id(monkeypatch, tmp_path):
     assert call["metadatas"][0][TENANT_METADATA_KEY] == "SLN-test"
 
 
-# ── 구형 문서 리포트 (서영님 #84 리뷰 후속) ────────────────────────
+# ── 구형 문서 리포트 ───────────────────────────────────────────────
 def test_reports_legacy_documents_after_seeding(monkeypatch, tmp_path, capsys):
-    """🔴 구형 문서 수를 **시딩 직후 전수로** 알려준다.
+    """구형 문서 수를 **시딩 직후 전수로** 알려준다.
 
     런타임(`_log_detail_page_miss`)에서 하지 않는 이유: "이 컬렉션이 구형인가" 는
     알림별이 아니라 **컬렉션 전체의 성질**이라, 미스마다 다시 계산하면 같은 답을 수십 번
@@ -133,7 +133,7 @@ def test_reports_legacy_documents_after_seeding(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "구형 문서 2건" in out
     assert "--all-companies" in out, "확인 방법을 같이 알려줘야 한다"
-    # 🔴 정리 수단으로 파괴적 명령을 권하지 않는다.
+    # 정리 수단으로 파괴적 명령을 권하지 않는다.
     assert "`--reset` 을 쓰지 마세요" in out
 
 
@@ -167,7 +167,7 @@ def test_stays_quiet_when_there_are_no_legacy_documents(monkeypatch, tmp_path, c
 
 
 def test_legacy_report_asks_for_metadatas_only(monkeypatch, tmp_path):
-    """🔴 본문 전송을 없앤다 — `include=["metadatas"]`.
+    """본문 전송을 없앤다 — `include=["metadatas"]`.
 
     상세페이지가 건당 700자대라, 빼지 않으면 수십 건만 훑어도 수만 자가 오간다
     (실측: 50건 = 36,090자). 리포트는 metadata 만 있으면 되므로 본문은 낭비다.

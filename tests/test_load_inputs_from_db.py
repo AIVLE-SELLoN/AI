@@ -43,7 +43,7 @@ def _db(tmp_path, cs_rows=(), review_rows=(), classified=(), prompt_version=None
         review_rows: (id, product_group_id, channel_id, content, created_at)
         classified: (item_id, source, [(aspect, sentiment), ...])
         prompt_version: 분류 결과에 남길 프롬프트 버전. 기본은 **활성 버전** — 워커가
-            실제로 적재하는 값이다. 탐지가 활성 버전 행만 읽으므로(2026-08-12), 이걸
+            실제로 적재하는 값이다. 탐지가 활성 버전 행만 읽으므로, 이걸
             안 채우면 픽스처가 "옛 분류기로 분류된 DB" 가 되어 전 테스트가 cutover
             에러로 죽는다. 그 상태 자체를 검증하는 테스트만 다른 값을 넘긴다.
             모델·파이프라인 축은 항상 활성 값으로 채운다(프롬프트 축만 흔들어 본다).
@@ -93,7 +93,7 @@ def _at(day: date, hour: int = 12) -> str:
 
 
 def test_unclassified_document_stays_in_the_denominator(tmp_path):
-    """🔴 분류 결과가 없는 문서도 documents 에 남는다 — **분모의 정본은 원문이다.**
+    """분류 결과가 없는 문서도 documents 에 남는다 — **분모의 정본은 원문이다.**
 
     여기서 빠지면 부정률의 분모가 깎여 p값이 부풀려진다(오탐 방향). aspect 0개가
     정상 출력인 리뷰에서 특히 크다.
@@ -184,7 +184,7 @@ def test_window_none_reads_everything(tmp_path):
 
 
 def test_day_boundary_uses_kst_not_utc(tmp_path):
-    """🔴 날짜 절단은 KST 다(확정 문서 §3). **오프셋이 다른 행으로 재야 진짜 검사다.**
+    """날짜 절단은 KST 다(확정 문서 §3). **오프셋이 다른 행으로 재야 진짜 검사다.**
 
     목 프로듀서는 전부 `+09:00` 으로 저장하므로, KST 문자열로만 재면 UTC 로 잘라도
     똑같이 통과한다(문자열의 날짜 부분이 이미 KST 라서). 그래서 **같은 순간을 UTC
@@ -215,15 +215,14 @@ def test_day_boundary_uses_kst_not_utc(tmp_path):
 
 
 def test_naive_timestamp_is_read_as_kst_not_host_local():
-    """🔴 오프셋 없는 값은 **KST 로 못박는다** — 실행 호스트 시간대를 보면 안 된다.
+    """오프셋 없는 값은 **KST 로 못박는다** — 실행 호스트 시간대를 보면 안 된다.
 
     `.astimezone()` 만 쓰면 naive 값을 호스트 로컬로 해석해서, 같은 행이 KST
     노트북에선 08-28 · UTC 컨테이너에선 08-29 가 된다. §3(KST 경계)을 지키려고 만든
     함수가 배포 환경에 따라 §3 을 어기는 셈이다.
 
-    ⚠️ **이 테스트는 KST 머신에서는 옛 코드로도 통과한다** — 호스트가 마침 KST 라서다.
+    **이 테스트는 KST 머신에서는 옛 코드로도 통과한다** — 호스트가 마침 KST 라서다.
        무는 건 UTC 컨테이너다. 그래도 계약을 글로만 두지 않으려고 박아둔다.
-       (2026-08-11 리뷰 ⑥)
     """
     got = inputs._to_kst("2026-08-28T20:00:00")
 
@@ -240,11 +239,11 @@ def test_offset_aware_timestamp_is_converted_not_relabeled():
 
 
 def test_naive_timestamp_is_kst_even_on_a_utc_host():
-    """🔴 위 계약을 **UTC 호스트에서** 확인한다 — 개발 머신이 KST 라 여기서만 잡힌다.
+    """위 계약을 **UTC 호스트에서** 확인한다 — 개발 머신이 KST 라 여기서만 잡힌다.
 
     같은 프로세스에서 재면 호스트가 마침 KST 라 옛 코드(`.astimezone()` 만)도 통과한다.
     그래서 `TZ=UTC` 로 서브프로세스를 띄워서 잰다 — 배치를 컨테이너(UTC)로 올렸을 때
-    실제로 도는 조건이다. 인코딩 배선을 서브프로세스로 검증한 PR #46 과 같은 방식이다.
+    실제로 도는 조건이다. 인코딩 배선을 서브프로세스로 검증한 것과 같은 방식이다.
     """
     code = (
         "from app.batch import inputs;"
@@ -273,7 +272,7 @@ def test_naive_timestamp_is_kst_even_on_a_utc_host():
 def test_unmapped_product_is_dropped_with_a_warning(tmp_path, caplog):
     """상품매핑이 안 붙은 원문은 어느 상품의 분모인지 모른다 — 세지 않고 건수만 남긴다.
 
-    ⚠️ 수집기(`dropped=`)를 같이 본다. **경고와 수집기는 같은 사실의 두 출구**라
+    수집기(`dropped=`)를 같이 본다. **경고와 수집기는 같은 사실의 두 출구**라
        한쪽만 잠그면 나머지가 조용히 빠진다 — 실제로 이 카운터는 오랫동안 경고 로그로만
        나갔고, 아무도 CronJob 로그를 안 봐서 미매핑이 늘어도 몰랐다.
     """
@@ -294,7 +293,7 @@ def test_unmapped_product_is_dropped_with_a_warning(tmp_path, caplog):
 
 
 def test_public_loader_contract_stays_a_pair(tmp_path):
-    """🔴 공개 로더는 **2-tuple 을 유지한다** — 수집기를 안 줘도 형태가 안 바뀐다.
+    """공개 로더는 **2-tuple 을 유지한다** — 수집기를 안 줘도 형태가 안 바뀐다.
 
     같은 seam 의 반대쪽(`scripts/golden_inputs.load_golden_inputs`)과 시그니처가 맞아야
     하고, `(items, documents)` 로 언패킹하는 호출부가 저장소에 9곳 있다
@@ -313,7 +312,7 @@ def test_public_loader_contract_stays_a_pair(tmp_path):
 
 
 def test_source_only_db_fails_loudly(tmp_path):
-    """🔴 원문만 적재되고 워커를 안 돌린 DB — **조용히 0건으로 넘어가면 안 된다.**
+    """원문만 적재되고 워커를 안 돌린 DB — **조용히 0건으로 넘어가면 안 된다.**
 
     실제로 나는 상태다(`mock_producer` 만 돌린 직후). 분자가 통째로 비면 알림이 한
     건도 안 나오는데 배치는 정상 종료해서, 무동작이 성공으로 보고된다.
@@ -329,7 +328,7 @@ def test_source_only_db_fails_loudly(tmp_path):
 
 
 def test_child_table_alone_missing_fails_loudly(tmp_path):
-    """🔴 `classified_item` 은 있고 **`classified_item_aspect` 만 없는** DB 도 막는다.
+    """`classified_item` 은 있고 **`classified_item_aspect` 만 없는** DB 도 막는다.
 
     위 `test_source_only_db_fails_loudly` 는 두 테이블이 **다 없는** 경우라, 가드를
     `classified_item` 하나만 보게 좁혀도 그대로 통과한다 — 이 경우가 그 구멍이다.
@@ -361,7 +360,7 @@ def test_legacy_schema_fails_before_the_query(tmp_path):
     """확정본과 다른 구조로 남은 DB 는 조회가 아니라 여기서 막는다.
 
     `CREATE TABLE IF NOT EXISTS` 가 이미 있는 테이블을 그대로 두기 때문에, 안 막으면 한참
-    뒤 `no such column` 으로 터져 원인이 메시지에 안 드러난다(PR #37 워커와 같은 함정).
+    뒤 `no such column` 으로 터져 원인이 메시지에 안 드러난다(워커와 같은 함정).
     """
     path = tmp_path / "raw.db"
     conn = sqlite3.connect(str(path))
@@ -375,14 +374,14 @@ def test_legacy_schema_fails_before_the_query(tmp_path):
 
 
 def test_missing_unique_constraint_also_stops_the_batch(tmp_path):
-    """🔴 컬럼은 확정본과 같고 **UNIQUE 제약만 빠진** DB 도 여기서 막는다.
+    """컬럼은 확정본과 같고 **UNIQUE 제약만 빠진** DB 도 여기서 막는다.
 
     이 사유는 위와 **증상이 다르다.** 컬럼이 옛것이면 조회가 `no such column` 으로 시끄럽게
     죽지만, 제약이 빠진 경우는 **아무것도 안 죽고** 재분류가 같은 `(item_id, aspect)` 를
     중복 적재해 탐지 분자가 부푼다 — 오탐 방향이라 조용하다. 인프라가 낡은 문서로 테이블을
-    먼저 세워 뒀을 때 나오는 모양이다(2026-08-18).
+    먼저 세워 뒀을 때 나오는 모양이다.
 
-    ⚠️ **메시지가 사유를 단정하면 안 된다.** 예전 문구("8/7 확정 이전 스키마")를 그대로 두면
+    **메시지가 사유를 단정하면 안 된다.** 예전 문구("8/7 확정 이전 스키마")를 그대로 두면
        제약이 빠진 사람이 스키마 버전을 뒤지게 된다 — 그래서 문구도 같이 고정한다.
     """
     path = tmp_path / "raw.db"
@@ -405,15 +404,15 @@ def test_missing_unique_constraint_also_stops_the_batch(tmp_path):
     assert "classified_item_aspect" in str(exc.value)
 
 
-# ── 분류기 버전 (2026-08-12) ────────────────────────────────────────────────
+# ── 분류기 버전 ─────────────────────────────────────────────────────────────
 #
 # 탐지는 35일(현재 7 + 과거 28)을 한 번에 읽는다. 그 사이 분류기가 바뀌면 한 검정 안에
 # 두 라벨러의 결과가 섞인다. **혼재는 표본이 준 것이 아니라 검정 전제가 깨진 것**이라
-# 경고가 아니라 중단으로 처리한다(fail-closed, 2026-08-12 결정).
+# 경고가 아니라 중단으로 처리한다(fail-closed).
 
 
 def test_partially_stale_window_stops_the_batch(tmp_path):
-    """🔴 일부만 옛 버전이어도 **세운다** — 경고로 넘기면 오탐이 난다.
+    """일부만 옛 버전이어도 **세운다** — 경고로 넘기면 오탐이 난다.
 
     필터가 분자에만 걸리기 때문이다. 분모(documents)는 원문이라 필터를 안 타므로, 과거
     구간이 옛 버전이면 기준선 부정률이 작아지는 게 아니라 **0 이 되고 그대로 오탐**이 된다
@@ -472,7 +471,7 @@ def test_null_prompt_version_counts_as_old(tmp_path):
 
 
 def test_full_stale_window_fails_loudly(tmp_path):
-    """🔴 윈도우가 통째로 옛 프롬프트면 **세운다** — 조용한 무동작이 제일 나쁘다.
+    """윈도우가 통째로 옛 프롬프트면 **세운다** — 조용한 무동작이 제일 나쁘다.
 
     그냥 두면 분자가 통째로 비어 배치가 "이상 없음"으로 정상 종료한다. 그건 관측 결과가
     아니라 우리가 라벨을 못 읽은 것인데, 로그만 보면 구분이 안 된다. 미탐 방향이라
@@ -490,7 +489,7 @@ def test_full_stale_window_fails_loudly(tmp_path):
 
 
 def test_model_change_alone_makes_rows_unreadable(tmp_path, monkeypatch):
-    """🔴 프롬프트가 그대로여도 **모델이 바뀌면** 그 행은 안 읽는다.
+    """프롬프트가 그대로여도 **모델이 바뀌면** 그 행은 안 읽는다.
 
     프롬프트 축만 거르면 "같은 프롬프트, 다른 라벨러" 가 통째로 새어 나간다 — `LLM_MODEL`
     을 갈아끼우면 프롬프트 파일은 한 글자도 안 바뀌었는데 라벨이 달라진다. 그 행들이 35일
@@ -547,9 +546,9 @@ def test_unclassified_window_does_not_trip_the_version_guard(tmp_path):
 
 # ── 혼재 윈도우의 다운스트림 결과 (통합) ────────────────────────────────────
 #
-# 🔴 **위 단위 테스트들은 "필터가 거르는가"까지만 본다.** 걸러진 결과로 실제 검정을 돌리면
+# **위 단위 테스트들은 "필터가 거르는가"까지만 본다.** 걸러진 결과로 실제 검정을 돌리면
 #    무슨 일이 나는지는 안 본다 — 그 자리가 비어서 "경고만 하고 통과" 설계의 오탐을
-#    놓쳤다(2026-08-12 리뷰 §1). 여기서 다운스트림까지 본다.
+#    놓쳤다. 여기서 다운스트림까지 본다.
 
 
 def _mixed_window_db(tmp_path, *, past_stale: bool):
@@ -607,7 +606,7 @@ def test_control_window_without_stale_raises_no_alert(tmp_path):
 
 
 def test_mixed_window_stops_before_detection(tmp_path):
-    """🔴 과거 구간만 옛 버전이면 **탐지 전에 세운다.**
+    """과거 구간만 옛 버전이면 **탐지 전에 세운다.**
 
     경고만 하고 통과시키면 여기서 최대 강도 오탐이 난다. 필터가 분자에만 걸려서
     `past_neg` 만 0 이 되고 `past_total` 은 그대로 남기 때문이다 — 기준선이 작아지는 게
@@ -626,7 +625,7 @@ def test_mixed_window_stops_before_detection(tmp_path):
 
 
 def test_blank_content_stale_row_does_not_deadlock_the_batch(tmp_path):
-    """🔴 **불변식: 배치를 세우는 집합 ⊆ `--reclassify-stale` 이 고칠 수 있는 집합.**
+    """**불변식: 배치를 세우는 집합 ⊆ `--reclassify-stale` 이 고칠 수 있는 집합.**
 
     워커의 stale 조회는 `TRIM(content) <> ''` 를 요구한다. 탐지의 cutover 가드가 같은
     조건을 안 걸면, 본문이 빈 원문의 stale 분류행 하나로 **빠져나갈 길이 없는 교착**이 난다:
@@ -637,7 +636,7 @@ def test_blank_content_stale_row_does_not_deadlock_the_batch(tmp_path):
 
     에러가 시키는 `--reclassify-stale` 은 "재분류할 문서가 없습니다"로 끝나고, 손으로
     SQL 을 치는 것 말고는 방법이 없다. 경고만 하던 때는 무해했고 fail-closed 로 바뀌면서
-    교착이 됐다. (2026-08-12 리뷰 §1 후속)
+    교착이 됐다.
     """
     db = _db(
         tmp_path,
@@ -700,13 +699,13 @@ async def test_batch_runs_end_to_end_on_the_db_loader(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_batch_summary_reports_dropped_inputs(tmp_path, monkeypatch):
-    """🔴 미매핑 건수가 **배치 요약과 화면까지** 간다.
+    """미매핑 건수가 **배치 요약과 화면까지** 간다.
 
     로더가 세는 것만으로는 절반이다 — 지금까지도 세고는 있었고 `logger.warning` 으로만
     나갔다. **CronJob 로그는 아무도 안 본다**(이 저장소가 반복해서 전제해 온 사실)라,
     운영에서 상류 매핑이 밀려도 조용했다. 배선이 빠지면 그 상태로 돌아간다.
 
-    ⚠️ 종료코드는 **안 건드린다**. 미매핑은 상류의 데이터 갭이지 우리 고장이 아니고,
+    종료코드는 **안 건드린다**. 미매핑은 상류의 데이터 갭이지 우리 고장이 아니고,
        재매핑은 사람이 손으로 하는 흐름이라 배치를 세워도 할 수 있는 게 없다.
     """
     db = _db(

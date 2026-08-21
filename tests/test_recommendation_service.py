@@ -5,7 +5,7 @@
 **끊겨도 결과 객체는 똑같이 나오는데 실제로는 image_guide 가 근거를 잃는다**(조용한 열화).
 
 라우터 테스트 4개는 이 함수를 통째로 monkeypatch 하므로 이 끊김을 못 잡는다.
-`fetch_linked_inquiries(alert)` 호출을 지워도 그쪽은 전부 통과한다. (2026-08-11 리뷰 ④)
+`fetch_linked_inquiries(alert)` 호출을 지워도 그쪽은 전부 통과한다.
 
 LLM·DB 를 안 탄다 — `pipeline.run` 과 조회 함수를 몽키패치로 막는다.
 """
@@ -21,7 +21,7 @@ async def test_cs_inquiries_are_fetched_and_passed_to_pipeline(monkeypatch, bias
     """조회한 CS 원문이 `run()` 까지 그대로 간다.
 
     body 로 alert 만 받으므로 여기서 조회하지 않으면 `cs_quotes` 가 0건이 되고,
-    image_guide 로 라우팅된 알림은 **항상 None** 이 된다(2026-08-10 이전 동작).
+    image_guide 로 라우팅된 알림은 **항상 None** 이 된다(조회를 붙이기 전 동작).
     """
     fetched = ["원문-1", "원문-2"]
     seen: dict = {}
@@ -81,14 +81,14 @@ async def test_missing_raw_db_degrades_with_a_warning(monkeypatch, biased_alert,
 async def test_unreachable_postgres_degrades_too(
     monkeypatch, biased_alert, caplog, exc, why
 ):
-    """🔴 같은 degrade 가 **Postgres 에서도** 돌아야 한다 — 안 그러면 여기만 500 이다.
+    """같은 degrade 가 **Postgres 에서도** 돌아야 한다 — 안 그러면 여기만 500 이다.
 
     위 테스트가 잠그는 `FileNotFoundError` 는 **sqlite 파일 부재**의 모양이다. raw DB 가
     Postgres 로 가면 같은 상황(못 읽는다)이 `psycopg.Error` 로 오는데 그건
     `FileNotFoundError` 가 아니라, `connection_error_types()` 가 빠지면 이 엔드포인트가
     조용히 500 으로 바뀐다 — 배치의 exit 1 회귀와 **같은 결함이 문만 다른 것**이다.
 
-    ⚠️ **두 베이스를 다 넣었다** — `OperationalError` 로 좁히면 `UndefinedTable` 이
+    **두 베이스를 다 넣었다** — `OperationalError` 로 좁히면 `UndefinedTable` 이
        혼자 실패해서 알려준다.
     """
 

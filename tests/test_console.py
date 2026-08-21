@@ -2,7 +2,7 @@
 
 배선(각 진입점이 실제로 부르는지)은 그 진입점 테스트가 본다 —
 `tests/test_batch_daily.py::test_main_switches_encoding_before_printing`.
-헬퍼만 덮으면 호출 한 줄이 빠져도 안 죽는다(2026-08-07 리뷰 지적).
+헬퍼만 덮으면 호출 한 줄이 빠져도 안 죽는다.
 """
 
 import sys
@@ -11,7 +11,7 @@ from app.core.console import force_utf8_output
 
 
 def test_output_streams_are_switched_to_utf8(monkeypatch):
-    """⚠️ 출력이 나가기 전에 stdout·stderr 을 UTF-8 로 돌린다.
+    """출력이 나가기 전에 stdout·stderr 을 UTF-8 로 돌린다.
 
     윈도우 기본 콘솔(cp949)에 `⚠️`(U+26A0)·`ℹ️`(U+2139)·`❌`(U+274C)·`—`(U+2014)가
     없어서 진입점들이 `UnicodeEncodeError` 로 터졌다. **할 일을 다 끝낸 뒤에** 죽는 게

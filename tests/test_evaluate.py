@@ -1,6 +1,6 @@
 """담당: 지인 — pipeline.evaluate() 테스트.
 
-3기준(grounding/consistency/actionability) 전부 실제 판정으로 구현됐다(2026-07-27).
+3기준(grounding/consistency/actionability) 전부 실제 판정으로 구현됐다.
 각 기준을 독립적으로 실패시켜서 다른 기준까지 덩달아 깨지지 않는지 확인한다 —
 그래서 기본 `_proposal()` 헬퍼는 나머지 두 기준을 항상 만족하는 값을 깔아두고,
 테스트마다 하나씩만 무너뜨린다.
@@ -73,7 +73,10 @@ def test_copy_draft_fails_when_current_text_is_hallucinated(biased_alert):
 
 
 def test_image_guide_checks_against_cs_quotes_not_detail_page(biased_alert):
-    """image_guide는 detail_text가 뭐든 상관없이 cs_quotes(고객 원문)만 본다(§4-3 도구별 분리)."""
+    """image_guide는 detail_text가 뭐든 상관없이 cs_quotes(고객 원문)만 본다.
+
+    `docs/agent3_logic.md` §4-3 의 도구별 근거 분리 그대로다.
+    """
     proposal = _proposal(ProposalType.IMAGE_GUIDE, "사진이랑 색이 너무 달라요")
     context = _context(
         detail_text="이 값과 달라도 상관없음",
@@ -87,7 +90,7 @@ def test_image_guide_checks_against_cs_quotes_not_detail_page(biased_alert):
 
 
 def test_image_guide_rejects_quoting_the_stat_summary(biased_alert):
-    """🔴 회귀 테스트 — image_guide grounding 자기참조 버그(2026-08-09 수정).
+    """회귀 테스트 — image_guide grounding 자기참조 버그.
 
     cs_summary("CS 20건 중 14건이 …")는 **우리 코드가 만든 문장**이다. 예전엔 그게
     grounding 대조 대상이어서, LLM이 그 문장을 그대로 되풀이하면 무조건 통과했다 —
@@ -120,7 +123,7 @@ def test_image_guide_fails_when_no_cs_quotes_available(biased_alert):
 
 @pytest.mark.parametrize("proposal_type", [ProposalType.IMAGE_GUIDE, ProposalType.COPY_DRAFT])
 def test_quoting_no_detail_text_itself_never_passes(biased_alert, proposal_type):
-    """🔴 회귀 테스트 — 근거가 없을 때 "정보 없음"을 인용하면 통과하던 버그(PR #40 리뷰).
+    """회귀 테스트 — 근거가 없을 때 "정보 없음"을 인용하면 통과하던 버그.
 
     `has_evidence("정보 없음", "정보 없음")` 은 True 다. 그리고 프롬프트가 모델에게
     **정확히 그 값을 쓰라고 지시**하고 있었다(copy_draft_v1.md, 구 image_guide_v2.md).
@@ -157,7 +160,7 @@ def test_fails_when_rationale_not_consistent_with_root_cause(biased_alert):
 def test_passes_with_naturally_paraphrased_rationale(biased_alert):
     """실제 LLM은 라벨을 언더스코어째로 안 베끼고 자연스럽게 풀어쓴다 — 그래도 통과해야 한다.
 
-    2026-07-27 버그: 라벨 전체("사진_색감_오차")를 한 덩어리로 대조해서, 자연스럽게
+    옛 버그: 라벨 전체("사진_색감_오차")를 한 덩어리로 대조해서, 자연스럽게
     풀어쓴 문장은 전부 실패 처리됐었다(API 호출 없이 정적으로 재현·수정 확인).
     """
     proposal = _proposal(
