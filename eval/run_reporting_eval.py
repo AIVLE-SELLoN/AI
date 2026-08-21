@@ -1,4 +1,4 @@
-"""실험⑦ 리포팅 정량 실험 — 검증기 민감도 / 1차 통과율 / 위반 유형 분포 / 프롬프트 버전 비교.
+"""실험⑧ 리포팅 정량 실험 — 검증기 민감도 / 1차 통과율 / 위반 유형 분포 / 프롬프트 버전 비교.
 
 ## 무엇을 재나
 
@@ -651,7 +651,7 @@ def main() -> None:
     #    **import 만 해도** 터졌다. 사유 전문은 `app/core/console.py`.
     force_utf8_output()
 
-    parser = argparse.ArgumentParser(description="실험⑦ 리포팅 정량 실험")
+    parser = argparse.ArgumentParser(description="실험⑧ 리포팅 정량 실험")
     parser.add_argument(
         "--live", action="store_true", help="실제 LLM 생성으로 1차 통과율 측정 (과금)"
     )

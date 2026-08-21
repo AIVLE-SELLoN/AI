@@ -1,4 +1,4 @@
-"""월간 JSD 산술 재현 - 골든 매핑·분류 라벨을 쓰는 평가 전용 러너.
+"""실험⑨ 월간 JSD 산술 재현 — 골든 매핑·분류 라벨을 쓰는 평가 전용 러너.
 
 원본 ``data/raw.db``는 읽기 전용으로 열고 메모리 DB에 복사한다. 메모리 복사본에만
 골든 상품 매핑과 aspect/sentiment 라벨을 주입하므로 운영 DB를 수정하지 않는다.
@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from app.core import raw_schema
+from app.core.console import force_utf8_output
 from app.core.raw_db import connect_readonly
 from app.reporting.monthly_aggregator import (
     aggregate_monthly_inputs,
@@ -169,4 +170,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    force_utf8_output()
     main()
