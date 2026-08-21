@@ -6,11 +6,11 @@
 잘 맞히는 패턴"이 우연히 겹칠 위험이 있다. relabel_300(진짜 사람 리뷰)을 기준선 삼아,
 llm_generated_700이 부자연스럽게 더 잘 맞으면(10%p 이상 차이) 의심 신호로 본다.
 
-동시에 §6 B안 도구(compute_leak_map)를 재사용해 llm_generated_700이 few-shot과
+동시에 유출 점검 도구(compute_leak_map)를 재사용해 llm_generated_700이 few-shot과
 안 겹치는지도 확인한다 — 생성 시점에 few-shot을 안 봤다고 했지만, 우연히 비슷한
 문장이 나왔을 가능성은 별도로 검증해야 한다.
 
-평가셋 파일이 둘로 나뉘어 있는 이유 (2026-08-09)
+평가셋 파일이 둘로 나뉘어 있는 이유
 --------------------------------------------------
 AI Hub 71630 이용정책상 원문을 저장소에 두지 않는다. 그래서 relabel_300 은 두 파일이다.
 
@@ -53,7 +53,7 @@ import app.classification.service as classification_service  # noqa: E402
 
 
 def load_raw_texts(text_path: Path) -> dict[str, str]:
-    """AI Hub 원문을 `id → raw_text` 로 읽는다 (2026-08-09 분리).
+    """AI Hub 원문을 `id → raw_text` 로 읽는다.
 
     `relabel_300_labels.csv` 에는 **사람이 매긴 라벨만** 있고 원문이 없다. AI Hub 71630
     이용정책상 원문을 저장소에 두지 않기 때문이다(.gitignore 참고). 채점하려면 원문이
@@ -165,7 +165,7 @@ def score_multi_aspect(rows: list[dict], predictions: dict[str, list[dict]]) -> 
     """다중aspect 행 채점 — 모든 aspect가 다 맞아야 완전정답, aspect별 부분점수도 집계.
 
     score()는 true_aspect가 단일 문자열이라고 가정하므로 여기서는 재사용 안 하고
-    별도 로직으로 채점한다(explode 계약 검증 목적 그 자체 — §4 결정사항②).
+    별도 로직으로 채점한다(explode 계약 검증 목적 그 자체).
     """
     if not rows:
         return {"n": 0, "note": "다중aspect 표본 없음"}
@@ -286,8 +286,8 @@ def print_comparison(relabel_result: dict, generated_result: dict) -> None:
         sent_warn = "  ⚠️ aspect_f1과 방향이 반대 — 단순 '같은모델이라 유리함'으로는 설명 안 됨, 원인 추가 조사 필요"
     print(f"\nsentiment_accuracy — relabel_300: {r_sent:.4f} / generated_700: {g_sent:.4f}  (차이 {sent_gap:+.4f}){sent_warn}")
 
-    # 🆕 2026-08-06 — F1은 extra aspect(fp)에 영향받지만, recall은 안 받는다(tp/(tp+fn)이라
-    # fp가 아예 안 들어감). relabel_300처럼 단일라벨 데이터는 recall로 다시 봐야 공정하다.
+    # F1은 extra aspect(fp)에 영향받지만 recall은 안 받는다(tp/(tp+fn)이라 fp가 아예 안
+    # 들어감). relabel_300처럼 단일라벨 데이터는 recall로 다시 봐야 공정하다.
     r_recall, r_prec = relabel_result["single"]["aspect_recall"], relabel_result["single"]["aspect_precision"]
     g_recall, g_prec = generated_result["single"]["aspect_recall"], generated_result["single"]["aspect_precision"]
     recall_gap = g_recall - r_recall
@@ -305,7 +305,7 @@ def print_comparison(relabel_result: dict, generated_result: dict) -> None:
         print(f"{label}: full_row_accuracy={result['full_row_accuracy']:.4f} "
               f"aspect_level_accuracy={result['aspect_level_accuracy']:.4f} (n={result['n_scored']})")
 
-    # 🆕 오답 상세 — 원인 진단용(도메인 불일치 가설 확인)
+    # 오답 상세 — 원인 진단용(도메인 불일치 가설 확인)
     print("\n--- relabel_300 오답 샘플(최대 15건, 원인 진단용) ---")
     mismatches = relabel_result["single"].get("mismatches", [])
     for m in mismatches[:15]:
@@ -370,15 +370,15 @@ async def main_async(args: argparse.Namespace) -> None:
     )
     print_comparison(relabel_result, generated_result)
 
-    # 🆕 결과 저장 — mismatches 포함, 나중에 원인 진단용으로 다시 열어볼 수 있게
+    # 결과 저장 — mismatches 포함, 나중에 원인 진단용으로 다시 열어볼 수 있게
     import json
     from datetime import datetime
 
     from app.core.constants import KST
 
-    # 🔴 relabel_300 은 AI Hub 71630 리뷰다. 원문(raw_text)을 결과 JSON에 남기면 그 파일이
-    # 곧 원문 사본이 되고, 커밋 시 AI Hub 이용정책 위반 소지가 생긴다(.gitignore 의
-    # review_eval_*.json 주석과 같은 사유 — 2026-08-09 발견해 여기서도 막는다).
+    # relabel_300 은 AI Hub 71630 리뷰다. 원문(raw_text)을 결과 JSON에 남기면 그 파일이 곧
+    # 원문 사본이 되고, 커밋 시 AI Hub 이용정책 위반 소지가 생긴다(.gitignore 의
+    # review_eval_*.json 주석과 같은 사유).
     # inquiry_id 는 남기므로 원문이 필요하면 relabel_300.csv 를 조회하면 된다.
     # llm_generated_700 은 LLM 생성물이라 해당 없음 — 그대로 둔다.
     for m in relabel_result["single"].get("mismatches", []):
@@ -402,10 +402,9 @@ async def main_async(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
-    #    (`description=__doc__`)에 `—` 가 있다. 예전 모듈 최상단
-    #    `sys.stdout.reconfigure()` 는 stderr 를 안 바꿔 로깅·traceback 이 그대로 깨졌다.
-    #    `app/core/console.py`.
+    # 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    # (`description=__doc__`)에 `—` 가 있다. 모듈 최상단 `sys.stdout.reconfigure()` 로는
+    # 부족하다 — stderr 를 안 바꿔 로깅·traceback 이 그대로 깨진다. `app/core/console.py`.
     force_utf8_output()
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

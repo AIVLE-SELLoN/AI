@@ -1,4 +1,4 @@
-"""llm_generated_700 sentiment 재라벨링 — 2026-08-09 확정 정책 반영.
+"""llm_generated_700 sentiment 재라벨링 — 확정 정책 반영.
 
 배경
 ----
@@ -17,8 +17,8 @@
 (감성 조작적 정의 + 검수 게이트 + 페르소나 배제), 이 스크립트는 **이미 생성된 700건의
 텍스트는 그대로 두고 라벨만** 정책에 맞게 다시 매긴다.
 
-🔴 순환논리 경고 — 반드시 읽을 것
-----------------------------------
+순환논리 경고 — 반드시 읽을 것
+------------------------------
 재라벨링을 분류기와 같은 모델로 하면, 그 라벨로 그 모델을 채점하는 건 순환논리다.
 sentiment accuracy가 자동으로 높게 나오고 그 수치는 아무 의미가 없다.
 
@@ -40,8 +40,8 @@ sentiment accuracy가 자동으로 높게 나오고 그 수치는 아무 의미�
     # 3) 사람이 큐 검토 후 실제 반영 (백업 자동 생성)
     python scripts/relabel_generated_sentiment.py --apply
 
-전체 재현 절차 (2026-08-09 반영분을 그대로 다시 만들려면)
---------------------------------------------------------
+전체 재현 절차 (반영분을 그대로 다시 만들려면)
+---------------------------------------------
     # ① 재현성 확인된 축만 3회 실행 다수결로 반영
     python scripts/relabel_generated_sentiment.py --apply-from \
         eval/eval_sets/relabel_runs/run1.csv run2.csv run3.csv
@@ -77,7 +77,7 @@ DEFAULT_MANUAL = "eval/eval_sets/relabel_manual_review.csv"
 # 검토 대상에서 아예 빠진다. 그 행들을 정책 확정 뒤 규칙으로 훑어 여기에 기록한다.
 DEFAULT_SWEEP = "eval/eval_sets/relabel_policy_sweep.csv"
 
-# 3회 실행(2026-08-09)에서 실행 간 재현성이 확인된 축 — 이것만 자동 반영한다.
+# 3회 실행에서 실행 간 재현성이 확인된 축 — 이것만 자동 반영한다.
 #   색상·사이즈·소재 100% / 오배송 98.7% / 파손 96.7%  ←  자동
 #   기타 80.7% / 다중aspect 82.0%                    ←  손검토(build_manual_queue)
 STABLE_ASPECTS_DEFAULT = "파손,오배송,색상,사이즈,소재"
@@ -177,7 +177,7 @@ def scan_by_rules(rows: list[dict]) -> dict:
 
 
 def make_backup(infile: Path) -> Path:
-    """덮어쓰지 않는 백업 (2026-08-09 추가).
+    """덮어쓰지 않는 백업.
 
     이전엔 항상 `.csv.bak` 하나에 복사해서, 반영을 두 번 하면(자동 반영 → 손검토 반영)
     두 번째가 **첫 백업(=원본)을 덮어써** 원본이 사라졌다. 비어 있는 번호를 찾아 쓴다.
@@ -283,8 +283,8 @@ async def run(
     progress = {"done": 0, "total": len(rows)}
     out, missing = await relabel_chunks(client, rows, chunk_size, concurrency, progress)
 
-    # 배치 응답이 JSON은 멀쩡한데 item_id를 통째로 빠뜨리는 일이 있다(2026-08-06 검증에서
-    # relabel_300 15건이 그랬음). 무응답을 최종 실패로 두면 결과가 응답 포맷 운에 좌우되므로
+    # 배치 응답이 JSON은 멀쩡한데 item_id를 통째로 빠뜨리는 일이 있다(검증에서 relabel_300
+    # 15건이 그랬다). 무응답을 최종 실패로 두면 결과가 응답 포맷 운에 좌우되므로
     # 작은 청크 → 1건씩으로 재시도한다.
     row_by_id = {r["id"]: r for r in rows}
     remaining = list(dict.fromkeys(missing))
@@ -338,7 +338,7 @@ async def run(
     for row in rows:
         if row["id"] not in new_by_id or new_by_id[row["id"]] == row["sentiment"]:
             continue
-        # --only-aspects: 재현성이 확인된 축만 자동 반영한다(2026-08-09 3회 실행 검증).
+        # --only-aspects: 재현성이 확인된 축만 자동 반영한다(3회 실행으로 검증).
         # 기타(80.7%)·다중aspect(82.0%)는 실행마다 판정이 뒤집혀 손검토로 돌린다.
         if only_aspects is not None and row["aspect"] not in only_aspects:
             skipped += 1
@@ -361,7 +361,7 @@ def build_manual_queue(
     only_aspects: set[str] | None,
     accept_agree: bool = False,
 ) -> None:
-    """여러 번 실행한 큐를 합쳐 **손검토 대상**을 뽑는다 (2026-08-09 추가).
+    """여러 번 실행한 큐를 합쳐 **손검토 대상**을 뽑는다.
 
     `--only-aspects`에서 제외된 축(기타·다중aspect)은 실행마다 판정이 뒤집혀서
     자동 반영을 못 한다. 대신 N회 실행 결과를 모아 이렇게 가른다:
@@ -400,9 +400,9 @@ def build_manual_queue(
             "majority": majority,
             # 사람이 채우는 칸. 비워두면 그 행은 반영 안 됨(= gold 유지).
             "final": majority if prefilled else "",
-            # 🔴 이 칸이 순환논리 가드다. --accept-agree 로 미리 채운 행은 "모델이 정한 값"이지
+            # 이 칸이 순환논리 가드다. --accept-agree 로 미리 채운 행은 "모델이 정한 값"이지
             # 사람이 검토한 값이 아니다. 둘을 파일에서 구분 못 하면 "모델 출력으로 모델
-            # 평가셋을 만드는" 순환이 그대로 뚫린다(2026-08-09 PR 리뷰 지적).
+            # 평가셋을 만드는" 순환이 그대로 뚫린다.
             # 검토자는 확인한 행의 이 값을 'human' 으로 바꿔야 한다.
             "decided_by": "model_majority" if prefilled else "",
             "verdict": verdict,
@@ -439,7 +439,7 @@ def build_manual_queue(
 
 
 def check_text_drift(rows: list[dict], recorded: dict[str, str], label: str) -> list[str]:
-    """저장된 라벨이 **다른 문장**에 붙는 걸 막는다 (2026-08-09 PR 리뷰 지적).
+    """저장된 라벨이 **다른 문장**에 붙는 걸 막는다.
 
     `GEN-####` 는 생성 시점의 **생존 행 순번**이라 내용 기반이 아니다. 검수 게이트가
     실패 행을 버리므로 재생성하면 같은 ID에 다른 문장이 들어간다. 그 상태로 예전
@@ -463,7 +463,7 @@ def check_text_drift(rows: list[dict], recorded: dict[str, str], label: str) -> 
 def apply_from_runs(
     infile: Path, run_files: list[Path], only_aspects: set[str] | None
 ) -> None:
-    """이미 끝난 실행들의 **다수결**을 CSV에 반영한다 (LLM 호출 없음, 2026-08-09 추가).
+    """이미 끝난 실행들의 **다수결**을 CSV에 반영한다 (LLM 호출 없음).
 
     `--apply`는 재라벨을 처음부터 다시 돌리므로 매번 다른 결과가 나온다(실행 간 판정이
     갈리는 축이 있기 때문). 이미 N회 돌려놓고 그 결과를 검토했다면, **검토한 그 결과**를
@@ -515,7 +515,7 @@ def apply_from_runs(
 
 
 def apply_sweep(infile: Path, sweep_file: Path) -> None:
-    """정책 전수 스캔 결과를 반영한다 (LLM 호출 없음, 2026-08-09 PR 리뷰 반영).
+    """정책 전수 스캔 결과를 반영한다 (LLM 호출 없음).
 
     `relabel_policy_sweep.csv` 는 `id, old_sentiment, new_sentiment, decided_by, reason,
     raw_text` 를 들고 있어, **어떤 행이 왜 바뀌었는지 재현 가능**하다. 이 경로가 없으면
@@ -561,7 +561,7 @@ def apply_sweep(infile: Path, sweep_file: Path) -> None:
 
 
 def apply_manual(infile: Path, review_file: Path) -> None:
-    """손검토 CSV의 `final` 칸을 읽어 반영한다 (LLM 호출 없음, 2026-08-09 추가).
+    """손검토 CSV의 `final` 칸을 읽어 반영한다 (LLM 호출 없음).
 
     검토자는 `final` 에 최종 라벨만 적으면 된다. 다중 aspect 행은 aspect 개수·순서에
     맞춰 쉼표로 (예: aspect 가 `기타,파손` 이면 `-1,0`).
@@ -613,7 +613,7 @@ def apply_manual(infile: Path, review_file: Path) -> None:
     print(f"손검토 파일 {len(reviewed)}행 읽음 — {review_file}")
     print(f"  반영 {changed}건 / final 이 gold 와 같아 변화 없음 {unchanged}건")
 
-    # 🔴 순환논리 가드를 반영 시점에도 보이게 한다 (2026-08-09 PR 리뷰 반영).
+    # 순환논리 가드를 반영 시점에도 보이게 한다.
     # decided_by 가 비어 있으면 "사람이 봤는지 모르는 행"이다. 기록만 해두고 조용히
     # 넘어가면 컬럼을 둔 의미가 없다.
     by = Counter((r.get("decided_by") or "(빈칸)").strip() or "(빈칸)" for r in reviewed)
@@ -640,10 +640,10 @@ def apply_manual(infile: Path, review_file: Path) -> None:
 
 
 def main() -> None:
-    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
-    #    (`description=__doc__` · `--only-aspects` · `--dry-run`)에 `—`·`🔴` 가 있다.
-    #    예전 모듈 최상단 `sys.stdout.reconfigure()` 는 stderr 를 안 바꿔 로깅·traceback 이
-    #    그대로 깨졌다. `app/core/console.py`.
+    # 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    # (`description=__doc__` · `--only-aspects` · `--dry-run`)에 `—`·`🔴` 가 있다.
+    # 모듈 최상단 `sys.stdout.reconfigure()` 로는 부족하다 — stderr 를 안 바꿔 로깅·traceback
+    # 이 그대로 깨진다. `app/core/console.py`.
     force_utf8_output()
 
     ap = argparse.ArgumentParser(

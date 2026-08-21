@@ -31,8 +31,8 @@ from pathlib import Path
 
 # scripts/ 는 저장소 루트의 형제 폴더 — app 패키지를 절대경로로 import하려면
 # 저장소 루트를 sys.path에 넣어야 함(실행 방식에 따라 자동으로 안 잡힐 수 있어서 명시).
-# ⚠️ 아래 `generate_cs_review_data` 는 형제 모듈이라 `scripts/` 가 sys.path 에 있어야 하는데,
-#    ROOT 를 0번에 끼워도 `scripts/` 는 뒤에 그대로 남으므로 둘 다 해결된다.
+# 아래 `generate_cs_review_data` 는 형제 모듈이라 `scripts/` 가 sys.path 에 있어야 하는데,
+# ROOT 를 0번에 끼워도 `scripts/` 는 뒤에 그대로 남으므로 둘 다 해결된다.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.console import force_utf8_output
@@ -51,7 +51,7 @@ def day_to_date_str(day: int, anchor_date: datetime, anchor_day: int = 60) -> st
 def count_actual(data_rows: list[dict], label_rows: list[dict], channel: str, aspect: str,
                   date_start: str, date_end: str, date_field: str, channel_product_id: str) -> tuple[int, int]:
     """(총 건수, 부정 건수) 실측.
-    서영님 정의(§3 [0]): 분모="해당 (sku,channel)의 총 문의수" — aspect 조건 없음.
+    확정 정의: 분모="해당 (sku,channel)의 총 문의수" — aspect 조건 없음.
     그래서 총건수는 aspect 무관하게 세고, 부정건수만 "이 케이스의 aspect + sentiment=-1"로 좁혀 센다."""
     total, neg = 0, 0
     for d, l in zip(data_rows, label_rows):
@@ -113,8 +113,8 @@ def verify_case(case_id: str, anomaly_rows: list[dict], data_by_source: dict,
 
 
 def main():
-    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
-    #    (`description=__doc__` · `--golden-dir`)에 `—` 가 있다. `app/core/console.py`.
+    # 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    # (`description=__doc__` · `--golden-dir`)에 `—` 가 있다. `app/core/console.py`.
     force_utf8_output()
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

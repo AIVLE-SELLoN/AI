@@ -1,12 +1,12 @@
 """
 input_orders.csv 생성기
 ========================
-Mock 데이터 정의서 §2(input_orders.csv — 대시보드·채널 비교 전용, 이상탐지 미사용) 기준.
+Mock 데이터 정의서 기준(input_orders.csv — 대시보드·채널 비교 전용, 이상탐지 미사용).
 
 컬럼: channel, channel_product_id, order_date, quantity, order_amount
 규칙: 42상품 × 3채널 × 60일, 요일 효과 + 자연 노이즈.
-      ⚠️ config_anomaly.csv는 참조하지 않음 — 이 파일은 "V2 부정률 방식" 이상탐지가
-      안 쓰는 데이터라, 스파이크(케이스) 연동이 문서에 명시적으로 불필요하다고 돼있음.
+      config_anomaly.csv 는 참조하지 않는다 — 이 파일은 "V2 부정률 방식" 이상탐지가
+      안 쓰는 데이터라, 스파이크(케이스) 연동이 문서상 불필요하다.
       대신 channel_product_id는 상품매핑 결과(golden_mapping.csv)에서 그대로 가져와
       다른 산출물(input_cs_inquiries.csv 등)과 ID 체계를 일관되게 유지한다.
 
@@ -119,8 +119,8 @@ def write_csv(rows: list[dict], path: Path):
 
 
 def main():
-    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
-    #    (`description=__doc__`)에 `—`·`⚠️` 가 있다. `app/core/console.py`.
+    # 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    # (`description=__doc__`)에 `—`·`⚠️` 가 있다. `app/core/console.py`.
     force_utf8_output()
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

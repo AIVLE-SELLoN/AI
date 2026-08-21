@@ -1,6 +1,6 @@
 """월간 리포트 일괄 생성 — 매월 1일 배치 진입점.
 
-## 스케줄 (2026-08-03 확정)
+## 스케줄
 
     대상 데이터   전월 1일 00:00:00.00 ~ 말일 23:59:59.99
     시작         당월 1일 **00:00** — 집계부터 시작한다
@@ -15,11 +15,11 @@
 
 ## 산출물이 월 1개인 이유
 
-PDF 는 상품별이 아니라 **전 상품을 합친 1개**다(2026-08-03 확정). UI 는 첫 페이지만 띄우고
+PDF 는 상품별이 아니라 **전 상품을 합친 1개**다. UI 는 첫 페이지만 띄우고
 전체는 presigned URL 로 내려받는다. 따라서
   - S3 객체도, 콜백도 **월 1건**이다.
   - 상품 하나가 실패해도 합본은 나간다. 빠진 상품의 안내는 갈 곳이 둘로 나뉜다
-    (표지는 2026-08-04 에 없앴다 — 첫 페이지가 곧 첫 상품의 리포트다):
+    (표지는 없다 — 첫 페이지가 곧 첫 상품의 리포트다):
       · **보류**(VOC 부족) → 합본 안에 **전용 보류 페이지**가 상품마다 생긴다
       · **실패**(생성 오류) → 지면에는 안 남고 콜백 `notice_message` 로만 알린다
 
@@ -102,9 +102,9 @@ class DeadlineTracker:
         self.deadline: datetime | None = None
         if deadline:
             hour, minute = (int(x) for x in deadline.split(":"))
-            # 🔴 **마감 시각은 KST 벽시계다.** 운영 타임라인이 "1일 08:00 까지"로 KST 기준인데
-            #    `datetime.now().astimezone()` 이면 그 08:00 이 **호스트 로컬 08:00** 이 된다 —
-            #    UTC 컨테이너에서는 KST 17:00 이라 마감 경고가 9시간 늦게 뜬다. (2026-08-13)
+            # **마감 시각은 KST 벽시계다.** 운영 타임라인이 "1일 08:00 까지"로 KST 기준인데
+            # `datetime.now().astimezone()` 이면 그 08:00 이 **호스트 로컬 08:00** 이 된다 —
+            # UTC 컨테이너에서는 KST 17:00 이라 마감 경고가 9시간 늦게 뜬다.
             now = datetime.now(KST)
             target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
             # 마감이 이미 지난 시각이면 다음 날로 본다(자정 넘겨 도는 집계 단계 대응)
@@ -149,13 +149,13 @@ def _month_path(directory: Path, report_month: str, suffix: str) -> Path:
 
 
 def run_aggregate(args: argparse.Namespace) -> int:
-    # ⚠️ **연결은 `raw_db.connect_readonly()` 를 경유한다.** 집계는 읽기만 하므로 읽기
-    #    전용이 맞고, 여기서 `sqlite3.connect` 를 직접 부르면 `RAW_DB_HOST` 가 설정된
-    #    운영에서 **접속 정보를 파일 경로로 해석해** 못 붙는다.
+    # **연결은 `raw_db.connect_readonly()` 를 경유한다.** 집계는 읽기만 하므로 읽기 전용이
+    # 맞고, 여기서 `sqlite3.connect` 를 직접 부르면 `RAW_DB_HOST` 가 설정된 운영에서 **접속
+    # 정보를 파일 경로로 해석해** 못 붙는다.
     #
-    # 🔴 **Postgres 실패는 `FileNotFoundError` 가 아니다** — `psycopg.Error` 는 그 하위가
-    #    아니라서 한쪽만 잡으면 다른 백엔드에서 raw traceback 이 나간다. 목록은
-    #    `raw_db.connection_error_types()` 가 준다(`app/batch/daily.py` 와 같은 형태).
+    # **Postgres 실패는 `FileNotFoundError` 가 아니다** — `psycopg.Error` 는 그 하위가 아니라서
+    # 한쪽만 잡으면 다른 백엔드에서 raw traceback 이 나간다. 목록은
+    # `raw_db.connection_error_types()` 가 준다(`app/batch/daily.py` 와 같은 형태).
     tracker = DeadlineTracker(args.deadline)
     try:
         conn = raw_db.connect_readonly(args.db)
@@ -282,7 +282,7 @@ async def run_generate(args: argparse.Namespace) -> int:
     if not args.dry_run:
         # 성공분만 모아 **월 1개 합본**을 만든다. 여기서 빠진 상품은 보류/실패로 갈리는데,
         # 보류는 아래 held 로 넘겨 **전용 페이지**가 되고 실패는 콜백 문구로만 나간다
-        # (표지는 2026-08-04 에 없앴다).
+        # (표지는 없다).
         items = [
             {"input": r["input"], "output": r["output"]}
             for r in results
@@ -320,10 +320,10 @@ async def run_generate(args: argparse.Namespace) -> int:
         # 다시 쏘면 되는 상태다(멱등 키가 report_id 라 메인이 upsert 한다). 예외를 올리면
         # 요약 파일조차 안 남아 무엇이 성공했는지 알 수 없게 된다.
         #
-        # ⚠️ 다만 **종료코드는 반드시 비-0 이어야 한다**(아래 참고). "계속 도는 것"과
-        #    "성공으로 보고하는 것"은 다르다 — 발행이 실패하면 백엔드에 리포트 행이 안 생기고
-        #    셀러에게 메일이 안 나가는데, exit 0 이면 cron·k8s Job 이 성공으로 기록한다.
-        #    **월 1회 배치라 다음 기회가 한 달 뒤다.** (app/batch/daily.py 와 같은 규칙)
+        # 다만 **종료코드는 반드시 비-0 이어야 한다**(아래 참고). "계속 도는 것"과 "성공으로
+        # 보고하는 것"은 다르다 — 발행이 실패하면 백엔드에 리포트 행이 안 생기고 셀러에게
+        # 메일이 안 나가는데, exit 0 이면 cron·k8s Job 이 성공으로 기록한다. **월 1회 배치라
+        # 다음 기회가 한 달 뒤다.** (app/batch/daily.py 와 같은 규칙)
         trace_id = new_trace_id()
         try:
             await publish_report_generated(result.callback, args.month, trace_id)
@@ -372,10 +372,9 @@ async def run_generate(args: argparse.Namespace) -> int:
     # 합본이 실패했으면 그게 곧 배치 실패다(산출물이 없다).
     if book.get("status", "SKIPPED").startswith("FAILED"):
         return 1
-    # ⚠️ 발행 실패도 배치 실패다. 여기서 0 을 돌려주면 화면엔 "합본 SUCCESS" 만 보이고
-    #    cron·k8s Job 이 성공으로 기록하는데, 정작 백엔드엔 리포트 행이 없고 셀러에게
-    #    메일이 안 나간다. 월 1회 배치라 다음 기회가 한 달 뒤다.
-    #    (SKIPPED·dry-run 은 "published" 키 자체가 없어 True 로 읽혀 통과한다)
+    # 발행 실패도 배치 실패다. 여기서 0 을 돌려주면 화면엔 "합본 SUCCESS" 만 보이고 cron·k8s
+    # Job 이 성공으로 기록하는데, 정작 백엔드엔 리포트 행이 없고 셀러에게 메일이 안 나간다.
+    # (SKIPPED·dry-run 은 "published" 키 자체가 없어 True 로 읽혀 통과한다)
     if not book.get("published", True):
         return 1
     failed_products = sum(v for k, v in counts.items() if k.startswith("FAILED"))
@@ -386,10 +385,10 @@ async def run_generate(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
-    # ⚠️ **출력보다 먼저, 그리고 `main()` 안에서** 부른다.
+    # **출력보다 먼저, 그리고 `main()` 안에서** 부른다.
     #
-    #    이 스크립트의 로그·도움말·요약 print 에 `—`(U+2014)가 들어 있는데 cp949 에는
-    #    없어서, 한국어 윈도우 콘솔에서는 `--help` 조차 UnicodeEncodeError 로 죽는다.
+    # 이 스크립트의 로그·도움말·요약 print 에 `—`(U+2014)가 들어 있는데 cp949 에는 없어서,
+    # 한국어 윈도우 콘솔에서는 `--help` 조차 UnicodeEncodeError 로 죽는다.
     #
     #    `if __name__ == "__main__"` 이 아니라 여기 두는 이유: 거기 두면 **배선을 테스트로
     #    고정할 수 없다.** 호출 한 줄이 빠져도 아무것도 안 깨지는데, 하필 이 인코딩이

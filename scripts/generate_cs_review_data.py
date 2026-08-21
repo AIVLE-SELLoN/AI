@@ -27,8 +27,8 @@ input_cs_inquiries.csv / golden_cs_labels.csv / input_reviews.csv / golden_revie
         --anchor-date 2026-08-28 \
         --seed 11
 
---anchor-date: Day 60에 해당하는 실제 날짜(발표일). 지인님 요청사항(§1-2) —
-발표일이 유동적이라 Day 번호만 config에 두고, 실제 날짜는 실행 시점에 주입.
+--anchor-date: Day 60에 해당하는 실제 날짜(발표일). 발표일이 유동적이라 Day 번호만
+config에 두고, 실제 날짜는 실행 시점에 주입한다.
 """
 
 import argparse
@@ -60,7 +60,7 @@ DEFAULT_CAUSE_PROMPT = Path(__file__).resolve().parent / "prompts" / "generate_c
 CAUSE_PLACEHOLDER_PREFIX = "[PLACEHOLDER:cause:"
 
 # ────────────────────────────────────────────────────────────────
-# 배경(비케이스) 상품용 baseline — 서영님 시나리오 정의서 §1 표 + 기타=3%(합의)
+# 배경(비케이스) 상품용 baseline — 시나리오 정의서 표 + 기타=3%(합의)
 # ────────────────────────────────────────────────────────────────
 
 BASELINE_RATE = {
@@ -76,8 +76,8 @@ ASPECTS = list(BASELINE_RATE.keys())
 REVIEW_ASPECTS = ["색상", "사이즈", "소재"]
 """리뷰는 프롬프트2 스코프만 — 파손·오배송·기타 없음.
 
-⚠️ **두 군데에 적지 말 것.** 이 목록의 길이가 `_negative_rate` 의 부정률 배수라,
-   갈리면 라벨이 조용히 틀려진다(라우팅만 갈리던 예전과 다르다)."""
+**두 군데에 적지 말 것.** 이 목록의 길이가 `_negative_rate` 의 부정률 배수라, 갈리면 라벨이
+조용히 틀려진다."""
 CHANNELS = ["COUPANG", "NAVER", "ZIGZAG"]
 SOURCES = ["cs", "review"]
 
@@ -85,11 +85,11 @@ SOURCES = ["cs", "review"]
 # BASELINE_RATE 의 분모 — `--baseline-denominator`
 # ────────────────────────────────────────────────────────────────
 # "total"  : (상품,채널,source) 총문의 중 해당 aspect 부정 비율. **확정 스펙이자 기본값.**
-# "aspect" : 그 aspect 로 배정된 문의 중 부정 비율. 2026-08-09 이전 배경 경로의 동작으로,
-#            옛 데이터를 재현할 때만 쓴다.
+# "aspect" : 그 aspect 로 배정된 문의 중 부정 비율. 배경 경로의 옛 동작이라, 그 시절
+#            데이터를 재현할 때만 쓴다.
 #
 # 왜 total 이 스펙인가 — 세 곳이 이미 total 로 못박혀 있다.
-#   1. 「이상탐지 시나리오 정의서[확정]」 §1: 분모 = 해당 상품의 해당 채널 총 문의 수
+#   1. 「이상탐지 시나리오 정의서[확정]」: 분모 = 해당 상품의 해당 채널 총 문의 수
 #      (최소표본 항목에 "(상품,채널) 총문의(= 분모, aspect 무관)" 라고 직접 적혀 있다)
 #   2. data/config/config_anomaly.csv: SC-001 쿠팡 색상 past_neg=40 / past_total=800.
 #      800 = 28일 x 28건/일 = CS 전체 볼륨이지 색상만의 분모가 아니다.
@@ -99,7 +99,7 @@ SOURCES = ["cs", "review"]
 # past_neg/past_total 로 전체 분모에 정확 건수를 심는데(build_rows_for_window_group),
 # 배경 경로만 aspect 내부 분모로 깔려서 한 파일 안에 규약이 두 개였다.
 #
-# 물증(2026-08-07 감사): TRUE config 33행 전부 past_rate == BASELINE_RATE 일치(33/33),
+# 물증: TRUE config 33행 전부 past_rate == BASELINE_RATE 일치(33/33),
 # 평균 case-past 관측률 5.03% vs 평균 순수 배경 0.85% = 6.04배. 6.04 는 CS aspect 수(6)다.
 BASELINE_DENOMINATOR_TOTAL = "total"
 BASELINE_DENOMINATOR_ASPECT = "aspect"
@@ -112,10 +112,9 @@ def _negative_rate(aspect: str, channel: str, n_aspects: int, denominator: str) 
     비율을 맞추려면 aspect 수만큼 되돌려 곱해야 한다 — 그러지 않으면 전체 분모로 볼 때
     `config / n_aspects` 로 희석된다(CS 1/6, 리뷰 1/3).
 
-    ⚠️ 1.0 을 넘으면 **조용히 자르지 않고 죽는다.** 잘라내면 그 aspect 만 요청보다 낮은
-       부정률로 생성되는데, 그게 정확히 이 함수가 고치려던 "명세와 구현이 조용히 갈리는"
-       문제다. 현재 표의 최대치는 사이즈/NAVER 0.09 x 6 = 0.54 라 여유가 있다.
-       (현진님 리뷰 5차)
+    1.0 을 넘으면 **조용히 자르지 않고 죽는다.** 잘라내면 그 aspect 만 요청보다 낮은 부정률로
+    생성되는데, 그게 정확히 이 함수가 고치려던 "명세와 구현이 조용히 갈리는" 문제다. 현재 표의
+    최대치는 사이즈/NAVER 0.09 x 6 = 0.54 라 여유가 있다.
     """
     rate = BASELINE_RATE[aspect][channel]
     if denominator == BASELINE_DENOMINATOR_TOTAL:
@@ -206,7 +205,7 @@ def day_to_date(day: int, anchor_date: datetime, anchor_day: int = 60) -> dateti
 
 
 # ────────────────────────────────────────────────────────────────
-# 4. ⚠️ TODO — 실제 텍스트 생성 (다음 단계에서 채울 자리)
+# 4. TODO — 실제 텍스트 생성 (다음 단계에서 채울 자리)
 #    - 원인분류 투입분(케이스당 ~30건): LLM 생성 예정
 #    - 분모용 나머지: 템플릿 변형 예정
 #    지금은 자리표시자만 반환.
@@ -432,7 +431,7 @@ def distribute_daily_negatives(total_neg: int, n_days: int, daily_pattern: str,
                 rem_used += extra
         return daily
 
-    # ⚠️ 폴백(spike_count 없는 구버전 config용) — 균등분배 후 잔여를 스파이크일에 역산
+    # 폴백(spike_count 없는 구버전 config용) — 균등분배 후 잔여를 스파이크일에 역산
     base = total_neg // n_days
     daily = [base] * n_days
     non_spike_sum = base * (n_days - 1)
@@ -471,12 +470,12 @@ def build_rows_for_window_group(rows: list[dict], rng: random.Random, pid_map: d
         assert r["past_total"] == first["past_total"] and r["cur_total"] == first["cur_total"], \
             f"같은 그룹인데 past_total/cur_total이 다름: {rows}"
 
-    # ⚠️ set 이면 안 된다. 아래 reserved_neg 가 이 순서를 dict 키 순서로 물려받고,
-    #    그게 "하루치 부정 슬롯을 어느 aspect 가 먼저 가져가나"를 정한다. 파이썬 str 해시는
-    #    PYTHONHASHSEED 를 안 박으면 프로세스마다 무작위라, 같은 코드·같은 seed 로도
-    #    실행마다 색상/파손 순서가 뒤집혀 다른 코퍼스가 나온다. 집계(aspect 별 부정 건수)는
-    #    같아서 verify_counts 도 행수 검산도 통과한다 — 조용히 갈린다.
-    #    dict.fromkeys 면 config 행 순서로 고정되고 `in` 은 그대로 O(1) 이다.
+    # set 이면 안 된다. 아래 reserved_neg 가 이 순서를 dict 키 순서로 물려받고, 그게 "하루치
+    # 부정 슬롯을 어느 aspect 가 먼저 가져가나"를 정한다. 파이썬 str 해시는 PYTHONHASHSEED 를
+    # 안 박으면 프로세스마다 무작위라, 같은 코드·같은 seed 로도 실행마다 색상/파손 순서가
+    # 뒤집혀 다른 코퍼스가 나온다. 집계(aspect 별 부정 건수)는 같아서 verify_counts 도 행수
+    # 검산도 통과한다 — 조용히 갈린다. dict.fromkeys 면 config 행 순서로 고정되고 `in` 은
+    # 그대로 O(1) 이다.
     group_aspects = dict.fromkeys(r["aspect"] for r in rows)  # 이 창에서 부정 몫이 정해진 aspect들
 
     data_rows, label_rows = [], []
@@ -485,9 +484,9 @@ def build_rows_for_window_group(rows: list[dict], rng: random.Random, pid_map: d
         (first["window_start_day"], first["window_end_day"], first["cur_total"], "cur_neg", True),
         (first["window_start_day"] - 28, first["window_start_day"] - 1, first["past_total"], "past_neg", False),
     ]
-    # ⚠️ 순서 반전(서영님 실험⑥ 피드백, 2026-08-05): cause_queue(aspect당 CAUSE_SAMPLE_COUNT개)를
-    # 과거·현재 두 창이 공유하는데, 원래는 과거(28일)가 먼저 돌아서 cause_queue를 거의 다 소진하고
-    # 현재 윈도우(7일)엔 하나도 안 남았음. 운영 [6] 원인분류는 현재 윈도우 텍스트만 읽으므로
+    # 현재 윈도우가 먼저다. cause_queue(aspect당 CAUSE_SAMPLE_COUNT개)를 과거·현재 두 창이
+    # 공유하는데, 과거(28일)가 먼저 돌면 cause_queue를 거의 다 소진해 현재 윈도우(7일)엔 하나도
+    # 안 남는다. 운영 [6] 원인분류는 현재 윈도우 텍스트만 읽으므로
     # (과거 윈도우 cause 텍스트는 어디서도 안 읽음 — 과거는 베이스라인 rate 계산용일 뿐),
     # 현재 윈도우가 cause_queue를 먼저 전부 가져가도록 순서를 바꿈. 배분비율은 100:0(현재:과거)
     # — 과거에 나눠줄 이유가 없음(아무도 안 읽는 텍스트에 유한한 LLM 생성 샘플을 나눠주는 건 낭비).
@@ -499,7 +498,7 @@ def build_rows_for_window_group(rows: list[dict], rng: random.Random, pid_map: d
         spike_day = int(r["spike_day"]) if r.get("spike_day") else None
         spike_count = int(r["spike_count"]) if r.get("spike_count") else None
         cause_dist = parse_cause_distribution(r["cause_distribution"])
-        # ⚠️ cause_distribution 컬럼이 같은 case_id의 모든 채널 행에 동일하게 채워져 있을 수 있음
+        # cause_distribution 컬럼이 같은 case_id의 모든 채널 행에 동일하게 채워져 있을 수 있음
         # (예: NAVER·ZIGZAG처럼 intended_answer=FALSE인 비발화 채널에도 값이 들어있는 경우).
         # 원인분류는 "편중형으로 발화한 채널"에서만 의미가 있으므로(로직 [6]),
         # intended_answer가 TRUE인 행에서만 cause 풀을 실제로 활성화한다.
@@ -510,7 +509,7 @@ def build_rows_for_window_group(rows: list[dict], rng: random.Random, pid_map: d
         if is_cause_pool:
             cause_counts = compute_cause_counts(cause_dist, total=CAUSE_SAMPLE_COUNT)
             cause_queue = list(text_gen.generate_cause_batch(r["case_id"], r["aspect"], cause_counts))
-            # ⚠️ 캐시에 저장된 리스트를 그대로 쓰면 pop(0)이 캐시 원본까지 같이 지워버림
+            # 캐시에 저장된 리스트를 그대로 쓰면 pop(0)이 캐시 원본까지 같이 지워버림
             # (list는 참조 타입) — 반드시 복사본을 만들어서 이번 그룹 전용으로 소모해야 함.
 
         per_aspect[r["aspect"]] = {
@@ -558,14 +557,14 @@ def build_rows_for_window_group(rows: list[dict], rng: random.Random, pid_map: d
 
                 if item_aspect is None:
                     # 이 그룹의 모든 aspect 부정 몫을 다 채웠음 — 나머지는 배경(무관한 문의)
-                    # ⚠️ 리뷰는 프롬프트2 스코프(색상·사이즈·소재)만 — 파손·오배송·기타 없음
+                    # 리뷰는 프롬프트2 스코프(색상·사이즈·소재)만 — 파손·오배송·기타 없음
                     bg_aspect_pool = REVIEW_ASPECTS if source == "review" else ASPECTS
                     item_aspect = rng.choice(bg_aspect_pool)
                     if item_aspect in group_aspects:
-                        # ⚠️ 이 그룹에 속한 aspect는 이미 위에서 "정확 건수"로 부정 몫을 다 심었음
-                        # (plant 원칙=결정론). 배경에서 또 -1이 나오면 안 됨.
-                        # ⚠️ 이 가드는 baseline_denominator 와 무관하게 유지해야 한다 —
-                        #    여기서 -1 이 새면 config 의 cur_neg/past_neg 가 깨져 intended_answer 가 흔들린다.
+                        # 이 그룹에 속한 aspect는 이미 위에서 "정확 건수"로 부정 몫을 다
+                        # 심었으므로(plant 원칙=결정론) 배경에서 또 -1이 나오면 안 된다.
+                        # 이 가드는 baseline_denominator 와 무관하게 유지해야 한다 — 여기서
+                        # -1 이 새면 config 의 cur_neg/past_neg 가 깨져 intended_answer 가 흔들린다.
                         sentiment = rng.choice([0, 1])
                     else:
                         item_rate = _negative_rate(
@@ -602,7 +601,7 @@ def build_rows_for_window_group(rows: list[dict], rng: random.Random, pid_map: d
                     })
                     label_rows.append({
                         "review_id": rid, "true_aspect": item_aspect, "true_sentiment": sentiment,
-                        # ⚠️ 항상 False — templates.yaml의 각 리뷰 문장은 단일 aspect·단일 감성만
+                        # 항상 False — templates.yaml의 각 리뷰 문장은 단일 aspect·단일 감성만
                         # 담아서 만들어지므로(한 리뷰 안에서 같은 aspect가 상반된 감성으로 충돌하는
                         # 경우를 애초에 생성하지 않음), 이 Mock 데이터로는 mixed_signal=True 케이스를
                         # 재현하지 못한다. 프롬프트2의 mixed_signal 정확도는 71630 평가셋(ver1~3
@@ -635,10 +634,10 @@ def get_hot_channels(anomaly_groups: dict) -> dict[str, set[tuple]]:
     Mock 정의서 산출 근거: 발화 채널은 케이스 창 밖에서도 일 28건(CS)/10건(리뷰)로 유지
     (같은 상품의 비발화 채널·순수 배경 상품은 일반 볼륨 6건/2건 그대로).
 
-    ⚠️ 대부분 케이스(36개 중 34개)가 CS만 테스트하고 리뷰는 SC-034·035 2개만 명시적으로
-    갖고 있음. 근데 "핫한 상품"이면 CS·리뷰 둘 다 평소 볼륨이 높아야 자연스러우므로,
-    CS가 발화 채널인 (채널)은 같은 상품의 리뷰에도 그대로 미러링한다 —
-    리뷰에 이상 신호가 없어도(config에 없어도), 평소 활발한 볼륨 자체는 유지."""
+    대부분 케이스(36개 중 34개)가 CS만 테스트하고 리뷰는 SC-034·035 2개만 명시적으로 갖고
+    있다. "핫한 상품"이면 CS·리뷰 둘 다 평소 볼륨이 높아야 자연스러우므로, CS가 발화 채널인
+    (채널)은 같은 상품의 리뷰에도 그대로 미러링한다 — 리뷰에 이상 신호가 없어도(config에
+    없어도) 평소 활발한 볼륨 자체는 유지한다."""
     hot: dict[str, set[tuple]] = {}
     for group_rows in anomaly_groups.values():
         first = group_rows[0]
@@ -721,13 +720,13 @@ def build_rows_for_product_background(gid: str, rng: random.Random, pid_map: dic
 
 
 # ────────────────────────────────────────────────────────────────
-# 7. ⚠️ TODO — 검산 (Fisher → BH-FDR → min_delta, config의 intended_answer와 대조)
+# 7. TODO — 검산 (Fisher → BH-FDR → min_delta, config의 intended_answer와 대조)
 # ────────────────────────────────────────────────────────────────
 
 def validate_against_config(anomaly_rows: list[dict], generated_cs_labels: list[dict],
                              generated_review_labels: list[dict]) -> dict:
     """TODO: 다음 단계에서 구현.
-    순서 반드시 준수(서영님 §1-1): ① 풀 배치 구성 → ② Fisher 단측 p값 →
+    순서 반드시 준수: ① 풀 배치 구성 → ② Fisher 단측 p값 →
     ③ BH-FDR(q=0.05) → ④ min_delta(3%p) AND → ⑤ intended_answer と assert(공백은 스킵).
     m = 1,464 (42상품×36검정 − 보류채널4개×12검정), 보류는 채널 단위로 통째로 제외."""
     print("  ⚠️ validate_against_config() 미구현 — 스텁만 존재. 다음 단계에서 구현 예정.")
@@ -768,9 +767,9 @@ def main():
     ap.add_argument("--golden-mapping-dir", default=None,
                      help="golden_mapping.csv 위치(생략 시 --mapping-dir와 동일 — 하위호환)")
     ap.add_argument("--templates", default="templates.yaml", help="분모용(denom) 텍스트 템플릿 사전")
-    # ⚠️ 스크립트 위치 기준으로 잡는다. cwd 기준이면 저장소 루트에서 돌릴 때 못 찾고,
-    #    못 찾으면 cause 텍스트가 [PLACEHOLDER:cause:색상:사진*색감*오차] 로 나간다.
-    #    원인 라벨이 본문에 박혀 [6] 원인분류가 문장을 읽는 게 아니라 답을 베끼게 된다.
+    # 스크립트 위치 기준으로 잡는다. cwd 기준이면 저장소 루트에서 돌릴 때 못 찾고, 못 찾으면
+    # cause 텍스트가 [PLACEHOLDER:cause:색상:사진*색감*오차] 로 나간다. 원인 라벨이 본문에 박혀
+    # [6] 원인분류가 문장을 읽는 게 아니라 답을 베끼게 된다.
     ap.add_argument("--cause-prompt", default=str(DEFAULT_CAUSE_PROMPT),
                      help="원인분류 투입분 생성 프롬프트")
     ap.add_argument("--cause-cache", default="cause_text_cache.json", help="cause 텍스트 캐시(재실행 시 재호출 방지)")
@@ -848,9 +847,8 @@ def main():
         else:
             review_data.extend(data_rows); review_labels.extend(label_rows)
 
-    # 🆕 60일 연속 서비스 재현 — 케이스 상품도 "자기 케이스 창 밖" 날짜는 배경 수준으로 채움.
-    # 순수 배경 상품(4개)은 애초에 케이스가 없으니 covered_days가 비어있어서 60일 전부가 채워짐
-    # (기존 동작과 동일). 이 부분이 이번에 새로 추가된 "구멍 메우기".
+    # 60일 연속 서비스 재현 — 케이스 상품도 "자기 케이스 창 밖" 날짜는 배경 수준으로 채운다.
+    # 순수 배경 상품(4개)은 애초에 케이스가 없으니 covered_days가 비어 60일 전부가 채워진다.
     covered_days = get_covered_days(anomaly_groups)
     hot_channels_by_product = get_hot_channels(anomaly_groups)
     all_products = [p["golden_group_id"] for p in products]

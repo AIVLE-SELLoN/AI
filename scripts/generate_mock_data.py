@@ -66,8 +66,9 @@ SIZE_POOL = ["S", "M", "L", "XL", "FREE"]
 
 SCENARIOS = ("정상일치", "정규화필요", "완전누락")
 
-# ── 채널별 상품명 파생 (지인님 원칙: 원래는 LLM 생성이 맞음. 크레딧 확보 전까지 임시로
-#    동의어 사전 기반 템플릿 치환 사용. LLM 예산 확보되면 이 함수만 교체하면 됨) ──
+# ── 채널별 상품명 파생 ────────────────────────────────────────────────────
+# 원래는 LLM 생성이 맞고, 크레딧 확보 전까지 임시로 동의어 사전 기반 템플릿 치환을 쓴다.
+# LLM 예산이 잡히면 이 함수만 교체하면 된다.
 SYNONYM_MAP = {
     "원피스": ["원피스", "드레스"],
     "니트": ["니트", "스웨터"],
@@ -147,7 +148,7 @@ class NameGenerator:
 
     캐시 파일(concept_name → 파생명 리스트)을 두는 이유:
     같은 concept_name에 대해 재실행할 때마다 API를 다시 부르면 비용·시간 낭비.
-    한 번 생성한 건 캐시에 저장해두고 재사용한다(지인님 원칙 §비용통제: 결과 캐싱).
+    한 번 생성한 건 캐시에 저장해두고 재사용한다(비용 통제 원칙: 결과 캐싱).
     """
 
     def __init__(self, cache_path: str = "channel_name_cache.json", use_llm: bool = True):
@@ -292,7 +293,7 @@ def generate(products: list[dict], seed: int, price_variance: float, name_gen: "
             for size in sizes:
                 for ch in ("COUPANG", "NAVER", "ZIGZAG"):
                     variant_counter += 1
-                    vrid = f"VR-{variant_counter:04d}"  # ← opaque, 상품/채널 정보 없음 (지인님 포맷)
+                    vrid = f"VR-{variant_counter:04d}"  # opaque — 상품/채널 정보 없음
                     scen = scenarios[ch]
 
                     golden_rows.append({
@@ -313,7 +314,7 @@ def generate(products: list[dict], seed: int, price_variance: float, name_gen: "
                         "channel_option_name": option_str,
                         "sale_price": sale,
                         "original_price": original,
-                        # ⚠️ golden_group_id, mock_scenario_tag 는 여기 넣지 않는다 (답 노출 방지)
+                        # golden_group_id, mock_scenario_tag 는 여기 넣지 않는다 (답 노출 방지)
                     })
 
     return golden_rows, raw_rows
@@ -399,9 +400,9 @@ def write_csv(rows: list[dict], path: Path):
 # ────────────────────────────────────────────────────────────────
 
 def main():
-    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
-    #    (`description=__doc__` · `--golden-outdir` · `--name-cache`)에 `—` 가 있다.
-    #    `app/core/console.py`.
+    # 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    # (`description=__doc__` · `--golden-outdir` · `--name-cache`)에 `—` 가 있다.
+    # `app/core/console.py`.
     force_utf8_output()
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

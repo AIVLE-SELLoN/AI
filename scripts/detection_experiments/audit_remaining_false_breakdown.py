@@ -306,9 +306,9 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    # 🔴 첫 문장이어야 한다 — 사설 `sys.stdout.reconfigure()` 를 대체한다(stderr 미변경 ·
-    #    `contextlib.suppress` 부재). ⚠️ `async def main()` 이라 `main()` 안이 아니라 **여기**다
-    #    (`tests/test_console_encoding.py::_entry_body` 참고). `app/core/console.py`.
+    # 첫 문장이어야 한다 — 사설 `sys.stdout.reconfigure()` 를 대체한다(stderr 미변경 ·
+    # `contextlib.suppress` 부재). `async def main()` 이라 `main()` 안이 아니라 **여기**다
+    # (`tests/test_console_encoding.py::_entry_body` 참고). `app/core/console.py`.
     force_utf8_output()
 
     asyncio.run(main())

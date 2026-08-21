@@ -88,7 +88,7 @@ async def setup() -> None:
     from app.core.mq_consumer import FEEDBACK_BINDING, INBOUND_QUEUE
 
     settings = get_settings()
-    # ⚠️ **연결보다 먼저**. 확인이 연결 뒤에 있으면 운영 브로커에 접속은 이미 한 뒤다.
+    # **연결보다 먼저**. 확인이 연결 뒤에 있으면 운영 브로커에 접속은 이미 한 뒤다.
     assert_local_broker(settings)
 
     connection = await connect_robust(
@@ -121,10 +121,10 @@ async def setup() -> None:
 
 
 if __name__ == "__main__":
-    # 🔴 첫 문장이어야 한다. 완료 메시지의 `—`(U+2014)가 cp949 에 없어서, 큐를 다 만들어 놓고
-    #    마지막 print 에서 죽어 **성공이 exit 1 로 보고**됐다. 그러면 종료코드가 성공과
-    #    "가드에 막혀 아무것도 안 함"을 구분하지 못한다. (app/core/console.py 참고)
-    # ⚠️ import 를 모듈 최상단으로 올렸다 — 함수 안에 두면 배선 테스트가 몽키패치를 못 건다.
+    # 첫 문장이어야 한다. 완료 메시지의 `—`(U+2014)가 cp949 에 없어서, 뒤에 두면 큐를 다 만들어
+    # 놓고 마지막 print 에서 죽어 **성공이 exit 1 로 보고**된다. 그러면 종료코드가 성공과 "가드에
+    # 막혀 아무것도 안 함"을 구분하지 못한다. (app/core/console.py 참고)
+    # import 는 모듈 최상단에 있어야 한다 — 함수 안에 두면 배선 테스트가 몽키패치를 못 건다.
     force_utf8_output()
 
     asyncio.run(setup())

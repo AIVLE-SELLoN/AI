@@ -47,7 +47,7 @@ ASPECTS = ["색상", "사이즈", "소재", "파손", "오배송", "기타"]
 CHANNELS = ["COUPANG", "NAVER", "ZIGZAG"]
 SOURCES = ["cs", "review"]
 
-# 배경 검정용 baseline (이상탐지 시나리오 정의서 §1, "기타"는 팀 확정값 3%)
+# 배경 검정용 baseline (이상탐지 시나리오 정의서, "기타"는 팀 확정값 3%)
 BASELINE_RATE = {
     "색상":   {"COUPANG": 0.05, "NAVER": 0.06, "ZIGZAG": 0.07},
     "사이즈": {"COUPANG": 0.08, "NAVER": 0.09, "ZIGZAG": 0.07},
@@ -106,8 +106,8 @@ def build_full_batch(anomaly_rows: list[dict], all_products: list[str]) -> tuple
         )
 
     # ── 1단계: (상품,채널) 단위로 최소표본 체크 ──
-    # ⚠️ 문서 §9 명시: "보류는 채널 단위다 — 한 채널이 보류되면 그 (상품,채널)의
-    #    모든 aspect·source 12검정이 통째로 family에서 빠진다."
+    # 시나리오 정의서 명시: "보류는 채널 단위다 — 한 채널이 보류되면 그 (상품,채널)의 모든
+    # aspect·source 12검정이 통째로 family에서 빠진다."
     # CS가 표본 부족이면, 그 (상품,채널)은 리뷰까지 같이 보류한다(소스별 개별 판정 아님).
     channel_cur_total = {}   # (상품,채널,source) -> cur_total (있는 것만)
     channel_past_total = {}  # (상품,채널,source) -> past_total (있는 것만)
@@ -143,9 +143,9 @@ def build_full_batch(anomaly_rows: list[dict], all_products: list[str]) -> tuple
                         intended = r.get("intended_answer", "").strip()
                         case_id = r.get("case_id", "")
                     else:
-                        # ⚠️ 배경 슬롯도 "분모는 aspect 무관" 원칙을 따라야 함 — 이 (상품,채널,source)에
-                        # 이미 명시된 aspect(케이스)가 있으면 그 총문의를 그대로 물려받는다.
-                        # 없으면(순수 배경 상품) baseline 볼륨을 쓴다.
+                        # 배경 슬롯도 "분모는 aspect 무관" 원칙을 따라야 한다 — 이
+                        # (상품,채널,source)에 이미 명시된 aspect(케이스)가 있으면 그 총문의를
+                        # 그대로 물려받고, 없으면(순수 배경 상품) baseline 볼륨을 쓴다.
                         rate = BASELINE_RATE[asp][ch]
                         cur_total = channel_cur_total.get((gid, ch, src), BG_VOLUME[src]["cur_total"])
                         past_total = channel_past_total.get((gid, ch, src), BG_VOLUME[src]["past_total"])
@@ -230,7 +230,7 @@ def score(batch: list[dict]) -> dict:
 
 
 # ────────────────────────────────────────────────────────────────
-# 4-2. ±1건 강건성 검사 (§5-5, "원칙 18")
+# 4-2. ±1건 강건성 검사 (시나리오 정의서 "원칙 18")
 #      G(SC-026~028)·D(SC-019~021)는 예외 — 저사건이 케이스의 본질이라
 #      ±1건에 흔들리는 게 정상 동작이므로 강건성 검사 대상에서 뺀다.
 # ────────────────────────────────────────────────────────────────
@@ -281,8 +281,8 @@ def robustness_check(batch: list[dict], alpha: float = 0.05, min_delta: float = 
 # ────────────────────────────────────────────────────────────────
 
 def main():
-    # 🔴 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
-    #    (`description=__doc__`)에 `—` 가 있다. `app/core/console.py`.
+    # 첫 문장이어야 한다 — 아래 `parse_args()` 가 `--help` 를 먼저 찍고, 그 도움말
+    # (`description=__doc__`)에 `—` 가 있다. `app/core/console.py`.
     force_utf8_output()
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

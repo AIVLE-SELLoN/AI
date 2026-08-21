@@ -6,7 +6,7 @@
 2. 전파: 분류 오차가 카운트를 얼마나 흔드는가 (oracle 대비)
 3. 판정: 그래도 그 케이스가 발화하는가
 
-⚠️ 비용: 두 군데서 LLM 을 부른다. --limit 로 규모를 조절할 것.
+비용: 두 군데서 LLM 을 부른다. --limit 로 규모를 조절할 것.
    ① Agent1 분류 — **문의 1건당 1회**. 기본값 200(현재 윈도우만).
       과거 윈도우는 golden 라벨을 그대로 쓴다(oracle) — 이번 확인의 관심사는
       '현재 윈도우 분류가 카운트를 흔드는가'이기 때문.
@@ -203,9 +203,9 @@ async def main(args):
 
 
 if __name__ == "__main__":
-    # 🔴 첫 문장이어야 한다. ⚠️ 이 파일은 `--help` 가 원래 통과한다 —
-    #    `ArgumentParser()` 에 `description=` 이 없어 docstring 의 `—`·`⚠️` 가 도움말에
-    #    안 실린다. 대신 아래 대조 결과 출력이 그 문자를 써서 **결과가 통째로 사라진다.**
+    # 첫 문장이어야 한다. 이 파일은 `--help` 자체는 통과한다 — `ArgumentParser()` 에
+    # `description=` 이 없어 docstring 의 `—`·`⚠️` 가 도움말에 안 실린다. 대신 아래 대조 결과
+    # 출력이 그 문자를 써서 **결과가 통째로 사라진다.**
     force_utf8_output()
 
     ap = argparse.ArgumentParser()

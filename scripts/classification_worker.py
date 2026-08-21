@@ -1,6 +1,6 @@
 """분류 워커 — raw DB 의 원문을 읽어 분류하고 classified_item 에 적재한다.
 
-워크플로우 회의(2026-08-02) 반영:
+Kafka 구독 폐기:
   기존   : Kafka consumer 로 raw.* 토픽 구독 → 분류 → 로그 출력 (docker 컨테이너로 상주)
   변경후 : **raw DB 조회** → 분류 → **classified_item 테이블 적재(타임라인 순)**
 
@@ -10,15 +10,14 @@
 
 「Raw DB 스키마 확정 (8/7)」 반영:
   기존   : 단일 `raw_event` 테이블을 source 컬럼으로 걸러 읽음
-  변경후 : 확정 문서 §2-4 `cs` · §2-5 `reviews` — 두 테이블을 합친 `voc_document` 뷰를 읽음
+  변경후 : 확정 문서의 `cs` · `reviews` — 두 테이블을 합친 `voc_document` 뷰를 읽음
 
-  §5-1 A안 확정으로 `item_id` 는 `cs.id` / `reviews.id` 를 그대로 재사용한다. 접두사가
+  `item_id` 는 `cs.id` / `reviews.id` 를 그대로 재사용한다. 접두사가
   INQ-/RVW- 로 갈려 두 테이블을 합쳐도 충돌하지 않는다. 스키마 정의는 `app/core/raw_schema.py`.
 
-분류 실패 건은 버리지 않고 dead-letter(classification_failure, §2-7)에 남긴다.
-탐지의 분모를 원본 테이블에서 세고 classified_item 을 LEFT JOIN 하기로 한 합의
-(탐지 분모 산출 방식, 2026-08-03 · 확정 문서 §4) 아래에서는 **분류 커버리지가 곧 분자의
-정확도**다. 실패 건이 조용히 사라지면 분모는 그대로인데 분자만 비어 부정률이 과소추정된다.
+분류 실패 건은 버리지 않고 dead-letter(classification_failure)에 남긴다.
+탐지의 분모를 원본 테이블에서 세고 classified_item 을 LEFT JOIN 하는 구조에서는
+**분류 커버리지가 곧 분자의 정확도**다. 실패 건이 조용히 사라지면 분모는 그대로인데 분자만 비어 부정률이 과소추정된다.
 
 실행:
   python scripts/classification_worker.py                 # 밀린 원문 전부 처리하고 종료
@@ -29,7 +28,7 @@
                                                           # 프롬프트 교체 후 backfill
   python scripts/classification_worker.py --dry-run       # DB 없이 샘플 2건으로 추론만 확인
 
-분류기 버전과 탐지(2026-08-12)
+분류기 버전과 탐지
   적재 시 `classified_item` 에 **버전 3종**(prompt·model·pipeline)을 남기고, 탐지
   (`app/batch/daily.py`)는 **활성 버전 행만** 읽는다. 탐지가 35일(현재 7 + 과거 28)을 한 번에
   보기 때문에, 그 사이 분류기를 바꾸면 한 검정 안에 두 라벨러의 결과가 섞이고
@@ -38,21 +37,21 @@
   축이 셋인 이유: 프롬프트가 그대로여도 라벨러는 바뀐다. 모델(`LLM_MODEL`)을 갈아끼우거나
   후처리·폴백을 손보면 프롬프트 파일은 한 글자도 안 바뀌었는데 분포가 달라진다.
 
-  🔴 **어느 축이든 올렸으면 `--reclassify-stale` 을 끝까지 돌려야 배치가 돈다.** 탐지는
+  **어느 축이든 올렸으면 `--reclassify-stale` 을 끝까지 돌려야 배치가 돈다.** 탐지는
   윈도우에 옛 버전 행이 하나라도 있으면 **중단**한다(fail-closed). 부분 backfill 상태로는
   탐지가 아예 안 도므로 "조금씩 나눠 돌리다 중간에 두는" 상태를 남기지 말 것 —
   `--limit` 으로 쪼개 돌리는 것은 되지만 마지막까지 채워야 한다.
   적재가 upsert 라 재분류 결과가 옛 결과를 덮어쓴다 — 예전 `INSERT OR IGNORE` 시절에는
   재분류를 돌려도 아무것도 안 바뀌었다.
 
-백엔드 2종 (Postgres 이식, 2026-08-18)
+백엔드 2종 (sqlite · Postgres)
   `RAW_DB_HOST` 가 있으면 **Postgres**, 없으면 sqlite 파일이다. 연결은
   `app.core.raw_db.connect_readwrite()` 한 곳을 경유한다 — 여기서 `sqlite3.connect` 를
   직접 부르면 `mode`·PRAGMA·오류 타입이 두 벌이 되고, 운영에서만 갈리는 조건이 생긴다.
 
-  🔴 **이 워커가 raw DB 에 쓰는 유일한 프로세스다.** 인프라가 RW 전면 부여로 회신해
-  (2026-08-18) DB 가 더는 `cs`·`reviews` 를 막아 주지 않으므로, 쓰기 대상이 AI 소유 4개
-  밖으로 나가지 않는 것은 `tests/test_raw_db_write_scope.py` 가 지킨다.
+  **이 워커가 raw DB 에 쓰는 유일한 프로세스다.** 인프라가 RW 를 전면 부여해 DB 가 더는
+  `cs`·`reviews` 를 막아 주지 않으므로, 쓰기 대상이 AI 소유 4개 밖으로 나가지 않는 것은
+  `tests/test_raw_db_write_scope.py` 가 지킨다.
 
   SQL 은 한 벌만 쓴다. `?` 바인딩은 `raw_db` 가 `%s` 로 옮기고, `INSERT OR IGNORE` 같은
   sqlite 전용 문법 대신 양쪽이 같은 뜻으로 받는 `ON CONFLICT` 를 쓴다(`raw_db.upsert_sql`).
@@ -197,7 +196,7 @@ DB_MAX_RETRY = 3
 # 집계에서는 계속 보인다.
 DEAD_LETTER_MAX_ATTEMPTS = int(os.getenv("DEAD_LETTER_MAX_ATTEMPTS", "3"))
 
-# 분류 대상 source. `voc_document` 뷰는 cs·reviews 만 합치므로 주문(§2-9)은 애초에
+# 분류 대상 source. `voc_document` 뷰는 cs·reviews 만 합치므로 주문은 애초에
 # 들어오지 않지만, 뷰 정의가 늘어나도 여기서 한 번 더 걸러 낸다.
 CLASSIFY_SOURCES = (Source.CS.value, Source.REVIEW.value)
 
@@ -205,8 +204,8 @@ CLASSIFY_SOURCES = (Source.CS.value, Source.REVIEW.value)
 # 두 테이블의 시각 컬럼명이 달라(inquired_at / created_at) 뷰가 occurred_at 으로 맞춰 준다.
 SOURCE_VIEW = raw_schema.VOC_DOCUMENT
 
-# ⚠️ 테이블 DDL 은 여기 두지 않는다 — `app/core/raw_schema.py` 가 정본이다. 프로듀서와
-#    정의가 갈리면 한쪽만 고쳐지는 사고가 난다. 여기에는 이 워커만 쓰는 **쿼리**만 둔다.
+# 테이블 DDL 은 여기 두지 않는다 — `app/core/raw_schema.py` 가 정본이다. 프로듀서와
+# 정의가 갈리면 한쪽만 고쳐지는 사고가 난다. 여기에는 이 워커만 쓰는 **쿼리**만 둔다.
 
 FAILURE_UPSERT = """
 INSERT INTO classification_failure
@@ -224,9 +223,9 @@ FAILURE_DELETE = "DELETE FROM classification_failure WHERE item_id = ?"
 # 재처리 대상 조회. 시도 횟수가 상한 미만인 것만 — 결정적 실패(예: 리뷰에 허용되지 않는
 # aspect)를 매번 다시 LLM 에 태우면 돈만 쓰고 결과는 같다.
 #
-# ⚠️ (occurred_at, item_id) 페이지 커서가 꼭 필요하다. 이게 없으면 재처리에 또 실패한
-#    건이 다음 조회에 **다시 잡혀서**, 한 번 실행하는 동안 같은 건을 상한까지 반복
-#    호출한다(1회 실행 = 건당 max_attempts 회 과금). 한 실행에서는 건당 1회만 시도한다.
+# (occurred_at, item_id) 페이지 커서가 꼭 필요하다. 이게 없으면 재처리에 또 실패한 건이
+# 다음 조회에 **다시 잡혀서**, 한 번 실행하는 동안 같은 건을 상한까지 반복 호출한다
+# (1회 실행 = 건당 max_attempts 회 과금). 한 실행에서는 건당 1회만 시도한다.
 FETCH_FAILED_SQL = f"""
 SELECT r.item_id, r.source, r.channel_id, r.channel_product_id, r.product_group_id,
        r.content, r.occurred_at
@@ -238,13 +237,12 @@ ORDER BY f.occurred_at, f.item_id
 LIMIT ?
 """
 
-# 🔴 **`INSERT OR IGNORE` 였다가 upsert 로 바꿨다(2026-08-12).** 옛 형태는 이미 있는
-#    item_id 를 **통째로 무시**해서, 재분류를 돌려도 `prompt_version` 도 결과도 옛 값
-#    그대로 남았다. 그러면 프롬프트를 바꿔도 지난 문서는 영원히 옛 라벨러 기준이고,
-#    탐지가 35일(현재 7 + 과거 28)을 한 번에 읽으므로 **한 검정 안에 두 프롬프트 결과가
-#    섞인다.** 부정률이 움직인 원인이 고객인지 우리가 라벨러를 바꾼 탓인지 구분되지
-#    않는데, Fisher 검정은 그 둘을 못 가른다 — 프롬프트 개선이 그대로 고객 이상 알림으로
-#    발화한다. `--reclassify-stale` 이 이 upsert 위에서 돈다.
+# **upsert 여야 한다 — `INSERT OR IGNORE` 로 되돌리지 말 것.** 그 형태는 이미 있는
+# item_id 를 통째로 무시해서, 재분류를 돌려도 `prompt_version` 도 결과도 옛 값 그대로
+# 남는다. 그러면 지난 문서는 영원히 옛 라벨러 기준이고, 탐지가 35일(현재 7 + 과거 28)을
+# 한 번에 읽으므로 **한 검정 안에 두 프롬프트 결과가 섞인다.** 부정률이 움직인 원인이
+# 고객인지 라벨러 교체인지 Fisher 검정은 못 가르므로, 프롬프트 개선이 그대로 고객 이상
+# 알림으로 발화한다. `--reclassify-stale` 이 이 upsert 위에서 돈다.
 CLASSIFIED_ITEM_UPSERT = """
 INSERT INTO classified_item
     (item_id, source, classified_at, prompt_version, model_version, pipeline_version)
@@ -257,23 +255,22 @@ ON CONFLICT(item_id) DO UPDATE SET
     pipeline_version = excluded.pipeline_version
 """
 
-# ⚠️ 재분류 전에 **옛 aspect 를 지운다.** `classified_item_aspect` 는
-#    UNIQUE(item_id, aspect) 라 INSERT OR IGNORE 만으로는 갱신이 안 되고, 그렇다고
-#    upsert 로 바꾸기만 하면 **새 프롬프트가 더 이상 안 내는 aspect 가 옛 행으로 남는다**
-#    (예: v4 가 붙이던 `기타` 를 v5 가 안 붙여도 그 행은 그대로). 부모는 새 버전인데
-#    자식은 두 버전이 섞인 상태가 되고, 분자를 세는 쪽은 그걸 구분할 방법이 없다.
-#    지우고 다시 넣는 편이 "이 문서의 aspect 집합 = 이 프롬프트의 출력"을 지킨다.
+# 재분류 전에 **옛 aspect 를 지운다.** `classified_item_aspect` 는 UNIQUE(item_id, aspect)
+# 라 갱신만으로는 **새 프롬프트가 더 이상 안 내는 aspect 가 옛 행으로 남는다**(예: v4 가
+# 붙이던 `기타` 를 v5 가 안 붙여도 그 행은 그대로). 부모는 새 버전인데 자식은 두 버전이
+# 섞인 상태가 되고, 분자를 세는 쪽은 그걸 구분할 방법이 없다. 지우고 다시 넣어야 "이
+# 문서의 aspect 집합 = 이 프롬프트의 출력"이 지켜진다.
 CLASSIFIED_ITEM_ASPECT_DELETE = "DELETE FROM classified_item_aspect WHERE item_id = ?"
 
 # 위에서 먼저 지우므로 남는 충돌은 **한 응답 안의 중복 aspect** 뿐이다(LLM 이 같은 속성을
 # 두 번 낸 경우). 그건 무시하는 게 맞아서 "이미 있으면 그대로 둔다" 를 유지한다.
 #
-# ⚠️ `INSERT OR IGNORE` 였다가 표준 `ON CONFLICT DO NOTHING` 으로 바꿨다 — 전자는 sqlite
-#    전용이라 Postgres 에서 구문 오류다. 뜻은 같고 sqlite 3.24+ 가 이 철자를 받는다.
+# `INSERT OR IGNORE` 가 아니라 표준 `ON CONFLICT DO NOTHING` 인 이유: 전자는 sqlite 전용이라
+# Postgres 에서 구문 오류다. 뜻은 같고 sqlite 3.24+ 가 이 철자를 받는다.
 #
-# 🔴 **이 문장은 `UNIQUE (item_id, aspect)` 가 있어야 뜻이 선다.** 제약이 없으면 충돌 자체가
-#    안 나서 같은 쌍이 그냥 두 번 들어가고, 탐지 분자가 부푼다. 그래서 그 제약이 빠진
-#    테이블을 `raw_schema.find_legacy_tables()` 가 구버전으로 잡는다.
+# **이 문장은 `UNIQUE (item_id, aspect)` 가 있어야 뜻이 선다.** 제약이 없으면 충돌 자체가
+# 안 나서 같은 쌍이 그냥 두 번 들어가고, 탐지 분자가 부푼다. 그래서 그 제약이 빠진 테이블을
+# `raw_schema.find_legacy_tables()` 가 구버전으로 잡는다.
 CLASSIFIED_ITEM_ASPECT_INSERT = raw_db.upsert_sql(
     "classified_item_aspect",
     ("item_id", "aspect", "sentiment", "mixed_signal"),
@@ -293,7 +290,7 @@ ORDER BY occurred_at, item_id
 LIMIT ?
 """
 
-# 분류 커버리지 확인용 분모. §2-4 가 "분류 안 된 문의도 반드시 남는다"고 못박은 대로
+# 분류 커버리지 확인용 분모. 확정 문서가 "분류 안 된 문의도 반드시 남는다"고 못박은 대로
 # 원문 테이블에서 센다 — classified_item 에서 세면 세는 대상과 확인하려는 대상이 같아진다.
 COUNT_SOURCE_SQL = f"""
 SELECT COUNT(*) FROM {SOURCE_VIEW}
@@ -311,10 +308,10 @@ _STALE_PREDICATE = f"NOT ({raw_schema.active_version_predicate('c')})"
 def active_version_params() -> tuple[str, str, str, str]:
     """활성 분류기 신원 — `(프롬프트CS, 프롬프트리뷰, 모델, 파이프라인)`.
 
-    ⚠️ `service_module` 과 설정을 **매번 다시 읽는다**(값을 상수로 굳히지 않는다). 적재 쪽
-       `save_classified_items()` 도 같은 출처를 보므로, 테스트가 버전을 monkeypatch 했을 때
-       **적재와 조회가 같은 값을 본다.** 한쪽만 굳으면 stale 조회가 0건이 되고, 그건
-       "재분류할 게 없다"로 조용히 통과한다.
+    `service_module` 과 설정을 **매번 다시 읽는다**(값을 상수로 굳히지 않는다). 적재 쪽
+    `save_classified_items()` 도 같은 출처를 보므로, 테스트가 버전을 monkeypatch 했을 때
+    **적재와 조회가 같은 값을 본다.** 한쪽만 굳으면 stale 조회가 0건이 되고, 그건
+    "재분류할 게 없다"로 조용히 통과한다.
     """
     return raw_schema.version_params(
         service_module.PROMPT_ASPECT_VERSION,
@@ -326,13 +323,11 @@ def active_version_params() -> tuple[str, str, str, str]:
 
 # 재분류(backfill) 대상 조회 — 이미 분류됐지만 **지금 분류기로 만든 게 아닌** 문서.
 #
-# ⚠️ 신규 조회(FETCH_BATCH_SQL)로는 절대 안 잡힌다. 그쪽은 커서보다 뒤에 있는 원문만
-#    보는데, 이 행들은 커서가 이미 지나간 자리에 있다. 분류기를 바꿔도 지난 문서가
-#    영원히 옛 라벨로 남던 이유가 이것이고, 그래서 별도 조회가 필요하다.
+# 신규 조회(FETCH_BATCH_SQL)로는 절대 안 잡힌다. 그쪽은 커서보다 뒤에 있는 원문만 보는데
+# 이 행들은 커서가 이미 지나간 자리에 있다 — 그래서 별도 조회가 필요하다.
 #
-# ⚠️ 페이지 커서가 필요한 이유는 `--retry-failed` 와 같다 — 재분류에 **실패**한 건은
-#    여전히 stale 이라 다음 조회에 다시 잡힌다. 그러면 한 번 실행하는 동안 같은 건을
-#    무한히 다시 LLM 에 태운다.
+# 페이지 커서가 필요한 이유는 `--retry-failed` 와 같다 — 재분류에 **실패**한 건은 여전히
+# stale 이라 다음 조회에 다시 잡히고, 한 실행 안에서 같은 건을 무한히 다시 LLM 에 태운다.
 FETCH_STALE_SQL = f"""
 SELECT r.item_id, r.source, r.channel_id, r.channel_product_id, r.product_group_id,
        r.content, r.occurred_at
@@ -345,11 +340,10 @@ ORDER BY r.occurred_at, r.item_id
 LIMIT ?
 """
 
-# 🔴 **재분류 조회와 같은 조인·같은 조건을 탄다.** 예전에는 `classified_item` 만 세서
-#    `FETCH_STALE_SQL`(원문 뷰와 INNER JOIN + 본문 비어있지 않음)과 범위가 갈렸다.
-#    원문이 사라진 행이 있으면 `count_stale()=1` 인데 `fetch_stale_batch()=0` 이 되어,
-#    "1건 남았다"고 알리고 곧바로 "대상을 모두 처리했습니다"로 끝난 뒤 종료 경고가
-#    **영원히 남는다** — 고치라는데 고칠 수단이 없는 경고다. (2026-08-12 리뷰 §5)
+# **재분류 조회와 같은 조인·같은 조건을 탄다.** 범위가 갈리면(예: 여기서만 원문 뷰 조인을
+# 빼면) 원문이 사라진 행에서 `count_stale()=1` 인데 `fetch_stale_batch()=0` 이 되어, "1건
+# 남았다"고 알리고 곧바로 "대상을 모두 처리했습니다"로 끝난 뒤 종료 경고가 **영원히 남는다**
+# — 고치라는데 고칠 수단이 없는 경고다.
 COUNT_STALE_SQL = f"""
 SELECT COUNT(*)
 FROM classified_item c
@@ -361,9 +355,9 @@ WHERE {_STALE_PREDICATE}
 # 재분류할 수 없는 stale 행 — 원문이 사라졌거나 본문이 비어 있어 LLM 에 태울 것이 없다.
 # 위 조인에서 빠지는 나머지다.
 #
-# ⚠️ 이 건수는 **탐지를 막지 않는다.** `app/batch/daily.py` 의 cutover 가드도 원문 뷰와
-#    조인하므로 원문 없는 행은 애초에 안 센다. 그래서 경고 문구를 가르기만 한다 —
-#    "backfill 하세요"와 "backfill 로는 못 없앤다"는 사람이 할 일이 다르다.
+# 이 건수는 **탐지를 막지 않는다.** `app/batch/daily.py` 의 cutover 가드도 원문 뷰와
+# 조인하므로 원문 없는 행은 애초에 안 센다. 그래서 경고 문구를 가르기만 한다 —
+# "backfill 하세요"와 "backfill 로는 못 없앤다"는 사람이 할 일이 다르다.
 COUNT_ORPHAN_STALE_SQL = f"""
 SELECT COUNT(*)
 FROM classified_item c
@@ -391,14 +385,14 @@ ORDER BY source, n DESC
 def cursor_origin(conn: raw_db.RawDbConnection) -> Any:
     """"아직 아무것도 안 읽었다" 를 뜻하는 커서 시작값. 모든 실제 시각보다 작아야 한다.
 
-    🔴 **빈 문자열은 Postgres 에서 못 쓴다.** 커서 조건절이 `occurred_at > ?` 인데 그 컬럼이
-       TIMESTAMPTZ 라, `''` 를 넘기면 비교가 실패하는 게 아니라 **`invalid input syntax for
-       type timestamp with time zone` 로 조회 자체가 죽는다.** sqlite 는 컬럼이 TEXT 라
-       `''` 가 모든 ISO 문자열보다 작아서 지금까지 이 값이 통했다.
+    **빈 문자열은 Postgres 에서 못 쓴다.** 커서 조건절이 `occurred_at > ?` 인데 그 컬럼이
+    TIMESTAMPTZ 라, `''` 를 넘기면 비교가 실패하는 게 아니라 **`invalid input syntax for type
+    timestamp with time zone` 으로 조회 자체가 죽는다.** sqlite 는 컬럼이 TEXT 라 `''` 가 모든
+    ISO 문자열보다 작아서 통한다.
 
-    ⚠️ 이 값은 dead-letter 의 `occurred_at` 기본값이기도 하다 — `NULL` 로 두면 `f.occurred_at
-       > ?` 가 그 행을 **영원히 안 집어서**(NULL 비교는 항상 false) `--retry-failed` 회수가
-       조용히 망가진다.
+    이 값은 dead-letter 의 `occurred_at` 기본값이기도 하다 — `NULL` 로 두면 `f.occurred_at > ?`
+    가 그 행을 **영원히 안 집어서**(NULL 비교는 항상 false) `--retry-failed` 회수가 조용히
+    망가진다.
     """
     if raw_db.dialect_of(conn) == raw_db.POSTGRES:
         # TIMESTAMPTZ 하한(4713 BC)보다 훨씬 늦지만 실제 데이터보다는 확실히 이르다.
@@ -409,17 +403,17 @@ def cursor_origin(conn: raw_db.RawDbConnection) -> Any:
 def open_db(db_path_str: str) -> raw_db.RawDbConnection:
     """raw DB 연결 + AI 소유 테이블 보장. sqlite·Postgres 양쪽.
 
-    원문 테이블(cs·reviews)은 main server 소유라 여기서 만들지 않는다(§1). 목
-    파이프라인에서는 mock_producer 가 그 역할이다. 없으면 아직 원문이 한 건도 적재되지
+    원문 테이블(cs·reviews)은 main server 소유라 여기서 만들지 않는다. 목 파이프라인에서는
+    mock_producer 가 그 역할이다. 없으면 아직 원문이 한 건도 적재되지
     않은 상태이므로, 잘못된 경로를 조용히 새 빈 파일로 만들어 버리지 않도록 여기서 멈춘다.
 
-    ⚠️ **sqlite 파일 존재 확인은 `RAW_DB_HOST` 가 비었을 때만 뜻이 있다.** Postgres 경로에서
-       `db_path` 는 안 쓰이는 값이라, 거기서 `Path.exists()` 를 보면 멀쩡한 접속을 "raw DB
-       없음" 으로 막는다. 그래서 접속 문자열 유무로 먼저 가른다.
+    **sqlite 파일 존재 확인은 `RAW_DB_HOST` 가 비었을 때만 뜻이 있다.** Postgres 경로에서
+    `db_path` 는 안 쓰이는 값이라, 거기서 `Path.exists()` 를 보면 멀쩡한 접속을 "raw DB 없음"
+    으로 막는다. 그래서 접속 문자열 유무로 먼저 가른다.
 
-    ⚠️ 원문 테이블 조회를 `raw_db.existing_tables()` 에 맡긴다 — `sqlite_master` 는 sqlite
-       에만 있어서 Postgres 에서는 이 확인 자체가 구문 오류로 죽는다(원문이 없다는 안내가
-       아니라 알 수 없는 에러가 나가는 모양이다).
+    원문 테이블 조회는 `raw_db.existing_tables()` 에 맡긴다 — `sqlite_master` 는 sqlite 에만
+    있어서 Postgres 에서는 이 확인 자체가 구문 오류로 죽는다(원문이 없다는 안내가 아니라 알
+    수 없는 에러가 나가는 모양이다).
     """
     dsn = raw_db.conninfo_from_settings()
     target = raw_db.describe_target(db_path_str, dsn=dsn)
@@ -431,11 +425,10 @@ def open_db(db_path_str: str) -> raw_db.RawDbConnection:
     # classified_item_aspect.item_id → classified_item.item_id 다 — 부모 없는 aspect 행이
     # 생기면 "분류 결과는 있는데 문서가 없는" 상태가 되어 커버리지 집계가 어긋난다.
     #
-    # 🔴 **접속 실패를 여기서 잡는다.** 이 워커는 k8s CronJob 이라, 안 잡으면 raw traceback
-    #    으로 죽고 스케줄러가 **같은 설정으로 무한 재시도**한다 — 사람이 로그를 열기 전에는
-    #    무엇이 잘못됐는지 아무 데도 안 적힌다. `psycopg.Error` 는 `FileNotFoundError` 의
-    #    하위가 아니라 위 파일 확인으로는 절대 안 걸린다(PR #101 이 배치·REST 에서 닫은 것과
-    #    같은 구멍이고, 이 워커가 세 번째 호출부다).
+    # **접속 실패를 여기서 잡는다.** 이 워커는 k8s CronJob 이라, 안 잡으면 raw traceback 으로
+    # 죽고 스케줄러가 **같은 설정으로 무한 재시도**한다 — 사람이 로그를 열기 전에는 무엇이
+    # 잘못됐는지 아무 데도 안 적힌다. `psycopg.Error` 는 `FileNotFoundError` 의 하위가 아니라
+    # 위 파일 확인으로는 절대 안 걸린다.
     try:
         conn = raw_db.connect_readwrite(db_path_str, dsn=dsn)
     except raw_db.connection_error_types() as exc:
@@ -453,22 +446,18 @@ def open_db(db_path_str: str) -> raw_db.RawDbConnection:
 
     legacy = raw_schema.find_legacy_tables(conn)
     if legacy:
-        # 🔴 **자식 테이블을 항상 함께 지운다.** `classified_item_aspect` 에는 마커가 없어서
-        #    `legacy` 목록에 절대 안 들어온다(그 테이블은 8/7 이전엔 아예 없었다). 그런데
-        #    부모만 지우면 **부모 없는 aspect 행이 남고**, 탐지는 부모를 거쳐 읽어서 무해하지만
-        #    월간 집계는 `FROM voc_document r JOIN classified_item_aspect a` 로 부모를 안 거친다
-        #    — 원문이 그대로 있으니 옛 분류기 라벨이 계속 리포트에 잡힌다.
-        #    문서 §4-3 이 두 테이블을 지우라고 하는데 안내가 하나만 내면 끝 상태가 갈린다.
-        #    (2026-08-13 리뷰 §3)
+        # **자식 테이블을 항상 함께 지운다.** 부모만 지우면 **부모 없는 aspect 행이 남고**,
+        # 탐지는 부모를 거쳐 읽어서 무해하지만 월간 집계는 `FROM voc_document r JOIN
+        # classified_item_aspect a` 로 부모를 안 거친다 — 원문이 그대로 있으니 옛 분류기
+        # 라벨이 계속 리포트에 잡힌다.
         #
-        # ⚠️ **자식을 먼저 지운다.** `PRAGMA foreign_keys=ON` 인 세션에서 부모부터 지우면
-        #    `FOREIGN KEY constraint failed` 로 막힌다(실측). sqlite3 CLI 는 기본이 OFF 라
-        #    보통은 그냥 돌지만, 켜 둔 셸에 붙여넣으면 안내가 통째로 실패한다 —
-        #    순서만 바꾸면 양쪽 다 된다. (2026-08-13 리뷰 §4)
+        # **자식을 먼저 지운다.** `PRAGMA foreign_keys=ON` 인 세션에서 부모부터 지우면
+        # `FOREIGN KEY constraint failed` 로 막힌다(실측). sqlite3 CLI 는 기본이 OFF 라 보통은 그냥
+        # 돌지만, 켜 둔 셸에 붙여넣으면 안내가 통째로 실패한다 — 순서만 바꾸면 양쪽 다 된다.
         #
-        # ⚠️ `classified_item_aspect` 가 이제 **스스로** 구버전으로 잡힐 수 있다
-        #    (`UNIQUE (item_id, aspect)` 누락, 2026-08-18). 그때 `legacy` 안에서 부모 뒤에
-        #    올 수 있으므로, 목록 순서에 기대지 않고 자식을 항상 맨 앞으로 끌어온다.
+        # `classified_item_aspect` 는 **스스로** 구버전으로 잡힐 수도 있어(`UNIQUE (item_id,
+        # aspect)` 누락) `legacy` 안에서 부모 뒤에 올 수 있다. 목록 순서에 기대지 않고 자식을
+        # 항상 맨 앞으로 끌어온다.
         child = "classified_item_aspect"
         targets = [t for t in legacy if t != child]
         if child in legacy or "classified_item" in legacy:
@@ -511,21 +500,20 @@ def _to_request_item(row: Any) -> ClassifyRequestItem:
     원문은 CSV 를 거의 그대로 담고 있어서 스키마 enum 과 표기가 어긋날 수 있다
     (채널 대소문자 등). 여기서만 맞춰 주고 분류 로직 자체는 건드리지 않는다.
 
-    ⚠️ **분류 결과의 item_id 가 원문 PK 와 같은 값이어야 한다.** dead-letter 기록이
-       `occurred_at_by_id[item_id]` 로 발생 시각을 찾는데 그 키를 채우는 것은
-       분류 결과의 item_id 다. 둘이 갈라지면 occurred_at 이 "" 로 들어가고
-       `FETCH_FAILED_SQL` 의 페이지 커서 정렬(f.occurred_at, f.item_id)이 깨져
-       `--retry-failed` 회수가 조용히 망가진다. §5-1 A안(item_id = cs.id / reviews.id)이
-       이 등식의 근거다.
-       (tests/test_classification_worker.py::test_dead_letter_records_occurred_at 이 고정)
+    **분류 결과의 item_id 가 원문 PK 와 같은 값이어야 한다.** dead-letter 기록이
+    `occurred_at_by_id[item_id]` 로 발생 시각을 찾는데 그 키를 채우는 것은 분류 결과의
+    item_id 다. 둘이 갈라지면 occurred_at 이 "" 로 들어가고 `FETCH_FAILED_SQL` 의 페이지 커서
+    정렬(f.occurred_at, f.item_id)이 깨져 `--retry-failed` 회수가 조용히 망가진다. 확정 문서의
+    `item_id = cs.id / reviews.id` 가 이 등식의 근거다.
+    (tests/test_classification_worker.py::test_dead_letter_records_occurred_at 이 고정)
     """
     return ClassifyRequestItem.model_validate({
         "item_id": row["item_id"],
         "source": str(row["source"]).lower(),
         "channel": str(row["channel_id"] or "").upper(),
-        # ⚠️ product_group_id 는 §2-4 대로 원문에 비정규화돼 있어야 한다. 목 대본에는
-        #    답 노출 방지 설계상 그 컬럼이 없어 채널 상품 ID 로 대신한다 — 실서비스에서는
-        #    적재 시점에 이미 매핑이 끝나 있으므로(§4-①) 이 폴백이 걸릴 일이 없다.
+        # product_group_id 는 확정 문서대로 원문에 비정규화돼 있어야 한다. 목 대본에는 답
+        # 노출 방지 설계상 그 컬럼이 없어 채널 상품 ID 로 대신한다 — 실서비스에서는 적재
+        # 시점에 이미 매핑이 끝나 있어 이 폴백이 걸릴 일이 없다.
         "product_group_id": str(
             row["product_group_id"] or row["channel_product_id"] or "PG-UNKNOWN"
         ),
@@ -671,11 +659,11 @@ class ClassificationWorker:
         커서는 건드리지 않는다(`advance_cursor=False`) — 신규 원본 진행과 독립이고,
         여기서 미는 건 이미 지나간 구간이다.
 
-        ⚠️ **비용이 든다.** 대상 1건이 곧 LLM 호출 1회다(현재 목 데이터 96,524건 규모).
-           `--limit` 로 나눠 돌릴 수 있게 열어 뒀고, 중간에 끊겨도 끝난 만큼은 새 버전으로
-           남아 다음 실행이 이어받는다 — 재분류된 행은 더 이상 stale 조회에 안 잡힌다.
+        **비용이 든다.** 대상 1건이 곧 LLM 호출 1회다(목 데이터 96,524건 규모). `--limit` 로
+        나눠 돌릴 수 있게 열어 뒀고, 중간에 끊겨도 끝난 만큼은 새 버전으로 남아 다음 실행이
+        이어받는다 — 재분류된 행은 더 이상 stale 조회에 안 잡힌다.
 
-        ⚠️ `--follow` 는 의미가 없어 무시한다. 대상이 고정 집합이라 다 돌면 끝이다.
+        `--follow` 는 의미가 없어 무시한다. 대상이 고정 집합이라 다 돌면 끝이다.
         """
         total_stale = self.count_stale()
         if not total_stale:
@@ -715,7 +703,7 @@ class ClassificationWorker:
         """(마지막으로 처리한 발생 시각, item_id).
 
         컬럼명이 `last_inquired_at` 인데 리뷰는 시각 컬럼이 `created_at` 이다 —
-        확정 문서 §2-8 의 이름을 그대로 따랐고, 값은 뷰의 `occurred_at` 이다.
+        확정 문서의 이름을 그대로 따랐고, 값은 뷰의 `occurred_at` 이다.
         """
         row = self.conn.execute(
             "SELECT last_inquired_at, last_item_id FROM classification_cursor WHERE worker_id = ?",
@@ -800,9 +788,9 @@ class ClassificationWorker:
         rows 는 이미 (occurred_at, item_id) 오름차순이라, 이 순서대로 INSERT 하면
         classified_item 이 타임라인 순으로 쌓인다.
 
-        실패한 건은 **버리지 않고** dead-letter(classification_failure)에 남긴다 —
-        분모를 원본 테이블에서 세는 합의(2026-08-03) 아래에서 분류 커버리지가 곧
-        분자의 정확도라, 무엇이 빠졌는지 셀 수 없으면 부정률이 조용히 과소추정된다.
+        실패한 건은 **버리지 않고** dead-letter(classification_failure)에 남긴다 — 분모를
+        원본 테이블에서 세는 구조에서는 분류 커버리지가 곧 분자의 정확도라, 무엇이 빠졌는지
+        셀 수 없으면 부정률이 조용히 과소추정된다.
 
         advance_cursor=False 는 재처리 모드용 — 이미 지나간 구간을 다시 훑는 것이라
         커서를 건드리면 안 된다.
@@ -859,24 +847,22 @@ class ClassificationWorker:
     ) -> tuple[list[ClassifiedItem], list[tuple[str, str, str]]]:
         """원문 N건을 분류한다. 실패는 **그 건에만** 국한된다.
 
-        격리는 classify_aspect() 가 한다 (계약, 2026-08-04):
+        격리는 classify_aspect() 가 한다 (계약):
           - 반환 길이·순서가 요청과 같아 zip(items, 반환) 이 성립한다.
           - 성공은 ClassifiedItem, 실패는 **예외 객체를 그 자리에 담아** 돌려준다.
             함수 자체는 raise 하지 않는다.
 
-        ⚠️ 여기서 배치를 통째로 재호출하지 않는다(비용). 이 실패는 대부분 **결정적**이라
-           — 리뷰에 대해 LLM 이 '파손'을 뱉으면 schemas 의 리뷰 aspect 제약
-           (색상/사이즈/소재)에 매번 걸린다 — 다시 부르면 성공했을 나머지 건까지 매번
-           다시 과금된다. 일시적 오류(네트워크·레이트리밋) 재시도는 llm_client 가
-           MAX_RETRY 로 이미 한다. 여기서 또 하면 이중 과금이다.
+        여기서 배치를 통째로 재호출하지 않는다(비용). 이 실패는 대부분 **결정적**이라 —
+        리뷰에 대해 LLM 이 '파손'을 뱉으면 schemas 의 리뷰 aspect 제약(색상/사이즈/소재)에
+        매번 걸린다 — 다시 부르면 성공했을 나머지 건까지 매번 다시 과금된다. 일시적 오류
+        (네트워크·레이트리밋) 재시도는 llm_client 가 MAX_RETRY 로 이미 한다.
 
-        ⚠️ 예전에는 건별 classify_aspect([item]) 를 다시 gather(return_exceptions=True)
-           로 감쌌다. 계약이 바뀐 뒤로는 **그러면 안 된다** — 안쪽이 raise 를 안 하므로
-           바깥 gather 는 예외를 볼 일이 없고, outcome 이 `[LlmParseError(...)]` 라는
-           **리스트**로 와서 아래 isinstance(outcome, BaseException) 이 영원히 False 가
-           된다. 그러면 dead-letter 에 안 남고 예외 객체가 results 에 섞여 들어가
-           persist 단계에서 AttributeError 로 배치가 통째로 터진다(=그 건은 어디에도
-           남지 않고 영구 유실). 조용히 깨지는 형태라 주석으로 못 박아 둔다.
+        **건별 classify_aspect([item]) 를 다시 gather(return_exceptions=True) 로 감싸지 말 것.**
+        안쪽이 raise 를 안 하므로 바깥 gather 는 예외를 볼 일이 없고, outcome 이
+        `[LlmParseError(...)]` 라는 **리스트**로 와서 아래 isinstance(outcome, BaseException) 이
+        영원히 False 가 된다. 그러면 dead-letter 에 안 남고 예외 객체가 results 에 섞여 들어가
+        persist 단계에서 AttributeError 로 배치가 통째로 터진다(=그 건은 어디에도 남지 않고
+        영구 유실).
 
         Returns:
             (분류 성공 목록, [(item_id, "classify", 오류메시지)]) — 실패는 호출부가
@@ -913,11 +899,11 @@ class ClassificationWorker:
     ) -> None:
         """배치가 통째로, 그것도 호출 단계에서 죽었으면 워커를 세운다.
 
-        ⚠️ 이게 없으면 **시스템 장애가 "N건 개별 실패"로 위장**된다. 401 이나 레이트리밋
-           소진처럼 배치 전체가 같은 이유로 죽는 상황에서, 워커는 그것을 건별 실패로
-           dead-letter 에 적고 커서를 밀고 다음 배치로 간다. 96,531건이면 배치가 9,654개라
-           원본 전량이 dead-letter 로 넘어간 채 **정상 종료**한다. 게다가 장애가 길어져
-           재처리가 DEAD_LETTER_MAX_ATTEMPTS 를 넘기면 회수 대상에서도 빠진다.
+        이게 없으면 **시스템 장애가 "N건 개별 실패"로 위장**된다. 401 이나 레이트리밋 소진처럼
+        배치 전체가 같은 이유로 죽는 상황에서, 워커는 그것을 건별 실패로 dead-letter 에 적고
+        커서를 밀고 다음 배치로 간다. 96,531건이면 배치가 9,654개라 원본 전량이 dead-letter 로
+        넘어간 채 **정상 종료**한다. 게다가 장애가 길어져 재처리가 DEAD_LETTER_MAX_ATTEMPTS 를
+        넘기면 회수 대상에서도 빠진다.
 
         판정에 오류 **종류**를 같이 보는 이유: `--retry-failed` 는 이미 실패한 건만 모아
         돌리는 모드라 전량 실패가 정상이다. 거기서 건수만 보고 세우면 회수 작업이
@@ -964,15 +950,15 @@ class ClassificationWorker:
         실패한 건이 있어도 배치가 통째로 다시 걸려 무한 재시도되는 걸 막기 위함이고,
         빠진 건은 dead-letter 에 남아 `--retry-failed` 로 따로 회수한다.
 
-        ⚠️ DB 오류를 그냥 위로 던지면 커서가 안 움직인 채 워커가 죽고, 재시작하면 같은
-           배치를 **다시 LLM 에 태워서** 같은 자리에서 또 죽는다(무한 재과금). 그래서
-           잠금 경합만 잠깐 재시도하고, 그래도 안 되면 롤백 후 워커를 정지시킨다 —
-           사람이 보게 만드는 쪽이 조용히 돈을 태우는 것보다 낫다.
+        DB 오류를 그냥 위로 던지면 커서가 안 움직인 채 워커가 죽고, 재시작하면 같은 배치를
+        **다시 LLM 에 태워서** 같은 자리에서 또 죽는다(무한 재과금). 그래서 잠금 경합만 잠깐
+        재시도하고, 그래도 안 되면 롤백 후 워커를 정지시킨다 — 사람이 보게 만드는 쪽이 조용히
+        돈을 태우는 것보다 낫다.
         """
         # 오류 타입은 백엔드마다 다르다 — 여기서 한 번 물어보고 아래 except 가 쓴다.
-        # 🔴 **`sqlite3.OperationalError` 를 그대로 두면 안 된다.** Postgres 에서는 잠금
-        #    경합·직렬화 실패가 그 타입이 아니라, 잠깐 기다리면 될 것이 "치명적" 으로
-        #    분류돼 워커가 서고 다음 실행이 같은 배치를 LLM 에 다시 태운다.
+        # **`sqlite3.OperationalError` 를 박아 두면 안 된다.** Postgres 에서는 잠금 경합·직렬화
+        # 실패가 그 타입이 아니라, 잠깐 기다리면 될 것이 "치명적" 으로 분류돼 워커가 서고 다음
+        # 실행이 같은 배치를 LLM 에 다시 태운다.
         retryable = raw_db.retryable_error_types(self.conn)
         fatal = raw_db.db_error_types(self.conn)
         for attempt in range(1, DB_MAX_RETRY + 1):
@@ -1071,9 +1057,8 @@ class ClassificationWorker:
         섞여 있으면 탐지가 **아예 안 돈다**(`daily._check_version_cutover` 가 세운다) —
         커버리지 숫자만 보면 100% 라 아무 문제 없어 보이는 상태다. 그래서 따로 찍는다.
 
-        ⚠️ **고칠 수 있는 것과 없는 것을 가른다.** 원문이 사라진 stale 행은
-           `--reclassify-stale` 로 없앨 수 없다. 안 가르면 "backfill 하세요" 경고가
-           영원히 남아 다음 사람이 시간을 쓴다.
+        **고칠 수 있는 것과 없는 것을 가른다.** 원문이 사라진 stale 행은 `--reclassify-stale`
+        로 없앨 수 없다. 안 가르면 "backfill 하세요" 경고가 영원히 남아 다음 사람이 시간을 쓴다.
         """
         if self.conn is None:
             return
@@ -1117,35 +1102,31 @@ class ClassificationWorker:
         logger.warning("\n".join(lines))
 
     def save_classified_items(self, items: list[ClassifiedItem]) -> int:
-        """분류 결과를 §2-6 두 테이블에 적재. 반환값은 실제 INSERT 된 aspect 행 수.
+        """분류 결과를 두 테이블에 적재. 반환값은 실제 INSERT 된 aspect 행 수.
 
-        ⚠️ 원문(raw_text)·채널·상품그룹·발생 시각을 **복사하지 않는다** (아키텍처 확정 §6).
-           전부 원문 테이블에 있으므로 집계는 그쪽을 기준으로 잡고 여기를 조인한다.
+        원문(raw_text)·채널·상품그룹·발생 시각을 **복사하지 않는다.** 전부 원문 테이블에
+        있으므로 집계는 그쪽을 기준으로 잡고 여기를 조인한다.
 
-        ⚠️ aspect 가 0개인 문의도 **부모 행은 남긴다.** 안 남기면 "분류를 시도했으나 언급된
-           속성이 없었다"와 "아직 분류하지 않았다"가 구분되지 않아, 커버리지 확인이 깨진다.
+        aspect 가 0개인 문의도 **부모 행은 남긴다.** 안 남기면 "분류를 시도했으나 언급된 속성이
+        없었다"와 "아직 분류하지 않았다"가 구분되지 않아 커버리지 확인이 깨진다.
 
-        ⚠️ **같은 item_id 를 다시 넣으면 덮어쓴다**(upsert + aspect 전체 교체). 예전에는
-           `INSERT OR IGNORE` 라 조용히 무시됐는데, 그래서 프롬프트를 바꾸고 재분류를
-           돌려도 결과가 안 바뀌었다 — `--reclassify-stale` 이 성립하려면 여기가
-           덮어쓰기여야 한다. 자세한 근거는 위 SQL 상수 주석.
+        **같은 item_id 를 다시 넣으면 덮어쓴다**(upsert + aspect 전체 교체) —
+        `--reclassify-stale` 이 성립하려면 여기가 덮어쓰기여야 한다. 근거는 위 SQL 상수 주석.
         """
-        # **KST 로 찍는다 — 호스트 시간대를 보지 않는다.** raw DB 의 시각은 전부 오프셋이
-        # 붙은 ISO 문자열이고 §3 이 날짜 경계를 KST 로 못박았다(raw_schema 모듈 docstring).
-        # `datetime.now(timezone.utc).astimezone()` 은 **실행 호스트의 로컬 오프셋**을 붙여서,
-        # UTC 컨테이너에서 돌리면 원문(mock_producer 는 KST)과 오프셋이 갈린다.
+        # **KST 로 찍는다 — 호스트 시간대를 보지 않는다.** raw DB 의 시각은 전부 오프셋이 붙은
+        # ISO 문자열이고 날짜 경계가 KST 다. `datetime.now(timezone.utc).astimezone()` 은 **실행
+        # 호스트의 로컬 오프셋**을 붙여서, UTC 컨테이너에서 돌리면 원문(mock_producer 는 KST)과
+        # 오프셋이 갈린다.
         #
-        # ⚠️ **일관성 확보이지 지금 깨지는 것을 고치는 게 아니다.** `classified_at` 은
-        #    저장소 전체에서 **쓰기 전용**이다 — 읽거나 비교하는 곳이 0건이다. 특히 월간
-        #    집계는 이 컬럼을 **일부러 안 쓴다**(`monthly_aggregator` 가 `occurred_at` 으로
-        #    거르고, 그 파일이 "분류 시각으로 기간을 자르면 말일 문의를 1일 새벽에 분류했을
-        #    때 다음 달로 넘어간다"고 적어 뒀다). 소비처가 생겼을 때 한 컬럼에 +09:00 과
-        #    +00:00 이 섞여 있지 않게 미리 맞춰 두는 것이다. (2026-08-13)
+        # **일관성 확보이지 지금 깨지는 것을 고치는 게 아니다.** `classified_at` 은 저장소 전체
+        # 에서 **쓰기 전용**이다 — 읽거나 비교하는 곳이 0건이고, 월간 집계는 이 컬럼을 일부러
+        # 안 쓴다(`monthly_aggregator` 가 `occurred_at` 으로 거른다). 소비처가 생겼을 때 한
+        # 컬럼에 +09:00 과 +00:00 이 섞여 있지 않게 미리 맞춰 두는 것이다.
         classified_at = datetime.now(KST).isoformat()
         inserted = 0
 
-        # ⚠️ 조회(`active_version_params`)와 **같은 출처를 본다.** 여기서 따로 읽으면 적재한
-        #    값과 stale 판정이 갈려, 방금 넣은 행이 곧바로 재분류 대상이 된다.
+        # 조회(`active_version_params`)와 **같은 출처를 본다.** 여기서 따로 읽으면 적재한 값과
+        # stale 판정이 갈려, 방금 넣은 행이 곧바로 재분류 대상이 된다.
         prompt_cs, prompt_review, model_version, pipeline_version = active_version_params()
 
         for item in items:
@@ -1170,8 +1151,8 @@ class ClassificationWorker:
                         row["item_id"],
                         row["aspect"],
                         row["sentiment"],
-                        # ⚠️ `int()` 로 캐스팅하지 말 것 — Postgres 컬럼이 BOOLEAN 이라
-                        #    정수를 받지 않는다. sqlite 는 bool 을 0/1 로 저장한다.
+                        # `int()` 로 캐스팅하지 말 것 — Postgres 컬럼이 BOOLEAN 이라 정수를
+                        # 받지 않는다. sqlite 는 bool 을 0/1 로 저장한다.
                         None if row["mixed_signal"] is None else bool(row["mixed_signal"]),
                     ),
                 )
@@ -1219,13 +1200,12 @@ class ClassificationWorker:
 def main() -> None:
     """CLI 진입점.
 
-    ⚠️ **`if __name__` 블록에 인라인으로 두지 말 것.** 그러면 pytest 가 그 블록을
-       실행하지 않아 `force_utf8_output()` 배선을 테스트로 잠글 수 없다 —
-       나머지 진입점과 형태도 갈린다(용준님 PR #92 리뷰 B-1).
+    **`if __name__` 블록에 인라인으로 두지 말 것.** 그러면 pytest 가 그 블록을 실행하지 않아
+    `force_utf8_output()` 배선을 테스트로 잠글 수 없고, 나머지 진입점과 형태도 갈린다.
     """
-    # 🔴 **첫 문장이어야 한다.** `--limit` 도움말에 `—`(U+2014) 가 있어서, 아래
-    #    `parse_args()` 가 그걸 먼저 찍으면 cp949 콘솔에서는 도움말만 요청해도
-    #    `UnicodeEncodeError` 로 죽는다(2026-08-14 실측). 사유 전문은 `app/core/console.py`.
+    # **첫 문장이어야 한다.** `--limit` 도움말에 `—`(U+2014) 가 있어서, 아래 `parse_args()` 가
+    # 그걸 먼저 찍으면 cp949 콘솔에서는 도움말만 요청해도 `UnicodeEncodeError` 로 죽는다.
+    # 사유 전문은 `app/core/console.py`.
     force_utf8_output()
 
     parser = argparse.ArgumentParser(description="Classification Worker (raw DB → classified_item)")

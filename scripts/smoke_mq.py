@@ -42,10 +42,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# ⚠️ 이 파일의 다른 `app` import 는 전부 함수 안이다 — `os.environ["MQ_ENABLED"]` 를
-#    먼저 세팅해야 `get_settings()`(lru_cache)에 반영되기 때문이다. **`console` 은 예외다:**
-#    `contextlib`·`sys` 만 쓰고 설정을 안 읽어서 여기 둬도 안전하고, 모듈 최상단이어야
-#    배선 테스트가 몽키패치를 걸 수 있다.
+# 이 파일의 다른 `app` import 는 전부 함수 안이다 — `os.environ["MQ_ENABLED"]` 를 먼저
+# 세팅해야 `get_settings()`(lru_cache)에 반영되기 때문이다. **`console` 은 예외다:**
+# `contextlib`·`sys` 만 쓰고 설정을 안 읽어서 여기 둬도 안전하고, 모듈 최상단이어야 배선
+# 테스트가 몽키패치를 걸 수 있다.
 from app.core.console import force_utf8_output
 
 SMOKE_QUEUE = "smoke.ai.inbound"
@@ -144,8 +144,7 @@ async def run_feedback(args: argparse.Namespace) -> int:
     settings = get_settings()
     alert, rec, _callback = _build_fixtures()
 
-    # 운영과 같은 배선을 탄다. 이걸 빼면 HANDLERS 가 비어 dispatch 가 KeyError 로 떨어진다
-    # — 실제로 그렇게 한 번 깨졌다(2026-08-07).
+    # 운영과 같은 배선을 탄다. 이걸 빼면 HANDLERS 가 비어 dispatch 가 KeyError 로 떨어진다.
     wire_handlers()
 
     recorded: list = []
@@ -166,8 +165,8 @@ async def run_feedback(args: argparse.Namespace) -> int:
             },
             "edited_text": None,
         },
-        # ⚠️ 계약(§8)에 없는 확장 필드다. 없으면 컬렉션2 적재 자체가 불가능해서
-        #    백엔드에 요청 중인 상태 — `_load_hitl_context()` 주석 참고.
+        # 계약(docs/mq_events.md §8)에 없는 확장 필드다. 없으면 컬렉션2 적재 자체가
+        # 불가능해서 백엔드에 요청 중인 상태 — `_load_hitl_context()` 주석 참고.
         "alert": alert.model_dump(mode="json"),
         "recommendation": rec.model_dump(mode="json"),
     }
@@ -256,8 +255,8 @@ async def run(args: argparse.Namespace) -> int:
         # 운영과 같은 함수를 탄다 — 이 스크립트만 다른 방식으로 exchange 를 잡으면
         # 검증 대상이 실제 코드가 아니게 된다.
         exchange = await mq.resolve_exchange(channel, settings)
-        # ⚠️ **발행 전에 바인딩한다.** 토픽 exchange 는 받는 큐가 없으면 메시지를 버리는데
-        #    발행 쪽은 성공으로 찍힌다 — 순서를 바꾸면 이 스크립트가 통과해도 아무 의미가 없다.
+        # **발행 전에 바인딩한다.** 토픽 exchange 는 받는 큐가 없으면 메시지를 버리는데 발행
+        # 쪽은 성공으로 찍힌다 — 순서를 바꾸면 이 스크립트가 통과해도 아무 의미가 없다.
         queue = await channel.declare_queue(
             SMOKE_QUEUE, durable=False, auto_delete=True
         )
@@ -358,11 +357,10 @@ def _report(received: list, trace_id: str) -> int:
 
 
 def main() -> None:
-    # 🔴 **첫 문장이어야 한다.** 예전엔 `parse_args()` 뒤에 있었는데, `description` 이
-    #    모듈 docstring 첫 줄이고 거기 `—`(U+2014)가 있어서 **`--help` 만 쳐도 죽었다**
-    #    (2026-08-16 실측 exit 1). 윈도우 콘솔 기본 코드페이지(cp949)는 한글은 되지만
-    #    em대시·`❌` 에서 터진다. payload 를 그대로 찍는 스크립트라 검증이 아니라
-    #    출력에서 죽는다. 사유 전문은 `app/core/console.py`.
+    # **첫 문장이어야 한다.** `parse_args()` 뒤에 두면 `--help` 만 쳐도 죽는다 —
+    # `description` 이 모듈 docstring 첫 줄이고 거기 `—`(U+2014)가 있다. 윈도우 콘솔 기본
+    # 코드페이지(cp949)는 한글은 되지만 em대시·`❌` 에서 터진다. payload 를 그대로 찍는
+    # 스크립트라 검증이 아니라 출력에서 죽는다. 사유 전문은 `app/core/console.py`.
     force_utf8_output()
 
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
