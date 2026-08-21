@@ -868,3 +868,60 @@ async def test_report_publish_blocked_when_mq_disabled(report_callback, monkeypa
 
     with pytest.raises(MqDisabledError):
         await mq.publish_report_generated(report_callback, "2026-07", "trace-1")
+
+# ── payload 시각 표기 (2026-08-21 데드레터 사고) ─────────────────────────────
+#
+# 백엔드 DTO 가 `java.time.LocalDateTime` 이라 존 성분을 못 읽는다. 오프셋이 붙어 나가면
+# `MALFORMED_PAYLOAD` 로 거부돼 데드레터에 쌓이는데, **발행은 성공으로 기록된다** — 우리
+# 로그만 보면 정상이라 이 계열은 테스트로 고정하지 않으면 다시 새어 나간다.
+
+
+def test_offset_is_stripped_not_converted_to_z():
+    """🔴 `+09:00` 을 `Z` 로 바꾸는 것으로는 안 고쳐진다 — **떼야** 한다.
+
+    실패 로그의 포맷이 `ISO_LOCAL_DATE_TIME` 이라 오프셋 자리 자체가 없다. `Z` 도 같은
+    위치에서 거부된다. 고치는 사람이 "UTC 로 통일" 로 되돌리기 쉬운 자리라 못박는다.
+    """
+    got = mq._to_backend_local_iso("2026-08-21T08:53:59.506524+09:00")
+
+    assert got == "2026-08-21T08:53:59.506524"
+    assert not got.endswith("Z")
+    assert "+" not in got
+
+
+def test_utc_input_is_shifted_to_kst_wall_clock():
+    """⚠️ 오프셋만 떼면 안 된다 — 백엔드가 로컬 시각으로 읽으므로 KST 로 맞춘 뒤 뗀다.
+
+    그냥 떼면 UTC 값이 그대로 남아 화면 표시가 9시간 당겨진다.
+    """
+    assert mq._to_backend_local_iso("2026-08-28T09:00:00Z") == "2026-08-28T18:00:00"
+
+
+def test_dates_and_non_timestamps_are_left_alone():
+    """⚠️ 날짜(§2-9 DATE)와 ID 문자열은 건드리지 않는다."""
+    assert mq._to_backend_local_iso("2026-06-30") == "2026-06-30"
+    assert mq._to_backend_local_iso("ALT-20260804-P001-COLOR-ZIGZAG") == (
+        "ALT-20260804-P001-COLOR-ZIGZAG"
+    )
+    assert mq._to_backend_local_iso("2026-08-28T09:00:00") == "2026-08-28T09:00:00"
+
+
+def test_normalization_reaches_nested_payload_fields():
+    """🔴 실제로 터진 필드가 `payload.recommendation.created_at` 이라 중첩까지 봐야 한다.
+
+    빌더가 `model_dump(mode="json")` 을 통째로 싣기 때문에 최상위만 훑으면 새 필드가
+    조용히 빠진다 — `occurredAt` 에만 정규화가 걸려 있어서 이 사고가 났다.
+    """
+    payload = {
+        "detected_at": "2026-08-28T00:00:00+09:00",
+        "recommendation": {"created_at": "2026-08-21T08:53:59.506524+09:00"},
+        "citations": [{"quoted_at": "2026-08-20T10:00:00+09:00"}],
+        "product_group_id": "P001",
+    }
+
+    got = mq.normalize_payload_datetimes(payload)
+
+    assert got["detected_at"] == "2026-08-28T00:00:00"
+    assert got["recommendation"]["created_at"] == "2026-08-21T08:53:59.506524"
+    assert got["citations"][0]["quoted_at"] == "2026-08-20T10:00:00"
+    assert got["product_group_id"] == "P001"
