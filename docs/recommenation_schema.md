@@ -154,18 +154,3 @@ Agent3(개선안 생성)가 내보내는 JSON의 정의.
 - **스코프 한계 케이스(실물_염색_편차·실제_원단_문제)** → image_guide 강제 예외: detailpage_grounded 값과 무관하게 proposal.type=copy_draft로 "상품/공급 확인 권장" 일반 가이드 문구 출력 + recommendation_confidence=낮음 고정
 
 **스코프 한계 (의도적 스코프 밖)** — 편중형인데 원인이 실제 상품 문제(실물_염색_편차·실제_원단_문제)로 잡히는 드문 경우, 문구·사진 어느 도구로도 해결되지 않는다. 이때는 recommendation_confidence를 "낮음"으로 두고 일반 가이드 + "상품/공급 확인 권장" 성격 문구로 처리하며, 상세페이지 자동 개선 범위 밖으로 명시한다. (향후 과제: 상품 품질 이슈를 탐지 단계에서 별도 라우팅 분리 — 현 스코프에선 전역형만 "상품 자체 점검 권장"으로 걸러짐.)
-
-## 7. 변경 내역
-
-| 날짜 | 변경 내용 | 합의자 |
-| --- | --- | --- |
-| 2026-07-16 | 최초 초안 (데이터 트랙 제안) | 유지인 (Agent3 담당 공동 확정 대기) |
-| 2026-07-22 | 탐지 스키마(확정) 정합 개정 — 트리거 단일화(recommended_action)·캡핑 규칙·Evaluator 3기준을 §3·§5 본문에 반영, §5 경계표 2행 해소, JSON 값 빠른이해 추가, 확신도 null 허용 | 유지인 (지인 검토 대기) |
-| 2026-07-22 | 도구 선택 규칙(§6) 확정 + 필드 3개 추가(detailpage_grounded·similar_case·confidence_reason) + JSON 예시 반영, 스코프 한계 명시. 팀 컨펌 대기 | 유지인 |
-| 2026-07-22 | 확정 이상탐지 대조 검수 반영 — hitl_feedback.rejection_reason 필드 신설(반려 사유 필수, 팀 코멘트 반영), JSON 구문오류 수정 | 유지인 |
-| 2026-07-23 | 로직 문서 정합 확정 — §6 copy_draft에 채널_사이즈_표준차이 추가, 스코프 한계를 image_guide 강제 예외로 명시, hitl_feedback.edited_text 필드 신설(수정후승인 정본·컬렉션2 정예시), 로직 상호참조 갱신(§5-2·§4-1). [미확정]→[확정] | 유지인 |
-| 2026-07-23 | 로직 §4 번호 밀림 반영 — 컬렉션2 스키마 참조 §4-1→§4-2(reason_text) | 유지인 |
-| 2026-07-23 | 냉철 검수 반영 — §2 JSON 예시를 규칙 정합본으로 교체(색감→image_guide, detailpage_grounded=false, 유사사례 있음→중간), §5 갱신 만료 처리 명확화(soft-delete), §3 detailpage_grounded 스코프 예외 주석, §6 "기타" 도구규칙 aspect 반영, §5 Evaluator 실패 시 recommendation_confidence=null 명시, §2 예시에 edited_text=null 필드 보강 | 유지인 |
-| 2026-07-23 | image_guide current_text 소스 확정(CS 문의 기반, 이미지·비전 미참조) — §3·§5 정정. grounding 소스 도구별 분리는 개선안 로직 §4-3 참조 | 유지인 |
-
----

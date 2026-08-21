@@ -32,9 +32,9 @@
 | 12 | 대시보드 상단 3지표용 **별도 API 신설** | 🔴 | 신규 엔드포인트 |
 | 13 | `presigned_url` 만료 정책 | 🔴 | 메일 첨부 방식 결정 |
 
-> ⚠️ **#8~#10 은 노션 「차별화 추가 기능」의 $M_{JSD}$ 수식 자체가 바뀌는 건이라 API 응답 형태가 달라집니다.**
-> 이 3건이 확정되기 전에는 `channel_divergence` 부분 구현을 보류하시는 게 낫습니다.
-> 나머지는 지금 착수 가능합니다.
+> ✅ **위 13건은 모두 반영이 끝났고 아래 본문이 그 결과다.** 이 표는 v1 대비 무엇이 바뀌었는지를
+> 보여주는 기록이지 남은 할 일 목록이 아니다. `#8~#10`(`channel_divergence` 개편)은 $M_{JSD}$
+> 수식이 함께 바뀐 건이라 §1-1 에 근거까지 적혀 있다.
 
 ---
 
@@ -411,7 +411,7 @@ E[JSD] = (2/3) × 0.6931 = 0.4621 nats
 | 🟢 `s3_full_key` | String | — | `s3_file_path + new_file_name`. **`Alias: s3_full_kdy` 제거** |
 | `file_extension` | String | — | 기본값 `"pdf"` |
 | `file_size_bytes` | Integer (`≥0`) | — | **10MB 초과 검증용** |
-| 🔴 `presigned_url` | String **\| null** | 다운로드 버튼 링크 | §7-2 결정 필요 |
+| `presigned_url` | String **\| null** | 다운로드 버튼 링크 | 발급 +7일 (`PRESIGNED_URL_TTL_HOURS`). 만료 시 `s3_full_key` 로 재발급 |
 
 > 🟢 「문서 생성 스키마 (1)」에 `s3_full_key | Alias: s3_full_kdy` 로 오타 별칭이 남아 있고,
 > 노션 「CS 대응 가이드라인 및 보고서 생성 설계」 2안 JSON 에도 `"s3_full_kdy"` 가 전파돼 있습니다.
@@ -474,109 +474,3 @@ POST /api/v1/internal/reports/complete
 > 데이터가 누적되면 분석이 재개됩니다."
 
 **LLM을 태우지 말고 하드코딩** — 같은 문서: *"무의미한 통계 연산 및 LLM 추론을 즉시 중단(Bypass)"*
-
----
-
-## §7. 🔴 신규 결정 필요 2건
-
-### 7-1. 대시보드 상단 카드 — 별도 API 필요
-
-노션 「월 간 보고서 필요 사항 정리」 UI 목업 구간1:
-
-```
-│ 비월 총 VOC 처리량 │ 미결 서브머리 알림 수 │ 평균 오퍼레이션 해결 시간 │
-│ 125,000 건        │ 3 건                  │ 14 시간                  │
-```
-
-**세 지표 모두 현재 스키마로 못 냅니다.**
-
-| 지표 | 문제 |
-| --- | --- |
-| 총 VOC 125,000건 | **전 상품 합계**인데 `MonthlyReportInput` 은 `product_group_id` 단위 |
-| 미결 알림 수 | 스키마에 없음 |
-| 평균 해결 시간 | 스키마에 없음 |
-
-**제안 — 신규 엔드포인트**
-
-```
-GET /api/v1/dashboard/monthly-summary?month=2026-07
-```
-
-| JSON Key | 데이터 타입 | UI/UX 표시 영역 | 설명 |
-| --- | --- | --- | --- |
-| `report_month` | String | — | `YYYY-MM` |
-| `total_voc_count` | Integer | 구간1 · 카드① | **전 상품 합계** |
-| `pending_alert_count` | Integer | 구간1 · 카드② | `hitl_status = 대기` 인 알림 수 |
-| `avg_resolution_hours` | Number \| null | 구간1 · 카드③ | `AVG(hitl_feedback.processed_at − detected_at)` |
-
-`avg_resolution_hours` 산출 근거: 노션 「개선안 출력 스키마」 §3
-`hitl_feedback.processed_at | datetime | 처리 시각·처리자`
-
-**이 API는 FastAPI가 아니라 백엔드가 직접 집계**하는 것이 자연스럽습니다
-(AI 연산이 아니라 단순 카운트).
-
-### 7-2. presigned URL 만료 정책
-
-| 문서 | 값 |
-| --- | --- |
-| 「CS 대응 가이드라인 및 보고서 생성 설계」 step7 / PdfS3Meta | **1시간** 유효 |
-| 「피드백 반영」 §1 | S3 Temp 버킷 **TTL 24h**, 재요청 시 JSONB에서 **온디맨드 재컴파일(<0.5초)** |
-| 「메일 전송 필요 사항 정리」 | `pdf_url` = presigned URL을 **메일에 담음** |
-
-**메일에 1시간짜리 URL을 담으면 수신자가 다음 날 열었을 때 만료입니다.**
-
-**제안 (택1)**
-
-| 안 | 방식 | 장단 |
-| --- | --- | --- |
-| **A (권장)** | 메일은 **PDF 파일 첨부**, `presigned_url` 은 웹 UI 전용 + 클릭 시 **온디맨드 재발급** | 만료 문제 소멸. 「피드백 반영」의 재컴파일 구조와 정합 |
-| B | 메일용 URL만 **7일** 발급 | SigV4 상한 7일(확인 필요). 단 S3 TTL 24h 와 충돌하므로 TTL도 7일로 연장 필요 |
-
-확인 링크: <https://docs.aws.amazon.com/AmazonS3/latest/userguide/ShareObjectPreSignedURL.html>
-
----
-
-## §8. 백엔드 착수 순서 제안
-
-| 순번 | 작업 | 선행 조건 |
-| --- | --- | --- |
-| 1 | 🟢 필드명 4건 수정 (`total_voc_count`, `item_id` ×2, `s3_full_key` alias 제거) | **없음 — 지금 가능** |
-| 2 | 🟢 `status` enum 5종 + 콜백 API | 없음 |
-| 3 | 🟡 `aspect_stats` 분모 통일 + `scope_in` · `detection_negative_rate` 신규 | #5 팀 확인 |
-| 4 | 🟡 보류 임계값 `<10` 통일 | #11 팀 확인 |
-| 5 | 🔴 `channel_divergence` 개편 | **#8·#9·#10 확정 후** |
-| 6 | 🔴 `/dashboard/monthly-summary` 신설 | #12 확정 후 |
-| 7 | 🔴 presigned 정책 | #13 확정 후 |
-
-- **1·2번은 오타·정합 수정이라 논쟁 여지가 없으니 바로 반영하셔도 됩니다.**
-- **5번은 「차별화 추가 기능」의 수식 자체가 개정 대상이라 확정 전 착수 시 재작업이 발생합니다.**
-
----
-
-## §9. 함께 갱신해야 할 Notion 문서
-
-| 문서 | 조치 |
-| --- | --- |
-| **「문서 생성 스키마 (1)」** | **deprecated 표기 또는 삭제** — 오타 4건 전파원 |
-| **「문서 생성 스키마」** | 본 v2 로 갱신 |
-| **「월 간 보고서 필요 사항 정리」** | 분모 정의(#5), 보류 부등호(#11), 게이지 UI(#10), 상단 카드 API(#12) |
-| **「차별화 추가 기능」** | M_JSD 수식 전면 개정 — 일별 평균 → 월 누적, log₂ 명시, `≥0.5` → BH-FDR + δ_min, 게이트·null 규칙 |
-| **「CS 대응 가이드라인 및 보고서 생성 설계」** | `cs_id` → `item_id`, `s3_full_kdy` 오타, presigned 정책(#13) |
-| **「피드백 반영」** | presigned 만료 vs 메일 열람 시점(#13) |
-
----
-
-## §10. 미확정 항목 체크리스트
-
-착수 전 팀 확정이 필요한 항목입니다.
-
-- [ ] **#5** `aspect_stats` 비율 3종 분모를 `total_count` 로 통일 (합 = 1.0)
-- [ ] **#6** aspect 6종 유지 + `scope_in` 플래그로 강조 대상 구분
-- [ ] **#8** `channel_divergence` 를 3쌍 배열 구조로 개편
-- [ ] **#9** `jsd_score` / `is_crisis` nullable 허용 (표본 부족 시 null)
-- [ ] **#10** `is_crisis` 판정을 BH-FDR + 효과크기 AND 게이트로 전환
-- [ ] **#11** 보류 임계값 `< 10` 통일
-- [ ] **#12** `/api/v1/dashboard/monthly-summary` 신설
-- [ ] **#13** presigned URL 만료 정책 (A안 첨부 / B안 7일)
-- [ ] `δ_min` 초기값 `0.10` 승인 (R1 실험 후 재조정 전제)
-- [ ] `aspect_scope` 를 색상·소재·사이즈 3종 고정 (N_min = 30)

@@ -70,7 +70,3 @@
 - `recommendation_confidence` ∈ {높음, 중간, 낮음, null}
 - `citations[].inquiry_id` ⊆ `DetectionAlert.evidence.inquiry_ids` (모델 간 교차검증 함수)
 - `source == "review"`이면 모든 `aspects[].aspect` ∈ {색상, 사이즈, 소재} (아니면 검증 에러)
-
-## 8. 변경 내역
-
-변경 이력은 git 이 갖는다 — `git log --follow docs/schemas.md`.
