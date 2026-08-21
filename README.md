@@ -22,6 +22,7 @@ SELLoN AI는 LLM 하나에 모든 판단을 맡기지 않습니다.
 - [모델 운용 전략](#-모델-운용-전략)
 - [기술 스택](#-기술-스택)
 - [검증 결과](#-검증-결과)
+- [엔지니어링 규율](#-엔지니어링-규율)
 - [빠른 시작](#-빠른-시작)
 - [로컬 파이프라인 실행](#-로컬-파이프라인-실행)
 - [API](#-api)
@@ -186,6 +187,7 @@ flowchart TD
 | 저장·문서 | SQLite mock Raw DB, Amazon S3, WeasyPrint |
 | 관측성 | 구조화 로그, LangSmith 선택 연동 |
 | 품질 | pytest, pytest-asyncio, Ruff |
+| 배포·CI | Docker(`python:3.12-slim`), Docker Compose, GitHub Actions |
 
 ---
 
@@ -209,6 +211,47 @@ flowchart TD
 
 평가셋의 성격, 실행 조건, 비용, 폐기된 결과와 한계는
 [`eval/README.md`](eval/README.md)에 기록되어 있습니다.
+
+---
+
+## 🔬 엔지니어링 규율
+
+기능만큼 **저장소가 스스로를 검증하는 방식**에 공을 들였습니다.
+
+### 검사 대상을 손으로 적지 않고 소스에서 유도합니다
+
+사람이 관리하는 목록은 낡습니다. 새 진입점이나 새 호출부가 생겼을 때 목록에 넣는 것을
+잊으면 테스트는 초록인데 검사 대상은 비어 있습니다. 그래서 대상을 코드·설정에서 뽑습니다.
+
+| 가드 | 대상을 어디서 유도하나 | 막는 회귀 |
+| --- | --- | --- |
+| [`test_console_encoding.py`](tests/test_console_encoding.py) | `Dockerfile`의 `COPY`와 `__main__` 블록 | 배포 진입점이 cp949 콘솔에서 죽는 것 |
+| [`test_raw_db_write_scope.py`](tests/test_raw_db_write_scope.py) | AST로 찾은 raw DB 연결부와 쓰기 대상 | 분류 워커가 AI 소유 밖 테이블에 쓰는 것 |
+| [`test_timestamp_timezone.py`](tests/test_timestamp_timezone.py) | `app/`·`scripts/` 전 소스 스캔 | 호스트 로컬 시각 관용구 유입 |
+| [`test_requirements_parity.py`](tests/test_requirements_parity.py) | 두 requirements 파일 대조 | 슬림 이미지의 버전 드리프트 |
+
+### 테스트가 실제로 무는지 되돌려서 확인합니다
+
+"테스트가 있다"와 "테스트가 회귀를 잡는다"는 다릅니다. 주요 수정은 고친 코드를 일부러
+되돌린 뒤(뮤테이션) 테스트가 실패하는지 확인하고 머지했습니다. 안 물리면 코드가 아니라
+테스트를 고칩니다.
+
+### 측정과 주장을 분리합니다
+
+- 정답 집계를 입력으로 준 oracle 결과와 실제 모델 성능을 한 숫자로 합치지 않습니다
+- 실험 결과에 모델·프롬프트 버전·시드·데이터 지문을 함께 기록해 재현 조건을 남깁니다
+- 폐기된 측정도 사유와 함께 [`eval/README.md`](eval/README.md)에 남깁니다
+
+### CI 3종
+
+| 워크플로 | 하는 일 |
+| --- | --- |
+| [`test.yml`](.github/workflows/test.yml) | pytest · **ruff 규칙별 기준선** · Postgres 서비스를 띄워 스키마 적재 |
+| [`image.yml`](.github/workflows/image.yml) | 빌드 → PDF 스모크(CJK 폰트·네이티브 의존성) → 진입점 import 확인 → 레지스트리 push → GitOps 태그 갱신 |
+| [`mock-producer.yml`](.github/workflows/mock-producer.yml) | 슬림 이미지 계약 확인 → 재생 스모크(대본 → raw DB) |
+
+ruff는 총계가 아니라 **규칙별**로 비교합니다. 총계로 걸면 한 규칙이 늘고 다른 규칙이
+그만큼 줄어든 회귀가 그대로 통과합니다.
 
 ---
 
@@ -276,9 +319,13 @@ uvicorn app.main:app --reload --port 8000
 python -m pytest -q
 ```
 
-`tests/`는 외부 API를 호출하지 않으므로 LLM 과금이 발생하지 않습니다.
-Postgres 실연결 테스트는 접속 정보(`RAW_DB_TEST_DSN`)가 없으면 건너뜁니다. 로컬에서
-skip이 몇 건 보이는 것은 정상이고, CI는 Postgres를 띄워 함께 실행합니다.
+`tests/`는 외부 API를 호출하지 않으므로 **LLM 호출 0회 · 과금 0원**이고, 전량 실행에
+약 2~3분이 걸립니다. 클론(또는 압축 해제) 직후 별도 데이터 준비 없이 바로 돌아가므로,
+이 명령 하나로 저장소 전체를 직접 검증할 수 있습니다.
+
+작성 시점 기준 **967 passed / 16 skipped**입니다. skip은 Postgres 실연결 테스트로,
+접속 정보(`RAW_DB_TEST_DSN`)가 없으면 건너뜁니다. 로컬에서 skip이 보이는 것은
+정상이고, CI는 Postgres를 띄워 함께 실행합니다.
 
 ---
 
@@ -390,10 +437,14 @@ app/
 └── reporting/           월간 리포트·CS 가이드라인·PDF·S3
 
 scripts/                 데이터 생성·분류 워커·시딩·운영 검산
-tests/                   비용 없는 단위·통합·회귀 테스트
+tests/                   비용 없는 단위·통합·회귀 테스트, 소스 유도형 가드
 eval/                    성능 평가 스크립트와 재현 기록
 docs/                    스키마·메시지·탐지·리포팅 설계 문서
 data/                    로컬 입력·골든·실행 상태, 대부분 git 제외
+
+Dockerfile               운영 이미지(API·배치·워커 공용)
+docker-compose.yml       로컬 의존 서비스: Kafka·RabbitMQ·Postgres·mock producer
+.github/workflows/       CI 3종 — 테스트·이미지·mock producer
 ```
 
 `tests/`와 `eval/`은 목적이 다릅니다.
