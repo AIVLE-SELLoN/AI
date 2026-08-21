@@ -440,7 +440,7 @@ data/                    로컬 입력·골든·실행 상태, 대부분 git 제
 | 문서 | 내용 |
 | --- | --- |
 | [`개발환경-컨벤션.md`](개발환경-컨벤션.md) | 개발 환경, 브랜치, 코드·프롬프트 규칙 |
-| [`eval/README.md`](eval/README.md) | 실험 7종의 실행법, 결과, 비용, 해석 한계 |
+| [`eval/README.md`](eval/README.md) | 실험 9종의 실행법, 결과, 비용, 해석 한계 |
 | [`eval/results/`](eval/results/) | 실험을 돌릴 때마다 쌓인 결과 파일. 각 파일은 실행 당시의 기록이라 **최신 수치는 위 `eval/README.md`를 봅니다** |
 | [`docs/schemas.md`](docs/schemas.md) | Agent 간 공용 데이터 계약 |
 | [`docs/이상탐지 로직.md`](docs/이상탐지%20로직.md) | Agent2 단계별 탐지 명세 |
