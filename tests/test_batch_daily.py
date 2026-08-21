@@ -1,6 +1,6 @@
 """담당: 서영 (Agent2) — 일 1회 배치의 상태 저장·게이트·종료코드.
 
-지인님 PR 리뷰(2026-08-06)가 짚은 1·3·5번이 전부 이 구간이라, 그 회귀를 고정한다.
+상태 저장·게이트·종료코드가 한 구간에 모여 있어 그 회귀를 여기서 고정한다.
 LLM 은 부르지 않는다 — 발행·개선안·가이드라인을 전부 주입/몽키패치로 막는다.
 """
 
@@ -139,7 +139,7 @@ def test_atomic_write_leaves_no_partial_file(tmp_path):
 
 
 def test_classifier_versions_only_when_the_filter_guaranteed_them():
-    """🔴 payload 의 분류기 신원은 **필터가 보장할 때만** 값이 있다.
+    """payload 의 분류기 신원은 **필터가 보장할 때만** 값이 있다.
 
     실을 수 있는 근거가 `_ASPECT_SQL` 의 활성 버전 필터뿐이다 — 그 필터가 "이 알림에
     기여한 모든 행의 버전 3종이 활성 값"임을 쿼리로 강제하므로 주장이 아니라 관측이다.
@@ -241,11 +241,11 @@ def _stub_in_scope_inputs(window_end=None):
 
 @pytest.mark.asyncio
 async def test_max_alerts_does_not_cache_untouched_alerts(tmp_path, monkeypatch):
-    """⚠️ 상한으로 잘린 알림은 캐시에 안 들어간다.
+    """상한으로 잘린 알림은 캐시에 안 들어간다.
 
     들어가면 다음 배치가 그걸 직전 알림으로 보고 RENOTIFY_BLOCK_DAYS 만큼 억제해서
     **셀러가 그 알림을 영영 못 본다.** resolved_alert_ids 가 빈 집합이라 조기 해제
-    경로도 없다. (지인님 PR 리뷰 §1)
+    경로도 없다.
     """
     path = tmp_path / "state.json"
     summary = await daily.run_batch(
@@ -281,7 +281,7 @@ async def test_window_end_is_taken_from_data_not_clock(tmp_path, monkeypatch):
     """로드·탐지·저장이 같은 window_end 를 쓴다.
 
     읽기가 실행 시각이면, 데이터가 뒤처진 상태에서 방금 저장한 캐시를 통째로 버려
-    매 배치가 첫 실행처럼 굴러간다. (지인님 PR 리뷰 §5)
+    매 배치가 첫 실행처럼 굴러간다.
     """
     path = tmp_path / "state.json"
 
@@ -350,7 +350,7 @@ async def test_cs_inquiries_are_built_once_and_shared(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_cs_mapping_failure_does_not_kill_the_batch(tmp_path, monkeypatch):
-    """🔴 CS 원문 매핑이 터져도 배치가 끝까지 돈다 — 알림 발행도 캐시 저장도 살아 있다.
+    """CS 원문 매핑이 터져도 배치가 끝까지 돈다 — 알림 발행도 캐시 저장도 살아 있다.
 
     이 호출은 알림별 try/except **바깥**에 있었다. 루프를 감싸는 try 엔 except 가 없어서
     (`finally: close_mq()` 뿐) 여기서 던지면 `run_batch` 밖으로 나가고, `save_published()`
@@ -384,7 +384,7 @@ async def test_cs_mapping_failure_does_not_kill_the_batch(tmp_path, monkeypatch)
 
 @pytest.mark.asyncio
 async def test_silent_recommendation_failure_still_shows_up(tmp_path, monkeypatch):
-    """⚠️ 개선안이 조용히 실패해도 요약·종료코드에 남는다.
+    """개선안이 조용히 실패해도 요약·종료코드에 남는다.
 
     `generate_outcome_for_alert` 는 계약상 예외를 안 던지고 개선안 없는 결과를 돌려준다.
     except 만 믿으면 개선안이 하나도 안 붙은 배치가 "성공"으로 끝나서 아무도 못 알아챈다.
@@ -421,7 +421,7 @@ async def test_silent_recommendation_failure_still_shows_up(tmp_path, monkeypatc
 
 @pytest.mark.asyncio
 async def test_routing_miss_is_counted_but_not_a_failure(tmp_path, monkeypatch):
-    """🔴 라우팅 미스도 **실패가 아니다** — 건수로만 센다 (2026-08-11 리뷰 반영).
+    """라우팅 미스도 **실패가 아니다** — 건수로만 센다.
 
     처음엔 실패로 뒀는데, 그러면 `NO_EVIDENCE` 를 실패에서 뺀 이유가 옆문으로 그대로
     돌아온다. **근본 원인이 같기 때문**이다(상세페이지 미등록 — mock 504행 중 489행이
@@ -458,7 +458,7 @@ async def test_routing_miss_is_counted_but_not_a_failure(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_no_evidence_is_counted_but_not_a_failure(tmp_path, monkeypatch):
-    """🔴 근거 0건은 **실패가 아니다** — 건수로만 세고 종료코드에 안 싣는다 (2026-08-10).
+    """근거 0건은 **실패가 아니다** — 건수로만 세고 종료코드에 안 싣는다.
 
     상세페이지 미등록은 흔한 데이터 갭이라(mock 기준 504행 중 489행이 "정보 없음"),
     이걸 실패로 세면 배치가 상시 종료코드 1 로 끝나 **진짜 장애 신호가 무뎌진다.**
@@ -490,11 +490,11 @@ async def test_no_evidence_is_counted_but_not_a_failure(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_raised_recommendation_failure_is_counted_once(tmp_path, monkeypatch):
-    """⚠️ 실패 1건이 요약에 1건으로 잡힌다.
+    """실패 1건이 요약에 1건으로 잡힌다.
 
     `generate_outcome_for_alert` 는 계약상 안 던지지만 던지는 날엔, except 와 뒤따르는
     `rec is None` 검사가 **둘 다** 타서 실패가 2배로 보고됐다. 그러면 배치 요약의
-    실패 건수를 못 믿게 된다. (2026-08-07 재검토)
+    실패 건수를 못 믿게 된다.
     """
 
     async def blows_up(alert, inquiries):
@@ -524,7 +524,7 @@ async def test_dry_run_skips_recommendation_when_gate_closed(tmp_path):
     """개선안 카운트는 should_generate 를 통과한 alert 만 센다.
 
     조치 7종 중 '개선안 생성' 은 1종뿐이라, 게이트를 안 태우면 Agent3 비용이 크게
-    과대추정된다. (지인님 PR 리뷰 §2)
+    과대추정된다.
     """
     summary = await daily.run_batch(
         dry_run=True, state_path=tmp_path / "state.json", load_inputs=_stub_inputs
@@ -536,7 +536,7 @@ async def test_dry_run_skips_recommendation_when_gate_closed(tmp_path):
     )
     # 가이드라인도 게이트를 태운다 — 이 알림은 `evidence.inquiry_ids` 가 비어 있어
     # (스코프 밖이라 [6] 원인분류를 안 탄다) `is_guideline_target()` 이 거르고 LLM 을
-    # 아예 안 부른다. 예전엔 알림 수만큼 세서 **비용 추정이 위로 어긋났다**(2026-08-10).
+    # 아예 안 부른다. 예전엔 알림 수만큼 세서 **비용 추정이 위로 어긋났다**.
     assert summary["llm_calls"].get("가이드라인", 0) == 0
     assert summary["state_cached"] == 0, "dry-run 은 캐시를 건드리지 않는다"
 
@@ -606,11 +606,11 @@ async def test_dry_run_counts_guideline_when_gate_open(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_mq_connection_is_closed_even_when_batch_blows_up(tmp_path, monkeypatch):
-    """⚠️ 루프 도중 터져도 MQ 연결을 닫는다.
+    """루프 도중 터져도 MQ 연결을 닫는다.
 
     app/core/mq.py 가 프로세스당 연결을 재사용하는데, 안 닫고 이벤트 루프가 내려가면
     connect_robust 의 재연결 태스크가 남아 "Task was destroyed but it is pending" 이
-    뜬다. 나중에 배치가 장수 프로세스에 얹히면 연결이 샌다. (서영님 PR 리뷰 §1)
+    뜬다. 나중에 배치가 장수 프로세스에 얹히면 연결이 샌다.
     """
     closed: list[bool] = []
 
@@ -689,7 +689,7 @@ async def test_cause_failure_is_reported_as_batch_failure(
 
 @pytest.mark.asyncio
 async def test_injected_loader_reports_unknown_not_zero(tmp_path):
-    """🔴 주입된 로더는 제외 건수가 **`None`(보고 안 함)** 이지 `0` 이 아니다.
+    """주입된 로더는 제외 건수가 **`None`(보고 안 함)** 이지 `0` 이 아니다.
 
     골든 로더는 매핑이 없는 행을 세지 않고 그냥 건너뛴다(`scripts/golden_inputs.py`).
     거기서 `{}` 나 `0` 을 실으면 배치가 **"제외 0건" 이라고 주장**하게 되는데, 그건
@@ -706,7 +706,7 @@ async def test_injected_loader_reports_unknown_not_zero(tmp_path):
 def test_print_summary_shows_dropped_inputs_only_when_there_are_any(capsys):
     """화면에 나야 값을 한다 — 요약 dict 에만 있으면 사람은 못 본다.
 
-    ⚠️ 반대편(비었거나 관측 불가면 줄을 안 낸다)도 같이 잠근다. 매번 "0건" 을 찍으면
+    반대편(비었거나 관측 불가면 줄을 안 낸다)도 같이 잠근다. 매번 "0건" 을 찍으면
        눈에 안 띄는 줄이 하나 늘 뿐이고, 이 항목의 목적은 **늘었을 때 보이는 것**이다.
     """
     daily.print_summary(_fake_summary(input_dropped={"상품매핑 없음": 7}))
@@ -720,13 +720,13 @@ def test_print_summary_shows_dropped_inputs_only_when_there_are_any(capsys):
 def _fake_summary(**overrides) -> dict:
     """`run_batch()` 반환값의 가짜. **실제 계약과 키가 정확히 같다.**
 
-    ⚠️ 예전엔 리터럴이 두 벌이었고 그중 하나에 실제로는 없는 `window_end` 가 들어 있었다
-       (용준님 PR #98 리뷰 잔가지). 가짜가 계약과 갈리면 다음 사람이 `summary["window_end"]`
+    예전엔 리터럴이 두 벌이었고 그중 하나에 실제로는 없는 `window_end` 가 들어 있었다
+       — 가짜가 계약과 갈리면 다음 사람이 `summary["window_end"]`
        를 쓰고 런타임에 `KeyError` 를 본다. **반대 방향(키 누락)도 같이 위험하다** —
        `print_summary` 가 `.get()` 으로 읽는 항목은 가짜에 없어도 조용히 통과해서, 그
        분기를 태운다고 믿는 테스트가 실제로는 안 태운다.
 
-    ⚠️ 아래 `test_fake_summary_matches_the_real_contract` 가 두 방향을 다 잠근다.
+    아래 `test_fake_summary_matches_the_real_contract` 가 두 방향을 다 잠근다.
     """
     return {
         "trace_id": "trace-1",
@@ -760,7 +760,7 @@ def _fake_summary(**overrides) -> dict:
 
 
 def test_fake_summary_matches_the_real_contract():
-    """🔴 가짜 요약이 `run_batch()` 의 실제 반환 키와 **정확히 일치**하는지.
+    """가짜 요약이 `run_batch()` 의 실제 반환 키와 **정확히 일치**하는지.
 
     한쪽으로만 검사하면 안 된다 —
       - 가짜에만 있는 키: 다음 사람이 그 키를 쓰고 런타임에 `KeyError` 를 본다
@@ -788,9 +788,9 @@ def test_fake_summary_matches_the_real_contract():
 
 
 def test_main_switches_encoding_before_printing(monkeypatch):
-    """⚠️ `main()` 이 실제로 `force_utf8_output()` 을 부른다 — 배선까지 고정한다.
+    """`main()` 이 실제로 `force_utf8_output()` 을 부른다 — 배선까지 고정한다.
 
-    헬퍼만 테스트하면 호출 한 줄이 빠져도 아무것도 안 깨진다(2026-08-07 리뷰 지적).
+    헬퍼만 테스트하면 호출 한 줄이 빠져도 아무것도 안 깨진다.
     `main()` 은 인자 파싱·늦은 import·로깅 설정이 몰려 있어 손이 자주 가는 함수라,
     빠지면 윈도우에서 **성공한 배치가 다시 비-0 으로 끝나고** 종료코드 판정이 죽는다.
     """
@@ -798,7 +798,7 @@ def test_main_switches_encoding_before_printing(monkeypatch):
 
     async def fake_run_batch(**_kwargs):
         calls.append("run_batch")
-        # ⚠️ `input_source` 는 "golden 이면 경고" 줄을 태우려고 이 값을 쓴다.
+        # `input_source` 는 "golden 이면 경고" 줄을 태우려고 이 값을 쓴다.
         return _fake_summary(input_source="load_golden_inputs")
 
     pin_settings(monkeypatch)
@@ -823,7 +823,7 @@ def test_main_switches_encoding_before_printing(monkeypatch):
 def test_config_error_exits_two_before_running_the_batch(
     monkeypatch, capsys, fake_get_settings, why
 ):
-    """🔴 설정 오류는 exit **2** 이고, `run_batch` 에 **들어가지도 않는다.**
+    """설정 오류는 exit **2** 이고, `run_batch` 에 **들어가지도 않는다.**
 
     예전엔 `get_settings()` 가 `run_batch` **안쪽**에서만 불려서
     (`_active_version_params()` · `load_inputs_from_db()`) `MQ_PORT=abc` 같은 값 오류가
@@ -831,12 +831,11 @@ def test_config_error_exits_two_before_running_the_batch(
     *"배치는 돌았는데 일부가 실패"* 로 쓰는 값이라(`sys.exit(EXIT_RUNTIME_ERROR)`),
     **"아예 못 떴다" 와 "돌다가 일부 실패" 가 종료코드로 구분이 안 됐다.**
 
-    ⚠️ **두 갈래를 다 돈다.** 초안은 `get_settings` 를 **성공하는** 가짜로 바꿔 레벨 갈래만
+    **두 갈래를 다 돈다.** 초안은 `get_settings` 를 **성공하는** 가짜로 바꿔 레벨 갈래만
        탔는데, 그러면 누가 `settings = get_settings()` 를 `try` 위로 올리는 "정리" 를 해도
-       이 파일은 초록이고 배치의 `MQ_PORT=abc` 가 조용히 exit 1 로 돌아간다
-       (용준님 PR #98 리뷰 잔가지).
+       이 파일은 초록이고 배치의 `MQ_PORT=abc` 가 조용히 exit 1 로 돌아간다.
 
-    ⚠️ `run_batch` 를 **안 탄다는 것까지** 본다. 종료코드만 보면, 배치를 끝까지 돌고 나서
+    `run_batch` 를 **안 탄다는 것까지** 본다. 종료코드만 보면, 배치를 끝까지 돌고 나서
        실패로 끝나도 통과한다 — LLM 을 태운 뒤 죽는 것과 아예 안 시작하는 것은 다르다.
     """
     monkeypatch.setattr(logging.root, "handlers", [])
@@ -844,9 +843,9 @@ def test_config_error_exits_two_before_running_the_batch(
 
     ran = []
 
-    # ⚠️ **코루틴이어야 한다.** 평범한 lambda 면 `asyncio.run(None)` 이 `ValueError` 로
+    # **코루틴이어야 한다.** 평범한 lambda 면 `asyncio.run(None)` 이 `ValueError` 로
     #    죽어서, 가드가 사라지는 회귀에서 `SystemExit` 대신 엉뚱한 예외가 나고
-    #    `assert not ran` 이 **우연히** 지켜진다(용준님 리뷰 잔가지, 재현 확인).
+    #    `assert not ran` 이 **우연히** 지켜진다.
     async def fake_run_batch(**_kwargs):
         ran.append(1)
         return _fake_summary()
@@ -874,7 +873,7 @@ def test_config_error_exits_two_before_running_the_batch(
             "스키마·분류결과 전제 — `_require_classified_tables` 계열",
         ),
         (
-            # 🔴 실제 `_check_version_cutover` 가 이 모양이다 — **조치 안내가 뒷줄에 있다.**
+            # 실제 `_check_version_cutover` 가 이 모양이다 — **조치 안내가 뒷줄에 있다.**
             RuntimeError(
                 "윈도우 안 분류 결과가 옛 분류기 기준입니다\n"
                 "  섞인 채로는 돌리지 않습니다 — 기준선 부정률이 0 이 되어 오탐이 됩니다.\n"
@@ -882,9 +881,9 @@ def test_config_error_exits_two_before_running_the_batch(
             ),
             "여러 줄 — 첫 줄만 남기면 조치 안내를 잃는다",
         ),
-        # 🔴 **Postgres 문.** 아래 둘은 `FileNotFoundError` 도 `RuntimeError` 도 아니라서
+        # **Postgres 문.** 아래 둘은 `FileNotFoundError` 도 `RuntimeError` 도 아니라서
         #    `connection_error_types()` 가 빠지면 **미포착 → exit 1 + raw traceback** 이다.
-        #    ⚠️ **두 베이스를 일부러 다 넣었다** — 누가 `psycopg.OperationalError` 로 좁히면
+        # **두 베이스를 일부러 다 넣었다** — 누가 `psycopg.OperationalError` 로 좁히면
         #       아래 `UndefinedTable`(= ProgrammingError) 이 혼자 실패해서 알려준다.
         (
             psycopg.OperationalError(
@@ -903,14 +902,14 @@ def test_config_error_exits_two_before_running_the_batch(
     ],
 )
 def test_runtime_environment_failures_exit_two(monkeypatch, capsys, exc, why):
-    """🔴 실행 중 드러나는 **환경 전제**도 exit 2 다 — 부팅 가드만으로는 안 덮인다.
+    """실행 중 드러나는 **환경 전제**도 exit 2 다 — 부팅 가드만으로는 안 덮인다.
 
     `configure_logging_or_exit()` 은 `Settings` 로 읽히는 값만 본다. 그런데 배치에서 제일
     자주 나는 실패는 그 다음이다 — raw DB 경로가 틀렸거나, 스키마가 옛 버전이거나, 분류
     결과 테이블이 없는 것. 전부 **재시작해도 같은데** exit 1 로 나가면 k8s 가 영원히
-    재시도한다(용준님 PR #98 리뷰 ①, 재현 확인).
+    재시도한다.
 
-    ⚠️ **메시지 전문이 나가야 한다.** 이 전제 검사들은 여러 줄로 조치 방법까지 담고 있어서
+    **메시지 전문이 나가야 한다.** 이 전제 검사들은 여러 줄로 조치 방법까지 담고 있어서
        (`LLM_MODEL 오타면 설정을 고치세요` 등) 첫 줄만 남기면 정작 필요한 안내를 잃는다 —
        부팅 경로(한 줄 축약)와 일부러 다르다.
     """
@@ -928,20 +927,20 @@ def test_runtime_environment_failures_exit_two(monkeypatch, capsys, exc, why):
     assert got.value.code == exit_codes.EXIT_CONFIG_ERROR, why
     err = capsys.readouterr().err
     assert "환경이 준비되지 않아" in err, why
-    # 🔴 **전문**이 나가야 한다 — 첫 줄만 보면 위 여러 줄 케이스에서 조치 안내를 잃는다.
+    # **전문**이 나가야 한다 — 첫 줄만 보면 위 여러 줄 케이스에서 조치 안내를 잃는다.
     for line in str(exc).splitlines():
         assert line.strip() in err, f"메시지가 잘렸습니다({why}): {line!r}"
     assert "Traceback" not in err, why
 
 
 def test_runtime_error_stays_confined_to_preconditions():
-    """🔴 위 분류의 전제 — `RuntimeError` 를 던지는 곳이 배치 전제검사뿐인지.
+    """위 분류의 전제 — `RuntimeError` 를 던지는 곳이 배치 전제검사뿐인지.
 
     `main()` 이 `(FileNotFoundError, RuntimeError)` 를 "환경 문제(=2)" 로 분류하는데,
     누군가 `app/` 어딘가에서 `RuntimeError` 를 **진짜 버그** 신호로 쓰기 시작하면 그게
     조용히 설정 오류로 오분류된다. 그때 이 테스트가 먼저 실패해서 분류를 다시 보게 한다.
 
-    ⚠️ 라이브러리가 던지는 `RuntimeError` 까지는 못 막는다. CronJob 이라 오분류 비용이
+    라이브러리가 던지는 `RuntimeError` 까지는 못 막는다. CronJob 이라 오분류 비용이
        비대칭이라(다음 예약 실행은 그대로 돈다) 감수한 선택이다 — `daily.main()` 주석 참고.
     """
     hits = {
@@ -963,9 +962,9 @@ def test_runtime_error_stays_confined_to_preconditions():
 def test_help_works_even_when_the_config_is_broken(monkeypatch):
     """`--help` 는 설정이 깨져 있어도 나와야 한다 — 그래서 설정 로딩이 `parse_args()` **뒤**다.
 
-    ⚠️ 순서를 앞으로 옮기면 **설정 오타 하나로 사용법조차 못 본다.** 하필 그때가 사용법이
+    순서를 앞으로 옮기면 **설정 오타 하나로 사용법조차 못 본다.** 하필 그때가 사용법이
        제일 필요한 순간이다(어떤 플래그로 고쳐 돌릴지 봐야 한다).
-    ⚠️ 반대 방향 제약도 있다 — `force_utf8_output()` 보다 뒤여야 한다(그건 첫 문장이어야
+    반대 방향 제약도 있다 — `force_utf8_output()` 보다 뒤여야 한다(그건 첫 문장이어야
        하고 `tests/test_console_encoding.py` 가 강제한다). 두 제약 사이의 자리다.
     """
     pin_settings(monkeypatch, log_level="info")  # 설정이 깨진 상태
@@ -981,7 +980,7 @@ def test_help_works_even_when_the_config_is_broken(monkeypatch):
 def test_batch_failures_still_exit_one(monkeypatch):
     """반대편 — "돌았는데 일부 실패" 는 여전히 **1** 이다.
 
-    ⚠️ 위 테스트만 있으면 누가 `sys.exit(EXIT_CONFIG_ERROR)` 로 통일해도 안 걸린다.
+    위 테스트만 있으면 누가 `sys.exit(EXIT_CONFIG_ERROR)` 로 통일해도 안 걸린다.
        그러면 cron·k8s 가 **재시도해도 소용없는 실패**로 오해한다 — 이쪽은 다음 실행에
        나을 수 있는 실패다.
     """
@@ -998,10 +997,10 @@ def test_batch_failures_still_exit_one(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         daily.main()
 
-    # ⚠️ 두 코드가 서로 다르다는 단언은 여기 두지 않는다 —
+    # 두 코드가 서로 다르다는 단언은 여기 두지 않는다 —
     #    `test_main_entrypoint.py::test_the_contract_values_are_what_k8s_expects` 가
     #    이미 본다. 배치 동작 테스트 안에 두면 계약이 바뀔 때 두 곳이 서로 다른 메시지로
-    #    실패한다(용준님 PR #98 리뷰 잔가지).
+    #    실패한다.
     assert exc.value.code == exit_codes.EXIT_RUNTIME_ERROR
 
 
@@ -1009,16 +1008,16 @@ def test_batch_failures_still_exit_one(monkeypatch):
 async def test_window_end_fallback_uses_kst_today(tmp_path, monkeypatch):
     """문서가 0건이라 window_end 를 못 정할 때, 오늘 날짜를 **KST 로 정한다.**
 
-    §3(KST 경계)을 이 폴백에서도 지키는지만 본다. `date.today()` 는 호스트 로컬이라
+    확정 문서의 KST 경계를 이 폴백에서도 지키는지만 본다. `date.today()` 는 호스트 로컬이라
     UTC 컨테이너에서는 KST 보다 하루 이른 날짜가 나온다.
 
-    ⚠️ **retention 동작을 재는 테스트가 아니다** (서영님 사후 리뷰, PR #68). 이 분기의
+    **retention 동작을 재는 테스트가 아니다**. 이 분기의
        `prior` 는 로그 건수에만 쓰인다 — documents 가 0건이면 `detect_anomaly` 가 즉시
        반환하고 `save_published` 도 건너뛴다. 컷오프 경계 자체는 위
        `test_state_roundtrip_drops_outside_retention` 이 이미 덮는다.
 
     UTC 호스트를 시계 monkeypatch 로 흉내낸다 — 서브프로세스가 필요 없다.
-    ⚠️ **기준 순간을 오늘과 멀리 잡는 게 중요하다.** 오늘 근처로 잡으면 `date.today()`
+    **기준 순간을 오늘과 멀리 잡는 게 중요하다.** 오늘 근처로 잡으면 `date.today()`
        로 되돌려도 우연히 같은 값이 나와 뮤테이션이 안 물린다.
         UTC 2026-03-04 23:30  =  KST 2026-03-05 08:30  (두 날짜가 갈리는 순간)
     """
@@ -1047,11 +1046,11 @@ async def test_window_end_fallback_uses_kst_today(tmp_path, monkeypatch):
     assert seen == [date(2026, 3, 5)], "UTC 호스트에서 오늘 날짜가 하루 밀렸습니다"
 
 
-# ── §4 가이드라인 재시도 대기열 (2026-08-14) ─────────────────────
+# ── §4 가이드라인 재시도 대기열 ──────────────────────────────────
 #
 # "알림 발행은 성공했는데 가이드라인만 실패" 하면 알림이 억제 캐시에 들어가
 # 그 건의 가이드라인이 영영 재시도되지 않던 구멍을 막는다. 대기열은
-# published_alerts.json 이 아니라 **별도 파일**이다 — §2 조회 API 가 붙으면
+# published_alerts.json 이 아니라 **별도 파일**이다 — 백엔드 조회 API 가 붙으면
 # 억제 캐시는 통째로 걷어내는데 "가이드라인을 받았는지"는 그 응답에 없어서다.
 
 
@@ -1068,7 +1067,7 @@ class _FakeCallback:
 
 @pytest.mark.asyncio
 async def test_guideline_publish_failure_goes_to_pending_queue(tmp_path, monkeypatch):
-    """🔴 §4 본체 — 발행 실패분이 대기열에 남고, 알림 자체는 억제 캐시에 들어간다.
+    """발행 실패분이 대기열에 남고, 알림 자체는 억제 캐시에 들어간다.
 
     알림까지 캐시에서 빼면 다음 배치가 알림·개선안을 통째로 재생성한다(LLM 재지불).
     가이드라인만 대기열로 가는 것이 '상태 두 단계로 쪼개기'의 핵심이다.
@@ -1256,7 +1255,7 @@ async def test_retry_failure_increments_attempts_and_keeps_entry(tmp_path, monke
     assert saved["ALT-PENDING"]["attempts"] == 1, "재시도 1회 소진이 기록돼야 한다"
     assert summary["guideline_retried"] == 0
     retry_failures = [f for f in summary["failures"] if f["stage"] == "가이드라인 재시도"]
-    # 식별자 키는 target_key 하나다(#80 후속) — alert_id 로 넣으면 print_summary 가
+    # 식별자 키는 target_key 하나다 — alert_id 로 넣으면 print_summary 가
     # "식별자 없음" 으로 찍는다.
     assert retry_failures and retry_failures[0]["target_key"] == "ALT-PENDING"
     # 이 배치 자신의 신규 실패도 attempts=0 으로 같이 들어간다 — 서로 안 겹친다.
@@ -1399,12 +1398,12 @@ async def test_pending_path_derives_from_custom_state_path(tmp_path, monkeypatch
     assert len(json.loads(derived.read_text(encoding="utf-8"))) == 1
 
 
-# ── PR #90 리뷰 반영 (서영, 2026-08-14) ──────────────────────────
+# ── 대기열 쓰기 순서와 조정 ──────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_pending_save_failure_does_not_suppress_the_alert(tmp_path, monkeypatch):
-    """🔴 P1 — 대기열 저장이 실패하면 그 알림을 억제 캐시에도 넣지 않는다.
+    """P1 — 대기열 저장이 실패하면 그 알림을 억제 캐시에도 넣지 않는다.
 
     억제 캐시를 먼저 저장하면 두 쓰기 사이에서 실패했을 때 알림은 억제되는데 대기
     항목이 없어 가이드라인이 영구 유실된다 — 이 PR 이 막으려는 구멍 그대로다.
@@ -1442,11 +1441,11 @@ async def test_pending_save_failure_does_not_suppress_the_alert(tmp_path, monkey
 
 @pytest.mark.asyncio
 async def test_alert_publish_failure_is_not_enqueued_for_retry(tmp_path, monkeypatch):
-    """🔴 P2 — 알림 발행까지 실패한 건은 대기열에 안 넣는다.
+    """P2 — 알림 발행까지 실패한 건은 대기열에 안 넣는다.
 
     그 알림은 억제 캐시에 없어 다음 배치가 신규 target 으로 통째로 재처리한다
     (가이드라인도 그 경로에서 다시 만들어진다). 대기열에도 넣으면 같은
-    guideline_id 가 두 경로에서 두 번 생성·발행된다 — 서영님 실측 그대로.
+    guideline_id 가 두 경로에서 두 번 생성·발행된다.
     """
 
     async def fake_guideline(alert, inquiries, *, product_name=None):
@@ -1475,7 +1474,7 @@ async def test_alert_publish_failure_is_not_enqueued_for_retry(tmp_path, monkeyp
 
 @pytest.mark.asyncio
 async def test_max_alerts_zero_holds_pending_retries(tmp_path, monkeypatch):
-    """🔴 P2 — 재시도가 --max-alerts 예산을 우회하면 안 된다.
+    """P2 — 재시도가 --max-alerts 예산을 우회하면 안 된다.
 
     max_alerts=0 은 "이 실행에서 LLM·S3 비용 0" 이라는 뜻이다. 대기열이 그걸
     우회하면 장애 복구 직후 대기열 규모만큼 비용이 한 번에 나간다. 예산 밖 대기
@@ -1575,11 +1574,11 @@ async def test_retry_budget_is_what_max_alerts_leaves_over(tmp_path, monkeypatch
 async def test_crash_between_pending_and_suppression_saves_single_path(
     tmp_path, monkeypatch
 ):
-    """🔴 2회전 P1 — "대기열 저장 성공 + 억제 캐시 저장 실패" 크래시 창의 재실행.
+    """2회전 P1 — "대기열 저장 성공 + 억제 캐시 저장 실패" 크래시 창의 재실행.
 
     두 상태 파일은 원자적으로 같이 못 쓴다. 그 사이에서 죽으면 다음 실행에 같은
     알림이 신규 target(억제 안 됨)과 대기열 **양쪽**에 있다 — 조정 없이는 같은
-    guideline_id 가 2회 생성·발행된다(서영님 실측). 실행 초입에 겹치는 대기 항목을
+    guideline_id 가 2회 생성·발행된다. 실행 초입에 겹치는 대기 항목을
     걷어내 메인 루프 한 경로만 태운다.
     """
     pending_path = _pending_path(tmp_path)
@@ -1602,7 +1601,7 @@ async def test_crash_between_pending_and_suppression_saves_single_path(
     monkeypatch.setattr(daily, "publish_anomaly_analyzed", sent)
 
     # 1차 실행: 가이드라인 발행 실패(→ 대기열 write-ahead 저장 성공) 직후
-    # 억제 캐시 저장이 죽는다 — 서영님 재현 그대로.
+    # 억제 캐시 저장이 죽는다.
     real_save_published = daily.save_published
 
     def save_published_crashes(published_alerts, window_end, path):

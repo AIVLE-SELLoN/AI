@@ -1,18 +1,18 @@
 """담당: 지인 — `app/core/raw_db.connect_readonly()` (raw DB 읽기 연결).
 
 이 모듈이 지키는 계약 2개. **둘 다 조용히 깨지는 종류라 테스트가 유일한 방어선이다:**
-  1. **읽기 전용이다** — 읽는 쪽이 원문을 고칠 수 없다(§5-2 권한 그대로).
+  1. **읽기 전용이다** — 읽는 쪽이 원문을 고칠 수 없다(확정 문서 §5-2 권한 그대로).
   2. **없는 경로를 조용히 넘기지 않는다** — 기본 연결은 빈 DB 를 새로 만들어서, 조회가
      0건으로 성공하고 배치가 알림 없이 **정상 종료**한다.
 
-Postgres 이식 1단계(2026-08-16)로 계약이 하나 늘었고, ⓑ-0(2026-08-18)에서 접속 정보가
+Postgres 이식 1단계로 계약이 하나 늘었고, ⓑ-0에서 접속 정보가
 커넥션 문자열 한 벌에서 **원자값**으로 바뀌었다:
   3. **백엔드를 가르는 것은 `RAW_DB_HOST` 하나다** — 비어 있으면 sqlite 그대로다.
      데모가 이 기본값 위에서 돌기 때문에, 이 갈림이 뒤집히면 데모가 빈 Postgres 를 본다.
   4. **접속 문자열은 원자값에서 우리가 조립한다** — 남의 커넥션 문자열을 파싱하지 않고,
      빈 값은 싣지 않으며, `sslmode` 는 항상 싣는다(빼면 libpq 가 평문으로 내려간다).
 
-⚠️ Postgres **실연결** 검증은 `tests/test_raw_db_postgres.py` 에 있고 DSN 이 있을 때만
+Postgres **실연결** 검증은 `tests/test_raw_db_postgres.py` 에 있고 DSN 이 있을 때만
    돈다. 여기는 DB 없이 확인할 수 있는 것만 둔다 — LLM·네트워크·DB 없음.
 """
 
@@ -45,7 +45,7 @@ _ATOMS = {
 def _settings(monkeypatch, **overrides) -> Settings:
     """`.env` 와 `os.environ` 을 **차단하고** 원자값만으로 Settings 를 만든다.
 
-    🔴 두 겹으로 막는 이유: `env_file` 뿐 아니라 `app.config.load_dotenv()` 가 import
+    두 겹으로 막는 이유: `env_file` 뿐 아니라 `app.config.load_dotenv()` 가 import
        시점에 `.env` 를 **`os.environ` 에도** 넣는다. `_env_file=None` 만으로는 그쪽이
        안 막혀서, `RAW_DB_*` 를 `.env` 에 둔 개발자에게만 결과가 달라진다 — 이 저장소가
        반복해서 밟은 계열이다(`pin_company_id`·`block_local_raw_db` 참고).
@@ -74,14 +74,14 @@ def _seed(path) -> None:
 
 
 def test_path_with_hash_opens_the_real_file(tmp_path):
-    """🔴 경로에 `#` 이 있어도 **그 DB 를 읽기 전용으로 연다.**
+    """경로에 `#` 이 있어도 **그 DB 를 읽기 전용으로 연다.**
 
     `f"file:{path}?mode=ro"` 로 만들면 `#` 뒤가 URI fragment 로 잘려 **`mode=ro` 가
     통째로 날아가고**, 남은 앞부분(`.../we`)을 경로로 잡아 **빈 DB 를 새로 만든다.**
     그러면 위 계약 두 개가 **동시에** 깨진다 — 쓰기가 열리고, 경로 오타가 "문서 0건"
     으로 조용히 통과한다. `as_uri()` 가 `#` 을 `%23` 으로 인코딩해서 막는다.
 
-    ⚠️ `#` 은 지어낸 입력이 아니다. Windows 사용자 폴더·브랜치명이 섞인 워크트리 경로에
+    `#` 은 지어낸 입력이 아니다. Windows 사용자 폴더·브랜치명이 섞인 워크트리 경로에
        실제로 들어간다(`RAW_DB_PATH` 는 `.env` 로 각자 지정한다).
 
     세 가지를 따로 본다. 하나만 보면 옛 형태로 되돌려도 통과하는 조합이 생긴다:
@@ -102,7 +102,7 @@ def test_path_with_hash_opens_the_real_file(tmp_path):
     finally:
         conn.close()
 
-    # 옛 형태는 여기에 `we` 라는 0바이트 DB 를 만든다(2026-08-11 리뷰 ③ 실측).
+    # 옛 형태는 여기에 `we` 라는 0바이트 DB 를 만든다.
     assert [p.name for p in tmp_path.iterdir()] == ["we#ird"]
 
 
@@ -120,7 +120,7 @@ def test_missing_path_raises_instead_of_creating_an_empty_db(tmp_path):
 
 
 def test_empty_dsn_keeps_the_sqlite_path(tmp_path):
-    """🔴 **기본값이 계약이다** — 접속 문자열이 비면 sqlite 로 간다.
+    """**기본값이 계약이다** — 접속 문자열이 비면 sqlite 로 간다.
 
     데모가 이 경로 위에서 돈다. 갈림이 뒤집히면 배치가 빈 Postgres 를 읽고 **문서 0건
     으로 정상 종료**하는데, 그건 이 파일 계약②가 막으려던 바로 그 모양이다.
@@ -157,11 +157,11 @@ def test_dsn_switches_to_postgres_without_touching_the_file(tmp_path, monkeypatc
     assert opened["dsn"] == "postgresql://x@h/rawdb"
 
 
-# ── 원자값 → 접속 문자열 (ⓑ-0, 2026-08-18) ──────────────────────────────────
+# ── 원자값 → 접속 문자열 ──────────────────────────────────────────
 
 
 def test_no_host_means_sqlite(monkeypatch):
-    """🔴 **갈림은 `RAW_DB_HOST` 하나다** — 나머지가 차 있어도 비면 sqlite 로 간다.
+    """**갈림은 `RAW_DB_HOST` 하나다** — 나머지가 차 있어도 비면 sqlite 로 간다.
 
     데모가 이 기본값 위에서 돈다. 뒤집히면 배치가 빈 Postgres 를 읽고 **문서 0건으로
     정상 종료**하는데, 그건 이 파일 계약②가 막으려던 바로 그 모양이다.
@@ -181,7 +181,7 @@ def test_conninfo_carries_every_atom(monkeypatch):
 
 
 def test_sslmode_is_always_carried(monkeypatch):
-    """🔴 **`sslmode` 가 빠지면 libpq 기본값 `prefer` 로 떨어진다.**
+    """**`sslmode` 가 빠지면 libpq 기본값 `prefer` 로 떨어진다.**
 
     `prefer` 는 SSL 을 시도하다 **서버가 거부하면 평문으로 붙고 실패하지 않는다**
     (실측: `pq.Conninfo.get_defaults()` → `prefer`). 즉 이 항목이 빠지는 회귀는 접속
@@ -193,7 +193,7 @@ def test_sslmode_is_always_carried(monkeypatch):
 
 
 def test_connect_timeout_is_always_carried(monkeypatch):
-    """🔴 **`connect_timeout` 이 빠지면 무한 대기다** — sslmode 와 같은 계열의 회귀다.
+    """**`connect_timeout` 이 빠지면 무한 대기다** — sslmode 와 같은 계열의 회귀다.
 
     libpq 기본값이 미지정이고, 그때 실패는 OS 의 TCP 재시도가 끝날 때까지 간다
     (blackhole IP `10.255.255.1` 실측, libpq 18):
@@ -201,7 +201,7 @@ def test_connect_timeout_is_always_carried(monkeypatch):
         미지정(이 항목이 빠진 모양)   130.0초   ConnectionTimeout
         connect_timeout=3              3.0초   ConnectionTimeout
 
-    ⚠️ **접속 실패로 나타나지 않는다** — 결국 같은 예외가 나오므로 #101 의 분류는 그때도
+    **접속 실패로 나타나지 않는다** — 결국 같은 예외가 나오므로 그 분류는 그때도
        정상 동작한다. 달라지는 것은 **그 답을 받기까지 걸리는 시간**뿐이라, 이 항목이
        빠져도 다른 테스트는 전부 초록이다. 여기가 유일한 방어선이다.
     """
@@ -216,11 +216,11 @@ def test_connect_timeout_is_always_carried(monkeypatch):
         "p w",  # 공백 — 따옴표로 감싸지 않으면 다음 키로 잘린다
         "p'w",  # 작은따옴표 — 키워드 형식의 인용 부호와 충돌한다
         "p\\w",  # 역슬래시 — 이스케이프 문자로 먹힌다
-        "pw=x sslmode=disable",  # 🔴 값이 **다른 키를 주입**할 수 있는 모양
+        "pw=x sslmode=disable",  # 값이 **다른 키를 주입**할 수 있는 모양
     ],
 )
 def test_special_characters_survive_assembly(monkeypatch, password):
-    """🔴 값에 특수문자가 있어도 **그대로** 전달된다 — f-string 조립을 막는 이유.
+    """값에 특수문자가 있어도 **그대로** 전달된다 — f-string 조립을 막는 이유.
 
     비밀번호는 공백·따옴표·역슬래시가 흔한 자리인데, 손으로 붙이면 키워드 형식이
     어긋나 **인증 실패로만 보이고 원인이 안 드러난다.** 마지막 케이스는 더 나쁘다 —
@@ -235,7 +235,7 @@ def test_special_characters_survive_assembly(monkeypatch, password):
 
 
 def test_empty_optionals_are_omitted_not_blank(monkeypatch):
-    """🔴 **`password=''` 는 "생략" 과 다른 뜻이다** — 빈 값은 싣지 않는다.
+    """**`password=''` 는 "생략" 과 다른 뜻이다** — 빈 값은 싣지 않는다.
 
     libpq 에 빈 문자열을 명시하면 *빈 비밀번호를 쓰겠다*는 뜻이라 `.pgpass` 조회가
     막힌다(실측: `make_conninfo(password='')` → `password=''` 가 실제로 실린다).
@@ -272,10 +272,10 @@ def test_ca_bundle_is_carried_when_set(monkeypatch):
 
 
 def test_verify_mode_without_ca_is_refused_at_boot(monkeypatch):
-    """🔴 `verify-*` 인데 CA 가 비면 **부팅에서** 세운다.
+    """`verify-*` 인데 CA 가 비면 **부팅에서** 세운다.
 
     안 세우면 나중에 보안을 조이려고 `verify-full` 만 켠 사람이 **런타임에 알 수 없는
-    이유로** 접속 실패를 본다(2026-08-18 결정). 여기서 걸리면 진입점의
+    이유로** 접속 실패를 본다. 여기서 걸리면 진입점의
     `configure_logging_or_exit()` 이 사유 한 줄 + exit 2 로 끝낸다.
     """
     with pytest.raises(ValidationError, match="CA 번들이 필요합니다"):
@@ -301,7 +301,7 @@ def test_unknown_sslmode_is_refused_at_boot(monkeypatch):
 
 @pytest.mark.parametrize("value", [0, -1, 1])
 def test_unbounded_connect_timeout_is_refused_at_boot(monkeypatch, value):
-    """🔴 **libpq 가 존중하지 않는 값은 부팅에서 막는다.** 실측(libpq 18):
+    """**libpq 가 존중하지 않는 값은 부팅에서 막는다.** 실측(libpq 18):
 
         connect_timeout=0    130.0초   ← 미지정과 같다. 0·음수 = 무한 대기
         connect_timeout=1      2.1초   ← 조용히 2 로 올라간다
@@ -316,13 +316,13 @@ def test_unbounded_connect_timeout_is_refused_at_boot(monkeypatch, value):
 
 
 def test_retired_dsn_key_is_refused_loudly(monkeypatch):
-    """🔴 폐기된 `RAW_DB_DSN` 이 남아 있으면 **부팅에서 세운다.**
+    """폐기된 `RAW_DB_DSN` 이 남아 있으면 **부팅에서 세운다.**
 
     `extra="ignore"` 라 그냥 두면 **아무 말 없이 무시되고 sqlite 를 읽는다.** 직전
     `.env.example` 이 *"주석 해제 → 검증 → 다시 주석"* 을 안내했으므로 남겨둔 사람이
     반드시 있고, 그 사람은 Postgres 를 본다고 믿으면서 목 데이터를 본다.
 
-    ⚠️ **호스트가 비어 있어도 걸려야 한다** — 피해자가 정확히 "원자값을 아직 안 넣은
+    **호스트가 비어 있어도 걸려야 한다** — 피해자가 정확히 "원자값을 아직 안 넣은
        사람" 이라, 이 검사가 호스트 게이트 안으로 들어가면 아무도 못 본다.
     """
     monkeypatch.setenv("RAW_DB_DSN", "postgresql://u:pw@db.internal:5432/rawdb")
@@ -334,7 +334,7 @@ def test_retired_dsn_key_is_refused_loudly(monkeypatch):
 
 
 def test_sqlite_default_skips_the_raw_db_guards(monkeypatch):
-    """🔴 **호스트가 비면 아무것도 안 본다** — 데모·팀원 로컬·테스트가 걸리면 안 된다.
+    """**호스트가 비면 아무것도 안 본다** — 데모·팀원 로컬·테스트가 걸리면 안 된다.
 
     위 세 가드는 전부 Postgres 를 설정한 배포에만 해당한다. 여기가 뒤집히면 설정을
     안 건드린 사람이 갑자기 부팅 실패를 본다(*"설정을 안 건드리면 이전과 같다"* 계약).
@@ -352,13 +352,13 @@ def test_sqlite_default_skips_the_raw_db_guards(monkeypatch):
 
 
 def test_boot_guard_message_is_readable_and_leaks_nothing(monkeypatch):
-    """🔴 가드가 터질 때 **비밀번호가 로그로 안 나가고, 사유는 읽힌다.**
+    """가드가 터질 때 **비밀번호가 로그로 안 나가고, 사유는 읽힌다.**
 
     진입점이 이 예외를 `logging_setup._describe()` 로 한 줄 요약해 stderr 에 찍는다
     (실측: `python -m app.batch.daily --dry-run` → exit 2 + 아래 문장).
       - 값이 실리면 배치 로그에 박혀 회수가 안 된다. `_describe` 가 `loc`·`msg` 만
         쓰는 것이 방어선이라, 가드 메시지에 값을 넣으면 그 방어선을 우회한다.
-      - ⚠️ **`model_validator` 는 `loc` 이 비어서** 그대로 붙이면 `": 사유"` 로 나간다.
+      - **`model_validator` 는 `loc` 이 비어서** 그대로 붙이면 `": 사유"` 로 나간다.
         이 저장소의 첫 모델 단위 검증이라 그 처리도 여기서 같이 잠근다.
     """
     with pytest.raises(ValidationError) as exc:
@@ -377,19 +377,19 @@ def test_boot_guard_message_is_readable_and_leaks_nothing(monkeypatch):
         "postgresql://sellon_ai:S3cr3t@db.internal:5432/rawdb",
         # URI — 자격증명이 쿼리 인자로
         "postgresql://db.internal/rawdb?password=S3cr3t",
-        # 🔴 키워드 형식. psycopg 가 이것도 받는데 `@`·`?` 가 없어서, 문자열을 잘라내는
-        #    방식으로는 **통째로 샌다**(2026-08-16 용준님 리뷰 §2, 실측).
+        # 키워드 형식. psycopg 가 이것도 받는데 `@`·`?` 가 없어서, 문자열을 잘라내는
+        #    방식으로는 **통째로 샌다**.
         "host=db.internal dbname=rawdb user=sellon_ai password=S3cr3t",
         "dbname=rawdb password=S3cr3t",
     ],
 )
 def test_describe_target_never_leaks_the_password(dsn):
-    """🔴 오류 메시지·로그에 raw DB 비밀번호를 싣지 않는다 — **DSN 형식 불문.**
+    """오류 메시지·로그에 raw DB 비밀번호를 싣지 않는다 — **DSN 형식 불문.**
 
     `_require_classified_tables` 가 "어느 DB 를 봤는지" 를 메시지에 넣는데, DSN 이 새면
     그 문자열이 배치 요약·로그로 그대로 나가 회수가 안 된다.
 
-    ⚠️ **URI 만 재면 안 된다.** 세 번째 케이스가 옛 구현에서 실제로 통째로 샜다 —
+    **URI 만 재면 안 된다.** 세 번째 케이스가 옛 구현에서 실제로 통째로 샜다 —
        한 형식만 잠그면 나머지 형식으로 같은 사고가 그대로 재발한다.
     """
     described = describe_target(dsn=dsn)
@@ -409,7 +409,7 @@ def test_describe_target_reports_where_it_looked():
 
 
 def test_describe_target_survives_an_unreadable_dsn():
-    """🔴 읽기 실패해도 **던지지 않고, 원문도 안 싣는다.**
+    """읽기 실패해도 **던지지 않고, 원문도 안 싣는다.**
 
     이 함수는 인자 자리에서 항상 평가되므로(`_require_classified_tables(conn,
     describe_target(...))`) 여기서 던지면 **진단이 진짜 원인을 가린다.** 그렇다고 폴백에
@@ -439,12 +439,12 @@ def test_translate_placeholders(sql, expected):
 
 
 def test_null_safe_comparison_spelling_works_on_sqlite():
-    """🔴 `IS NOT DISTINCT FROM` 이 sqlite 에서도 `IS` 와 같은 뜻이어야 한다.
+    """`IS NOT DISTINCT FROM` 이 sqlite 에서도 `IS` 와 같은 뜻이어야 한다.
 
     sqlite·Postgres 양쪽에서 같은 뜻이라 이 철자 하나로 쓰는데, **sqlite 3.39 미만이면 구문 오류**다.
     그 환경에서는 탐지 배치와 분류 워커가 통째로 못 돈다 — 팀원 로컬마다 파이썬이
     다르므로 "내 PC 에서 되니까" 로 넘길 수 없어 테스트로 잠근다.
-    (호스트 3.49 · 런타임 이미지 python:3.12-slim 3.46 실측, 2026-08-16)
+    (호스트 3.49 · 런타임 이미지 python:3.12-slim 3.46 실측)
     """
     conn = sqlite3.connect(":memory:")
     try:
@@ -462,14 +462,14 @@ def test_null_safe_comparison_spelling_works_on_sqlite():
 
 
 def test_connection_error_types_covers_both_psycopg_bases():
-    """🔴 Postgres 실패가 두 베이스로 갈린다 — 한쪽만 잡으면 절반이 샌다.
+    """Postgres 실패가 두 베이스로 갈린다 — 한쪽만 잡으면 절반이 샌다.
 
     호출부(`daily.main()` 의 exit 2 분류, `service.generate_recommendation` 의 degrade)가
     이 목록으로 "환경 탓" 을 가른다. `psycopg.OperationalError` 로 좁히면 **DSN 형식 오타 ·
     DB 이름 틀림 · 뷰 없음 · GRANT 누락**이 전부 빠져나간다(전부 `ProgrammingError` 계열).
     하필 그 넷이 첫 연동에서 제일 잦다.
 
-    ⚠️ **`FileNotFoundError`·`RuntimeError` 가 아닌 것까지 같이 본다.** 그게 이 함수가
+    **`FileNotFoundError`·`RuntimeError` 가 아닌 것까지 같이 본다.** 그게 이 함수가
        존재하는 이유이므로(둘 중 하나였다면 호출부가 이미 잡고 있었다), 그 전제가
        psycopg 버전이 올라가며 바뀌면 여기서 먼저 알려준다.
     """

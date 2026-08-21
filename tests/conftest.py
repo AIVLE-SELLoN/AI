@@ -4,7 +4,7 @@ import logging
 import os
 
 # pipeline.py의 @traceable은 LLM이 mock이어도 트레이스를 실제로 전송한다 — 테스트가
-# LangSmith 월 한도를 소진한다(2026-08-04 초과 확인). app import보다 먼저 꺼야 하고,
+# LangSmith 월 한도를 소진한다. app import보다 먼저 꺼야 하고,
 # app.config의 load_dotenv()는 override=False라 여기서 박아두면 .env가 못 덮는다.
 # setdefault라 `LANGSMITH_TRACING=true pytest`로 그 실행만 켤 수 있다.
 os.environ.setdefault("LANGSMITH_TRACING", "false")
@@ -42,7 +42,7 @@ def bad_log_level_settings():
     둘인데 이게 그 하나다. `monkeypatch.setattr(logging_setup, "get_settings", ...)` 로
     끼워 쓴다.
 
-    ⚠️ **여기(conftest)에 둔 이유** — 진입점이 셋이라 같은 가짜가 테스트 파일 3개에
+    **여기(conftest)에 둔 이유** — 진입점이 셋이라 같은 가짜가 테스트 파일 3개에
        복제될 참이었다. `Settings` 검증이 바뀌면 세 곳을 같이 고쳐야 하는데, 한 곳만
        고치면 **나머지 둘은 조용히 옛 실패 모드를 재는** 테스트가 된다.
     """
@@ -60,18 +60,18 @@ def unloadable_settings():
 def pin_settings(monkeypatch, log_level: str = "INFO") -> None:
     """진입점의 부팅 가드가 **개발자 환경을 안 타게** 못박는다.
 
-    🔴 **이게 없으면 `LOG_LEVEL=info` 가 걸린 머신에서 무관한 테스트가 빨개진다** —
+    **이게 없으면 `LOG_LEVEL=info` 가 걸린 머신에서 무관한 테스트가 빨개진다** —
        `main()` 이 설정 오류로 exit 2 하고, 화면에는 *"인코딩 배선이 깨졌다"* 처럼 보인다.
-       PR #79 의 `.env` 의존 사고와 같은 계열이고, **개발자 로컬이 곧 CI 인 구조**라
+       `.env` 의존 사고와 같은 계열이고, **개발자 로컬이 곧 CI 인 구조**라
        사람마다 결과가 갈린다.
 
-    🔴 **root 핸들러는 일부러 안 비운다.** 비우면 pytest 의 `caplog` 핸들러가 사라져서
-       **로그는 나가는데 `caplog.records` 가 비는** 상태가 된다 — #96 에서 `force=True`
+    **root 핸들러는 일부러 안 비운다.** 비우면 pytest 의 `caplog` 핸들러가 사라져서
+       **로그는 나가는데 `caplog.records` 가 비는** 상태가 된다 — `force=True`
        로 밟았던 그 함정이고, 여기서도 컨슈머 테스트 3개가 같은 모양으로 깨졌다(실측).
        비우는 것이 필요한 쪽은 *"잘못된 레벨로 `basicConfig` 를 **실제로** 터뜨리는"*
        테스트뿐이라, 그건 각 테스트가 직접 한다.
 
-    ⚠️ `main()` 을 부르는 테스트는 **전부** 이걸 써야 한다. 안 쓰면 "그 머신에서만"
+    `main()` 을 부르는 테스트는 **전부** 이걸 써야 한다. 안 쓰면 "그 머신에서만"
        실패해서 원인을 엉뚱한 데서 찾게 된다.
     """
     from app.core import logging_setup
@@ -85,16 +85,16 @@ def pin_settings(monkeypatch, log_level: str = "INFO") -> None:
 def restore_root_logger():
     """root 로거 상태(레벨·핸들러)를 테스트마다 되돌린다.
 
-    🔴 **왜 필요한가 — 실제로 다른 파일 테스트 2개를 깨뜨렸다**(2026-08-16 실측).
+    **왜 필요한가 — 실제로 다른 파일 테스트 2개를 깨뜨렸다**.
        진입점의 `configure_logging_or_exit()`(`app/core/logging_setup.py`)이 `LOG_LEVEL`
        을 **항상** 적용하도록 바뀌면서, 그걸 태우는 테스트가 root 레벨을 바꾼 채 끝나면
        **뒤에 도는 테스트의 `caplog` 가 조용히 달라진다.** 레벨이 올라간 상태면 기대하던
        INFO/WARNING 레코드가 아예 안 잡힌다.
 
-    ⚠️ `monkeypatch` 로는 못 막는다 — `handlers` 리스트는 되돌려주지만 **`level` 은
+    `monkeypatch` 로는 못 막는다 — `handlers` 리스트는 되돌려주지만 **`level` 은
        되돌리지 않는다.** 그래서 별도 픽스처가 필요하다.
 
-    ⚠️ 실패가 **테스트 단독 실행에서는 재현되지 않는다**(그때는 앞에서 레벨을 바꾼 게
+    실패가 **테스트 단독 실행에서는 재현되지 않는다**(그때는 앞에서 레벨을 바꾼 게
        없다). 순서에 따라 갈리는 형태라 눈에 잘 안 띈다 — 그래서 전역으로 잠근다.
     """
     root = logging.getLogger()
@@ -118,19 +118,19 @@ def block_local_raw_db(monkeypatch, tmp_path):
     DB 를 실제로 쓰는 테스트는 `db_path=` 로 자기 임시 파일을 명시해서 이 기본값을
     덮는다(`tests/test_load_inputs_from_db.py`).
 
-    🔴 **Postgres 접속 원자값도 같이 비운다 — 이게 없으면 `db_path=` 가 통째로 무시된다.**
+    **Postgres 접속 원자값도 같이 비운다 — 이게 없으면 `db_path=` 가 통째로 무시된다.**
        `connect_readonly()` 는 접속 문자열이 있으면 파일 경로를 **아예 안 본다**(그게
        계약이다). 그래서 개발자 `.env` 에 그 키가 남아 있으면 자기 임시 파일을 명시한
-       테스트까지 개발자 Postgres 로 간다 — 실측 25 failed(2026-08-16). 그리고 이건 드문
+       테스트까지 개발자 Postgres 로 간다 — 실측 25 failed. 그리고 이건 드문
        사고가 아니다: `.env.example` 이 이식 검증 절차로 **"주석 해제 → 검증 → 다시 주석"**
        을 안내하므로, 마지막 한 줄을 안 되돌린 사람은 반드시 밟는다.
-       ⚠️ Postgres 가 안 떠 있으면 접속 오류로, 떠 있으면 **엉뚱한 데이터로 통과**한다 —
-          후자가 더 나쁘다. PR #77 의 `.env` 사고(#79 로 수습)와 같은 계열이다.
+       Postgres 가 안 떠 있으면 접속 오류로, 떠 있으면 **엉뚱한 데이터로 통과**한다 —
+          후자가 더 나쁘다. 위 `.env` 사고와 같은 계열이다.
 
        실연결을 재는 테스트는 `RAW_DB_TEST_DSN` 을 **따로** 읽어 이 기본값을 덮는다
        (`tests/test_raw_db_postgres.py`) — 키를 나눈 이유가 그것이다.
 
-    ⚠️ **`raw_db_host` 만 비워도 지금은 충분하지만, 다섯 개를 다 비운다.** 갈림이 호스트
+    **`raw_db_host` 만 비워도 지금은 충분하지만, 다섯 개를 다 비운다.** 갈림이 호스트
        하나라는 것은 `conninfo_from_settings()` 의 현재 계약일 뿐이고, 나중에 "원자값이
        하나라도 있으면 Postgres" 로 바뀌면 나머지가 조용히 새어 들어온다. 값이 아니라
        **상태**를 고정한다.
@@ -157,26 +157,26 @@ TEST_COMPANY_ID = "SLN-test"
 def pin_company_id(monkeypatch):
     """`MQ_COMPANY_ID` 를 테스트 고정값으로 못박는다. **개발자 `.env` 를 못 보게 한다.**
 
-    🔴 **이걸로 막는 사고**: `core/vectordb.current_tenant()` 가 이 설정을 읽어 벡터DB
+    **이걸로 막는 사고**: `core/vectordb.current_tenant()` 가 이 설정을 읽어 벡터DB
        문서 ID·metadata·조회 필터의 회사 축을 만든다. 그래서 `.env` 가 있는 사람과 없는
        사람이 **다른 ID 를 보고**, 같은 테스트가 한쪽에서만 통과한다.
-       실제로 PR #77 이 그렇게 통과했다 — 워크트리엔 `.env` 가 없어 폴백(`_local`)이
+       실제로 그렇게 통과한 적이 있다 — 워크트리엔 `.env` 가 없어 폴백(`_local`)이
        나왔고, `.env` 가 있는 메인 작업 폴더에서는 `SLN-local` 이 나와 **머지 후 main 이
        빨개졌다.** CI 가 따로 없어 **각자 로컬이 곧 CI** 인 구조에서 반복되는 계열이다
-       (`block_local_raw_db`·`block_real_s3` 와 같은 사유. 08-07 S3 키 9 failed,
-       08-11 MQ `mq_host` 도 같은 모양이었다).
+       (`block_local_raw_db`·`block_real_s3` 와 같은 사유. S3 키와 MQ `mq_host` 도
+       같은 모양이었다).
 
     폴백 자체를 재는 테스트는 이 값을 `""` 로 덮어 쓴다
     (`test_record_hitl_outcome.test_local_fallback_when_company_id_is_unset`).
 
-    🔴 **`get_settings.cache_clear()` 를 부르는 테스트를 추가하면 이 가드가 조용히
+    **`get_settings.cache_clear()` 를 부르는 테스트를 추가하면 이 가드가 조용히
        무력화된다.** 여기서 고정하는 건 `@lru_cache` 가 들고 있는 **그 인스턴스**이고
        (`app/config.get_settings`), 캐시를 비우면 다음 호출이 **새 Settings 를 만들어
        `.env` 를 다시 읽는다.** 그 순간 위 사고가 그대로 재발한다 — 실패가 아니라
        **환경에 따라 갈리는 통과**로 나타나므로 눈에 안 띈다.
        → 설정 재로딩을 재는 테스트는 `monkeypatch.setenv("MQ_COMPANY_ID", ...)` 로
-       **환경변수까지 명시적으로 고정**할 것. (서영님 PR #79 사후 리뷰 지적. 현재
-       저장소에 `get_settings.cache_clear()` 호출은 0건이라 지금은 안전하다.)
+       **환경변수까지 명시적으로 고정**할 것. 현재 저장소에
+       `get_settings.cache_clear()` 호출은 0건이라 지금은 안전하다.
     """
     monkeypatch.setattr(get_settings(), "mq_company_id", TEST_COMPANY_ID)
 

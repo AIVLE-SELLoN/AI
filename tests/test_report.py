@@ -1,4 +1,4 @@
-"""리포팅 검증 로직 테스트 — 문서 생성 스키마 §4-4.
+"""리포팅 검증 로직 테스트 — 절 번호는 `docs/reporting_validation.md` 기준.
 
 여기서 재는 것은 **검증기가 반려해야 할 것을 반려하는가**다(비용 0, LLM 미호출).
 생성물의 품질(문장이 좋은가)은 `eval/run_reporting_eval.py` 소관이다.
@@ -104,7 +104,7 @@ def block_real_s3():
     `upload_pdf_to_s3` 는 이제 boto3 로 진짜 올린다. 막지 않으면 테스트가 네트워크를 타고,
     자격증명이 있으면 개발 버킷에 쓰레기 객체를 쌓는다.
 
-    ⚠️ 키까지 여기서 patch 하는 이유: 키 존재 검사가 `_get_s3_client()` 호출보다 **한 칸
+    키까지 여기서 patch 하는 이유: 키 존재 검사가 `_get_s3_client()` 호출보다 **한 칸
        위**에 있어서, 클라이언트를 막는 것만으로는 그 전에 걸린다. 그러면 `.env` 에 키가
        있는 사람만 통과하고 없는 사람은 9개가 `S3NotConfiguredError` 로 죽는다 — CI 가
        따로 없어 **각자 로컬이 곧 CI** 인데 "PR 전 pytest 통과" 게이트가 사람마다 달라진다.
@@ -240,7 +240,7 @@ def _held_input(
 
     채널쌍은 전부 보류로 둔다 — VOC 가 10건도 안 되는 상품은 채널쌍 판정도 설 수 없다.
 
-    ⚠️ 기본 이름은 13자라 **안내 문구 길이 검증에는 못 쓴다.** 실제 `channel_product_name`
+    기본 이름은 13자라 **안내 문구 길이 검증에는 못 쓴다.** 실제 `channel_product_name`
        은 커머스 노출명이라 훨씬 길다. 길이를 재는 테스트는 `name` 으로 실제 길이를 준다.
     """
     return MonthlyReportInput(
@@ -398,7 +398,7 @@ def test_monthly_validator_factchecks_pair_analysis(
 ) -> None:
     """쌍별 원인 문장의 수치도 팩트체크 대상이다.
 
-    ⚠️ 쌍을 **빼지 않고** 하나만 오염시킨다. 쌍을 떨어뜨리면 "채널쌍 분석 누락" 이 함께
+    쌍을 **빼지 않고** 하나만 오염시킨다. 쌍을 떨어뜨리면 "채널쌍 분석 누락" 이 함께
        올라와, 팩트체크를 통째로 지워도 passed=False 라서 테스트가 통과해 버린다.
     """
     analyses = [a.model_copy(deep=True) for a in monthly_output.channel_pair_analyses]
@@ -654,7 +654,7 @@ async def test_monthly_recovers_on_second_attempt(monthly_input, monthly_output)
 
 @pytest.mark.asyncio
 async def test_monthly_book_is_one_object_per_month(monthly_input, monthly_output) -> None:
-    """PDF·S3·콜백이 상품별이 아니라 **월 1건**인지(2026-08-03 확정)."""
+    """PDF·S3·콜백이 상품별이 아니라 **월 1건**인지."""
     items = [{"input": monthly_input, "report": monthly_output} for _ in range(3)]
 
     with (
@@ -718,7 +718,7 @@ async def test_cs_pipeline_success(cs_input, cs_output) -> None:
 
 
 def test_object_path_follows_infra_rule() -> None:
-    """인프라 「S3 파일 구조 규칙 정의」 경로·파일명 규칙 (2026-08-05 확정).
+    """인프라 「S3 파일 구조 규칙 정의」 경로·파일명 규칙.
 
         reports/{report_type}/{company_id}/{yyyy}/{mm}/
         {report_type}_{yyyyMM}_{uuid4}.pdf
@@ -782,7 +782,7 @@ async def test_cs_original_file_name_differs_by_alert(cs_input, cs_output) -> No
     나오므로 `{yyyyMM}` 만으로는 5월 가이드라인이 전부 `cs-guideline_202605.pdf` 가 되어
     목록이 도배된다(저장 자체는 `new_file_name` 의 uuid4 로 안전하다).
 
-    ⚠️ 업로더를 mock 하지 않고 **실제 함수**를 태운다 — mock 하면 서비스가 source_id 를
+    업로더를 mock 하지 않고 **실제 함수**를 태운다 — mock 하면 서비스가 source_id 를
        넘기는지, 업로더가 그걸 이름에 붙이는지 둘 다 검증되지 않는다.
     """
     naver_input = cs_input.model_copy(update={"alert_id": "ALT-20260528-P001-NAVER"})
@@ -827,7 +827,7 @@ def test_monthly_original_file_name_has_no_source_id() -> None:
 
 @pytest.mark.asyncio
 async def test_upload_carries_company_metadata() -> None:
-    """회사 구분을 **메타데이터로** 실어 보낸다 (2026-08-06 확정).
+    """회사 구분을 **메타데이터로** 실어 보낸다.
 
     경로가 `reports/{report_type}/{company_id}/…` 로 회사 단위로 갈리는데 그 값이 어느 입력
     스키마에도 없어, 산출물만 보고는 어느 회사 것인지 알 수 없었다. `company_id` 를 실어
@@ -895,7 +895,7 @@ async def test_local_mirror_reproduces_bucket_layout(short_mirror_dir) -> None:
     assert mirrored.read_bytes() == b"%PDF-MOCK"
     # 인프라 규칙 그대로 — 회사/문서종류/연/월 순으로 갈린다
     parts = mirrored.relative_to(short_mirror_dir).parts
-    # ⚠️ report_type 이 company_id 보다 **위**다 — Lifecycle 이 리터럴 prefix 완전 일치만
+    # report_type 이 company_id 보다 **위**다 — Lifecycle 이 리터럴 prefix 완전 일치만
     #    지원해서, 회사가 위면 문서 종류별로 규칙을 걸 수 없다.
     assert parts[1:6] == ("reports", "monthly-report", _COMPANY_ID, "2026", "07")
 
@@ -995,7 +995,7 @@ async def test_upload_failure_raises_instead_of_reporting_success(block_real_s3)
 def test_s3_client_signs_with_static_keys_and_sigv4(block_real_s3) -> None:
     """정적 키 + SigV4 로 클라이언트를 만든다.
 
-    ⚠️ 기본 자격증명 체인(IAM Role)을 쓰면 임시 크리덴셜 만료 시 URL 도 같이 죽어 7일이
+    기본 자격증명 체인(IAM Role)을 쓰면 임시 크리덴셜 만료 시 URL 도 같이 죽어 7일이
        유지되지 않는다. SigV4 도 못 박아야 한다 — 구버전 서명은 7일을 못 버틴다.
     """
     with (
@@ -1015,7 +1015,7 @@ def test_s3_client_signs_with_static_keys_and_sigv4(block_real_s3) -> None:
 def test_storage_policy_differs_by_document_type() -> None:
     """월간 6개월 / CS 7일 자동 삭제 (S3 Lifecycle).
 
-    버킷은 **하나**이고 문서 종류는 프리픽스로 가른다(인프라 2026-08-05) — Lifecycle
+    버킷은 **하나**이고 문서 종류는 프리픽스로 가른다(인프라 규칙) — Lifecycle
     규칙이 프리픽스 단위로 걸리기 때문이다.
     """
     monthly = resolve_storage_policy(REPORT_TYPE_MONTHLY)
@@ -1153,7 +1153,7 @@ def test_book_template_renders_without_undefined_vars(monthly_input, monthly_out
 async def test_book_notice_separates_held_and_failed(monthly_input, monthly_output) -> None:
     """보류(표본 부족)와 실패(검증 미통과)를 콜백 안내 문구에서 구분한다.
 
-    표지 페이지를 없앤 뒤(2026-08-04) 이 안내는 notice_message 로만 나간다. 둘을 합쳐
+    표지 페이지를 없앤 뒤 이 안내는 notice_message 로만 나간다. 둘을 합쳐
     보내면 VOC 500건인 상품이 "VOC 10건 미만이라 분석하지 않았다"고 잘못 안내된다.
     """
     items = [{"input": monthly_input, "report": monthly_output}]
@@ -1245,9 +1245,9 @@ def test_cs_prompt_sanitizes_table_breakers(cs_input) -> None:
 
 
 def test_cs_prompt_labels_review_rows(cs_input) -> None:
-    """🔴 리뷰 원문은 표에 **리뷰**로 표기된다 — 접두사 추측에 맡기지 않는다.
+    """리뷰 원문은 표에 **리뷰**로 표기된다 — 접두사 추측에 맡기지 않는다.
 
-    리뷰를 CS 가이드라인 근거로 쓰는 것이 확정 정책이다(2026-08-11). 그런데 리뷰는
+    리뷰를 CS 가이드라인 근거로 쓰는 것이 확정 정책이다. 그런데 리뷰는
     **공개 답글**이라 응대가 다르다 — 답글로는 반품·교환을 접수할 수 없다. 표에 출처가
     없으면 모델이 전부 1:1 문의로 답해서 **지키지 못할 약속**("무상 교환·반품을
     도와드리겠습니다")이 리뷰 답글로 나간다.
@@ -1272,10 +1272,10 @@ def test_cs_prompt_labels_review_rows(cs_input) -> None:
 
 
 def test_unknown_source_is_treated_as_inquiry(cs_input) -> None:
-    """⚠️ 출처 미상(None)은 **문의**로 본다 — 어긋났을 때 덜 나쁜 쪽이다.
+    """출처 미상(None)은 **문의**로 본다 — 어긋났을 때 덜 나쁜 쪽이다.
 
     `build_linked_inquiries` 는 `source` 값이 이상하거나 키가 없으면 None 을 넣는다
-    (2026-08-11, PR #58). 그때 "리뷰 답글" 톤으로 쓰면 **답변을 기다리는 고객에게
+    그때 "리뷰 답글" 톤으로 쓰면 **답변을 기다리는 고객에게
     "고객센터로 연락 주세요" 가 나간다.** 반대(리뷰에 문의 답변 톤)는 어색할 뿐이지만
     이쪽은 응대 자체가 어긋나므로, 모르면 문의 쪽으로 기운다.
     """
@@ -1287,7 +1287,7 @@ def test_unknown_source_is_treated_as_inquiry(cs_input) -> None:
 
 
 def test_old_prompt_versions_keep_the_two_column_table(cs_input) -> None:
-    """⚠️ 구버전에는 출처 열을 넣지 않는다 — 버전 비교 실험의 조건이 달라진다.
+    """구버전에는 출처 열을 넣지 않는다 — 버전 비교 실험의 조건이 달라진다.
 
     v4 의 헤더는 `[문의] 문의ID|원문` 이라 2열이다. 3열을 주면 자기가 선언하지 않은 열을
     받게 되고, 구버전을 남겨 둔 이유(정량 비교 — CLAUDE.md 4)가 무너진다. 예전에 잰
@@ -1438,7 +1438,7 @@ def test_guideline_input_narrows_detection_models(biased_alert) -> None:
 def test_out_of_scope_alert_is_not_a_guideline_target(biased_alert) -> None:
     """가리키는 문의가 없는 알림은 **대상이 아니다** — 실패가 아니다.
 
-    ⚠️ 원인 분류([6])는 스코프 안(색상·사이즈·소재) 알림만 타므로 파손·오배송 알림은
+    원인 분류([6])는 스코프 안(색상·사이즈·소재) 알림만 타므로 파손·오배송 알림은
        `evidence.inquiry_ids` 가 언제나 비어 있다. 이걸 실패로 처리하면 스코프 밖 알림이
        뜰 때마다 배치 요약에 실패가 쌓이고, 정상 동작에 묻혀 진짜 실패를 놓친다.
     """
@@ -1518,7 +1518,7 @@ async def test_generate_guideline_returns_publishable_callback(biased_alert) -> 
 async def test_unconfigured_s3_fails_before_paying_for_the_llm(cs_input) -> None:
     """S3 가 구성 안 됐으면 **LLM 을 부르기 전에** 끝낸다.
 
-    ⚠️ 업로드는 `LLM 호출 → PDF 컴파일 → S3` 의 마지막 단계다. 점검이 거기 있으면
+    업로드는 `LLM 호출 → PDF 컴파일 → S3` 의 마지막 단계다. 점검이 거기 있으면
        알림 1건마다 LLM 값을 다 지불하고 FAILED_ERROR 만 돌아온다. 가이드라인은 개선안과
        달리 발화한 알림 **거의 전부**에 대해 생성되므로 건수가 그대로 비용이다.
        결론은 같고 비용만 0 이어야 한다.
@@ -1561,13 +1561,13 @@ def test_upload_precheck_is_reusable_before_generation() -> None:
         s3_uploader.ensure_s3_ready(_COMPANY_ID)
 
 
-# ── 보류 상품 지면 노출 (2026-08-09) ──────────────────────────────────────
+# ── 보류 상품 지면 노출 ───────────────────────────────────────────────────
 
 
 def test_held_product_gets_its_own_page(monthly_input, monthly_output) -> None:
     """보류 상품도 지면에 남는다 — 사유가 PDF 안에서 읽혀야 한다.
 
-    ⚠️ 예전에는 합본에서 통째로 빼고 콜백 notice_message 로만 알렸다. 표지도 목차도 없는
+    예전에는 합본에서 통째로 빼고 콜백 notice_message 로만 알렸다. 표지도 목차도 없는
        구조라 **PDF 만 받아보는 사람은 자기 상품이 왜 없는지 알 방법이 없었다** —
        "빠졌다"는 사실 자체가 문서 어디에도 안 보인다.
     """
@@ -1625,7 +1625,7 @@ async def test_all_held_reports_why_not_just_that_it_failed() -> None:
     수록 0개 → FAILED_ERROR 는 계약이다(§5 status 표). 보류 페이지만 있는 PDF 를 SUCCESS
     로 내보내면 메인이 "PDF 첨부 메일 발송"을 타서 분석이 한 건도 없는 문서가 셀러에게 간다.
 
-    ⚠️ 다만 "생성에 실패했다"만 가면 **데이터 파이프라인 고장과 구분이 안 된다** —
+    다만 "생성에 실패했다"만 가면 **데이터 파이프라인 고장과 구분이 안 된다** —
        전 상품 표본 부족(신규 고객사 등)은 정상 동작이다. 어느 상품이 왜 빠졌는지 실어야 한다.
     """
     result = await compile_and_upload_monthly_book(
@@ -1642,17 +1642,17 @@ async def test_all_held_reports_why_not_just_that_it_failed() -> None:
 # 실제 `products.channel_product_name` 을 흉내 낸 이름. `_fetch_product_names()` 가 커머스
 # 노출명을 **자르지 않고 그대로** 싣기 때문에 문구에도 이 길이가 그대로 들어온다.
 #
-# ⚠️ 픽스처 기본 이름(`보류상품 P000`, 13자)으로 재면 상한이 안 걸려도 통과한다 —
+# 픽스처 기본 이름(`보류상품 P000`, 13자)으로 재면 상한이 안 걸려도 통과한다 —
 #    개수 상한만 있던 시절 목 이름으로는 223자라 통과했지만 이 이름으로는 368자였다
-#    (2026-08-09 리뷰 실측). 길이 검증은 반드시 **긴 이름**으로 한다.
+#    (실측). 길이 검증은 반드시 **긴 이름**으로 한다.
 _REAL_LENGTH_NAME = "2026 신상 봄가을 여성 미디 원피스 데일리 롱 A라인 5color"
 
 # SEO 키워드가 붙은 노출명. 커머스 노출명은 이 정도 길이가 흔하다.
 #
-# ⚠️ 38자와 82자는 **서로 다른 것을 잰다.** 38자 이름은 라벨이 45자라 두 번째가 예산에
+# 38자와 82자는 **서로 다른 것을 잰다.** 38자 이름은 라벨이 45자라 두 번째가 예산에
 #    안 들어가 45자에서 멈추지만, 긴 이름은 예산 끝까지 잘려 들어와 **예산을 꽉 채운다.**
 #    그래서 38자로만 재면 천장을 못 본다 — 구절당 70자를 주던 시절 실측으로
-#    38자는 226자였는데 82자는 256자로 255를 넘겼다(2026-08-10 리뷰).
+#    38자는 226자였는데 82자는 256자로 255를 넘겼다.
 _KEYWORD_STUFFED_NAME = (
     "2026 신상 봄가을 여성 미디 원피스 데일리 롱 A라인 5color "
     "빅사이즈 하객룩 데이트룩 오피스룩 무료배송 당일출고 인기상품"
@@ -1660,22 +1660,22 @@ _KEYWORD_STUFFED_NAME = (
 
 # 나열 예산을 **확실히 넘는** 이름. 자르기 분기를 타게 하는 것이 목적이다.
 #
-# ⚠️ `_KEYWORD_STUFFED_NAME` 은 72자 = 라벨 78자로, 보류1+실패1 일 때의 예산(78자)과
+# `_KEYWORD_STUFFED_NAME` 은 72자 = 라벨 78자로, 보류1+실패1 일 때의 예산(78자)과
 #    **정확히 같아서** 접히지 않고 지나간다. 경계에 딱 걸친 값만 쓰면 자르기 경로가
-#    한 번도 실행되지 않는다(2026-08-10 리뷰). 그래서 여유 있게 넘는 이름을 따로 둔다.
+#    한 번도 실행되지 않는다. 그래서 여유 있게 넘는 이름을 따로 둔다.
 _OVER_BUDGET_NAME = _KEYWORD_STUFFED_NAME + " 리뷰이벤트 사은품증정 한정수량"
 
 
 def test_notice_length_is_bounded_even_with_real_product_names() -> None:
     """안내 문구 길이가 상품 수에도, **상품명 길이에도** 비례해 자라지 않는다.
 
-    ⚠️ `notice_message` 에는 스키마 max_length 가 없어 **우리 쪽에서 안 걸린다.** 전부
-       나열하면 보류 42건에 631자, 보류+실패 동시면 742자였다(2026-08-09 실측).
+    `notice_message` 에는 스키마 max_length 가 없어 **우리 쪽에서 안 걸린다.** 전부
+       나열하면 보류 42건에 631자, 보류+실패 동시면 742자였다.
        백엔드 컬럼이 짧으면 조용히 잘리거나 INSERT 가 터지고, 어느 쪽이든 셀러는 자기
        상품이 왜 빠졌는지 못 본다.
 
-    ⚠️ 상한을 **개수**로 걸면 안 된다. 상품명이 길면 5개만 나열해도 넘는다 — 실측으로
-       목 이름(7자) 223자 / 실제 노출명(38자) **368자**(2026-08-09).
+    상한을 **개수**로 걸면 안 된다. 상품명이 길면 5개만 나열해도 넘는다 — 실측으로
+       목 이름(7자) 223자 / 실제 노출명(38자) **368자**.
     """
     from app.core import constants
     from app.reporting.monthly_report_service import _build_excluded_notice
@@ -1696,7 +1696,7 @@ def test_notice_length_is_bounded_even_with_real_product_names() -> None:
     )
 
     # 접혀도 셈이 맞아야 한다: 나열한 것 + "외 N개" = 총 개수.
-    # ⚠️ "외 41개" 처럼 접힌 수를 박아 두면 예산이 바뀔 때마다 깨진다 — 몇 개가 들어가는지는
+    # "외 41개" 처럼 접힌 수를 박아 두면 예산이 바뀔 때마다 깨진다 — 몇 개가 들어가는지는
     #    상한과 이름 길이에 달렸고, 계약은 "합이 맞는다" 쪽이다.
     shown = many.count("(P")
     folded = int(re.search(r"외 (\d+)개", many).group(1))
@@ -1707,8 +1707,8 @@ def test_notice_length_is_bounded_even_with_real_product_names() -> None:
 def test_notice_length_is_bounded_at_every_scale() -> None:
     """상품 수·이름 길이를 **천장까지** 밀어도 `NOTICE_MAX_CHARS` 를 넘지 않는다.
 
-    ⚠️ 한 조합(42/42)만 재면 못 잡는다. 구절당 예산을 주던 시절 42/42 는 252자로 통과했지만
-       150/150 은 256자, 자릿수를 최대로 올리면 260자였다(2026-08-10 리뷰 실측).
+    한 조합(42/42)만 재면 못 잡는다. 구절당 예산을 주던 시절 42/42 는 252자로 통과했지만
+       150/150 은 256자, 자릿수를 최대로 올리면 260자였다.
 
     두 축이 동시에 길이를 밀어올린다:
       · **이름 길이** — 예산을 넘는 이름은 예산 끝까지 잘려 들어와 예산을 꽉 채운다.
@@ -1725,9 +1725,9 @@ def test_notice_length_is_bounded_at_every_scale() -> None:
         _OVER_BUDGET_NAME,
         "초장문 상품명 " * 30,
     )
-    # ⚠️ (1, 1) 이 빠지면 안 된다. 구절이 **둘**이라야 예산이 반으로 갈려 긴 이름 1건이
+    # (1, 1) 이 빠지면 안 된다. 구절이 **둘**이라야 예산이 반으로 갈려 긴 이름 1건이
     #    잘리는 경로에 닿는다 — (1, 0) 은 구절이 하나라 예산이 넉넉해서 접히지도 않는다.
-    #    그 경로에서 "외 0개" 가 새어 나갔다(2026-08-10 리뷰).
+    #    그 경로에서 "외 0개" 가 새어 나갔다.
     counts = ((1, 0), (0, 1), (1, 1), (3, 3), (42, 42), (150, 150), (504, 504), (99_999, 99_999))
 
     for name in names:
@@ -1747,9 +1747,9 @@ def test_notice_length_is_bounded_at_every_scale() -> None:
 def test_single_held_product_does_not_say_folded_zero() -> None:
     """보류 1건이면 "외 0개" 가 붙지 않는다 — 잘린 것과 접힌 것은 다르다.
 
-    ⚠️ 이름이 예산보다 길면 자르기 분기를 타는데, 거기서 꼬리를 무조건 붙이면
+    이름이 예산보다 길면 자르기 분기를 타는데, 거기서 꼬리를 무조건 붙이면
        `len(labels) - len(shown)` 이 0 이라 **"상품 1개: …이름… 외 0개"** 가 셀러 화면에
-       나간다(2026-08-10 리뷰 실측). 1개라고 알린 바로 뒤에 "외 0개" 가 붙는 문구다.
+       나간다. 1개라고 알린 바로 뒤에 "외 0개" 가 붙는 문구다.
 
     구절이 **둘**이라야 예산이 반으로 갈려 이 경로에 닿는다 — 보류만 있으면 예산이
     넉넉해서 접히지 않는다. 그래서 실패도 1건 같이 넣는다.
@@ -1769,7 +1769,7 @@ def test_truncated_label_keeps_the_product_code() -> None:
 
     오른쪽부터 자르면 끝에 붙은 `(P001)` 이 가장 먼저 날아간다. 셀러가 관리 화면에서
     상품을 특정하는 값은 노출명이 아니라 **코드**라, 같은 예산이면 코드를 남기는 쪽이
-    정보가 더 많다(2026-08-10 리뷰).
+    정보가 더 많다.
     """
     from app.reporting.monthly_report_service import _build_excluded_notice
 
@@ -1803,8 +1803,8 @@ def test_notice_stays_bounded_when_one_name_is_absurdly_long() -> None:
 def test_notice_lists_every_product_when_budget_allows() -> None:
     """예산 안이면 전부 나열한다 — 몇 개 안 될 때까지 접으면 정보만 잃는다.
 
-    ⚠️ 개수를 하드코딩하지 않는다. 상수에서 파생시켜야 `NOTICE_MAX_CHARS` 를 낮췄을 때
-       이 테스트가 "왜 접혔는지" 를 알려준다(2026-08-10 지적).
+    개수를 하드코딩하지 않는다. 상수에서 파생시켜야 `NOTICE_MAX_CHARS` 를 낮췄을 때
+       이 테스트가 "왜 접혔는지" 를 알려준다.
     """
     from app.core import constants
     from app.reporting.monthly_report_service import _build_excluded_notice

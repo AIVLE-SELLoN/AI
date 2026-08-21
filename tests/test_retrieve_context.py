@@ -34,7 +34,7 @@ def fake_get_documents(*, product_docs, tenant_docs=({"document": "다른 상품
     `tenant_docs` 기본값을 비우지 않는 이유: 대부분의 테스트가 재려는 건 "시딩은 정상인데
     이 상품만 없다" 라서, 회사 문서가 있는 쪽이 기본 전제여야 한다.
 
-    ⚠️ **세 번째 조회(구형 판별)는 여기 없다 — 일부러 없앴다.** 그건 컬렉션 전체의 성질이라
+    **세 번째 조회(구형 판별)는 여기 없다 — 일부러 없앴다.** 그건 컬렉션 전체의 성질이라
        미스마다 다시 계산할 게 아니고, 지금은 `scripts/seed_vectordb.py` 가 시딩 직후
        전수로 본다(`tests/test_seed_vectordb.py::test_reports_legacy_documents…`).
     """
@@ -127,10 +127,10 @@ def _stub_vectordb(monkeypatch):
 
 
 def test_cs_quotes_and_cs_summary_are_separate_slots(monkeypatch, biased_alert, linked_inquiries):
-    """🔴 둘을 한 문자열로 합치면 image_guide grounding 이 다시 자기참조가 된다.
+    """둘을 한 문자열로 합치면 image_guide grounding 이 다시 자기참조가 된다.
 
-    cs_summary 는 우리가 만든 문장이라 grounding 대조 대상에 섞이면 안 된다
-    (2026-08-09 수정). 슬롯 분리를 계약으로 고정한다.
+    cs_summary 는 우리가 만든 문장이라 grounding 대조 대상에 섞이면 안 된다.
+    슬롯 분리를 계약으로 고정한다.
     """
     _stub_vectordb(monkeypatch)
 
@@ -170,13 +170,13 @@ def test_returns_top_similar_case_when_found(monkeypatch, biased_alert):
 
 # ── 회사 범위 격리 — 컬렉션1 조회 경로 ─────────────────────────────
 def test_detail_page_lookup_is_scoped_to_the_current_company(monkeypatch, biased_alert):
-    """🔴 컬렉션1 조회가 **회사 축까지** 좁힌다.
+    """컬렉션1 조회가 **회사 축까지** 좁힌다.
 
     `product_group_id` 는 회사별 시퀀스라 A사에도 `P001`, B사에도 `P001` 이 있다. 이
     필터가 없으면 **다른 회사 상세페이지**가 개선안의 인용 근거가 되고, 그 문장이
     `citations` 에 박제돼 셀러 화면까지 나간다.
 
-    ⚠️ 시딩 ID 격리만으로는 이걸 못 막는다 — ID 가 안 겹쳐도 조회는 그대로 뚫린다.
+    시딩 ID 격리만으로는 이걸 못 막는다 — ID 가 안 겹쳐도 조회는 그대로 뚫린다.
        그래서 **시딩 테스트와 별개로** `where` 인자 자체를 잡아서 본다
        (`tests/test_seed_vectordb.py` 가 쓰기 쪽 반쪽).
     """
@@ -216,7 +216,7 @@ def _run_with_no_tenant_documents(monkeypatch, biased_alert, caplog):
 def test_warns_when_collection_has_no_documents_for_this_company(
     monkeypatch, biased_alert, caplog
 ):
-    """🔴 회사 축 도입이 만든 **새 실패 모드** — 축 없이 시딩된 컬렉션.
+    """회사 축 도입이 만든 **새 실패 모드** — 축 없이 시딩된 컬렉션.
 
     옛 문서엔 `company_id` metadata 가 없어서 조회 필터가 **전건을 걸러낸다**. 504건이
     멀쩡히 들어 있으니 `count()` 는 0이 아니고, 그래서 옛 코드였다면 **"상세페이지
@@ -230,14 +230,14 @@ def test_warns_when_collection_has_no_documents_for_this_company(
 
 
 def test_never_recommends_reset_in_the_miss_path(monkeypatch, biased_alert, caplog):
-    """🔴 **`--reset` 을 안내하면 안 된다 (서영님 #84 리뷰).**
+    """**`--reset` 을 안내하면 안 된다.**
 
     "현재 회사 문서 0건" 은 두 상태가 **같은 모양**이다 — ① 구형 문서만 있음 ② A사는
     정상이고 **새로 붙은 B사만** 아직 없음. ②에서 `--reset` 을 안내대로 실행하면
     `detail_pages` 뿐 아니라 **`rejection_reasons`(HITL 반려 이력)와 다른 회사 문서까지**
     지워진다. 이번 변경은 임베딩 모델 변경이 아니라 **일반 시딩이면 복구된다**(실측).
 
-    ⚠️ 런타임에선 ①·②를 **구분하지 않는다**(구분은 시딩 스크립트가 전수로 한다). 그래서
+    런타임에선 ①·②를 **구분하지 않는다**(구분은 시딩 스크립트가 전수로 한다). 그래서
        문구가 두 경우 모두에 참이어야 하고, 이 테스트가 그걸 고정한다 — 없으면 파괴적
        안내가 조용히 되돌아온다.
     """
@@ -247,20 +247,20 @@ def test_never_recommends_reset_in_the_miss_path(monkeypatch, biased_alert, capl
     assert "seed_vectordb.py" in caplog.text
     # 두 상태 모두에 참인 문구여야 한다 — 한쪽을 단정하지 않는다.
     assert "회사 축 없이 시딩됐거나 이 회사가 처음입니다" in caplog.text
-    # 🔴 핵심 단언 — 파괴적 명령을 "실행하라" 고 안내하지 않는다.
+    # 핵심 단언 — 파괴적 명령을 "실행하라" 고 안내하지 않는다.
     assert "--reset` 으로" not in caplog.text
     assert "`--reset` 은 쓰지 마세요" in caplog.text
 
 
-# ── 회사 범위 격리 — 조회 경로 (서영님 PR #77 리뷰) ────────────────
+# ── 회사 범위 격리 — 조회 경로 ─────────────────────────────────────
 def test_similar_case_query_is_scoped_to_the_current_company(monkeypatch, biased_alert):
-    """🔴 컬렉션2 조회가 **aspect 와 회사 축을 같이** 좁힌다.
+    """컬렉션2 조회가 **aspect 와 회사 축을 같이** 좁힌다.
 
     문서 ID 에 회사 접두어가 붙는 것만으로는 **조회가 안 막힌다** — 예전 필터는
     `where={"aspect": ...}` 하나뿐이라 다른 회사의 반려 사례가 `similar_case` 로
     새어 나왔다. ID 격리와 조회 격리는 **짝이고, 이건 그 나머지 반쪽**이다.
 
-    ⚠️ 필터를 지워도 컬렉션2 가 비어 있으면(운영 현재 0건) 아무 테스트도 안 깨진다 —
+    필터를 지워도 컬렉션2 가 비어 있으면(운영 현재 0건) 아무 테스트도 안 깨진다 —
        그래서 `where` 인자 자체를 잡아서 본다.
     """
     captured: dict = {}

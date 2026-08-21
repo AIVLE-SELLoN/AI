@@ -78,7 +78,7 @@ def test_hold_is_channel_level():
 def test_past_total_zero_holds_only_that_aspect():
     """과거표본 0 은 그 aspect 슬롯만 보류한다 — 같은 채널의 다른 aspect 는 살아야 한다.
 
-    past_total 은 aspect 마다 따로 센다(aggregate §97·§181). 색상의 기준선이
+    past_total 은 aspect 마다 따로 센다. 색상의 기준선이
     비었다고 같은 채널의 사이즈·소재까지 판정을 접으면, 그 이상이 held 표기도
     없이 조용히 사라진다. 최소표본 보류(채널 단위)와 범위를 섞지 말 것.
     """
@@ -118,7 +118,7 @@ def test_unreliable_denominator_slot_is_excluded_before_testing():
 def test_hold_propagates_across_sources():
     """CS 가 표본 부족이면 그 (상품,채널)은 리뷰까지 함께 보류된다.
 
-    로직 §5·§215, config 보고 §304: "한 채널이 보류되면 그 (상품,채널)의
+    이상탐지 로직: "한 채널이 보류되면 그 (상품,채널)의
     모든 aspect·source 12검정이 통째로 family 에서 빠진다."
     source 별로 따로 보류하면 family 크기(m)가 달라져 BH 컷오프가 어긋난다.
     """
@@ -140,7 +140,7 @@ def test_bh_step_up_toy():
     k=3(0.030) 이 (3/5)*0.05=0.030 에 딱 맞아 통과 → 1,2,3 발화 / 4,5 탈락.
     (전부 delta 충분하다고 두고 BH 만 본다.)
 
-    ⚠️ 5개를 **같은 상품**에 둔다 — family 가 상품별이라 그래야 한 family 안의
+    5개를 **같은 상품**에 둔다 — family 가 상품별이라 그래야 한 family 안의
        step-up 을 보는 원래 의도가 유지된다.
     """
     ps = [0.001, 0.008, 0.030, 0.045, 0.060]
@@ -402,7 +402,7 @@ def _row(product, channel, source, aspect, neg, day, rid="x", text="t"):
 
 
 def test_count_window_denominator_is_aspect_agnostic():
-    """분모(총문의)는 aspect·감성 무관 전체, 분자는 부정+aspect 만. (문서 §129)"""
+    """분모(총문의)는 aspect·감성 무관 전체, 분자는 부정+aspect 만."""
     rows = [
         _row("P1", "COUPANG", "cs", "색상", True, 30),  # 부정 색상
         _row("P1", "COUPANG", "cs", "색상", True, 31),  # 부정 색상
@@ -429,7 +429,7 @@ def test_count_window_boundary_inclusive_and_excludes_outside():
 
 
 def test_count_window_source_separated():
-    """cs 와 review 는 분모를 합치지 않는다. (문서 §136)"""
+    """cs 와 review 는 분모를 합치지 않는다."""
     rows = [
         _row("P1", "COUPANG", "cs", "색상", True, 30),
         _row("P1", "COUPANG", "review", "색상", True, 30),
@@ -468,7 +468,7 @@ def test_build_baseline_uses_preceding_28_days():
 
 
 def test_build_baseline_excludes_alert_days():
-    """알림 구간 날짜(상품,aspect,채널,day)는 과거 집계에서 제외 — 기준선 오염 방지(§150)."""
+    """알림 구간 날짜(상품,aspect,채널,day)는 과거 집계에서 제외 — 기준선 오염 방지."""
     rows = [
         _row("P1", "COUPANG", "cs", "색상", True, 10),
         _row("P1", "COUPANG", "cs", "색상", True, 11),  # 이 날이 알림 구간
@@ -485,7 +485,7 @@ def test_build_baseline_excludes_alert_days():
 
 
 def test_build_baseline_exclusion_is_per_aspect():
-    """색상 알림 구간을 빼도 같은 날의 사이즈 집계는 남는다 — 제외 단위가 aspect별(§150)."""
+    """색상 알림 구간을 빼도 같은 날의 사이즈 집계는 남는다 — 제외 단위가 aspect별."""
     rows = [
         _row("P1", "COUPANG", "cs", "색상", True, 10),
         _row(
@@ -520,7 +520,7 @@ def test_build_combinations_emits_full_grid_with_zero_fill():
 
 
 def test_baseline_fallback_when_past_halved_by_exclusion():
-    """알림 구간 제외로 과거 표본이 절반 이하로 줄면 설정값 부정률로 대체 (§152).
+    """알림 구간 제외로 과거 표본이 절반 이하로 줄면 설정값 부정률로 대체.
 
     과거 4건 중 3건이 알림 구간 → 1건만 남음(절반 이하) → 설정값 10% × 1건 = 0건.
     """
@@ -548,7 +548,7 @@ def test_baseline_fallback_when_past_halved_by_exclusion():
 def test_baseline_fallback_initial_period_assumes_window_ratio_n():
     """과거 표본이 아예 없으면(초기 구간) 현재 볼륨을 윈도우 길이 비로 늘려 N 으로 쓴다.
 
-    현재 7일 20건 · 과거 28일 → N = 20 × 28/7 = 80, 설정값 5% → 부정 4건. (§153·§137)
+    현재 7일 20건 · 과거 28일 → N = 20 × 28/7 = 80, 설정값 5% → 부정 4건.
     """
     rows = [
         _row("P1", "COUPANG", "cs", "색상", i < 3, 29 + (i % 7), rid=f"r{i}")

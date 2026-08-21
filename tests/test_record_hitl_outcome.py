@@ -73,8 +73,8 @@ def test_records_approved_outcome(monkeypatch, biased_alert):
     assert call["ids"] == [f"{TEST_COMPANY_ID}:REC-HITL-TEST"]
     assert call["metadatas"][0]["company_id"] == TEST_COMPANY_ID
     assert "사진_색감_오차" in call["documents"][0]
-    # §4-2 스펙: "원인 라벨 + CS 요약 + 개선안 본문" — CS 요약이 실제로 들어가는지 확인
-    # (2026-07-27 이전엔 CS 요약 대신 aspect가 들어가던 버그).
+    # `docs/agent3_logic.md` §4-2: "원인 라벨 + CS 요약 + 개선안 본문" — CS 요약 확인
+    # (예전엔 CS 요약 대신 aspect가 들어가던 버그).
     assert "CS 20건 중 14건" in call["documents"][0]
     assert call["metadatas"][0]["outcome"] == "승인"
     assert call["metadatas"][0]["channel"] == "COUPANG"
@@ -231,7 +231,7 @@ def test_raises_when_alert_id_mismatch(biased_alert):
         pipeline.record_hitl_outcome(biased_alert, recommendation)
 
 
-# ── 회사 범위 격리 (서영님 PR #77 리뷰) ────────────────────────────
+# ── 회사 범위 격리 ─────────────────────────────────────────────────
 def _two_company_upserts(monkeypatch, biased_alert, companies):
     """같은 논리 알림을 회사만 바꿔 두 번 적재하고 upsert 인자를 돌려준다.
 
@@ -259,7 +259,7 @@ def _two_company_upserts(monkeypatch, biased_alert, companies):
 def test_two_companies_with_the_same_alert_do_not_overwrite_each_other(
     monkeypatch, biased_alert
 ):
-    """🔴 회사가 다르면 **같은 `recommendation_id` 라도 문서가 안 겹친다.**
+    """회사가 다르면 **같은 `recommendation_id` 라도 문서가 안 겹친다.**
 
     `product_group_id` 가 회사별 시퀀스라 A사에도 `P001`, B사에도 `P001` 이 있다.
     백엔드는 `(companyId, alert_id)` 복합 유니크로 흡수하지만 **벡터DB엔 그 축이
@@ -302,7 +302,7 @@ def test_local_fallback_when_company_id_is_unset(monkeypatch, biased_alert):
     개발·테스트 환경의 기본값이 `""` 라(`config.mq_company_id`) 폴백이 없으면 문서 ID 가
     `:REC-…` 가 된다. 운영은 배포마다 실제 값이 박혀 이 경로를 안 탄다.
 
-    ⚠️ conftest 의 `pin_company_id` 가 고정한 값을 **여기서만 덮어쓴다** — 폴백을 재려면
+    conftest 의 `pin_company_id` 가 고정한 값을 **여기서만 덮어쓴다** — 폴백을 재려면
        설정이 비어 있어야 하기 때문이다.
     """
     monkeypatch.setattr(get_settings(), "mq_company_id", "")

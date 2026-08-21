@@ -5,7 +5,7 @@
 실패가 밖으로 나가면 그 알림의 **발행까지 막혀** 셀러가 이상 알림 자체를 못 받는다.
 그래서 "안 던진다"를 말로 적어두는 대신 실제로 던져보고 확인한다.
 
-두 번째 계약은 **"개선안이 없는 사유를 값으로 돌려준다"** 다(2026-08-10). 근거 0건은
+두 번째 계약은 **"개선안이 없는 사유를 값으로 돌려준다"** 다. 근거 0건은
 데이터 갭이라 배치 실패가 아니고, 그 구분이 `None` 하나로는 안 된다.
 
 LLM 은 부르지 않는다 — `run_with_outcome()` 을 몽키패치로 막는다.
@@ -148,7 +148,7 @@ async def test_gate_closed_skips_llm_entirely(monkeypatch):
 )
 @pytest.mark.asyncio
 async def test_never_raises_whatever_run_throws(monkeypatch, error, caplog):
-    """⚠️ 무엇이 터지든 None 으로 흡수한다.
+    """무엇이 터지든 None 으로 흡수한다.
 
     여기서 예외가 새면 배치 루프의 `except` 가 잡아 **그 알림이 발행되지 않는다** —
     개선안이 없는 것과 알림 자체가 안 가는 것은 셀러 입장에서 전혀 다르다.

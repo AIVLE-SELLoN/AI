@@ -3,7 +3,7 @@
 성격: "코드가 안 깨졌나" 검증(자동·무료) — tests/eval 성격 구분(README) 원칙에 따라
 실제 LLM 호출 없이 app.core.llm_client를 가짜(mock)로 대체해서 로직만 검증한다.
 
-🔴 확인 필요: 이 파일의 기존 docstring엔 "완료 기준 = fixture 100건 분류 정확도
+확인 필요: 이 파일의 기존 docstring엔 "완료 기준 = fixture 100건 분류 정확도
 측정치 첨부"라고 돼 있었으나, tests/fixtures/README.md의 설계 원칙(정답 없음·몇 건)과
 상충함을 발견함(팀 확인 대기 중). "정확도 측정"은 LLM 실제 호출·golden 정답이 필요해
 eval/의 역할(README: eval="성능이 얼마나 나오나", 수동·과금)에 해당하는 것으로 보여,
@@ -82,7 +82,7 @@ def test_fixture_matches_classify_request_item_shape(raw_cs_reviews):
 
 
 def test_explode_to_rows_splits_multi_aspect_into_multiple_rows():
-    """§2 규약: aspect 여러 개 → 행도 그만큼 분리."""
+    """분류 규약: aspect 여러 개 → 행도 그만큼 분리."""
     item = _make_item()
     rows = explode_to_rows(item)
     assert len(rows) == 2
@@ -138,12 +138,12 @@ def test_parse_llm_response_invalid_aspect_value_raises():
 
 
 def test_parse_llm_response_cs_empty_aspects_falls_back_to_etc_neutral():
-    """CS가 빈 배열을 내면 raise 대신 기타/중립으로 채운다(서영님↔현진 계약 7번, 2026-08-04).
+    """CS가 빈 배열을 내면 raise 대신 기타/중립으로 채운다 — 분류 계약 7번.
 
     배경: 프롬프트1은 "CS는 반드시 6개 중 하나 이상"이라 명시하지만 LLM이 가끔
     위반한다(관측: 제품과 무관한 순수 CS 응대 감사 표현, 300건 중 6건).
     detection/aggregate.py의 분모는 ClassifiedItem 1건=행 1개로 aspect 내용과
-    무관하게 세므로(§129), 빈 배열을 그대로 두든 기타/중립으로 채우든 탐지
+    무관하게 세므로, 빈 배열을 그대로 두든 기타/중립으로 채우든 탐지
     산식엔 no-op이다(둘 다 분모+1, 분자+0). 진짜 위험은 LlmParseError로 던져
     ClassifiedItem 자체를 안 만드는 쪽 — 그러면 그 문의가 분모에서 통째로 빠져
     부정률이 실제보다 높게 계산된다(오탐 방향). 그래서 raise 대신 채워서
@@ -234,10 +234,10 @@ async def test_classify_one_review_uses_prompt2_and_keeps_mixed_signal():
 async def test_classify_one_review_with_damage_aspect_fails_schema_validation():
     """LLM이 리뷰인데 파손을 뱉는 극단적 오류 상황 — ClassifiedItem 생성 자체가 막혀야 함.
 
-    ⚠️ 예전엔 pytest.raises(Exception)으로 느슨하게 잡아서, 내부에서 실제로
-    새는 게 pydantic ValidationError인지 LlmParseError인지 구분을 못 했다(지인님
-    ruff 리뷰의 B017 지적과 같은 종류의 문제). classify_aspect()의 계약(2026-08-04,
-    "실패는 LlmCallError 또는 LlmParseError만")을 지키려면 ValidationError가
+    예전엔 pytest.raises(Exception)으로 느슨하게 잡아서, 내부에서 실제로
+    새는 게 pydantic ValidationError인지 LlmParseError인지 구분을 못 했다 — ruff
+    B017 이 잡는 것과 같은 종류의 문제다. classify_aspect()의 계약("실패는
+    LlmCallError 또는 LlmParseError만")을 지키려면 ValidationError가
     그대로 새면 안 되므로, 구체적 타입까지 확인하도록 강화한다.
     """
     fake_client = AsyncMock()
@@ -283,11 +283,11 @@ def test_classify_endpoint_partial_failure_returns_200_with_errors(raw_cs_review
     """2건 중 1건 실패해도 전체 502가 아니라 200 + errors로 부분 성공 응답한다.
 
     배경: classify_aspect()가 return_exceptions=True로 바뀌면서 개별 실패를
-    raise 대신 결과 리스트에 예외 객체로 담아 반환하게 됨(서영님↔현진 계약,
-    2026-08-04). 이 테스트가 없으면, 누군가 라우터를 "실패 시 그냥 502"로
+    raise 대신 결과 리스트에 예외 객체로 담아 반환하게 됨(분류 계약).
+    이 테스트가 없으면, 누군가 라우터를 "실패 시 그냥 502"로
     되돌려도 아무도 못 잡는다.
-    ⚠️ side_effect는 리스트가 아니라 trace_key(item_id 포함)로 분기하는 함수다
-    (PR 리뷰 nit, 2026-08-04) — asyncio.gather()는 태스크 실행 순서를 보장하지
+    side_effect는 리스트가 아니라 trace_key(item_id 포함)로 분기하는 함수다
+    — asyncio.gather()는 태스크 실행 순서를 보장하지
     않으므로, "몇 번째 호출인지"에 의존하는 리스트형 side_effect는 우연히
     지금은 맞아도 원칙적으로 깨지기 쉽다. item_id로 분기하면 순서와 무관하게
     항상 올바른 결과를 낸다.

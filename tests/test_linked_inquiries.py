@@ -125,7 +125,7 @@ def _raw_db(tmp_path, cs_rows=(), review_rows=()):
 
 
 def test_fetch_reads_inquired_at_not_created_at(tmp_path):
-    """🔴 `cs` 는 시각 컬럼이 **둘**이다 — 접수 일시는 `inquired_at` 이다.
+    """`cs` 는 시각 컬럼이 **둘**이다 — 접수 일시는 `inquired_at` 이다.
 
     `LinkedCSInquiry.created_at` 의 정의가 "CS 접수 일시" 인데 `cs.created_at`(레코드
     적재 시각)을 이름만 보고 매핑하면 조용히 틀린 값이 들어간다. 두 값을 일부러 다르게
@@ -169,7 +169,7 @@ def test_fetch_keeps_evidence_order_and_skips_missing(tmp_path, caplog):
 
 
 def test_fetch_reads_reviews_too(tmp_path):
-    """🔴 리뷰(`RVW-`)도 근거로 쓴다 — **확정 정책이다(2026-08-11)**, 미결이 아니다.
+    """리뷰(`RVW-`)도 근거로 쓴다 — **확정 정책이다**, 미결이 아니다.
 
     리뷰 소스 알림이면 `evidence.inquiry_ids` 가 `RVW-*` 이고, 그게 그대로 CS 가이드라인
     근거로 들어간다. 국내 커머스는 셀러가 리뷰에 답글을 달고 그것도 CS 업무라, 리뷰 전용
@@ -192,13 +192,13 @@ def test_fetch_reads_reviews_too(tmp_path):
 
 
 def test_both_paths_agree_on_source(tmp_path):
-    """🔴 두 조회 경로가 같은 `source` 를 낸다.
+    """두 조회 경로가 같은 `source` 를 낸다.
 
     `build_`(배치가 든 documents)와 `fetch_`(raw DB 직접)는 호출부가 다를 뿐 같은 근거를
     내야 한다. 한쪽만 출처를 채우면 **REST 로 디버깅한 결과와 운영 배치 결과가 갈려서**,
     "리뷰였는데 문의로 보였다" 를 재현으로 확인할 수 없게 된다.
 
-    ⚠️ **실제로 갈릴 수 있는 지점은 쿼리에서 `source` 를 빼먹는 것 하나뿐이고, 그건
+    **실제로 갈릴 수 있는 지점은 쿼리에서 `source` 를 빼먹는 것 하나뿐이고, 그건
     첫 assert 가 잡는다**(뮤테이션으로 확인 — 빼고 돌리면 첫 줄에서 멈춘다). 둘째
     assert 는 `fetch_` 가 `build_` 를 그대로 부르는 구조라 매핑이 갈려서 깨질 일이
     없다 — 그 구조를 계약으로 못박아 두는 자리다(양쪽이 각자 매핑을 쓰기 시작하면
@@ -247,7 +247,7 @@ def test_build_without_source_key_does_not_crash():
 
 @pytest.mark.parametrize("bad", ["CS", "kakao"])
 def test_build_survives_a_bad_source_value(bad, caplog):
-    """🔴 출처 값이 틀려도 **그 문의만** 출처 미상이 된다 — 나머지가 같이 죽지 않는다.
+    """출처 값이 틀려도 **그 문의만** 출처 미상이 된다 — 나머지가 같이 죽지 않는다.
 
     `Source(...)` 를 그냥 부르면 `ValidationError` 가 호출부까지 올라가서, 값이 이상한
     1건 때문에 **그 알림의 문의가 통째로 사라진다.** 문서 못 찾음·원문 빈 값은 1건만

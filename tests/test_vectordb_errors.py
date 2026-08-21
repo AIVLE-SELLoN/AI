@@ -7,7 +7,6 @@
 됐는데, `openai.OpenAIError` 는 `ChromaError` 의 하위가 아니라 기존 `except ChromaError`
 를 그대로 통과했다 — 레이트리밋 한 번에 REST 500 / 배치의 해당 알림 개선안 유실로
 이어진다. 회귀하면 조용히 같은 모양이 되므로 계약으로 고정한다.
-(PR #42 서영님 리뷰 지적 ①·④, 2026-08-09)
 """
 
 import httpx
@@ -89,7 +88,7 @@ def test_unrelated_errors_are_not_swallowed():
         query_documents(RaisingCollection(AttributeError("오타")), query_text="색상")
 
 
-# ── get_documents 의 include 지원 (서영님 #84 리뷰 후속) ────────────
+# ── get_documents 의 include 지원 ───────────────────────────────────
 class _RecordingCollection:
     """`get()` 인자를 기록하고, Chroma 처럼 **빠진 필드를 빈 리스트로** 돌려준다."""
 
@@ -107,7 +106,7 @@ class _RecordingCollection:
 
 
 def test_include_metadatas_only_still_returns_every_row():
-    """🔴 `include` 로 본문을 빼도 **행이 사라지면 안 된다.**
+    """`include` 로 본문을 빼도 **행이 사라지면 안 된다.**
 
     Chroma 는 빠진 필드를 **빈 리스트**로 준다. 예전 구현은 세 리스트를 `zip` 으로 묶어서,
     `documents` 가 비면 **전체가 0건으로 잘렸다** — 조회는 성공했는데 결과만 조용히

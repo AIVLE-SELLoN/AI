@@ -8,14 +8,14 @@
     0.54  0.50      0.04    SAFE      막대 오른쪽(54%)
     0.25  0.02      0.23    CRISIS    막대 왼쪽(25%)
 
-🔴 **여기서 재는 것 둘.**
+**여기서 재는 것 둘.**
 
 1. **기준선이 같이 찍히는가** — 두 마커 사이 간격이 곧 excess 라 초과분이 그림에 남는다.
 2. **절대 축의 구간명이 판정어를 쓰지 않는가** — 이쪽이 더 중요하다. 기준선을 추가해도
    구간 이름이 "SAFETY ZONE / 안전"이면 CRISIS 인 두 번째 쌍의 마커가 그 구역 안에
    찍힌다. 같은 페이지 `cause_title` 은 `_validate_stage_label` 이 "위험 단계"를
    강제하므로 **문서 안에서 문장과 그림이 정면으로 반대**가 된다. 간격을 읽으면 이유를
-   추론할 수 있게 될 뿐, 모순 자체는 안 풀린다(2026-08-13 서영님 2차 지적).
+   추론할 수 있게 될 뿐, 모순 자체는 안 풀린다.
 
    그래서 구간명은 절대 축의 말("절대 격차 낮음/높음")이어야 하고, 판정은 문장이 한다.
 """
@@ -59,7 +59,7 @@ def _gauge(score: float | None, baseline: float | None) -> str:
     ],
 )
 def test_baseline_marker_explains_the_verdict(score, baseline, expected_stage) -> None:
-    """🔴 절대 위치가 판정과 어긋나는 쌍에서 **기준선이 그 이유를 설명**한다.
+    """절대 위치가 판정과 어긋나는 쌍에서 **기준선이 그 이유를 설명**한다.
 
     판정을 여기서 다시 계산하지 않고 `decide_severity` 를 그대로 부른다 — 테스트가
     판정식을 베껴 적으면 그쪽이 바뀌었을 때 이 테스트만 옛 기준으로 남는다.
@@ -127,7 +127,7 @@ def test_baseline_label_never_collides_with_the_sample_text() -> None:
 
 
 def test_pdf_context_actually_passes_the_baseline() -> None:
-    """🔴 **호출부가 `jsd_baseline` 을 넘기는지**까지 본다 — 원래 버그가 여기였다.
+    """**호출부가 `jsd_baseline` 을 넘기는지**까지 본다 — 원래 버그가 여기였다.
 
     `render_divergence_gauge` 만 테스트하면 인자를 안 넘기는 회귀를 못 잡는다. 실제로
     이 함수가 `jsd_score`·`sample_size` 만 넘기고 있어서, 게이지는 판정을 반영할 방법
@@ -178,7 +178,7 @@ VERDICT_WORDS = ("SAFETY", "DANGER", "SAFE", "CRISIS", "CAUTION", "안전", "위
     ],
 )
 def test_zone_labels_never_use_verdict_words(score, baseline, bh_significant) -> None:
-    """🔴 어떤 입력에서도 구간명이 판정어를 쓰지 않는다.
+    """어떤 입력에서도 구간명이 판정어를 쓰지 않는다.
 
     반례(0.25/0.02)를 실제로 돌려 보면 마커는 막대 **왼쪽**에 찍힌다. 예전 라벨이면
     그 자리가 "SAFETY ZONE / 안전"이라, 판정이 CRISIS 이고 상단 문장이 "위험 단계"인데
@@ -195,7 +195,7 @@ def test_zone_labels_never_use_verdict_words(score, baseline, bh_significant) ->
 
 
 def test_crisis_counterexample_marker_sits_left_yet_label_is_neutral() -> None:
-    """🔴 반례를 끝까지 확인한다 — 마커 위치와 구간명을 **함께** 본다.
+    """반례를 끝까지 확인한다 — 마커 위치와 구간명을 **함께** 본다.
 
     위치만 보면 "왼쪽에 찍혔다"까지만 알고, 구간명만 보면 그게 왜 문제인지 모른다.
     이 테스트가 고정하는 건 둘의 조합이다: **판정은 CRISIS 이고 마커는 왼쪽인데,

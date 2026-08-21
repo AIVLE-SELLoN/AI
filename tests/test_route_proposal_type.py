@@ -76,7 +76,7 @@ async def test_offers_both_tools_and_includes_both_evidence_in_prompt(monkeypatc
 @pytest.mark.asyncio
 async def test_raises_llm_parse_error_for_unknown_tool_name(monkeypatch, biased_alert):
     """LLM이 우리가 안 준 tool 이름을 반환하면 KeyError로 그냥 죽지 않고 명확한
-    예외를 던져야 한다(2026-07-27 발견·수정 — 방어 코드 없던 버그)."""
+    예외를 던져야 한다(방어 코드가 없던 버그)."""
     fake_client = _FakeToolChoosingClient("use_something_unexpected")
     monkeypatch.setattr(pipeline, "get_llm_client", lambda: fake_client)
 

@@ -1,9 +1,9 @@
-"""담당: 지인 — scripts/inspect_detail_pages.py 회사 범위 테스트 (서영님 #84 리뷰).
+"""담당: 지인 — scripts/inspect_detail_pages.py 회사 범위 테스트.
 
 실제 ChromaDB 는 안 쓴다. `collection.get()` 이 받은 `where` 만 잡아서 **기본 덤프가
 회사 범위를 지키는지** 본다.
 
-🔴 왜 필요한가 — metadata 격리는 **권한 경계가 아니다**(`docs/vectordb_tenancy.md` §5).
+왜 필요한가 — metadata 격리는 **권한 경계가 아니다**(`docs/vectordb_tenancy.md` §5).
    그래서 저장소가 주는 운영 도구가 기본으로 전건을 뜨면, 공유 컬렉션에서 **다른 회사
    상세페이지 원문이 한 CSV 로 새어 나간다.**
 """
@@ -44,7 +44,7 @@ def _dump(monkeypatch, tmp_path, *, all_companies):
 
 
 def test_default_dump_is_scoped_to_the_current_company(monkeypatch, tmp_path):
-    """🔴 기본 덤프는 `company_id` 로 좁힌다 — 안 좁히면 남의 원문이 CSV 로 나간다."""
+    """기본 덤프는 `company_id` 로 좁힌다 — 안 좁히면 남의 원문이 CSV 로 나간다."""
     collection, _ = _dump(monkeypatch, tmp_path, all_companies=False)
 
     assert collection.calls == [{"company_id": "SLN-test"}], (
@@ -71,7 +71,7 @@ def test_dump_writes_company_id_column(monkeypatch, tmp_path):
 
 
 def test_cli_defaults_to_scoped_dump(monkeypatch, tmp_path):
-    """🔴 배선 확인 — `main()` 이 인자 없이 불리면 **회사 범위**로 돈다.
+    """배선 확인 — `main()` 이 인자 없이 불리면 **회사 범위**로 돈다.
 
     `dump()` 만 테스트하면 CLI 기본값이 `--all-companies` 로 뒤집혀도 안 걸린다.
     """

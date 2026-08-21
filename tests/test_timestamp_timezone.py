@@ -2,8 +2,8 @@
 
 왜 소스를 훑는 테스트인가
 ------------------------
-같은 사고가 **네 번** 났다 — `daily._to_kst`(PR #53) · 탐지 시각 기본값(PR #68) ·
-`mock_producer` KST 정의(PR #70) · 리포팅/워커 타임스탬프(2026-08-13). 매번 다른 파일이고
+같은 사고가 **네 번** 났다 — `daily._to_kst` · 탐지 시각 기본값 ·
+`mock_producer` KST 정의 · 리포팅/워커 타임스탬프. 매번 다른 파일이고
 매번 "개발 머신이 KST 라 로컬 테스트로는 영원히 안 잡힌다"가 원인이었다.
 
 값을 하나씩 단언하는 테스트로는 **다음 파일**을 못 막는다. 새로 쓰는 코드가 같은 관용구를
@@ -16,9 +16,9 @@
 컨테이너에서는 9시간 어긋난다 — 확정 문서 §3 이 날짜 경계를 Asia/Seoul 로 못박았으므로
 이건 환경에 따라 계약을 어기는 코드다.
 
-⚠️ **UTC 를 명시한 것은 대상이 아니다.** `datetime.now(timezone.utc)` 는 호스트에 의존하지
+**UTC 를 명시한 것은 대상이 아니다.** `datetime.now(timezone.utc)` 는 호스트에 의존하지
    않고, 두 곳은 그렇게 두는 것이 맞다:
-     - `app/core/mq.py` `_now_iso()` — Envelope `occurredAt` 은 계약이 UTC·`Z` 접미다(§3)
+     - `app/core/mq.py` `_now_iso()` — Envelope `occurredAt` 은 계약이 UTC·`Z` 접미다
      - `app/batch/daily.py` `started` — 벽시계가 아니라 **차이**만 쓰는 경과시간 기준점
    이 둘은 표현이 UTC 일 뿐 같은 순간이고, KST 로 바꾸면 계약이 깨지거나(전자) 아무것도
    안 달라진다(후자).
@@ -38,10 +38,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SCANNED_DIRS = ("app", "scripts", "eval")
 """훑을 폴더.
 
-⚠️ **`eval/` 을 빼지 말 것.** 처음엔 `("app", "scripts")` 였는데, 그 상태로도 가드는
+**`eval/` 을 빼지 말 것.** 처음엔 `("app", "scripts")` 였는데, 그 상태로도 가드는
    초록이었고 `eval/` 에 5건이 남아 있었다 — 그중 `run_classify_eval.py` 의 결과 파일명
    스탬프는 같은 커밋에서 `scripts/verify_hybrid_eval_sets.py` 에 고친 것과 **완전히 같은
-   버그**였다. 바로 옆 파일인데 스캔 범위 밖이라 안 잡혔다. (2026-08-13 리뷰)
+   버그**였다. 바로 옆 파일인데 스캔 범위 밖이라 안 잡혔다.
 
    `eval/` 산출물은 실험 기록이라 파일명·`run_at` 날짜가 하루 밀리면 같은 실행분이 두
    날짜로 흩어진다. `tests/` 는 0건이라 넣지 않았다 — 넣어도 되지만, 픽스처가 고정 시각을
@@ -60,10 +60,10 @@ FORBIDDEN = re.compile(
 def _offending_lines(path: Path) -> list[tuple[int, str]]:
     """그 파일에서 금지 관용구가 **코드로** 쓰인 줄. 주석·문자열은 뺀다.
 
-    ⚠️ 주석을 빼는 이유: 이 관용구들이 **왜 위험한지**를 설명하는 주석이 여러 파일에 있고
+    주석을 빼는 이유: 이 관용구들이 **왜 위험한지**를 설명하는 주석이 여러 파일에 있고
        (그게 있어야 다음 사람이 안 되돌린다), 그것까지 잡으면 설명을 지워야 통과하게 된다.
 
-    ⚠️ **`tokenize` 를 쓴다 — 줄 단위로 직접 세지 않는다.** 처음엔 `\"\"\"` 로 docstring
+    **`tokenize` 를 쓴다 — 줄 단위로 직접 세지 않는다.** 처음엔 `\"\"\"` 로 docstring
        구간을 손으로 따라갔는데 `daily.py` 의 여러 줄 docstring 안 주석을 오탐했다.
        파서를 흉내 내면 이런 구멍이 계속 생긴다.
     """
@@ -98,7 +98,7 @@ def _offending_lines(path: Path) -> list[tuple[int, str]]:
 
 @pytest.mark.parametrize("folder", SCANNED_DIRS)
 def test_no_host_local_timestamps(folder: str) -> None:
-    """🔴 호스트 로컬 시각을 쓰는 코드가 없어야 한다.
+    """호스트 로컬 시각을 쓰는 코드가 없어야 한다.
 
     걸렸다면 `app/core/constants.py` 의 `KST` 를 명시할 것:
 

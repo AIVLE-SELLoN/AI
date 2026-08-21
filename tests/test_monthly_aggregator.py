@@ -74,7 +74,7 @@ def conn() -> sqlite3.Connection:
     합친 `voc_document` 뷰다. 시각 컬럼명이 갈려 있어(inquired_at / created_at) 뷰가
     엉뚱한 쪽을 고르면 기간 절단이 통째로 어긋나므로, 픽스처도 실제 DDL 을 쓴다.
 
-    ⚠️ **`row_factory` 를 실제 경로와 맞춘다.** 운영에서는 `raw_db.connect_readonly()` 가
+    **`row_factory` 를 실제 경로와 맞춘다.** 운영에서는 `raw_db.connect_readonly()` 가
        열어 주고 그 연결은 행을 **컬럼 이름으로** 읽게 돼 있다(sqlite 는 `sqlite3.Row`,
        Postgres 는 `raw_db.RawRow`). 여기서 기본 튜플로 두면 집계가 이름으로 읽는 코드를
        못 태우고, 정작 운영 경로에서만 `TypeError` 가 난다.
@@ -105,7 +105,7 @@ def conn() -> sqlite3.Connection:
                 "content, rating, created_at) VALUES (?,?,?,?,?,?,?)",
                 (item_id, "C1", "P001", channel, "원문", 2, occurred_at),
             )
-        # ⚠️ 분류 시각은 일부러 **8월**로 둔다. 기간 절단이 발생 시각 기준이 아니면
+        # 분류 시각은 일부러 **8월**로 둔다. 기간 절단이 발생 시각 기준이 아니면
         #    7월 건이 통째로 빠져 아래 단언이 깨진다.
         db.execute(
             "INSERT INTO classified_item (item_id, source, classified_at, prompt_version)"
@@ -172,7 +172,7 @@ def _insert(db: sqlite3.Connection, item_id: str, channel: str, aspect: str) -> 
 def test_channel_case_is_normalized(conn: sqlite3.Connection) -> None:
     """원문의 채널 표기가 소문자로 와도 같은 채널로 묶인다.
 
-    ⚠️ 예전에는 `classified_item.channel` 을 읽었고 그 값은 `ClassifiedItem` 을 거쳐
+    예전에는 `classified_item.channel` 을 읽었고 그 값은 `ClassifiedItem` 을 거쳐
        `Channel` enum 이 표기를 보장했다. 지금은 원문 테이블 값이 그대로 나오는데 그
        표기는 메인 서버 소관이다. 맞추지 않으면 호출부의
        `channel_counts.get("COUPANG", [0,0,0])` 가 빗나가 그 채널이 **빈 분포**로
@@ -208,8 +208,8 @@ def test_unknown_channel_is_excluded_and_logged(conn: sqlite3.Connection, caplog
 def test_product_name_falls_back_when_catalog_is_empty(conn: sqlite3.Connection) -> None:
     """카탈로그가 비어 있으면 None — 이름을 지어내지 않는다. 호출부가 코드를 그대로 쓴다.
 
-    ⚠️ 예전에는 "테이블이 아예 없을 때"를 재는 테스트였다. 2026-08-11 에 확정 스키마
-       §2-2·§2-3 이 `raw_schema` 로 들어와 두 테이블이 **항상 생기므로**, 이제 남은 경우는
+    예전에는 "테이블이 아예 없을 때"를 재는 테스트였다. 확정 스키마가
+       `raw_schema` 로 들어와 두 테이블이 **항상 생기므로**, 이제 남은 경우는
        "테이블은 있는데 그 상품이 아직 매핑되지 않음" 이다. 백엔드가 매핑을 적재하기 전
        구간이 정확히 이 상태다.
     """
@@ -240,11 +240,11 @@ def test_product_name_uses_mode_across_channels(conn: sqlite3.Connection) -> Non
     assert _fetch_product_names(conn, "P001") == "미디 원피스"
 
 
-# ── calculated_at 타임존 (2026-08-13 리뷰 §1) ────────────────────────────
+# ── calculated_at 타임존 ─────────────────────────────────────────────────
 
 
 def test_calculated_at_is_kst_not_host_or_utc(conn: sqlite3.Connection) -> None:
-    """🔴 `calculated_at` 은 **KST 여야 한다.** 소스 스캔 가드가 못 잠그는 반대편이다.
+    """`calculated_at` 은 **KST 여야 한다.** 소스 스캔 가드가 못 잠그는 반대편이다.
 
     `tests/test_timestamp_timezone.py` 의 가드는 호스트 로컬 관용구만 금지하고
     `datetime.now(timezone.utc)` 는 **일부러 통과시킨다** — `mq.py` 의 `occurredAt` 은
@@ -256,10 +256,9 @@ def test_calculated_at_is_kst_not_host_or_utc(conn: sqlite3.Connection) -> None:
 
     실측으로 확인한 구멍이다 — `datetime.now(timezone.utc)` 로 되돌려도 소스 스캔만으로는
     **682건 전부 통과했다.** 관용구는 막았는데 "이 값은 KST 여야 한다"는 요건은 아무 데서도
-    안 지켜지고 있었다. 같은 모양(가드를 만들면서 반대편을 안 잠금)이 PR #68·#70·#77 에서
-    이미 세 번 났다.
+    안 지켜지고 있었다. 같은 모양(가드를 만들면서 반대편을 안 잠금)이 이미 세 번 났다.
 
-    ⚠️ **지면에 찍히는 문자열까지 잰다.** `utcoffset()` 만 보면 절단 폭·포맷이 바뀌었을 때
+    **지면에 찍히는 문자열까지 잰다.** `utcoffset()` 만 보면 절단 폭·포맷이 바뀌었을 때
        못 잡는다 — 증상은 어디까지나 "셀러가 보는 시각"이다.
     """
     before = datetime.now(KST)

@@ -1,9 +1,9 @@
-"""담당: 지인 — pipeline.score_confidence() 테스트 (§4-4 확신도 규칙 + §5-1 탐지 캡핑).
+"""담당: 지인 — pipeline.score_confidence() 테스트.
 
-Agent1/2 코드 없이 conftest.py 픽스처(DetectionAlert)만으로 완결되는 로직이라
-mock 데이터만으로 전부 검증 가능하다.
+근거는 `docs/agent3_logic.md` §4-4(확신도 규칙) · §5-1(탐지 캡핑) 이다.
+Agent1/2 코드 없이 mock 데이터만으로 전부 검증 가능하다.
 
-§4-4 개정(2026-08-04) — 근거 축을 evaluator.checks.grounding 으로 교체했다.
+§4-4 개정 — 근거 축을 evaluator.checks.grounding 으로 교체했다.
 이전엔 proposal.detailpage_grounded 를 썼는데 그건 copy_draft 전용이라
 image_guide 가 구조적으로 항상 '낮음'이었다(실연동 크로스체크에서 발견).
 """
@@ -119,7 +119,7 @@ def test_image_guide_can_reach_high(biased_alert):
     """[회귀 방지] image_guide 도 '높음'까지 갈 수 있어야 한다.
 
     개정 전에는 detailpage_grounded 가 copy_draft 전용이라 image_guide 가
-    항상 낮음이었다 — 실연동 크로스체크(2026-08-04)에서 발견한 버그.
+    항상 낮음이었다 — 실연동 크로스체크에서 발견한 버그.
     """
     confidence, _, _ = score_confidence(
         _proposal(ProposalType.IMAGE_GUIDE),

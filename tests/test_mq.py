@@ -173,7 +173,7 @@ def test_occurred_at_is_utc_with_milliseconds():
 
 
 def test_routing_key_is_analyzed_not_detected():
-    """`ai.anomaly.detected` 는 2026-08-03 에 개명된 구 이름이다(§2)."""
+    """`ai.anomaly.detected` 는 개명 전 구 이름이다(§2)."""
     assert mq.ANOMALY_ANALYZED == "ai.anomaly.analyzed"
     assert mq.GUIDELINE_GENERATED == "ai.guideline.generated"
 
@@ -228,7 +228,7 @@ def test_anomaly_payload_carries_classifier_versions(alert, recommendation):
 def test_classifier_versions_is_explicit_null_when_unknown(alert):
     """근거가 없으면 **null 을 싣는다** — 키를 빼지도, 지어내지도 않는다.
 
-    🔴 값의 근거는 `daily.py` 의 활성 버전 필터뿐이다. 그 필터를 안 타는 입력원
+    값의 근거는 `daily.py` 의 활성 버전 필터뿐이다. 그 필터를 안 타는 입력원
        (`--input-source golden`)에서 발행 시점 설정으로 채우면, 검증한 적 없는 것을
        검증된 것처럼 보고하게 된다. `recommendation` 과 같은 이유로 키는 남긴다.
     """
@@ -300,7 +300,7 @@ def test_monthly_report_cannot_go_out_as_guideline():
 async def test_disabled_mq_raises_instead_of_silently_skipping(
     alert, recommendation, guideline_callback, monkeypatch
 ):
-    """⚠️ MQ_ENABLED=false 는 no-op 이 아니다.
+    """MQ_ENABLED=false 는 no-op 이 아니다.
 
     호출부는 예외가 없으면 발행 성공으로 보고 그 알림을 prior_alerts 캐시에 넣는다 —
     캐시에 들어가면 재알림이 7일간 억제되므로, 조용히 넘기면 셀러가 그 알림을 영영
@@ -348,10 +348,10 @@ async def test_publish_sends_envelope_on_the_right_routing_key(
 
 @pytest.mark.asyncio
 async def test_unroutable_message_is_a_failure_not_a_success(alert, monkeypatch):
-    """⚠️ 어느 큐에도 안 닿은 메시지를 발행 성공으로 보고하지 않는다.
+    """어느 큐에도 안 닿은 메시지를 발행 성공으로 보고하지 않는다.
 
     토픽 exchange 는 바인딩된 큐가 없으면 메시지를 **조용히 버린다.** aio_pika 는 그때
-    예외를 던지지 않고 `Basic.Return` 을 돌려준다(2026-08-07 로컬 브로커 실측). 반환값을
+    예외를 던지지 않고 `Basic.Return` 을 돌려준다. 반환값을
     안 보면 배치가 그 알림을 prior_alerts 캐시에 넣어 RENOTIFY_BLOCK_DAYS 동안 재알림이
     막히고 **셀러가 그 알림을 영영 못 본다.**
 
@@ -384,7 +384,7 @@ async def test_unroutable_message_is_a_failure_not_a_success(alert, monkeypatch)
 async def test_unconfirmed_publish_is_a_failure(alert, monkeypatch):
     """Ack 도 Return 도 아닌 응답을 성공으로 넘기지 않는다.
 
-    ⚠️ **Nack 은 여기 안 온다** — aiormq 가 `DeliveryError` 예외로 던져서
+    **Nack 은 여기 안 온다** — aiormq 가 `DeliveryError` 예외로 던져서
     (`aiormq/channel.py` `_confirm_delivery`) 위쪽 try/except 가 먼저 `MqPublishError` 로
     감싼다. 즉 세 갈래(Ack / Return / 그 외)가 전부 막히되 경로가 다르다. 이 분기는
     라이브러리가 계약을 바꿔도 조용히 새지 않게 두는 방어다.
@@ -439,7 +439,7 @@ async def test_disabled_check_runs_before_broker_connection(alert, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_publish_refuses_without_company_id(alert, monkeypatch):
-    """⚠️ companyId 가 비면 발행하지 않는다.
+    """companyId 가 비면 발행하지 않는다.
 
     빈 값으로 나가면 백엔드 DB 에 회사 미상 행이 쌓이는데, 나중에 어느 회사 것인지
     복구할 단서가 없다(발행 시각뿐). 접속이 되는데 내용이 틀린 메시지를 보내는 건
@@ -485,7 +485,7 @@ class _FakeChannel:
 
 @pytest.mark.asyncio
 async def test_does_not_redeclare_someone_elses_exchange(monkeypatch):
-    """⚠️ 기본값은 **선언하지 않고 확인만** 한다.
+    """기본값은 **선언하지 않고 확인만** 한다.
 
     운영 exchange 는 백엔드 인프라 소유이고 quorum·DLX·TTL 설정이 붙어 있다. 우리가
     다른 인자로 declare 하면 PRECONDITION_FAILED 로 거부당해 발행이 통째로 죽는다.
@@ -504,7 +504,7 @@ async def test_does_not_redeclare_someone_elses_exchange(monkeypatch):
 async def test_declares_topology_only_when_told_to(monkeypatch):
     """로컬 docker-compose 처럼 아무것도 없는 환경에서만 우리가 만든다.
 
-    ⚠️ `mq_host` 를 여기서 명시한다. 가드가 호스트도 보는데 기본값이 `""`(fail-closed)
+    `mq_host` 를 여기서 명시한다. 가드가 호스트도 보는데 기본값이 `""`(fail-closed)
     이라, `.env` 에 기대면 **`.env` 를 만든 사람만 통과하는 테스트**가 된다.
     """
     settings = mq.get_settings()
@@ -519,7 +519,7 @@ async def test_declares_topology_only_when_told_to(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_refuses_to_declare_against_a_remote_broker(monkeypatch):
-    """🔴 플래그가 켜져 있어도 브로커가 로컬이 아니면 **선언 자체를 시도하지 않는다.**
+    """플래그가 켜져 있어도 브로커가 로컬이 아니면 **선언 자체를 시도하지 않는다.**
 
     `topology_config_errors()` 로는 이 사고를 못 막는다 — 그쪽은 브로커가 거부했을 때
     문구를 고쳐 주는 것이고, 운영 exchange 가 **아직 없으면 declare 는 그냥 성공한다.**
@@ -544,7 +544,7 @@ async def test_refuses_to_declare_against_a_remote_broker(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_remote_broker_is_fine_when_we_do_not_declare(monkeypatch):
-    """⚠️ 반대 방향 — **운영 설정(플래그 off + 원격 호스트)은 막으면 안 된다.**
+    """반대 방향 — **운영 설정(플래그 off + 원격 호스트)은 막으면 안 된다.**
 
     가드를 `mq_declare_topology` 와 무관하게 걸면 운영에서 발행이 통째로 죽는다.
     운영이야말로 원격 호스트가 정상인 환경이다.
@@ -602,7 +602,7 @@ class _RefusingChannel:
 
 @pytest.mark.asyncio
 async def test_declare_on_someone_elses_exchange_says_which_flag_to_drop(monkeypatch):
-    """🔴 운영 브로커에 `MQ_DECLARE_TOPOLOGY=true` 로 붙었을 때의 안내.
+    """운영 브로커에 `MQ_DECLARE_TOPOLOGY=true` 로 붙었을 때의 안내.
 
     브로커 원문은 `PRECONDITION_FAILED - inequivalent arg 'type'` 뿐이라 **무엇을
     고쳐야 하는지를 안 알려준다.** 연동 주에 이 로그만 보고 플래그를 찾아가야 하는데,
@@ -660,7 +660,7 @@ async def test_missing_exchange_points_at_the_local_setup_script(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("declare_topology", [True, False])
 async def test_permission_denied_is_a_config_error_too(monkeypatch, declare_topology):
-    """🔴 403 ACCESS_REFUSED 도 설정 오류다 — 406/404 만 잡으면 새어 나간다.
+    """403 ACCESS_REFUSED 도 설정 오류다 — 406/404 만 잡으면 새어 나간다.
 
     운영 토폴로지는 백엔드 인프라 소유라 우리 AI 계정에 `configure`/`write` 권한이
     없을 수 있다 (`consume()` 이 같은 이유로 운영에서 바인딩을 시도하지 않는다).
@@ -668,7 +668,7 @@ async def test_permission_denied_is_a_config_error_too(monkeypatch, declare_topo
     `MqPublishError`(= 다음 배치가 다시 시도한다)로 나간다 — 권한을 안 고치는 한
     매일 같은 자리에서 실패하는 것이 일시적 장애처럼 보인다.
     """
-    # ⚠️ `aio_pika.exceptions` 에는 이 이름이 없다 — 정의처인 aiormq 에서 가져온다
+    # `aio_pika.exceptions` 에는 이 이름이 없다 — 정의처인 aiormq 에서 가져온다
     #    (`topology_config_errors()` 주석 참고).
     from aiormq.exceptions import ChannelAccessRefused
 
@@ -704,7 +704,7 @@ def test_topology_error_tuple_does_not_swallow_plain_channel_close():
 
 @pytest.mark.asyncio
 async def test_publish_does_not_relabel_config_error_as_retryable(monkeypatch):
-    """🔴 `_publish` 의 광범위 except 가 설정 오류를 재시도 대상으로 바꾸면 안 된다.
+    """`_publish` 의 광범위 except 가 설정 오류를 재시도 대상으로 바꾸면 안 된다.
 
     `MqPublishError` 의 정의가 "재시도 대상(다음 배치가 다시 시도한다)" 이라, 설정
     오류를 그걸로 싸면 **영원히 같은 자리에서 실패하는 것**이 일시적 장애처럼 보인다.
@@ -767,7 +767,7 @@ def test_report_payload_shape(report_callback):
 def test_report_month_is_passed_not_derived(report_callback):
     """report_month 는 인자로 받는다 — report_id 에서 잘라 쓰지 않는다.
 
-    ⚠️ `RPT-202607` → `2026-07` 로 되돌릴 수 있어 보이지만, 정본이 손에 있는데 재구성하는
+    `RPT-202607` → `2026-07` 로 되돌릴 수 있어 보이지만, 정본이 손에 있는데 재구성하는
        패턴은 alert_id 에서 이미 문제가 됐다(`_alert_id_of` 주석). 인자로 준 값이
        그대로 실리는지 고정한다.
     """
@@ -782,7 +782,7 @@ def test_guideline_callback_rejected_on_report_key(guideline_callback):
     `build_guideline_payload` 의 역방향 가드와 짝이다. 둘이 뒤바뀌면 백엔드가 엉뚱한
     소비 동작(CS팀 메일 발송)을 탄다.
 
-    ⚠️ 스키마가 report_id / guideline_id 를 **배타**로 강제하므로(정확히 하나),
+    스키마가 report_id / guideline_id 를 **배타**로 강제하므로(정확히 하나),
        가이드라인 콜백은 report_id 가 None 이라 그 검사에서 걸린다. 검사가 하나여도
        양방향이 다 막힌다는 것을 이 테스트가 고정한다.
     """
@@ -812,7 +812,7 @@ def test_product_level_status_never_leaves_as_monthly_event(status):
 def test_report_publisher_signature_matches_batch_call():
     """배치 호출부와 시그니처가 어긋나지 않는지만 본다.
 
-    ⚠️ 이 테스트는 **발행 동작을 검증하지 않는다.** 이름이 그렇게 읽히지 않도록 바꿨다 —
+    이 테스트는 **발행 동작을 검증하지 않는다.** 이름이 그렇게 읽히지 않도록 바꿨다 —
        예전 이름(`..._uses_report_id_as_idempotency_key`)은 멱등 키를 검증하는 것처럼
        보였는데 실제로는 파라미터 이름만 봤다. 라우팅 키를 오타내도 통과했다.
        실제 발행은 아래 `test_report_publish_sends_...` 가 본다.
@@ -830,7 +830,7 @@ async def test_report_publish_sends_envelope_on_the_right_routing_key(
 ):
     """전송 직전까지 태운다 — 라우팅 키·멱등 키·Envelope 이 전부 실물이다.
 
-    ⚠️ 시그니처만 보는 테스트로는 `REPORT_GENERATED` 오타를 못 잡는다. 오타가 나면
+    시그니처만 보는 테스트로는 `REPORT_GENERATED` 오타를 못 잡는다. 오타가 나면
        바인딩(`ai.#`)에는 걸려도 백엔드가 그 이벤트를 안 읽어 **리포트 행이 안 생기는데**,
        배치는 발행 성공으로 보고 끝난다. 여기서 문자열을 직접 확인한다.
     """

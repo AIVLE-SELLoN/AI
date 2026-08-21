@@ -39,7 +39,7 @@ def test_uppercase_and_padding_are_normalized():
     ["mq.sellon.example.com", "10.0.1.20", "sellon-rabbitmq.prod.internal"],
 )
 def test_remote_host_is_refused_even_when_flag_is_on(host):
-    """🔴 **플래그가 켜져 있어도** 로컬이 아니면 거부한다.
+    """**플래그가 켜져 있어도** 로컬이 아니면 거부한다.
 
     예전 가드는 `MQ_DECLARE_TOPOLOGY` 하나만 봤다. 그 플래그는 "우리가 토폴로지를
     만든다" 는 뜻이지 "여기가 로컬이다" 가 아니다 — 운영 접속정보(C1)를 넣으면서
@@ -72,7 +72,7 @@ def test_empty_host_is_refused():
 
 
 def test_shares_one_allowlist_with_the_runtime_guard():
-    """🔴 목록이 두 벌이면 스크립트와 런타임의 "로컬" 정의가 조용히 갈린다.
+    """목록이 두 벌이면 스크립트와 런타임의 "로컬" 정의가 조용히 갈린다.
 
     `resolve_exchange()`·`resolve_queue()` 가 같은 목록으로 막는다. 한쪽에만 호스트를
     추가하면 **스크립트로는 큐를 만들 수 있는데 배치는 발행을 거부하는**(또는 그 반대의)
