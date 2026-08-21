@@ -14,6 +14,25 @@ SELLoN AI는 LLM 하나에 모든 판단을 맡기지 않습니다.
 
 ---
 
+## 목차
+
+- [프로젝트 개요](#-프로젝트-개요)
+- [전체 흐름](#-전체-흐름)
+- [핵심 AI 기능](#-핵심-ai-기능)
+- [모델 운용 전략](#-모델-운용-전략)
+- [기술 스택](#-기술-스택)
+- [검증 결과](#-검증-결과)
+- [빠른 시작](#-빠른-시작)
+- [로컬 파이프라인 실행](#-로컬-파이프라인-실행)
+- [API](#-api)
+- [저장소 구조](#-저장소-구조)
+- [운영 안전장치](#-운영-안전장치)
+- [현재 범위와 제한](#-현재-범위와-제한)
+- [주요 문서](#-주요-문서)
+- [개발 원칙](#-개발-원칙)
+
+---
+
 ## 🎯 프로젝트 개요
 
 오픈마켓을 여러 곳에서 운영하면 같은 상품의 CS와 리뷰가 채널별로 분산됩니다.
@@ -51,9 +70,7 @@ flowchart LR
     L --> H
 ```
 
-운영 탐지 진입점은 [`app/batch/daily.py`](app/batch/daily.py)이며 일 1회 실행을
-전제로 합니다. 탐지부터 개선안·CS 가이드라인 생성과 메시지 발행까지 조율합니다.
-`POST /api/v1/detect`는 운영 배치가 아니라 특정 입력을 재현하는 디버깅 API입니다.
+> 운영 탐지 진입점은 [`app/batch/daily.py`](app/batch/daily.py)이며 일 1회 실행을 전제로 합니다. 탐지부터 개선안·CS 가이드라인 생성과 메시지 발행까지 조율합니다. `POST /api/v1/detect`는 운영 배치가 아니라 특정 입력을 재현하는 디버깅 API입니다.
 
 ---
 
@@ -145,7 +162,7 @@ flowchart TD
 
 ---
 
-## 모델 운용 전략
+## 🤖 모델 운용 전략
 
 | 용도 | 기본 모델 | 선정 근거 |
 | --- | --- | --- |
@@ -156,7 +173,7 @@ flowchart TD
 모델명을 코드에 흩어 놓지 않고 `LLM_MODEL`과 `CAUSE_LLM_MODEL` 환경변수로 분리합니다.
 모델 출력은 자유 형식으로 신뢰하지 않고 JSON, Tool Calling, Pydantic 검증을 거칩니다.
 
-## 기술 스택
+## 🧰 기술 스택
 
 | 영역 | 기술 |
 | --- | --- |
@@ -188,9 +205,7 @@ flowchart TD
 | Agent3 Citation | **7/7**, evidence 이탈 0건 | image guide 라우팅 건의 고객 인용 검증 |
 | Agent3 Tool Routing | **9~10/11** | 독립 실행 간 변동 존재 |
 
-Agent2의 oracle 결과인 탐지 `25/25`, 정상 `0/8`, 판정 `33/33`은 정답 집계값을
-주었을 때 구현이 명세대로 동작하는지를 확인한 회귀 검증입니다. 이를 실제 모델 성능으로
-표현하지 않습니다.
+> Agent2의 oracle 결과인 탐지 `25/25`, 정상 `0/8`, 판정 `33/33`은 정답 집계값을 주었을 때 구현이 명세대로 동작하는지를 확인한 회귀 검증입니다. 이를 실제 모델 성능으로 표현하지 않습니다.
 
 평가셋의 성격, 실행 조건, 비용, 폐기된 결과와 한계는
 [`eval/README.md`](eval/README.md)에 기록되어 있습니다.
@@ -261,8 +276,9 @@ uvicorn app.main:app --reload --port 8000
 python -m pytest -q
 ```
 
-현재 브랜치 기준으로 pytest 테스트 **883개**가 수집됩니다. `tests/`는 외부 API를
-호출하지 않으며 LLM 과금이 발생하지 않습니다.
+`tests/`는 외부 API를 호출하지 않으므로 LLM 과금이 발생하지 않습니다.
+Postgres 실연결 테스트는 접속 정보(`RAW_DB_TEST_DSN`)가 없으면 건너뜁니다. 로컬에서
+skip이 몇 건 보이는 것은 정상이고, CI는 Postgres를 띄워 함께 실행합니다.
 
 ---
 
@@ -271,6 +287,9 @@ python -m pytest -q
 전체 파이프라인에는 git에 포함되지 않는 mock 입력 데이터가 필요합니다.
 클론 직후에도 API health check와 테스트는 실행할 수 있지만, 아래 명령은
 `data/input/`과 `data/raw.db`가 준비된 환경을 전제로 합니다.
+
+<details>
+<summary><b>단계별 실행 명령 펼쳐보기</b> — 벡터DB 시딩 · 분류 워커 · 일일 배치 · 월간 리포트 · 로컬 MQ</summary>
 
 ### 상세페이지 벡터DB 시딩
 
@@ -322,8 +341,8 @@ python scripts/generate_monthly_reports.py --stage all --month 2026-07 --dry-run
 ```dotenv
 MQ_ENABLED=true
 MQ_HOST=localhost
-MQ_VHOST=/
-MQ_COMPANY_ID=SLN-LOCAL
+MQ_VHOST=app
+MQ_COMPANY_ID=SLN-local
 MQ_DECLARE_TOPOLOGY=true
 ```
 
@@ -335,9 +354,11 @@ python scripts/setup_local_mq.py
 운영 RabbitMQ 토폴로지는 백엔드 인프라가 소유합니다. 운영에서는
 `MQ_DECLARE_TOPOLOGY=false`를 유지하고 실제 회사 식별자를 사용해야 합니다.
 
+</details>
+
 ---
 
-## API
+## 🔌 API
 
 | Method | Endpoint | 용도 |
 | --- | --- | --- |
@@ -354,12 +375,13 @@ python scripts/setup_local_mq.py
 
 ---
 
-## 저장소 구조
+## 📁 저장소 구조
 
 ```text
 app/
 ├── main.py              FastAPI 앱과 라우터 등록
 ├── config.py            환경변수 로딩
+├── consumer.py          RabbitMQ 컨슈머(백엔드 피드백 수신) 진입점
 ├── batch/               일일 탐지·개선안·발행 오케스트레이션
 ├── core/                공용 스키마, LLM, DB, MQ, VectorDB 계약
 ├── classification/      Agent1 속성·감성 분류
@@ -399,7 +421,7 @@ data/                    로컬 입력·골든·실행 상태, 대부분 git 제
 - 운영 코드와 평가 골든 데이터를 물리적으로 분리
 - LLM 실험 결과에 모델명·프롬프트 버전·시드·데이터 지문 기록
 
-## 현재 범위와 제한
+## 🚧 현재 범위와 제한
 
 - 이 저장소의 Raw DB 실행 어댑터는 현재 SQLite 파일 경로를 사용합니다.
 - mock 입력·golden 데이터 대부분은 저장소에 포함되지 않습니다.
@@ -436,7 +458,7 @@ data/                    로컬 입력·골든·실행 상태, 대부분 git 제
 
 ---
 
-## 개발 원칙
+## 📐 개발 원칙
 
 1. LLM 호출은 `app/core/llm_client.py`를 통해 수행합니다.
 2. 프롬프트는 모듈별 `prompts/`에 버전 파일로 보존합니다.
