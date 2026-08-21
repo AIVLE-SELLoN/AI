@@ -201,7 +201,7 @@ verdict 필드에 들어갈 수 있는 값은 아래 **5개뿐**이다.
 | --- | --- | --- |
 | 편중형 / 2채널 편중 | (case_id × channel) — 발행 채널별 | is_anomaly, verdict, is_biased, main_aspect, root_cause. detection_confidence는 SC-030/031·3-3 한정(시나리오 §4 채점 범위) |
 | 전역형 | case_id (케이스 수준) | is_anomaly, verdict, is_biased=false. golden 3채널 행 모두 Y인 것이 전역 정의이므로 채널별 대조 면제 |
-| 구분불가 / 잠정 전역형 | 채점 제외 (관찰 케이스 SC-037/038 — `docs/이상탐지 시나리오.md`) | — |
+| 구분불가 / 잠정 전역형 | 채점 제외 (관찰 케이스 SC-037/038 — `docs/detection_scenarios.md`) | — |
 | 정상 | (case_id × channel) alert 부재 확인 | is_anomaly=false |
 - 편중형은 "다른 채널이 안 울리는 것"까지가 정답이라, golden의 channel_significant=N 행(alert 없음)과 예측의 alert 부재를 대조.
 - sub_aspects는 채점 대상 아님(시나리오 §4 지표에 sub 없음) — SC-029는 main_aspect=색상 일치로 채점.

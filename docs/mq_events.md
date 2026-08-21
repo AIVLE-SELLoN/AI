@@ -233,7 +233,7 @@ AI 쪽은 활성 버전 행만 읽고, 윈도우에 옛 버전 행이 **하나�
 빈 카드·렌더 오류가 난다. 카드 유무는 `recommendation` 필드로만 판단할 것.
 그 외 6종 조치는 종전대로 항상 null 이다.
 
-정본은 `docs/recommenation_schema.md`.
+정본은 `docs/recommendation_schema.md`.
 
 | 필드 | 타입 | 설명 |
 |---|---|---|

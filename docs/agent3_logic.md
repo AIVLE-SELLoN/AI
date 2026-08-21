@@ -137,7 +137,7 @@
 
 ### 4-3. Agent3 출력 구조
 
-Agent3 출력 JSON의 **정본은 별도 문서 [「개선안 출력 스키마」](https://app.notion.com/p/39fe39c614978017b36befb4730e520c?pvs=21)**(저장소 사본 [`docs/recommenation_schema.md`](recommenation_schema.md)). 구조·필드·값 범위는 그 문서를 따른다.
+Agent3 출력 JSON의 **정본은 별도 문서 [「개선안 출력 스키마」](https://app.notion.com/p/39fe39c614978017b36befb4730e520c?pvs=21)**(저장소 사본 [`docs/recommendation_schema.md`](recommendation_schema.md)). 구조·필드·값 범위는 그 문서를 따른다.
 
 - grounding 검사: 인용문이 실제 원문에 있는지 사후 검증 → 없으면 확신도 강등.
     - CS 인용=정본 `citations`(evidence.inquiry_ids 부분집합)
