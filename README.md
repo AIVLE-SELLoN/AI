@@ -184,7 +184,7 @@ flowchart TD
 | 데이터 계약 | Pydantic v2, Enum |
 | 검색 | ChromaDB, OpenAI Embeddings |
 | 메시징 | RabbitMQ Topic Exchange, Kafka KRaft |
-| 저장·문서 | SQLite mock Raw DB, Amazon S3, WeasyPrint |
+| 저장·문서 | PostgreSQL 운영 Raw DB, SQLite mock Raw DB, Amazon S3, WeasyPrint |
 | 관측성 | 구조화 로그, LangSmith 선택 연동 |
 | 품질 | pytest, pytest-asyncio, Ruff |
 | 배포·CI | Docker(`python:3.12-slim`), Docker Compose, GitHub Actions |
@@ -225,7 +225,7 @@ flowchart TD
 
 | 가드 | 대상을 어디서 유도하나 | 막는 회귀 |
 | --- | --- | --- |
-| [`test_console_encoding.py`](tests/test_console_encoding.py) | `Dockerfile`의 `COPY`와 `__main__` 블록 | 배포 진입점이 cp949 콘솔에서 죽는 것 |
+| [`test_console_encoding.py`](tests/test_console_encoding.py) | `Dockerfile`의 `COPY`, Compose의 `command`·`entrypoint`, `__main__` 블록 | 배포 진입점이 cp949 콘솔에서 죽는 것 |
 | [`test_raw_db_write_scope.py`](tests/test_raw_db_write_scope.py) | AST로 찾은 raw DB 연결부와 쓰기 대상 | 분류 워커가 AI 소유 밖 테이블에 쓰는 것 |
 | [`test_timestamp_timezone.py`](tests/test_timestamp_timezone.py) | `app/`·`scripts/` 전 소스 스캔 | 호스트 로컬 시각 관용구 유입 |
 | [`test_requirements_parity.py`](tests/test_requirements_parity.py) | 두 requirements 파일 대조 | 슬림 이미지의 버전 드리프트 |
@@ -247,7 +247,7 @@ flowchart TD
 | 워크플로 | 하는 일 |
 | --- | --- |
 | [`test.yml`](.github/workflows/test.yml) | pytest · **ruff 규칙별 기준선** · Postgres 서비스를 띄워 스키마 적재 |
-| [`image.yml`](.github/workflows/image.yml) | 빌드 → PDF 스모크(CJK 폰트·네이티브 의존성) → 진입점 import 확인 → 레지스트리 push → GitOps 태그 갱신 |
+| [`image.yml`](.github/workflows/image.yml) | 빌드 → PDF 스모크(CJK 폰트·네이티브 의존성) → 진입점 import 확인 → main 병합 시 레지스트리 push·GitOps 태그 갱신 |
 | [`mock-producer.yml`](.github/workflows/mock-producer.yml) | 슬림 이미지 계약 확인 → 재생 스모크(대본 → raw DB) |
 
 ruff는 총계가 아니라 **규칙별**로 비교합니다. 총계로 걸면 한 규칙이 늘고 다른 규칙이
@@ -323,9 +323,10 @@ python -m pytest -q
 약 2~3분이 걸립니다. 클론(또는 압축 해제) 직후 별도 데이터 준비 없이 바로 돌아가므로,
 이 명령 하나로 저장소 전체를 직접 검증할 수 있습니다.
 
-작성 시점 기준 **967 passed / 16 skipped**입니다. skip은 Postgres 실연결 테스트로,
-접속 정보(`RAW_DB_TEST_DSN`)가 없으면 건너뜁니다. 로컬에서 skip이 보이는 것은
-정상이고, CI는 Postgres를 띄워 함께 실행합니다.
+작성 시점의 새 체크아웃 로컬 기준 **967 passed / 16 skipped**입니다. 16건 중 15건은
+Postgres 실연결 테스트라 접속 정보(`RAW_DB_TEST_DSN`)가 없으면 건너뛰고, 1건은 git에
+포함되지 않는 canonical 데이터가 필요한 테스트입니다. CI는 Postgres를 직접 띄워
+**982 passed / 1 skipped**로 실행됩니다.
 
 ---
 
@@ -474,7 +475,8 @@ docker-compose.yml       로컬 의존 서비스: Kafka·RabbitMQ·Postgres·moc
 
 ## 🚧 현재 범위와 제한
 
-- 이 저장소의 Raw DB 실행 어댑터는 현재 SQLite 파일 경로를 사용합니다.
+- Raw DB 어댑터는 운영 PostgreSQL과 로컬·mock SQLite를 모두 지원합니다.
+  `RAW_DB_HOST`가 비어 있으면 SQLite를 사용하는 것이 기본값입니다.
 - mock 입력·golden 데이터 대부분은 저장소에 포함되지 않습니다.
 - CI는 GitHub Actions 워크플로 3종(`test.yml` · `image.yml` · `mock-producer.yml`)으로 돌립니다.
 - 일일 배치 실행 코드는 구현되어 있지만 배포 스케줄러 정의는 이 저장소에 포함되지 않습니다.
